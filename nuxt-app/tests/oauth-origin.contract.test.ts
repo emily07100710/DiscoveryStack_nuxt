@@ -61,6 +61,10 @@ describe('OAuth frontend-origin contract', () => {
     expect(callback).toContain('providerError: providerFailure.value.kind')
     expect(callback).toContain('providerStatus: providerFailure.value.status')
     expect(callback).toContain('providerReason: providerFailure.value.reason')
+    expect(callback).toContain("type SessionFailureKind = 'owner_mismatch' | 'configuration' | 'jwt_session' | 'unknown'")
+    expect(callback).toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Session-Error', sessionFailure)")
+    expect(callback).toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Session-Status', String(sessionStatus))")
+    expect(callback).toContain('return { error: callbackFailureMessage(stage), sessionError: sessionFailure, sessionStatus }')
     expect(callback).not.toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Owner', user.openId)")
     expect(callback).not.toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Callback', code)")
     expect(callback).not.toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Callback', user.email)")
@@ -70,7 +74,7 @@ describe('OAuth frontend-origin contract', () => {
     expect(callback).not.toContain('providerStatus: error.response.data')
     expect(callback).not.toContain('providerReason: error.response.data')
     expect(callback).not.toContain('providerResponse:')
-    expect(callback).toContain('console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; error=${errorName}`)')
+    expect(callback).toContain("console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; status=${statusCode}; session=${sessionFailure || 'none'}; error=${errorName}`)")
     expect(callback).not.toContain('console.error(error)')
     expect(callback).not.toContain('console.error(code)')
     expect(callback).not.toContain('console.error(user.email)')
@@ -104,7 +108,7 @@ describe('OAuth frontend-origin contract', () => {
 
   it('requires the production image to build a clean Nitro artifact with the current OAuth release marker', () => {
     expect(dockerfile).toContain('rm -rf .nuxt .output')
-    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r8' .output/server")
+    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r9' .output/server")
     expect(dockerfile).toContain('CMD ["node", ".output/server/index.mjs"]')
   })
 

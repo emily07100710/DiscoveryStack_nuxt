@@ -4,7 +4,23 @@ import { setOwnerSession } from '../../utils/auth'
 import { exchangeOAuthCode, type OAuthProviderError } from '../../utils/oauth'
 
 type CallbackStage = 'exchange' | 'token' | 'identity' | 'database' | 'session'
-const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r8'
+type SessionFailureKind = 'owner_mismatch' | 'configuration' | 'jwt_session' | 'unknown'
+const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r9'
+
+function errorStatusCode(error: unknown) {
+  const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+    ? (error as { statusCode: number }).statusCode
+    : 500
+  return statusCode >= 400 && statusCode < 600 ? statusCode : 500
+}
+
+function classifySessionFailure(error: unknown): SessionFailureKind {
+  const statusCode = errorStatusCode(error)
+  if (statusCode === 403) return 'owner_mismatch'
+  if (statusCode === 503) return 'configuration'
+  if (statusCode === 500) return 'jwt_session'
+  return 'unknown'
+}
 
 function callbackStatusCode(error: unknown, stage: CallbackStage, providerError: OAuthProviderError | null) {
   // Cloudflare turns an origin 502 into a generic Host Error page, which hides
@@ -12,10 +28,7 @@ function callbackStatusCode(error: unknown, stage: CallbackStage, providerError:
   // authorization response, not an application crash, so return a controlled
   // client-visible response without exposing provider details.
   if ((stage === 'token' || stage === 'identity') && providerError) return 400
-  const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
-    ? (error as { statusCode: number }).statusCode
-    : 500
-  return statusCode >= 400 && statusCode < 600 ? statusCode : 500
+  return errorStatusCode(error)
 }
 
 function callbackFailureMessage(stage: CallbackStage) {
@@ -60,14 +73,20 @@ export default defineEventHandler(async (event) => {
     return sendRedirect(event, '/audit-lab', 302)
   } catch (error: unknown) {
     setHeader(event, 'X-DiscoveryStack-OAuth-Callback', stage)
+    const sessionFailure = stage === 'session' ? classifySessionFailure(error) : null
+    const sessionStatus = stage === 'session' ? errorStatusCode(error) : null
     if (providerFailure.value) {
       setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Error', providerFailure.value.kind)
       if (providerFailure.value.status !== null) setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Status', String(providerFailure.value.status))
       if (providerFailure.value.reason) setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Reason', providerFailure.value.reason)
     }
+    if (sessionFailure && sessionStatus !== null) {
+      setHeader(event, 'X-DiscoveryStack-OAuth-Session-Error', sessionFailure)
+      setHeader(event, 'X-DiscoveryStack-OAuth-Session-Status', String(sessionStatus))
+    }
     const statusCode = callbackStatusCode(error, stage, providerFailure.value)
     const errorName = error instanceof Error ? error.name : typeof error
-    console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; error=${errorName}`)
+    console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; status=${statusCode}; session=${sessionFailure || 'none'}; error=${errorName}`)
     setResponseStatus(event, statusCode)
     if (providerFailure.value) {
       return {
@@ -76,6 +95,9 @@ export default defineEventHandler(async (event) => {
         providerStatus: providerFailure.value.status,
         providerReason: providerFailure.value.reason,
       }
+    }
+    if (sessionFailure && sessionStatus !== null) {
+      return { error: callbackFailureMessage(stage), sessionError: sessionFailure, sessionStatus }
     }
     return { error: callbackFailureMessage(stage) }
   }
