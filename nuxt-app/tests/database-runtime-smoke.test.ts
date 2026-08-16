@@ -8,8 +8,8 @@ describe('managed MySQL runtime smoke test', () => {
   it.skipIf(!databaseUrl)('executes a read-only health query when the managed database is configured', async () => {
     const database = getDatabase()
     expect(database).not.toBeNull()
-    const result = await database!.execute(sql`SELECT 1 AS healthy`)
-    expect(result[0]).toHaveLength(1)
-    expect((result[0][0] as { healthy: number }).healthy).toBe(1)
+    const [rows] = await database!.execute(sql`SELECT 1 AS healthy`) as unknown as [{ healthy: number }[], unknown]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.healthy).toBe(1)
   })
 })
