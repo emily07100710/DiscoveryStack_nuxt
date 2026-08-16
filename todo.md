@@ -45,3 +45,4 @@
 - [ ] 評估不繞過 owner OAuth 與 human-review 的受限代管訓練替代架構，並取得使用者核准後才實作。
 - [ ] 修復 Autoscale hosting 在真實 OAuth callback request 對 Nitro 上游回傳 Cloudflare 502 的問題，並以 owner round-trip 驗收。
 - [ ] 避免以 HTTP 502 回傳 OAuth provider 失敗而被 Cloudflare 覆寫，改用無敏感資訊的受控 callback 回應驗證真實 exchange 結果。
+- [ ] 以遞增 OAuth Nitro release 標記驗證 Autoscale 已載入最新 callback 修復，而非沿用先前 container image。

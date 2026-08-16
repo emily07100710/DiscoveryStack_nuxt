@@ -4,7 +4,7 @@ import { setOwnerSession } from '../../utils/auth'
 import { exchangeOAuthCode, type OAuthProviderErrorKind } from '../../utils/oauth'
 
 type CallbackStage = 'exchange' | 'token' | 'identity' | 'database' | 'session'
-const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r4'
+const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r5'
 
 function callbackStatusCode(error: unknown, stage: CallbackStage, providerError: OAuthProviderErrorKind | null) {
   // Cloudflare turns an origin 502 into a generic Host Error page, which hides
