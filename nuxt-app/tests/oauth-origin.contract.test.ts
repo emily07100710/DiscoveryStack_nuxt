@@ -11,6 +11,7 @@ const login = readFileSync(join(root, 'server/api/auth/login.get.ts'), 'utf8')
 const callback = readFileSync(join(root, 'server/api/auth/callback.get.ts'), 'utf8')
 const releaseProbe = readFileSync(join(root, 'server/api/__release.get.ts'), 'utf8')
 const auditLab = readFileSync(join(root, 'pages/audit-lab.vue'), 'utf8')
+const mlLab = readFileSync(join(root, 'pages/ml-lab-preview.vue'), 'utf8')
 const dockerfile = readFileSync(join(root, '..', 'Dockerfile'), 'utf8')
 
 describe('OAuth frontend-origin contract', () => {
@@ -72,6 +73,20 @@ describe('OAuth frontend-origin contract', () => {
     expect(auditLab).toContain('const origin = window.location.origin')
     expect(auditLab).toContain('window.location.assign(`/api/auth/login?origin=${encodeURIComponent(origin)}`)')
     expect(auditLab).toContain('@click="startAuditSignIn"')
+  })
+
+  it('keeps the owner-only Audit Lab and ML Workbench controls in Traditional Chinese without changing safety codes', () => {
+    expect(auditLab).toContain('人工審核')
+    expect(auditLab).toContain('受政策控管的公開來源')
+    expect(auditLab).toContain('儲存人工審核')
+    expect(auditLab).toContain('displayLabel(assessment.assessmentStatus)')
+    expect(mlLab).toContain('機器學習工作台')
+    expect(mlLab).toContain('啟動受限抓取')
+    expect(mlLab).toContain('執行 Hugging Face 訓練')
+    expect(mlLab).toContain('開發模式 · 至少 5 筆樣本且涵蓋每個階段')
+    expect(mlLab).toContain('尚未有訓練執行')
+    expect(mlLab).toContain("TRAINING_GATE_NOT_MET: '未達訓練門檻'")
+    expect(mlLab).not.toContain('ML Workbench · DiscoveryStack')
   })
 
   it('keeps callback failure diagnostics free of codes, tokens, and account data', () => {

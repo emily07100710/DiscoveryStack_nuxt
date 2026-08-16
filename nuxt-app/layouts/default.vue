@@ -1,7 +1,8 @@
 <!-- Quiet Intelligence: restrained editorial frame, clear navigation and no inaccessible visual-only content. -->
 <script setup lang="ts">
 const route = useRoute()
-const isZh = computed(() => route.path.startsWith('/zh-hant'))
+const isPrivateOwnerRoute = computed(() => route.path === '/audit-lab' || route.path === '/ml-lab-preview')
+const isZh = computed(() => isPrivateOwnerRoute.value || route.path.startsWith('/zh-hant'))
 const htmlLang = computed(() => isZh.value ? 'zh-Hant' : 'en-US')
 
 useHead({
@@ -13,7 +14,7 @@ useHead({
   <a class="skip-link" href="#main-content">{{ isZh ? '跳至主要內容' : 'Skip to content' }}</a>
   <div class="site-shell">
     <header class="site-header">
-      <NuxtLink :to="isZh ? '/zh-hant' : '/en'" class="brand" aria-label="DiscoveryStack home">
+      <NuxtLink :to="isZh ? '/zh-hant' : '/en'" class="brand" :aria-label="isZh ? 'DiscoveryStack 首頁' : 'DiscoveryStack home'">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>DISCOVERYSTACK</span>
       </NuxtLink>

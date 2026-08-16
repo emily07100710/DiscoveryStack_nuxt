@@ -22,7 +22,7 @@ const expandedJobId = ref<number | null>(null)
 const trainingMode = ref<'development' | 'production'>('development')
 const crawlForm = reactive({ sourceId: 0, requestedUrl: '', maxPages: 5, maxDepth: 1 })
 
-useHead({ title: 'ML Workbench · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }, { name: 'description', content: 'Private bounded crawl, cleaning and supervised training workbench.' }] })
+useHead({ title: '機器學習工作台 · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }, { name: 'description', content: '私有、受限的爬取、清洗與監督式訓練工作台。' }] })
 definePageMeta({ i18n: false })
 
 const eligibleSources = computed(() => sources.value.filter(source => source.reviewStatus === 'approved' && !source.removedAt && source.allowedUse !== 'blocked' && source.robotsStatus === 'reviewed_allow' && ['allows_research', 'allows_evaluation', 'allows_training'].includes(source.termsStatus) && source.copyrightRisk === 'low' && source.piiStatus === 'none_detected'))
@@ -49,7 +49,7 @@ async function loadWorkbench() {
   } catch (error: unknown) {
     const statusCode = (error as { statusCode?: number, status?: number }).statusCode ?? (error as { status?: number }).status
     if (statusCode === 401 || statusCode === 403) state.value = 'signin'
-    else { state.value = 'error'; errorMessage.value = 'The ML Workbench is unavailable. Check the private service configuration and try again.' }
+    else { state.value = 'error'; errorMessage.value = '機器學習工作台目前無法使用。請確認私有服務設定後再試。' }
   }
 }
 
@@ -82,7 +82,7 @@ async function startCrawl() {
     await refreshJobs()
   } catch (error: unknown) {
     crawlStatus.value = 'error'
-    crawlMessage.value = (error as { statusMessage?: string }).statusMessage || 'The bounded crawl could not start.'
+    crawlMessage.value = (error as { statusMessage?: string }).statusMessage || '受限抓取無法啟動。'
   }
 }
 
@@ -99,12 +99,18 @@ async function startTraining() {
     await refreshRuns()
   } catch (error: unknown) {
     trainingStatus.value = 'error'
-    trainingMessage.value = (error as { statusMessage?: string }).statusMessage || 'The training run could not start.'
+    trainingMessage.value = (error as { statusMessage?: string }).statusMessage || '訓練執行無法啟動。'
     await refreshRuns()
   }
 }
 
-function displayStatus(value: string) { return value.replaceAll('_', ' ') }
+const statusLabels: Record<string, string> = {
+  approved: '已核准', blocked: '已阻擋', completed: '已完成', failed: '失敗', pending: '待處理',
+  running: '處理中', queued: '排隊中', cancelled: '已取消', removed: '已停用',
+  TRAINING_GATE_NOT_MET: '未達訓練門檻', training_gate_not_met: '未達訓練門檻',
+  development: '開發模式', production: '正式模式', site: '網站',
+}
+function displayStatus(value: string) { return statusLabels[value] || statusLabels[value.toLowerCase()] || value.replaceAll('_', ' ') }
 function formatDate(value: string) { return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) }
 function toggleJob(jobId: number) { expandedJobId.value = expandedJobId.value === jobId ? null : jobId }
 
@@ -114,75 +120,75 @@ onMounted(loadWorkbench)
 <template>
   <main class="ml-workbench" aria-labelledby="workbench-title">
     <header class="workbench-header">
-      <NuxtLink to="/en" class="workbench-mark" aria-label="Return to DiscoveryStack home">DISCOVERY<span>STACK</span></NuxtLink>
-      <p class="workbench-route">PRIVATE SYSTEM / ML WORKBENCH</p>
-      <NuxtLink to="/audit-lab" class="workbench-link">Open Audit Lab <span aria-hidden="true">↗</span></NuxtLink>
+      <NuxtLink to="/zh-hant" class="workbench-mark" aria-label="返回 DiscoveryStack 首頁">DISCOVERY<span>STACK</span></NuxtLink>
+      <p class="workbench-route">私有系統／機器學習工作台</p>
+      <NuxtLink to="/audit-lab" class="workbench-link">開啟稽核實驗室 <span aria-hidden="true">↗</span></NuxtLink>
     </header>
 
-    <div v-if="state === 'loading'" class="workbench-state" aria-live="polite">Loading the ML Workbench…</div>
+    <div v-if="state === 'loading'" class="workbench-state" aria-live="polite">正在載入機器學習工作台…</div>
     <section v-else-if="state === 'signin'" class="workbench-state workbench-auth">
-      <p class="eyebrow">Owner session required</p>
-      <h1>Run the pipeline.<br><em>Keep the evidence governed.</em></h1>
-      <p>This workbench is private. It exposes source-approved crawling, in-memory cleaning and human-gated training records only after owner sign-in.</p>
-      <button class="workbench-button" type="button" @click="startSignIn">Sign in to ML Workbench <span aria-hidden="true">↗</span></button>
+      <p class="eyebrow">需要 owner 工作階段</p>
+      <h1>執行工作流程。<br><em>證據仍受治理。</em></h1>
+      <p>這是私有工作台。只有 owner 登入後，才會顯示已核准來源的爬取、記憶體內清洗，以及有人審閘門的訓練紀錄。</p>
+      <button class="workbench-button" type="button" @click="startSignIn">登入機器學習工作台 <span aria-hidden="true">↗</span></button>
     </section>
     <section v-else-if="state === 'error'" class="workbench-state workbench-error" role="alert">{{ errorMessage }}</section>
 
     <template v-else>
       <section class="workbench-hero">
         <div>
-          <p class="eyebrow">Journey Intelligence / Operational layer</p>
-          <h1 id="workbench-title">Crawl.<br><em>Clean. Train.</em></h1>
-          <p class="workbench-lede">這裡是真正的機器學習工作區：先用受限 crawler 抓取已核准的公開頁面，再在記憶體中清洗並轉成 typed structural features，最後以人審、去識別且通過品質門檻的資料執行可重現的 training run。</p>
+          <p class="eyebrow">旅程洞察／作業層</p>
+          <h1 id="workbench-title">抓取。<br><em>清洗。訓練。</em></h1>
+          <p class="workbench-lede">這裡是真正的機器學習工作區：先用受限爬蟲抓取已核准的公開頁面，再在記憶體中清洗並轉成型別化結構特徵，最後以人審、去識別且通過品質門檻的資料執行可重現的訓練執行。</p>
         </div>
         <aside class="workbench-boundary">
-          <strong>Operational boundary</strong>
+          <strong>作業邊界</strong>
           <p>不追蹤整站、不跟隨 redirect、不保存 raw HTML 或清洗後正文；每一頁都會留下狀態、hash、PII 結果與 artifact lineage。</p>
-          <NuxtLink to="/audit-lab" class="text-link">建立 Source Card 與人工標籤 <span aria-hidden="true">↗</span></NuxtLink>
+          <NuxtLink to="/audit-lab" class="text-link">建立來源卡與人工標籤 <span aria-hidden="true">↗</span></NuxtLink>
         </aside>
       </section>
 
-      <section class="workbench-stats" aria-label="ML pipeline counters">
-        <article><span>Approved sources</span><strong>{{ eligibleSources.length }}</strong><p>通過 robots、terms、copyright 與 PII gate。</p></article>
-        <article><span>Cleaned pages</span><strong>{{ cleanedPages }}</strong><p>已轉成 structural artifacts 的頁面數。</p></article>
-        <article><span>Completed crawls</span><strong>{{ completedJobs.length }}</strong><p>每次 crawl 由 owner 明確觸發。</p></article>
-        <article><span>Latest model</span><strong>{{ latestCompletedRun ? latestCompletedRun.modelVersion : 'Not trained' }}</strong><p>{{ latestCompletedRun ? '仍需檢視 holdout 與人審。' : '先建立足夠的合格標籤。' }}</p></article>
+      <section class="workbench-stats" aria-label="機器學習流程統計">
+        <article><span>已核准來源</span><strong>{{ eligibleSources.length }}</strong><p>通過 robots、條款、著作權與 PII 閘門。</p></article>
+        <article><span>已清洗頁面</span><strong>{{ cleanedPages }}</strong><p>已轉成結構化產物的頁面數。</p></article>
+        <article><span>已完成抓取</span><strong>{{ completedJobs.length }}</strong><p>每次抓取均由 owner 明確觸發。</p></article>
+        <article><span>最新模型</span><strong>{{ latestCompletedRun ? latestCompletedRun.modelVersion : '尚未訓練' }}</strong><p>{{ latestCompletedRun ? '仍需檢視保留集與人工審核。' : '請先建立足夠的合格標籤。' }}</p></article>
       </section>
 
       <section class="workbench-section" aria-labelledby="crawl-title">
-        <div class="section-intro"><p class="eyebrow">01 / Crawl</p><h2 id="crawl-title">抓取受核准的頁面。</h2><p>這不是無限制爬蟲。起點必須屬於 Source Card 的 host，最多 10 頁、深度最多 2，只接受 HTTPS HTML，並以 manual redirect 防止意外離開範圍。</p></div>
+        <div class="section-intro"><p class="eyebrow">01／抓取</p><h2 id="crawl-title">抓取已核准的頁面。</h2><p>這不是無限制爬蟲。起點必須屬於來源卡的網域，最多 10 頁、深度最多 2，只接受 HTTPS HTML，並以手動重新導向控管防止意外離開範圍。</p></div>
         <div class="workbench-card">
           <form class="workbench-form" @submit.prevent="startCrawl">
-            <label><span>Approved Source Card</span><select v-model.number="crawlForm.sourceId" required><option :value="0" disabled>Select a policy-cleared source</option><option v-for="source in eligibleSources" :key="source.id" :value="source.id">{{ source.sourceName || source.domain }} · {{ source.allowedUse.replaceAll('_', ' ') }}</option></select></label>
+            <label><span>已核准來源卡</span><select v-model.number="crawlForm.sourceId" required><option :value="0" disabled>選擇已通過政策審核的來源</option><option v-for="source in eligibleSources" :key="source.id" :value="source.id">{{ source.sourceName || source.domain }} · {{ displayStatus(source.allowedUse) }}</option></select></label>
             <label><span>起始 URL</span><input v-model.trim="crawlForm.requestedUrl" required type="url" placeholder="https://approved-source.example/" inputmode="url"></label>
-            <div class="form-grid"><label><span>Max pages</span><input v-model.number="crawlForm.maxPages" type="number" min="1" max="10"></label><label><span>Max depth</span><input v-model.number="crawlForm.maxDepth" type="number" min="0" max="2"></label></div>
-            <button class="workbench-button" :disabled="crawlStatus === 'saving' || !eligibleSources.length" type="submit">{{ crawlStatus === 'saving' ? 'Crawling and cleaning…' : 'Start bounded crawl' }} <span aria-hidden="true">↗</span></button>
-            <p v-if="!eligibleSources.length" class="workbench-hint">目前沒有通過自動抓取 gate 的 Source Card。先到 Audit Lab 建立並審核來源。</p>
+            <div class="form-grid"><label><span>最多頁數</span><input v-model.number="crawlForm.maxPages" type="number" min="1" max="10"></label><label><span>最大深度</span><input v-model.number="crawlForm.maxDepth" type="number" min="0" max="2"></label></div>
+            <button class="workbench-button" :disabled="crawlStatus === 'saving' || !eligibleSources.length" type="submit">{{ crawlStatus === 'saving' ? '正在抓取與清洗…' : '啟動受限抓取' }} <span aria-hidden="true">↗</span></button>
+            <p v-if="!eligibleSources.length" class="workbench-hint">目前沒有通過自動抓取閘門的來源卡。請先到稽核實驗室建立並審核來源。</p>
             <p v-if="crawlMessage" class="workbench-feedback" :class="crawlStatus === 'error' ? 'is-error' : 'is-success'" aria-live="polite">{{ crawlMessage }}</p>
           </form>
-          <dl class="boundary-list"><div><dt>Scope</dt><dd>Same approved host only</dd></div><div><dt>Acquisition</dt><dd>HTTPS HTML, one bounded run</dd></div><div><dt>Retention</dt><dd>Hashes + typed features, no page copy</dd></div><div><dt>PII</dt><dd>Potential findings skip artifact creation</dd></div></dl>
+          <dl class="boundary-list"><div><dt>範圍</dt><dd>僅限相同已核准網域</dd></div><div><dt>取得方式</dt><dd>HTTPS HTML，單次受限執行</dd></div><div><dt>保存方式</dt><dd>雜湊與型別化特徵，不保存頁面副本</dd></div><div><dt>PII</dt><dd>可能發現時略過建立產物</dd></div></dl>
         </div>
       </section>
 
       <section class="workbench-section" aria-labelledby="clean-title">
-        <div class="section-intro"><p class="eyebrow">02 / Clean</p><h2 id="clean-title">看見清洗，而不是黑盒子。</h2><p>每次 run 都會顯示 fetched、cleaned、artifact 數量與安全 error code。點開一列可查看各頁的 depth、PII 結果與 artifact id，但不會顯示原始正文。</p></div>
+        <div class="section-intro"><p class="eyebrow">02／清洗</p><h2 id="clean-title">看見清洗，而不是黑盒子。</h2><p>每次執行都會顯示已取得、已清洗、產物數量與安全錯誤代號。點開一列可查看各頁深度、PII 結果與產物 ID，但不會顯示原始正文。</p></div>
         <div class="workbench-card table-card">
-          <div v-if="jobs.length" class="table-wrap"><table><thead><tr><th>Run</th><th>Mode / status</th><th>Pages</th><th>Cleaned chars</th><th>Requested</th><th></th></tr></thead><tbody><template v-for="job in jobs" :key="job.id"><tr><td><strong>#{{ job.id }}</strong><br><small>{{ job.sourceName || `Source #${job.sourceId}` }}</small></td><td>{{ displayStatus(job.collectionMode) }}<br><span class="status" :class="`status-${job.status}`">{{ displayStatus(job.status) }}</span></td><td>{{ job.pagesCleaned || 0 }} / {{ job.pagesFetched || 0 }}<br><small>{{ job.artifactsCreated || 0 }} artifacts</small></td><td>{{ job.cleanedCharacterCount || 0 }}</td><td><small>{{ formatDate(job.requestedAt) }}</small></td><td><button class="row-button" type="button" @click="toggleJob(job.id)">{{ expandedJobId === job.id ? 'Hide' : 'Inspect' }}</button></td></tr><tr v-if="expandedJobId === job.id" class="detail-row"><td colspan="6"><div class="page-results"><article v-for="page in (job.crawlResults || [])" :key="`${job.id}-${page.url}`"><strong>{{ page.status }}</strong><span>{{ page.depth }} · HTTP {{ page.httpStatus || '—' }}</span><small>{{ page.url }}</small><small>{{ page.cleanedCharacterCount || 0 }} chars · {{ page.piiOutcome || '—' }} · artifact {{ page.artifactId || 'none' }}<template v-if="page.errorCode"> · {{ page.errorCode }}</template></small></article></div></td></tr></template></tbody></table></div>
-          <p v-else class="empty-state">尚未執行 crawl。通過 Source Card policy gate 後，第一個 bounded run 會出現在這裡。</p>
+          <div v-if="jobs.length" class="table-wrap"><table><thead><tr><th>執行</th><th>模式／狀態</th><th>頁面</th><th>已清洗字元</th><th>建立時間</th><th></th></tr></thead><tbody><template v-for="job in jobs" :key="job.id"><tr><td><strong>#{{ job.id }}</strong><br><small>{{ job.sourceName || `來源 #${job.sourceId}` }}</small></td><td>{{ displayStatus(job.collectionMode) }}<br><span class="status" :class="`status-${job.status}`">{{ displayStatus(job.status) }}</span></td><td>{{ job.pagesCleaned || 0 }} / {{ job.pagesFetched || 0 }}<br><small>{{ job.artifactsCreated || 0 }} 個產物</small></td><td>{{ job.cleanedCharacterCount || 0 }}</td><td><small>{{ formatDate(job.requestedAt) }}</small></td><td><button class="row-button" type="button" @click="toggleJob(job.id)">{{ expandedJobId === job.id ? '收合' : '檢視' }}</button></td></tr><tr v-if="expandedJobId === job.id" class="detail-row"><td colspan="6"><div class="page-results"><article v-for="page in (job.crawlResults || [])" :key="`${job.id}-${page.url}`"><strong>{{ displayStatus(page.status) }}</strong><span>{{ page.depth }} · HTTP {{ page.httpStatus || '—' }}</span><small>{{ page.url }}</small><small>{{ page.cleanedCharacterCount || 0 }} 個字元 · {{ displayStatus(page.piiOutcome || '—') }} · 產物 {{ page.artifactId || '無' }}<template v-if="page.errorCode"> · {{ page.errorCode }}</template></small></article></div></td></tr></template></tbody></table></div>
+          <p v-else class="empty-state">尚未執行抓取。通過來源卡政策閘門後，第一個受限執行會出現在這裡。</p>
         </div>
       </section>
 
       <section class="workbench-section" aria-labelledby="train-title">
-        <div class="section-intro"><p class="eyebrow">03 / Train</p><h2 id="train-title">用合格標籤訓練可檢查的模型。</h2><p>Crawl 產生的是 feature artifact，不是 label。Training 會讀取 Audit Lab 中明確 consent、人工 review、quality passed 且未撤回的 de-identified examples。development run 用於驗證流程；production gate 仍要求至少 150 筆、每個 journey stage 至少 20 筆。</p></div>
+        <div class="section-intro"><p class="eyebrow">03／訓練</p><h2 id="train-title">用合格標籤訓練可檢查的模型。</h2><p>抓取產生的是特徵產物，不是標籤。訓練只會讀取稽核實驗室中有明確同意、人工審核、品質通過且未撤回的去識別樣本。開發模式用於驗證流程；正式模式仍要求至少 150 筆、每個旅程階段至少 20 筆。</p></div>
         <div class="workbench-card training-card">
-          <div class="training-callout"><span class="eyebrow">Current training engine</span><strong>Hugging Face Transformers Trainer</strong><p>這裡會把合格的去識別 feature records 組成 dataset，提交到 Hugging Face Jobs 的 GPU，使用 multilingual DistilBERT 做 supervised fine-tuning，完成後把 private model artifact 上傳到 Hugging Face model repo。沒有成功提交或完成 remote job，就不會宣稱模型已訓練。</p><p class="provider-status">Firecrawl：<strong>{{ providerStatus.firecrawl.configured ? '已連接' : '未設定' }}</strong><template v-if="providerStatus.firecrawl.last4"> · ****{{ providerStatus.firecrawl.last4 }}</template> · Hugging Face Jobs：<strong>{{ providerStatus.huggingface.configured ? '已連接' : '未設定' }}</strong><template v-if="providerStatus.huggingface.last4"> · ****{{ providerStatus.huggingface.last4 }}</template><template v-if="providerStatus.huggingface.namespace"> · {{ providerStatus.huggingface.namespace }}</template></p><p class="workbench-hint">你可以直接在這裡設定；key 只會加密存放在 server database，瀏覽器不會拿到完整內容。</p></div>
-          <form class="workbench-form provider-settings" @submit.prevent="saveProviderSettings"><label><span>Firecrawl API key</span><input v-model.trim="providerForm.firecrawlApiKey" type="password" autocomplete="off" placeholder="貼上 Firecrawl key；留白代表保留原設定"></label><label><span>Hugging Face token</span><input v-model.trim="providerForm.huggingFaceApiToken" type="password" autocomplete="off" placeholder="貼上 Hugging Face token；留白代表保留原設定"></label><label><span>Hugging Face 使用者名稱</span><input v-model.trim="providerForm.huggingFaceNamespace" type="text" autocomplete="username" placeholder="例如 your-name"></label><button class="workbench-button" :disabled="providerSaveStatus === 'saving'" type="submit">{{ providerSaveStatus === 'saving' ? '儲存中…' : '儲存 provider 設定' }} <span aria-hidden="true">↗</span></button><p v-if="providerSaveMessage" class="workbench-feedback" :class="providerSaveStatus === 'error' ? 'is-error' : 'is-success'" aria-live="polite">{{ providerSaveMessage }}</p></form>
-          <form class="workbench-form training-form" @submit.prevent="startTraining"><label><span>Run mode</span><select v-model="trainingMode"><option value="development">Development · ≥ 5 examples, every stage covered</option><option value="production">Production · ≥ 150 examples, ≥ 20 per stage</option></select></label><button class="workbench-button" :disabled="trainingStatus === 'running'" type="submit">{{ trainingStatus === 'running' ? 'Submitting Hugging Face job…' : 'Run Hugging Face training' }} <span aria-hidden="true">↗</span></button><p v-if="trainingMessage" class="workbench-feedback" :class="trainingStatus === 'error' ? 'is-error' : 'is-success'" aria-live="polite">{{ trainingMessage }}</p></form>
-          <div v-if="trainingRuns.length" class="run-list"><article v-for="run in trainingRuns" :key="run.id"><div><strong>#{{ run.id }} · {{ run.mode }}</strong><span class="status" :class="`status-${run.status}`">{{ displayStatus(run.status) }}</span><small>{{ formatDate(run.createdAt) }} · {{ run.exampleCount }} examples · train {{ run.trainCount }} / val {{ run.validationCount }} / test {{ run.testCount }}</small><small>Hugging Face · {{ run.modelFamily }} · {{ run.modelVersion }}</small><a v-if="run.remoteJobUrl" class="run-link" :href="run.remoteJobUrl" target="_blank" rel="noreferrer">Open remote job ↗</a><a v-if="run.modelRepoId" class="run-link" :href="`https://huggingface.co/${run.modelRepoId}`" target="_blank" rel="noreferrer">Open private model repo ↗</a></div><dl v-if="run.metrics?.test"><div><dt>Test accuracy</dt><dd>{{ run.metrics.test.accuracy ?? '—' }}</dd></div><div><dt>Test macro-F1</dt><dd>{{ run.metrics.test.macroF1 ?? '—' }}</dd></div><div><dt>Labels</dt><dd>{{ Object.values(run.labelCounts).reduce((sum, count) => sum + count, 0) }}</dd></div></dl><small v-if="run.errorCode" class="run-error">{{ run.errorCode }}</small></article></div><p v-else class="empty-state">尚未有 training run。先在 Audit Lab 完成人工觀察、review、quality gate 與 training approval。</p>
+          <div class="training-callout"><span class="eyebrow">目前訓練引擎</span><strong>Hugging Face Transformers Trainer</strong><p>這裡會把合格的去識別特徵紀錄組成資料集，提交到 Hugging Face Jobs 的 GPU，使用多語言 DistilBERT 進行監督式微調，完成後把私有模型產物上傳到 Hugging Face 模型儲存庫。未成功提交或完成遠端工作時，不會宣稱模型已訓練。</p><p class="provider-status">Firecrawl：<strong>{{ providerStatus.firecrawl.configured ? '已連接' : '未設定' }}</strong><template v-if="providerStatus.firecrawl.last4"> · ****{{ providerStatus.firecrawl.last4 }}</template> · Hugging Face Jobs：<strong>{{ providerStatus.huggingface.configured ? '已連接' : '未設定' }}</strong><template v-if="providerStatus.huggingface.last4"> · ****{{ providerStatus.huggingface.last4 }}</template><template v-if="providerStatus.huggingface.namespace"> · {{ providerStatus.huggingface.namespace }}</template></p><p class="workbench-hint">你可以直接在這裡設定；金鑰只會加密存放在伺服器資料庫，瀏覽器不會取得完整內容。</p></div>
+          <form class="workbench-form provider-settings" @submit.prevent="saveProviderSettings"><label><span>Firecrawl API 金鑰</span><input v-model.trim="providerForm.firecrawlApiKey" type="password" autocomplete="off" placeholder="貼上 Firecrawl 金鑰；留白代表保留原設定"></label><label><span>Hugging Face token</span><input v-model.trim="providerForm.huggingFaceApiToken" type="password" autocomplete="off" placeholder="貼上 Hugging Face token；留白代表保留原設定"></label><label><span>Hugging Face 使用者名稱</span><input v-model.trim="providerForm.huggingFaceNamespace" type="text" autocomplete="username" placeholder="例如 your-name"></label><button class="workbench-button" :disabled="providerSaveStatus === 'saving'" type="submit">{{ providerSaveStatus === 'saving' ? '儲存中…' : '儲存服務設定' }} <span aria-hidden="true">↗</span></button><p v-if="providerSaveMessage" class="workbench-feedback" :class="providerSaveStatus === 'error' ? 'is-error' : 'is-success'" aria-live="polite">{{ providerSaveMessage }}</p></form>
+          <form class="workbench-form training-form" @submit.prevent="startTraining"><label><span>執行模式</span><select v-model="trainingMode"><option value="development">開發模式 · 至少 5 筆樣本且涵蓋每個階段</option><option value="production">正式模式 · 至少 150 筆樣本、每個階段至少 20 筆</option></select></label><button class="workbench-button" :disabled="trainingStatus === 'running'" type="submit">{{ trainingStatus === 'running' ? '正在提交 Hugging Face 工作…' : '執行 Hugging Face 訓練' }} <span aria-hidden="true">↗</span></button><p v-if="trainingMessage" class="workbench-feedback" :class="trainingStatus === 'error' ? 'is-error' : 'is-success'" aria-live="polite">{{ trainingMessage }}</p></form>
+          <div v-if="trainingRuns.length" class="run-list"><article v-for="run in trainingRuns" :key="run.id"><div><strong>#{{ run.id }} · {{ displayStatus(run.mode) }}</strong><span class="status" :class="`status-${run.status}`">{{ displayStatus(run.status) }}</span><small>{{ formatDate(run.createdAt) }} · {{ run.exampleCount }} 筆樣本 · 訓練 {{ run.trainCount }}／驗證 {{ run.validationCount }}／測試 {{ run.testCount }}</small><small>Hugging Face · {{ run.modelFamily }} · {{ run.modelVersion }}</small><a v-if="run.remoteJobUrl" class="run-link" :href="run.remoteJobUrl" target="_blank" rel="noreferrer">開啟遠端工作 ↗</a><a v-if="run.modelRepoId" class="run-link" :href="`https://huggingface.co/${run.modelRepoId}`" target="_blank" rel="noreferrer">開啟私有模型儲存庫 ↗</a></div><dl v-if="run.metrics?.test"><div><dt>測試準確率</dt><dd>{{ run.metrics.test.accuracy ?? '—' }}</dd></div><div><dt>測試 macro-F1</dt><dd>{{ run.metrics.test.macroF1 ?? '—' }}</dd></div><div><dt>標籤</dt><dd>{{ Object.values(run.labelCounts).reduce((sum, count) => sum + count, 0) }}</dd></div></dl><small v-if="run.errorCode" class="run-error">{{ run.errorCode }}</small></article></div><p v-else class="empty-state">尚未有訓練執行。請先在稽核實驗室完成人工觀察、審核、品質閘門與訓練核准。</p>
         </div>
       </section>
 
-      <section class="workbench-footer-guardrail"><p class="eyebrow">Human gate</p><h2>能跑，不代表能宣稱。</h2><p>每個 Hugging Face run 都必須通過 de-identified dataset、policy、consent、quality、split 與 strategist review gate；只有 remote job 完成並留下 model artifact，才會顯示為 completed。它不代表 conversion prediction。</p><NuxtLink to="/audit-lab" class="workbench-button workbench-button-light">Open Audit Lab <span aria-hidden="true">↗</span></NuxtLink></section>
+      <section class="workbench-footer-guardrail"><p class="eyebrow">人工閘門</p><h2>可以執行，不代表可以宣稱完成。</h2><p>每個 Hugging Face 訓練執行都必須通過去識別資料集、政策、同意、品質、切分與策略師審核閘門；只有遠端工作完成並留下模型產物，才會顯示為已完成。它不代表轉換預測。</p><NuxtLink to="/audit-lab" class="workbench-button workbench-button-light">開啟稽核實驗室 <span aria-hidden="true">↗</span></NuxtLink></section>
     </template>
   </main>
 </template>

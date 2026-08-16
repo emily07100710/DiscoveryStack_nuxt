@@ -63,3 +63,7 @@
 - [x] 釐清既有 OWNER_OPEN_ID 與目前代理瀏覽器 Manus 帳戶的 owner mismatch，僅在使用者明確指定授權 owner 帳戶後更新 allowlist。
 - [x] 依使用者明確授權，將目前已完成 OAuth identity 驗證的帳戶安全遷移為唯一 owner，避免在 Git、公開回應或聊天室暴露 open ID。
 - [ ] 在 Audit Lab 建立並人工審核至少 5 筆具 consent、quality pass、未撤回且涵蓋 journey stages 的去識別訓練樣本，再確認 development run 是否可提交遠端 Hugging Face job。
+- [ ] 盤點 owner-only Audit Lab 與 ML Workbench 所有可見英文文字，建立繁體中文在地化範圍且不翻譯機密值、模型代號或安全 error code。
+- [ ] 將 Audit Lab owner 後台可見導覽、表單、狀態、資料治理與人審文字改為繁體中文。
+- [ ] 將 ML Workbench 可見導覽、爬取／清洗／訓練控制項、資料門檻與 blocked-run 狀態改為繁體中文。
+- [ ] 以正式 owner session 驗證中文 Audit Lab、中文 ML Workbench 與既有訓練 gate 均可正常運作。
