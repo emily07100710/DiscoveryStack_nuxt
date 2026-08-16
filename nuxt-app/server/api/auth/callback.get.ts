@@ -4,6 +4,7 @@ import { setOwnerSession } from '../../utils/auth'
 import { exchangeOAuthCode } from '../../utils/oauth'
 
 type CallbackStage = 'exchange' | 'token' | 'identity' | 'database' | 'session'
+const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r4'
 
 function callbackStatusCode(error: unknown) {
   const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
@@ -23,7 +24,12 @@ export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const code = typeof query.code === 'string' ? query.code : ''
   const state = typeof query.state === 'string' ? query.state : ''
-  if (!code || !state) throw createError({ statusCode: 400, statusMessage: 'Sign-in callback requires code and state.' })
+  setHeader(event, 'Cache-Control', 'no-store, max-age=0')
+  setHeader(event, 'X-DiscoveryStack-OAuth-Release', OAUTH_NITRO_RELEASE)
+  if (!code || !state) {
+    setResponseStatus(event, 400)
+    return { error: 'Private sign-in could not be completed.' }
+  }
   let stage: CallbackStage = 'exchange'
   try {
     const user = await exchangeOAuthCode(event, code, state, (nextStage) => { stage = nextStage })

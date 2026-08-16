@@ -20,6 +20,8 @@ describe('OAuth frontend-origin contract', () => {
 
   it('binds the requested frontend origin, OAuth state, and callback URI to the same allowlist value', () => {
     expect(login).toContain('beginOAuthLogin(event, origin)')
+    expect(login).toContain("setHeader(event, 'Cache-Control', 'no-store, max-age=0')")
+    expect(login).toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Release', OAUTH_NITRO_RELEASE)")
     expect(login).toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Route', 'nuxt-origin-allowlist-v1')")
     expect(oauth).toContain("if (requestedOrigin !== allowedOrigin)")
     expect(oauth).toContain('const redirectUri = `${allowedOrigin}/api/oauth/callback`')
@@ -61,6 +63,9 @@ describe('OAuth frontend-origin contract', () => {
   it('bounds provider calls so a failed provider cannot leave the callback without a response', () => {
     expect(oauth).toContain('const OAUTH_PROVIDER_TIMEOUT_MS = 12_000')
     expect(oauth).toContain('timeout: OAUTH_PROVIDER_TIMEOUT_MS')
+    expect(callback).toContain("setHeader(event, 'Cache-Control', 'no-store, max-age=0')")
+    expect(callback).toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Release', OAUTH_NITRO_RELEASE)")
+    expect(callback).toContain("return { error: 'Private sign-in could not be completed.' }")
     expect(callback).toContain('setResponseStatus(event, statusCode)')
     expect(callback).toContain('return { error: callbackFailureMessage(stage) }')
   })
