@@ -34,3 +34,9 @@ A second proxy-browser reproduction navigated to the same correctly parameterize
 The proxy browser can load the public Manus homepage normally, but it presents a `Sign in` control, confirming that the browser has no authenticated Manus owner session. The standard public sign-in control did not initiate a usable owner session in this browser context. Consequently, a live owner OAuth authorization cannot be completed by the proxy browser without a connected authenticated browser session.
 
 After accepting the public-site notice, the standard Manus login page rendered correctly in the proxy browser and presented account-bound sign-in choices (social identity providers, email, and passkey). No owner credential or pre-authenticated session is available to the proxy browser, and no credential was entered or submitted during this diagnostic.
+
+After the browser completed the public-site consent flow, the standard Manus login page continued to render normally. Returning to the production Audit Lab showed its client-side private-state loader; the owner sign-in action is expected after the anonymous overview request resolves.
+
+With the public-site consent flow completed and the standard Manus login page demonstrably functional, the production Audit Lab `app-auth` authorization URL still rendered only a blank loading state. The issue is therefore not caused by the public cookie notice or the DiscoveryStack origin, callback URI, app ID, state encoding, or anonymous Audit Lab state transition.
+
+The proxy browser console reported no client-side error. Its final document state after the `app-auth` redirect was `about:blank` with a completed empty document and no loaded resources, which confirms that the external authorization route clears the browsing context before the DiscoveryStack callback is invoked.
