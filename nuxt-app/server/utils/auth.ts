@@ -11,8 +11,8 @@ function authConfig(event: H3Event) {
   // Nitro serializes runtimeConfig during build. Hosting secrets are injected only
   // into the running container, so the server-only environment fallback keeps the
   // session boundary available without ever exposing either value to the client.
-  const sessionSecret = (typeof config.sessionSecret === 'string' ? config.sessionSecret : '') || process.env.JWT_SECRET || ''
-  const ownerOpenId = (typeof config.ownerOpenId === 'string' ? config.ownerOpenId : '') || process.env.OWNER_OPEN_ID || ''
+  const sessionSecret = (typeof config.sessionSecret === 'string' ? config.sessionSecret : '') || process.env.NUXT_SESSION_SECRET || process.env.JWT_SECRET || ''
+  const ownerOpenId = (typeof config.ownerOpenId === 'string' ? config.ownerOpenId : '') || process.env.NUXT_OWNER_OPEN_ID || process.env.OWNER_OPEN_ID || ''
   if (!sessionSecret || !ownerOpenId) {
     throw createError({ statusCode: 503, statusMessage: 'Private administration is not configured.' })
   }

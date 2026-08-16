@@ -6,6 +6,7 @@ const root = process.cwd()
 const config = readFileSync(join(root, 'nuxt.config.ts'), 'utf8')
 const oauth = readFileSync(join(root, 'server/utils/oauth.ts'), 'utf8')
 const auth = readFileSync(join(root, 'server/utils/auth.ts'), 'utf8')
+const privateConfigProbe = readFileSync(join(root, 'server/api/__private-config.get.ts'), 'utf8')
 const login = readFileSync(join(root, 'server/api/auth/login.get.ts'), 'utf8')
 const callback = readFileSync(join(root, 'server/api/auth/callback.get.ts'), 'utf8')
 const releaseProbe = readFileSync(join(root, 'server/api/__release.get.ts'), 'utf8')
@@ -44,10 +45,21 @@ describe('OAuth frontend-origin contract', () => {
   })
 
   it('reads owner session secrets only on the server at request time when hosting injects them after build', () => {
+    expect(auth).toContain("process.env.NUXT_SESSION_SECRET || process.env.JWT_SECRET || ''")
+    expect(auth).toContain("process.env.NUXT_OWNER_OPEN_ID || process.env.OWNER_OPEN_ID || ''")
     expect(auth).toContain("process.env.JWT_SECRET || ''")
     expect(auth).toContain("process.env.OWNER_OPEN_ID || ''")
     expect(auth).toContain("const SESSION_COOKIE = '__Host-discoverystack-session'")
     expect(auth).toContain("httpOnly: true, secure: true, sameSite: 'lax'")
+  })
+
+  it('offers a secret-free server configuration probe for secure deployment validation', () => {
+    expect(privateConfigProbe).toContain("setHeader(event, 'Cache-Control', 'no-store, max-age=0')")
+    expect(privateConfigProbe).toContain("setHeader(event, 'X-DiscoveryStack-Private-Config', hasSessionSecret && hasOwnerOpenId ? 'ready' : 'missing')")
+    expect(privateConfigProbe).toContain("process.env.NUXT_SESSION_SECRET")
+    expect(privateConfigProbe).toContain("process.env.NUXT_OWNER_OPEN_ID")
+    expect(privateConfigProbe).not.toContain('return { sessionSecret')
+    expect(privateConfigProbe).not.toContain('return { ownerOpenId')
   })
 
   it('mints the browser origin only in the explicit Audit Lab sign-in click handler', () => {
@@ -116,7 +128,7 @@ describe('OAuth frontend-origin contract', () => {
 
   it('requires the production image to build a clean Nitro artifact with the current OAuth release marker', () => {
     expect(dockerfile).toContain('rm -rf .nuxt .output')
-    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r10' .output/server")
+    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r11' .output/server")
     expect(dockerfile).toContain('CMD ["node", ".output/server/index.mjs"]')
   })
 
