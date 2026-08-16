@@ -29,8 +29,9 @@ describe('OAuth frontend-origin contract', () => {
     expect(oauth).toContain('const expectedRedirect = `${allowedOrigin}/api/oauth/callback`')
     expect(readFileSync(join(root, 'server/api/oauth/callback.get.ts'), 'utf8')).toContain("export { default } from '../auth/callback.get'")
     expect(oauth).toContain('parsed.nonce !== expectedNonce')
-    expect(oauth).toContain("body: { clientId: appId, grantType: 'authorization_code', code, redirectUri: statePayload.redirectUri }")
-    expect(oauth).not.toContain("body: { clientId: appId, grantType: 'authorization_code', code, state }")
+    expect(oauth).toContain('axios.post<{ accessToken?: string }>')
+    expect(oauth).toContain("clientId: appId, grantType: 'authorization_code', code, redirectUri: statePayload.redirectUri")
+    expect(oauth).not.toContain("clientId: appId, grantType: 'authorization_code', code, state")
   })
 
   it('uses a short-lived Secure cross-site state cookie only for the OAuth callback and never exposes its nonce', () => {
@@ -62,6 +63,8 @@ describe('OAuth frontend-origin contract', () => {
   })
 
   it('bounds provider calls so a failed provider cannot leave the callback without a response', () => {
+    expect(oauth).toContain("import axios from 'axios'")
+    expect(oauth).not.toContain('$fetch<')
     expect(oauth).toContain('const OAUTH_PROVIDER_TIMEOUT_MS = 12_000')
     expect(oauth).toContain('timeout: OAUTH_PROVIDER_TIMEOUT_MS')
     expect(callback).toContain("setHeader(event, 'Cache-Control', 'no-store, max-age=0')")
