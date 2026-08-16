@@ -36,14 +36,14 @@ export default defineEventHandler(async (event) => {
     return { error: 'Private sign-in could not be completed.' }
   }
   let stage: CallbackStage = 'exchange'
-  let providerError: OAuthProviderError | null = null
+  const providerFailure: { value: OAuthProviderError | null } = { value: null }
   try {
     const user = await exchangeOAuthCode(
       event,
       code,
       state,
       (nextStage) => { stage = nextStage },
-      (failure) => { providerError = failure },
+      (failure) => { providerFailure.value = failure },
     )
     stage = 'database'
     const database = getDatabase()
@@ -60,14 +60,21 @@ export default defineEventHandler(async (event) => {
     return sendRedirect(event, '/audit-lab', 302)
   } catch (error: unknown) {
     setHeader(event, 'X-DiscoveryStack-OAuth-Callback', stage)
-    if (providerError) {
-      setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Error', providerError.kind)
-      if (providerError.status !== null) setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Status', String(providerError.status))
+    if (providerFailure.value) {
+      setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Error', providerFailure.value.kind)
+      if (providerFailure.value.status !== null) setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Status', String(providerFailure.value.status))
     }
-    const statusCode = callbackStatusCode(error, stage, providerError)
+    const statusCode = callbackStatusCode(error, stage, providerFailure.value)
     const errorName = error instanceof Error ? error.name : typeof error
     console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; error=${errorName}`)
     setResponseStatus(event, statusCode)
+    if (providerFailure.value) {
+      return {
+        error: callbackFailureMessage(stage),
+        providerError: providerFailure.value.kind,
+        providerStatus: providerFailure.value.status,
+      }
+    }
     return { error: callbackFailureMessage(stage) }
   }
 })
