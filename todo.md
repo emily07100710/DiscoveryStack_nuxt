@@ -30,35 +30,36 @@
 - [x] 重新發布並驗證正式網域的 canonical/hreflang 及 Audit Lab noindex header。
 - [x] 改用未與平台系統環境變數衝突的 `NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL`，讓 SEO、robots、llms 與 sitemap 在 container runtime 使用實際正式網域。
 - [x] 對 managed Nuxt preview 的 `/en` 執行 canonical/hreflang integration test，確認它使用 `NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL` 而非平台預設 URL。
-- [ ] 在正式網域實測 owner OAuth 登入，確認 session 僅授予設定的 owner。
-- [ ] 於 owner-only ML Workbench 執行一筆可追溯的受控訓練流程，驗證 human-review gate 與訓練狀態紀錄。
-- [ ] 記錄 OAuth 與受控訓練實測結果，並補足必要的 regression coverage。
-- [ ] 診斷並修正正式 owner OAuth 登入導向顯示空白頁的問題。
-- [ ] 以代理瀏覽器完成 owner OAuth 與 ML Workbench 實測，不要求使用者接手瀏覽器。
-- [ ] 隔離並修正帳戶選擇後正式 OAuth callback 產生 Cloudflare 502 的 server-side 失敗階段。
-- [ ] 為 OAuth provider exchange 加入不洩漏憑證的逾時與結構化錯誤診斷，避免 callback 無回應。
+- [x] 在正式網域實測 owner OAuth 登入，確認 session 僅授予設定的 owner。
+- [x] 於 owner-only ML Workbench 執行一筆可追溯的受控訓練流程，驗證 human-review gate 與訓練狀態紀錄。
+- [x] 記錄 OAuth 與受控訓練實測結果，並補足必要的 regression coverage。
+- [x] 診斷並修正正式 owner OAuth 登入導向顯示空白頁的問題。
+- [x] 以代理瀏覽器完成 owner OAuth 與 ML Workbench 實測，不要求使用者接手瀏覽器。
+- [x] 隔離並修正帳戶選擇後正式 OAuth callback 產生 Cloudflare 502 的 server-side 失敗階段。
+- [x] 為 OAuth provider exchange 加入不洩漏憑證的逾時與結構化錯誤診斷，避免 callback 無回應。
 - [x] 為正式 Nitro API 回應加入無快取 release 觀測，確認網域不再輪替至舊 deployment 或不存在的上游服務。
 - [x] 重新發布並驗證正式 OAuth callback 僅命中最新 Nitro runtime，而非外層模板或舊 artifact。
-- [ ] 對齊平台 SDK 的 OAuth HTTP client，修正真實 authorization-code exchange 在 Nitro production 的相容性。
-- [ ] 為 OAuth provider exchange 加入 HTTP JSON header 與無敏感 provider error 分類，辨識真實 callback 502 的上游失敗模式。
+- [x] 對齊平台 SDK 的 OAuth HTTP client，修正真實 authorization-code exchange 在 Nitro production 的相容性。
+- [x] 為 OAuth provider exchange 加入 HTTP JSON header 與無敏感 provider error 分類，辨識真實 callback 502 的上游失敗模式。
 - [x] 重新啟動停止回應的 Nuxt 開發預覽，並確認預覽首頁可正常載入。
 - [ ] 評估不繞過 owner OAuth 與 human-review 的受限代管訓練替代架構，並取得使用者核准後才實作。
-- [ ] 修復 Autoscale hosting 在真實 OAuth callback request 對 Nitro 上游回傳 Cloudflare 502 的問題，並以 owner round-trip 驗收。
-- [ ] 避免以 HTTP 502 回傳 OAuth provider 失敗而被 Cloudflare 覆寫，改用無敏感資訊的受控 callback 回應驗證真實 exchange 結果。
-- [ ] 以遞增 OAuth Nitro release 標記驗證 Autoscale 已載入最新 callback 修復，而非沿用先前 container image。
-- [ ] 在 hosting 修復後確認正式網域回傳 OAuth Nitro r5，再重跑 owner OAuth 與受控訓練驗收。
-- [ ] 在不暴露 provider 回應內容的前提下觀測 OAuth exchange HTTP status，辨識有效 authorization code 被拒絕的原因。
+- [x] 修復 Autoscale hosting 在真實 OAuth callback request 對 Nitro 上游回傳 Cloudflare 502 的問題，並以 owner round-trip 驗收。
+- [x] 避免以 HTTP 502 回傳 OAuth provider 失敗而被 Cloudflare 覆寫，改用無敏感資訊的受控 callback 回應驗證真實 exchange 結果。
+- [x] 以遞增 OAuth Nitro release 標記驗證 Autoscale 已載入最新 callback 修復，而非沿用先前 container image。
+- [x] 在 hosting 修復後確認正式網域回傳 OAuth Nitro r5，再重跑 owner OAuth 與受控訓練驗收。
+- [x] 在不暴露 provider 回應內容的前提下觀測 OAuth exchange HTTP status，辨識有效 authorization code 被拒絕的原因。
 - [x] 修正 callback provider error closure 的 TypeScript 型別收斂，讓 production Docker build 可完成。
 - [x] 將缺少 access token 或 identity 的成功 HTTP provider payload 納入安全分類，取得不含憑證的 exchange 結果診斷。
-- [ ] 以最新 production release 再次驗證 owner OAuth callback 的安全 provider status，據以完成 exchange 修復。
-- [ ] 部署包含 successful-payload 安全分類的最新 checkpoint，並以無快取 probe 確認正式網域已載入新版本。
-- [ ] 以代理瀏覽器重跑 owner OAuth callback，記錄最新 production 的安全 provider error/status，不暴露授權碼、token 或帳戶資料。
-- [ ] 建立僅存在於 Nuxt Nitro 的無敏感 release endpoint，隔離 production 網域是否仍指向舊 revision 或殘留 callback handler。
-- [ ] 依平台 OAuth SDK 契約以原始 state 進行 authorization-code exchange，修正目前僅傳 redirect URI 所導致的 provider HTTP 401。
-- [ ] 將 OAuth provider 401 response 安全映射為 allowlisted 的拒絕原因碼，辨識 app、redirect URI 或 authorization-code 設定問題而不暴露 response body。
-- [ ] 對 OAuth session-stage failure 記錄無敏感 HTTP 狀態與 allowlisted 類別，分辨 owner mismatch、私有設定與 JWT session 簽署問題。
-- [ ] 以 server-only request-time environment fallback 讀取 JWT_SECRET 與 OWNER_OPEN_ID，修正 Nuxt production build-time runtimeConfig 遺失 hosting secrets 的 session configuration failure。
-- [ ] 設定 NUXT_SESSION_SECRET 與 NUXT_OWNER_OPEN_ID 為 Nuxt runtimeConfig 的 production aliases，避免 build-time default 覆蓋 hosting secrets。
-- [ ] 以不回傳任何值的 private configuration probe 驗證正式 container 已讀到 Nuxt session／owner aliases。
-- [ ] 釐清既有 OWNER_OPEN_ID 與目前代理瀏覽器 Manus 帳戶的 owner mismatch，僅在使用者明確指定授權 owner 帳戶後更新 allowlist。
-- [ ] 依使用者明確授權，將目前已完成 OAuth identity 驗證的帳戶安全遷移為唯一 owner，避免在 Git、公開回應或聊天室暴露 open ID。
+- [x] 以最新 production release 再次驗證 owner OAuth callback 的安全 provider status，據以完成 exchange 修復。
+- [x] 部署包含 successful-payload 安全分類的最新 checkpoint，並以無快取 probe 確認正式網域已載入新版本。
+- [x] 以代理瀏覽器重跑 owner OAuth callback，記錄最新 production 的安全 provider error/status，不暴露授權碼、token 或帳戶資料。
+- [x] 建立僅存在於 Nuxt Nitro 的無敏感 release endpoint，隔離 production 網域是否仍指向舊 revision 或殘留 callback handler。
+- [x] 依平台 OAuth SDK 契約以原始 state 進行 authorization-code exchange，修正目前僅傳 redirect URI 所導致的 provider HTTP 401。
+- [x] 將 OAuth provider 401 response 安全映射為 allowlisted 的拒絕原因碼，辨識 app、redirect URI 或 authorization-code 設定問題而不暴露 response body。
+- [x] 對 OAuth session-stage failure 記錄無敏感 HTTP 狀態與 allowlisted 類別，分辨 owner mismatch、私有設定與 JWT session 簽署問題。
+- [x] 以 server-only request-time environment fallback 讀取 JWT_SECRET 與 OWNER_OPEN_ID，修正 Nuxt production build-time runtimeConfig 遺失 hosting secrets 的 session configuration failure。
+- [x] 設定 NUXT_SESSION_SECRET 與 NUXT_OWNER_OPEN_ID 為 Nuxt runtimeConfig 的 production aliases，避免 build-time default 覆蓋 hosting secrets。
+- [x] 以不回傳任何值的 private configuration probe 驗證正式 container 已讀到 Nuxt session／owner aliases。
+- [x] 釐清既有 OWNER_OPEN_ID 與目前代理瀏覽器 Manus 帳戶的 owner mismatch，僅在使用者明確指定授權 owner 帳戶後更新 allowlist。
+- [x] 依使用者明確授權，將目前已完成 OAuth identity 驗證的帳戶安全遷移為唯一 owner，避免在 Git、公開回應或聊天室暴露 open ID。
+- [ ] 在 Audit Lab 建立並人工審核至少 5 筆具 consent、quality pass、未撤回且涵蓋 journey stages 的去識別訓練樣本，再確認 development run 是否可提交遠端 Hugging Face job。
