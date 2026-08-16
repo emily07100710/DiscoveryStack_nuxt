@@ -78,3 +78,7 @@ The My Browser bridge rendered the authenticated workbench and all its textual c
 ### 2026-08-17 — Owner-authorized development training gate validation
 
 After the user explicitly confirmed the browser action, the authenticated owner session submitted one development-mode training request. The server created the auditable run `#1` with status `BLOCKED` and safe reason `TRAINING_GATE_NOT_MET`: it found `0` eligible examples and split counts of `0 / 0 / 0`, while development requires at least five quality-passed, consented examples with stage coverage. The Workbench continued to show `Latest model: Not trained`; no Hugging Face remote job, model artifact, raw training data or credential was exposed or claimed.
+
+### Controlled-training architecture decision
+
+The production Autoscale request-handler design was validated as sufficient for owner-authorized training submission, database status recording and the human-review/data-quality gates. No managed-background workaround, direct token route or owner-bypass alternative is appropriate: any real remote training remains contingent on owner authentication and a qualifying de-identified dataset. The next action is data governance work in Audit Lab, not infrastructure replacement.
