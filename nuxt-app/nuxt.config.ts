@@ -68,7 +68,7 @@ export default defineNuxtConfig({
     strategy: 'prefix',
     defaultLocale: 'en',
     detectBrowserLanguage: false,
-    baseUrl: process.env.NUXT_PUBLIC_SITE_URL || 'https://discoverystack.example',
+    baseUrl: process.env.NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL || process.env.NUXT_PUBLIC_SITE_URL || 'https://discoverystack.example',
     locales: [
       { code: 'en', language: 'en-US', file: 'en.json', name: 'English' },
       { code: 'zh-hant', language: 'zh-Hant', file: 'zh-hant.json', name: '繁體中文' },
@@ -78,7 +78,7 @@ export default defineNuxtConfig({
     oauthServerUrl: process.env.OAUTH_SERVER_URL || '',
     oauthPortalUrl: process.env.VITE_OAUTH_PORTAL_URL || '',
     oauthAppId: process.env.VITE_APP_ID || '',
-    oauthAllowedOrigin: process.env.OAUTH_ALLOWED_ORIGIN || '',
+    discoveryStackOauthAllowedOrigin: process.env.NUXT_DISCOVERY_STACK_OAUTH_ALLOWED_ORIGIN || process.env.OAUTH_ALLOWED_ORIGIN || '',
     sessionSecret: process.env.JWT_SECRET || '',
     ownerOpenId: process.env.OWNER_OPEN_ID || '',
     firecrawlApiKey: process.env.FIRECRAWL_API_KEY || '',
@@ -88,7 +88,7 @@ export default defineNuxtConfig({
     huggingFaceBaseModelId: process.env.HUGGINGFACE_BASE_MODEL_ID || 'distilbert/distilbert-base-multilingual-cased',
     huggingFaceJobFlavor: process.env.HUGGINGFACE_JOB_FLAVOR || 'a10g-small',
     public: {
-      siteUrl: process.env.NUXT_PUBLIC_SITE_URL || 'https://discoverystack.example',
+      discoveryStackSiteUrl: process.env.NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL || process.env.NUXT_PUBLIC_SITE_URL || 'https://discoverystack.example',
     },
   },
   // `pnpm typecheck` remains the authoritative check. The managed preview

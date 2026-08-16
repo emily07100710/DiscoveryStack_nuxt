@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { fetchSsrHtml, startSsrServer, stopSsrServer } from './helpers/ssr-server'
 
 const publicRoot = join(process.cwd(), '.output/public')
-const siteUrl = (process.env.NUXT_PUBLIC_SITE_URL || 'https://discoverystack.example').replace(/\/$/, '')
+const siteUrl = (process.env.NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL || process.env.NUXT_PUBLIC_SITE_URL || 'https://discoverystack.example').replace(/\/$/, '')
 const escapedSiteUrl = siteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const canonicalPattern = new RegExp(`<link\\b(?=[^>]*\\brel="canonical")(?=[^>]*\\bhref="${escapedSiteUrl}\\/(en|zh-hant)[^"]*")[^>]*>`, 'i')
 const englishAlternatePattern = /<link\b(?=[^>]*\brel="alternate")(?=[^>]*\bhreflang="en")(?=[^>]*\bhref="[^"]+")[^>]*>/i

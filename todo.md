@@ -28,3 +28,5 @@
 - [x] 修正 Nuxt 開發預覽 `/en` 路由回傳 unavailable 的問題，並確認可顯示 DiscoveryStack SSR 首頁。
 - [x] 將 `NUXT_PUBLIC_SITE_URL` 與 `OAUTH_ALLOWED_ORIGIN` 更新為正式 Manus 網域，並以 SSR integration test 驗證 canonical 與 OAuth origin 一致。
 - [ ] 重新發布並驗證正式網域的 canonical/hreflang 及 Audit Lab noindex header。
+- [x] 改用未與平台系統環境變數衝突的 `NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL`，讓 SEO、robots、llms 與 sitemap 在 container runtime 使用實際正式網域。
+- [x] 對 managed Nuxt preview 的 `/en` 執行 canonical/hreflang integration test，確認它使用 `NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL` 而非平台預設 URL。

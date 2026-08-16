@@ -11,8 +11,8 @@ const auditLab = readFileSync(join(root, 'pages/audit-lab.vue'), 'utf8')
 
 describe('OAuth frontend-origin contract', () => {
   it('requires a configured HTTPS allowlist origin rather than trusting a request host', () => {
-    expect(config).toContain("oauthAllowedOrigin: process.env.OAUTH_ALLOWED_ORIGIN || ''")
-    expect(oauth).toContain("const configuredOrigin = typeof config.oauthAllowedOrigin === 'string' ? config.oauthAllowedOrigin : ''")
+    expect(config).toContain("discoveryStackOauthAllowedOrigin: process.env.NUXT_DISCOVERY_STACK_OAUTH_ALLOWED_ORIGIN || process.env.OAUTH_ALLOWED_ORIGIN || ''")
+    expect(oauth).toContain("const configuredOrigin = typeof config.discoveryStackOauthAllowedOrigin === 'string' ? config.discoveryStackOauthAllowedOrigin : ''")
     expect(oauth).toContain('new URL(configuredOrigin).origin')
     expect(oauth).toContain("allowedOrigin.startsWith('https://')")
     expect(oauth).not.toContain('getRequestURL(event).origin')

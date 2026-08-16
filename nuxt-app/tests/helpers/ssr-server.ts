@@ -43,6 +43,10 @@ export async function fetchSsrHtml(path: string) {
   return { response, html: await response.text() }
 }
 
+export async function fetchSsrResponse(path: string, init?: RequestInit) {
+  return fetch(`${baseUrl}${path}`, init)
+}
+
 export async function stopSsrServer() {
   if (!server || server.exitCode !== null) return
   server.kill('SIGTERM')

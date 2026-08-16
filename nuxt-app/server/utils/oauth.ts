@@ -12,7 +12,7 @@ export function oauthConfig(event: H3Event) {
   const serverUrl = typeof config.oauthServerUrl === 'string' ? config.oauthServerUrl : ''
   const portalUrl = typeof config.oauthPortalUrl === 'string' ? config.oauthPortalUrl : ''
   const appId = typeof config.oauthAppId === 'string' ? config.oauthAppId : ''
-  const configuredOrigin = typeof config.oauthAllowedOrigin === 'string' ? config.oauthAllowedOrigin : ''
+  const configuredOrigin = typeof config.discoveryStackOauthAllowedOrigin === 'string' ? config.discoveryStackOauthAllowedOrigin : ''
   if (!serverUrl || !portalUrl || !appId || !configuredOrigin) {
     throw createError({ statusCode: 503, statusMessage: 'Private sign-in is not configured.' })
   }

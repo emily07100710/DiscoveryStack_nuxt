@@ -2,7 +2,8 @@
 import { isConfiguredProductionUrl, normalizedSiteUrl } from '../utils/publicRoutes'
 
 export default defineEventHandler((event) => {
-  const siteUrl = normalizedSiteUrl(useRuntimeConfig(event).public.siteUrl)
+  const config = useRuntimeConfig(event)
+  const siteUrl = normalizedSiteUrl(config.public.discoveryStackSiteUrl || config.public.siteUrl)
   setHeader(event, 'content-type', 'text/plain; charset=utf-8')
   setHeader(event, 'cache-control', 'public, max-age=3600')
 

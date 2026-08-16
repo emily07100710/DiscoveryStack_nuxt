@@ -4,7 +4,8 @@ import { isConfiguredProductionUrl, normalizedSiteUrl, publicRoutePairs } from '
 const escapeXml = (value: string) => value.replace(/[<>&'\"]/g, (character) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[character] || character)
 
 export default defineEventHandler((event) => {
-  const siteUrl = normalizedSiteUrl(useRuntimeConfig(event).public.siteUrl)
+  const config = useRuntimeConfig(event)
+  const siteUrl = normalizedSiteUrl(config.public.discoveryStackSiteUrl || config.public.siteUrl)
   setHeader(event, 'content-type', 'application/xml; charset=utf-8')
   setHeader(event, 'cache-control', 'public, max-age=3600')
 

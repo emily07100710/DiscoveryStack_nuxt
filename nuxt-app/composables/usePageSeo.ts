@@ -19,7 +19,7 @@ function alternateFor(path: string, locale: 'en' | 'zh-hant') {
 export function usePageSeo(input: SeoInput) {
   const route = useRoute()
   const config = useRuntimeConfig()
-  const baseUrl = String(config.public.siteUrl).replace(/\/$/, '')
+  const baseUrl = String(config.public.discoveryStackSiteUrl || config.public.siteUrl).replace(/\/$/, '')
   const isPlaceholder = baseUrl.includes('discoverystack.example')
   const canonicalPath = computed(() => route.path.replace(/\/$/, '') || '/')
   const absolute = (path: string) => `${baseUrl}${path}`

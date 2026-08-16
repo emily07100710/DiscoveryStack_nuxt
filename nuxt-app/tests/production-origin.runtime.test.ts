@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { fetchSsrHtml, startSsrServer, stopSsrServer } from './helpers/ssr-server'
 
-const siteUrl = process.env.NUXT_PUBLIC_SITE_URL
-const oauthOrigin = process.env.OAUTH_ALLOWED_ORIGIN
+const siteUrl = process.env.NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL
+const oauthOrigin = process.env.NUXT_DISCOVERY_STACK_OAUTH_ALLOWED_ORIGIN || process.env.OAUTH_ALLOWED_ORIGIN
 
 describe('production HTTPS origin', () => {
   beforeAll(startSsrServer)
