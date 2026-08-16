@@ -18,10 +18,13 @@ RUN npm install -g corepack@latest \
 COPY nuxt-app/ ./
 
 # `pnpm install` runs the package prepare hook before the application source is
-# copied into this layer. Regenerate Nuxt's auto-import and module types after
-# the full source tree exists, then build the live Nitro SSR server.
-RUN corepack pnpm exec nuxt prepare \
-  && DISCOVERYSTACK_SKIP_PRERENDER=1 corepack pnpm run build
+# copied into this layer. Start from clean generated output after the full source
+# tree exists, then verify the live Nitro SSR server contains the current OAuth
+# release marker rather than a stale artifact.
+RUN rm -rf .nuxt .output \
+  && corepack pnpm exec nuxt prepare \
+  && DISCOVERYSTACK_SKIP_PRERENDER=1 corepack pnpm run build \
+  && grep -R -q 'nitro-oauth-20260816-r4' .output/server
 
 ENV NODE_ENV=production
 ENV NITRO_HOST=0.0.0.0

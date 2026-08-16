@@ -8,6 +8,7 @@ const oauth = readFileSync(join(root, 'server/utils/oauth.ts'), 'utf8')
 const login = readFileSync(join(root, 'server/api/auth/login.get.ts'), 'utf8')
 const callback = readFileSync(join(root, 'server/api/auth/callback.get.ts'), 'utf8')
 const auditLab = readFileSync(join(root, 'pages/audit-lab.vue'), 'utf8')
+const dockerfile = readFileSync(join(root, '..', 'Dockerfile'), 'utf8')
 
 describe('OAuth frontend-origin contract', () => {
   it('requires a configured HTTPS allowlist origin rather than trusting a request host', () => {
@@ -68,5 +69,11 @@ describe('OAuth frontend-origin contract', () => {
     expect(callback).toContain("return { error: 'Private sign-in could not be completed.' }")
     expect(callback).toContain('setResponseStatus(event, statusCode)')
     expect(callback).toContain('return { error: callbackFailureMessage(stage) }')
+  })
+
+  it('requires the production image to build a clean Nitro artifact with the current OAuth release marker', () => {
+    expect(dockerfile).toContain('rm -rf .nuxt .output')
+    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r4' .output/server")
+    expect(dockerfile).toContain('CMD ["node", ".output/server/index.mjs"]')
   })
 })
