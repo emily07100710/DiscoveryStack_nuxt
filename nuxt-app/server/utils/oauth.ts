@@ -7,17 +7,41 @@ const OAUTH_PROVIDER_TIMEOUT_MS = 25_000
 
 type OAuthState = { redirectUri: string, nonce: string }
 export type OAuthProviderErrorKind = 'timeout' | 'response' | 'network' | 'unknown'
-export type OAuthProviderError = { kind: OAuthProviderErrorKind, status: number | null }
+export type OAuthProviderRejectionReason = 'invalid_client' | 'invalid_redirect_uri' | 'invalid_authorization_code' | 'unauthenticated'
+export type OAuthProviderError = { kind: OAuthProviderErrorKind, status: number | null, reason: OAuthProviderRejectionReason | null }
 
 const toBase64 = (value: string) => Buffer.from(value, 'utf8').toString('base64')
 const fromBase64 = (value: string) => Buffer.from(value, 'base64').toString('utf8')
 
+function classifyProviderRejectionReason(body: unknown): OAuthProviderRejectionReason | null {
+  const values: string[] = []
+  if (typeof body === 'string') values.push(body)
+  if (body && typeof body === 'object') {
+    const record = body as Record<string, unknown>
+    for (const key of ['error', 'code', 'message', 'status']) {
+      const value = record[key]
+      if (typeof value === 'string') values.push(value)
+      if (value && typeof value === 'object') {
+        const nested = value as Record<string, unknown>
+        if (typeof nested.code === 'string') values.push(nested.code)
+        if (typeof nested.message === 'string') values.push(nested.message)
+      }
+    }
+  }
+  const text = values.join(' ').toLowerCase()
+  if (/redirect[\s_-]*uri/.test(text)) return 'invalid_redirect_uri'
+  if (/authorization[\s_-]*code|invalid[\s_-]*grant/.test(text)) return 'invalid_authorization_code'
+  if (/client|app[\s_-]*id|project[\s_-]*id/.test(text)) return 'invalid_client'
+  if (/unauthenticated|unauthorized|authentication/.test(text)) return 'unauthenticated'
+  return null
+}
+
 function classifyProviderError(error: unknown): OAuthProviderError {
-  if (!axios.isAxiosError(error)) return { kind: 'unknown', status: null }
+  if (!axios.isAxiosError(error)) return { kind: 'unknown', status: null, reason: null }
   const status = typeof error.response?.status === 'number' ? error.response.status : null
-  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') return { kind: 'timeout', status }
-  if (error.response) return { kind: 'response', status }
-  return { kind: 'network', status }
+  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') return { kind: 'timeout', status, reason: null }
+  if (error.response) return { kind: 'response', status, reason: classifyProviderRejectionReason(error.response.data) }
+  return { kind: 'network', status, reason: null }
 }
 
 export function oauthConfig(event: H3Event) {
@@ -95,7 +119,7 @@ export async function exchangeOAuthCode(
   if (!exchange.accessToken) {
     // A 2xx response with no required token is still a provider contract failure.
     // Record only its HTTP status; never include the response body in diagnostics.
-    onProviderError?.({ kind: 'response', status: exchangeStatus })
+    onProviderError?.({ kind: 'response', status: exchangeStatus, reason: null })
     throw createError({ statusCode: 502, statusMessage: 'The sign-in provider did not return an access token.' })
   }
   onStage?.('identity')
@@ -113,7 +137,7 @@ export async function exchangeOAuthCode(
   }
   if (!user.openId) {
     // Preserve the same redaction boundary for a malformed successful identity response.
-    onProviderError?.({ kind: 'response', status: identityStatus })
+    onProviderError?.({ kind: 'response', status: identityStatus, reason: null })
     throw createError({ statusCode: 502, statusMessage: 'The sign-in provider did not return an account identity.' })
   }
   return user

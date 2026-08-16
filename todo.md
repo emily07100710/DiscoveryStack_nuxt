@@ -55,3 +55,4 @@
 - [ ] 以代理瀏覽器重跑 owner OAuth callback，記錄最新 production 的安全 provider error/status，不暴露授權碼、token 或帳戶資料。
 - [ ] 建立僅存在於 Nuxt Nitro 的無敏感 release endpoint，隔離 production 網域是否仍指向舊 revision 或殘留 callback handler。
 - [ ] 依平台 OAuth SDK 契約以原始 state 進行 authorization-code exchange，修正目前僅傳 redirect URI 所導致的 provider HTTP 401。
+- [ ] 將 OAuth provider 401 response 安全映射為 allowlisted 的拒絕原因碼，辨識 app、redirect URI 或 authorization-code 設定問題而不暴露 response body。

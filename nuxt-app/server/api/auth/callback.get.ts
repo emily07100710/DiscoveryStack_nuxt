@@ -4,7 +4,7 @@ import { setOwnerSession } from '../../utils/auth'
 import { exchangeOAuthCode, type OAuthProviderError } from '../../utils/oauth'
 
 type CallbackStage = 'exchange' | 'token' | 'identity' | 'database' | 'session'
-const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r7'
+const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r8'
 
 function callbackStatusCode(error: unknown, stage: CallbackStage, providerError: OAuthProviderError | null) {
   // Cloudflare turns an origin 502 into a generic Host Error page, which hides
@@ -63,6 +63,7 @@ export default defineEventHandler(async (event) => {
     if (providerFailure.value) {
       setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Error', providerFailure.value.kind)
       if (providerFailure.value.status !== null) setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Status', String(providerFailure.value.status))
+      if (providerFailure.value.reason) setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Reason', providerFailure.value.reason)
     }
     const statusCode = callbackStatusCode(error, stage, providerFailure.value)
     const errorName = error instanceof Error ? error.name : typeof error
@@ -73,6 +74,7 @@ export default defineEventHandler(async (event) => {
         error: callbackFailureMessage(stage),
         providerError: providerFailure.value.kind,
         providerStatus: providerFailure.value.status,
+        providerReason: providerFailure.value.reason,
       }
     }
     return { error: callbackFailureMessage(stage) }
