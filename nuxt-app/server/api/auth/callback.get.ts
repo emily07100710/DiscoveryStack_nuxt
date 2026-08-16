@@ -1,12 +1,12 @@
 import { getDatabase } from '../../database'
 import { users } from '../../database/schema'
 import { setOwnerSession } from '../../utils/auth'
-import { exchangeOAuthCode, type OAuthProviderErrorKind } from '../../utils/oauth'
+import { exchangeOAuthCode, type OAuthProviderError } from '../../utils/oauth'
 
 type CallbackStage = 'exchange' | 'token' | 'identity' | 'database' | 'session'
 const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r5'
 
-function callbackStatusCode(error: unknown, stage: CallbackStage, providerError: OAuthProviderErrorKind | null) {
+function callbackStatusCode(error: unknown, stage: CallbackStage, providerError: OAuthProviderError | null) {
   // Cloudflare turns an origin 502 into a generic Host Error page, which hides
   // our safe callback diagnostics. A provider failure is an unsuccessful
   // authorization response, not an application crash, so return a controlled
@@ -36,14 +36,14 @@ export default defineEventHandler(async (event) => {
     return { error: 'Private sign-in could not be completed.' }
   }
   let stage: CallbackStage = 'exchange'
-  let providerError: OAuthProviderErrorKind | null = null
+  let providerError: OAuthProviderError | null = null
   try {
     const user = await exchangeOAuthCode(
       event,
       code,
       state,
       (nextStage) => { stage = nextStage },
-      (kind) => { providerError = kind },
+      (failure) => { providerError = failure },
     )
     stage = 'database'
     const database = getDatabase()
@@ -60,7 +60,10 @@ export default defineEventHandler(async (event) => {
     return sendRedirect(event, '/audit-lab', 302)
   } catch (error: unknown) {
     setHeader(event, 'X-DiscoveryStack-OAuth-Callback', stage)
-    if (providerError) setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Error', providerError)
+    if (providerError) {
+      setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Error', providerError.kind)
+      if (providerError.status !== null) setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Status', String(providerError.status))
+    }
     const statusCode = callbackStatusCode(error, stage, providerError)
     const errorName = error instanceof Error ? error.name : typeof error
     console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; error=${errorName}`)

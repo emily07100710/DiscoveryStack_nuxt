@@ -46,3 +46,5 @@
 - [ ] 修復 Autoscale hosting 在真實 OAuth callback request 對 Nitro 上游回傳 Cloudflare 502 的問題，並以 owner round-trip 驗收。
 - [ ] 避免以 HTTP 502 回傳 OAuth provider 失敗而被 Cloudflare 覆寫，改用無敏感資訊的受控 callback 回應驗證真實 exchange 結果。
 - [ ] 以遞增 OAuth Nitro release 標記驗證 Autoscale 已載入最新 callback 修復，而非沿用先前 container image。
+- [ ] 在 hosting 修復後確認正式網域回傳 OAuth Nitro r5，再重跑 owner OAuth 與受控訓練驗收。
+- [ ] 在不暴露 provider 回應內容的前提下觀測 OAuth exchange HTTP status，辨識有效 authorization code 被拒絕的原因。

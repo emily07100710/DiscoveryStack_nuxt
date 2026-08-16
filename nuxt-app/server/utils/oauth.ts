@@ -7,15 +7,17 @@ const OAUTH_PROVIDER_TIMEOUT_MS = 25_000
 
 type OAuthState = { redirectUri: string, nonce: string }
 export type OAuthProviderErrorKind = 'timeout' | 'response' | 'network' | 'unknown'
+export type OAuthProviderError = { kind: OAuthProviderErrorKind, status: number | null }
 
 const toBase64 = (value: string) => Buffer.from(value, 'utf8').toString('base64')
 const fromBase64 = (value: string) => Buffer.from(value, 'base64').toString('utf8')
 
-function classifyProviderError(error: unknown): OAuthProviderErrorKind {
-  if (!axios.isAxiosError(error)) return 'unknown'
-  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') return 'timeout'
-  if (error.response) return 'response'
-  return 'network'
+function classifyProviderError(error: unknown): OAuthProviderError {
+  if (!axios.isAxiosError(error)) return { kind: 'unknown', status: null }
+  const status = typeof error.response?.status === 'number' ? error.response.status : null
+  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') return { kind: 'timeout', status }
+  if (error.response) return { kind: 'response', status }
+  return { kind: 'network', status }
 }
 
 export function oauthConfig(event: H3Event) {
@@ -69,7 +71,7 @@ export async function exchangeOAuthCode(
   code: string,
   state: string,
   onStage?: (stage: 'token' | 'identity') => void,
-  onProviderError?: (kind: OAuthProviderErrorKind) => void,
+  onProviderError?: (failure: OAuthProviderError) => void,
 ) {
   const { serverUrl, appId } = oauthConfig(event)
   const statePayload = validateOAuthState(event, state)
