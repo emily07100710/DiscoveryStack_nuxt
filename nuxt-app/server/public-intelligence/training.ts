@@ -1,15 +1,15 @@
 import { and, desc, eq, isNull } from 'drizzle-orm'
-import { auditTrainingExamples, auditWorkspaces, publicIntelligenceTrainingRuns } from '../database/schema'
+import { auditTrainingExamples, auditWorkspaces, publicIntelligenceArtifacts, publicIntelligenceDatasetBuilds, publicIntelligenceDatasetMembers, publicIntelligenceSources, publicIntelligenceTrainingRuns } from '../database/schema'
 import { requireAuditDatabase } from '../audit/repository'
 import { getHuggingFaceJob, getHuggingFaceJobLogs, isHuggingFaceConfigured, parseTrainingResult, startHuggingFaceTraining } from './huggingface-jobs'
 import { getOwnerProviderCredentials } from './provider-repository'
+import { buildSeoGeoTrainingText, JOURNEY_STAGES, SEO_GEO_LABEL_TAXONOMY_VERSION, seoGeoMultilabelSchema, toSeoGeoTrainingTargets, type SeoGeoTrainingTargets } from './seoGeoTaxonomy'
 
-export const TRAINING_MODEL_VERSION = 'distilbert-multilingual-finetune-v1'
-export const TRAINING_FEATURE_CONTRACT_VERSION = 'audit-training-v1'
-export const TRAINING_LABEL_TAXONOMY_VERSION = 'journey-friction-v1'
+export const TRAINING_MODEL_VERSION = 'distilbert-multilingual-seo-geo-v2'
+export const TRAINING_FEATURE_CONTRACT_VERSION = 'public-intelligence-v1'
+export const TRAINING_LABEL_TAXONOMY_VERSION = SEO_GEO_LABEL_TAXONOMY_VERSION
 export const TRAINING_SPLIT_VERSION = 'deterministic-id-v1'
 
-const JOURNEY_STAGES = ['discovery', 'understanding', 'response', 'progression', 'conversion'] as const
 type JourneyStage = typeof JOURNEY_STAGES[number]
 type Split = 'train' | 'validation' | 'test'
 
@@ -18,6 +18,7 @@ type TrainingExample = {
   labelStage: JourneyStage
   dataSplit: 'unassigned' | Split | 'holdout'
   featureVector: unknown
+  targets: SeoGeoTrainingTargets
 }
 
 type PreparedExample = TrainingExample & { split: Split }
@@ -57,8 +58,8 @@ function labelCounts(rows: PreparedExample[]) {
 
 function eligibilityMessage(mode: 'development' | 'production', rows: PreparedExample[]) {
   const counts = labelCounts(rows)
-  const minimum = mode === 'production' ? 150 : 5
-  const minimumPerStage = mode === 'production' ? 20 : 1
+  const minimum = mode === 'production' ? 150 : 100
+  const minimumPerStage = mode === 'production' ? 20 : 10
   const missing = JOURNEY_STAGES.filter(stage => (counts[stage] || 0) < minimumPerStage)
   if (rows.length < minimum) return `Need at least ${minimum} quality-passed, consented examples for a ${mode} run; found ${rows.length}.`
   if (missing.length) return `Need at least ${minimumPerStage} example per journey stage; missing ${missing.join(', ')}.`
@@ -121,7 +122,7 @@ async function refreshHuggingFaceTrainingRun(run: TrainingRunRow, ownerUserId: n
       const result = parseTrainingResult(logs)
       if (result) {
         patch.metrics = result.metrics || null
-        patch.modelArtifact = { provider: 'huggingface_jobs', engine: result.engine, labels: result.labels, modelRepo: result.modelRepo, baseModel: result.baseModel, splitCounts: result.splitCounts, exampleCount: result.exampleCount }
+        patch.modelArtifact = { provider: 'huggingface_jobs', engine: result.engine, taskHeads: result.taskHeads || null, taxonomyVersion: result.taxonomyVersion || null, modelRepo: result.modelRepo, baseModel: result.baseModel, splitCounts: result.splitCounts, exampleCount: result.exampleCount }
         if (result.modelRepo) patch.modelRepoId = result.modelRepo
       }
     }
@@ -138,29 +139,40 @@ export async function listOwnerTrainingRuns(ownerUserId: number) {
   return pending.length ? selectTrainingRuns(ownerUserId) : rows
 }
 
-export async function runSupervisedTraining(input: { ownerUserId: number, mode: 'development' | 'production' }) {
+async function selectApprovedPublicTrainingDataset(input: { ownerUserId: number, datasetBuildId: number }) {
   const database = requireAuditDatabase()
-  const sourceRows = await database.select({
-    id: auditTrainingExamples.id,
-    labelStage: auditTrainingExamples.labelStage,
-    dataSplit: auditTrainingExamples.dataSplit,
-    featureVector: auditTrainingExamples.featureVector,
-  }).from(auditTrainingExamples)
-    .innerJoin(auditWorkspaces, eq(auditTrainingExamples.workspaceId, auditWorkspaces.id))
-    .where(and(eq(auditWorkspaces.ownerUserId, input.ownerUserId), isNull(auditWorkspaces.deletedAt), eq(auditTrainingExamples.trainingConsent, true), isNull(auditTrainingExamples.consentRevokedAt), eq(auditTrainingExamples.qualityCheckStatus, 'passed')))
-  const rows = prepareExamples(sourceRows as TrainingExample[])
+  const [dataset] = await database.select({ id: publicIntelligenceDatasetBuilds.id, datasetName: publicIntelligenceDatasetBuilds.datasetName, datasetVersion: publicIntelligenceDatasetBuilds.datasetVersion, featureContractVersion: publicIntelligenceDatasetBuilds.featureContractVersion, labelTaxonomyVersion: publicIntelligenceDatasetBuilds.labelTaxonomyVersion, splitVersion: publicIntelligenceDatasetBuilds.splitVersion, manifestHash: publicIntelligenceDatasetBuilds.manifestHash, status: publicIntelligenceDatasetBuilds.status, intendedUse: publicIntelligenceDatasetBuilds.intendedUse }).from(publicIntelligenceDatasetBuilds).where(and(eq(publicIntelligenceDatasetBuilds.id, input.datasetBuildId), eq(publicIntelligenceDatasetBuilds.ownerUserId, input.ownerUserId))).limit(1)
+  if (!dataset || dataset.status !== 'approved' || dataset.intendedUse !== 'training') throw createError({ statusCode: 422, statusMessage: 'Choose an owner-approved public training manifest before submitting Hugging Face training.' })
+  if (dataset.labelTaxonomyVersion !== SEO_GEO_LABEL_TAXONOMY_VERSION) throw createError({ statusCode: 422, statusMessage: 'The selected manifest does not use the active SEO/GEO multi-label taxonomy.' })
+  const members = await database.select({ id: publicIntelligenceArtifacts.id, dataSplit: publicIntelligenceDatasetMembers.dataSplit, fieldData: publicIntelligenceArtifacts.fieldData, artifactText: publicIntelligenceArtifacts.artifactText, language: publicIntelligenceArtifacts.language, qualityStatus: publicIntelligenceArtifacts.qualityStatus, piiStatus: publicIntelligenceArtifacts.piiStatus, sourceUse: publicIntelligenceSources.allowedUse, sourceReviewStatus: publicIntelligenceSources.reviewStatus, memberStatus: publicIntelligenceDatasetMembers.memberStatus, sourceRemovedAt: publicIntelligenceSources.removedAt, artifactRemovedAt: publicIntelligenceArtifacts.removedAt }).from(publicIntelligenceDatasetMembers).innerJoin(publicIntelligenceArtifacts, eq(publicIntelligenceDatasetMembers.artifactId, publicIntelligenceArtifacts.id)).innerJoin(publicIntelligenceSources, eq(publicIntelligenceArtifacts.sourceId, publicIntelligenceSources.id)).where(eq(publicIntelligenceDatasetMembers.datasetBuildId, dataset.id))
+  const rows: TrainingExample[] = []
+  for (const member of members) {
+    if (member.memberStatus !== 'included' || member.qualityStatus !== 'passed' || member.piiStatus !== 'none_detected' || member.sourceUse !== 'training_candidate' || member.sourceReviewStatus !== 'approved' || member.sourceRemovedAt || member.artifactRemovedAt) continue
+    const parsed = seoGeoMultilabelSchema.safeParse(member.fieldData)
+    if (!parsed.success) continue
+    const trainingText = buildSeoGeoTrainingText({ artifactText: member.artifactText, language: member.language })
+    if (!trainingText) continue
+    rows.push({ id: member.id, labelStage: parsed.data.primaryJourneyStage, dataSplit: member.dataSplit, targets: toSeoGeoTrainingTargets(parsed.data), featureVector: { task: 'seo_geo_multitask', taxonomyVersion: parsed.data.annotationVersion, trainingText } })
+  }
+  return { dataset, rows: prepareExamples(rows) }
+}
+
+export async function runSupervisedTraining(input: { ownerUserId: number, mode: 'development' | 'production', datasetBuildId: number }) {
+  const database = requireAuditDatabase()
+  const { dataset, rows } = await selectApprovedPublicTrainingDataset(input)
   const counts = labelCounts(rows)
   const split = splitCounts(rows)
   const blockedReason = eligibilityMessage(input.mode, rows)
   const runResult = await database.insert(publicIntelligenceTrainingRuns).values({
     ownerUserId: input.ownerUserId,
+    datasetBuildId: dataset.id,
     mode: input.mode,
     provider: 'huggingface_jobs',
     modelFamily: 'huggingface_transformers',
     modelVersion: TRAINING_MODEL_VERSION,
-    featureContractVersion: TRAINING_FEATURE_CONTRACT_VERSION,
-    labelTaxonomyVersion: TRAINING_LABEL_TAXONOMY_VERSION,
-    splitVersion: TRAINING_SPLIT_VERSION,
+    featureContractVersion: dataset.featureContractVersion || TRAINING_FEATURE_CONTRACT_VERSION,
+    labelTaxonomyVersion: dataset.labelTaxonomyVersion || TRAINING_LABEL_TAXONOMY_VERSION,
+    splitVersion: dataset.splitVersion || TRAINING_SPLIT_VERSION,
     status: blockedReason ? 'blocked' : 'queued',
     exampleCount: rows.length,
     trainCount: split.train,
@@ -173,19 +185,19 @@ export async function runSupervisedTraining(input: { ownerUserId: number, mode: 
     completedAt: blockedReason ? new Date() : null,
   })
   const runId = Number(runResult[0].insertId)
-  if (blockedReason) return { runId, status: 'blocked' as const, provider: 'huggingface_jobs' as const, message: blockedReason, counts, split }
+  if (blockedReason) return { runId, datasetBuildId: dataset.id, status: 'blocked' as const, provider: 'huggingface_jobs' as const, message: blockedReason, counts, split }
   try {
-    const remote = await startHuggingFaceTraining({ ownerUserId: input.ownerUserId, runId, mode: input.mode, records: rows.map(row => ({ id: row.id, label: row.labelStage, split: row.split, featureVector: row.featureVector })) })
-    await database.update(publicIntelligenceTrainingRuns).set({ status: 'running', remoteJobId: remote.jobId, remoteJobUrl: remote.jobUrl, baseModelId: remote.baseModelId, modelRepoId: remote.modelRepo, datasetDigest: remote.datasetDigest, modelArtifact: { provider: 'huggingface_jobs', engine: 'transformers.Trainer', hardware: remote.flavor, modelRepo: remote.modelRepo, baseModel: remote.baseModelId } }).where(eq(publicIntelligenceTrainingRuns.id, runId))
-    return { runId, status: 'running' as const, provider: 'huggingface_jobs' as const, remoteJobId: remote.jobId, remoteJobUrl: remote.jobUrl, modelRepoId: remote.modelRepo, baseModelId: remote.baseModelId, datasetDigest: remote.datasetDigest, counts, split, message: 'Hugging Face Transformers training job started. Refresh the ledger to see status and metrics.' }
+    const remote = await startHuggingFaceTraining({ ownerUserId: input.ownerUserId, runId, mode: input.mode, records: rows.map(row => ({ id: row.id, label: row.labelStage, targets: row.targets, split: row.split, featureVector: row.featureVector })) })
+    await database.update(publicIntelligenceTrainingRuns).set({ status: 'running', remoteJobId: remote.jobId, remoteJobUrl: remote.jobUrl, baseModelId: remote.baseModelId, modelRepoId: remote.modelRepo, datasetDigest: remote.datasetDigest, modelArtifact: { provider: 'huggingface_jobs', engine: 'shared_encoder_multitask', hardware: remote.flavor, modelRepo: remote.modelRepo, baseModel: remote.baseModelId, labelTaxonomyVersion: SEO_GEO_LABEL_TAXONOMY_VERSION, taskHeads: ['journeyStage', 'searchIntents', 'contentTypes', 'audienceRoles', 'geoSignals', 'citationReadiness', 'technicalSeoSignals', 'frictionSignals', 'actionPriority'] } }).where(eq(publicIntelligenceTrainingRuns.id, runId))
+    return { runId, datasetBuildId: dataset.id, status: 'running' as const, provider: 'huggingface_jobs' as const, remoteJobId: remote.jobId, remoteJobUrl: remote.jobUrl, modelRepoId: remote.modelRepo, baseModelId: remote.baseModelId, datasetDigest: remote.datasetDigest, counts, split, message: 'Hugging Face shared-encoder multi-task SEO/GEO training started from the approved public manifest. Refresh the ledger to see per-head status and metrics.' }
   } catch (error: unknown) {
     const code = error instanceof Error && error.message.includes('huggingface_') ? error.message.split(':')[0] : 'huggingface_job_submit_failed'
     await database.update(publicIntelligenceTrainingRuns).set({ status: 'failed', errorCode: code, errorDetail: 'The remote training job could not be submitted. No model is claimed as trained.', completedAt: new Date() }).where(eq(publicIntelligenceTrainingRuns.id, runId))
-    return { runId, status: 'failed' as const, provider: 'huggingface_jobs' as const, message: 'Hugging Face training was not started. Check the server token, namespace and Jobs permission.' }
+    return { runId, datasetBuildId: dataset.id, status: 'failed' as const, provider: 'huggingface_jobs' as const, message: 'Hugging Face training was not started. Check the server token, namespace and Jobs permission.' }
   }
 }
 
 export function trainingReadiness(rows: { labelStage: string }[]) {
   const counts = Object.fromEntries(JOURNEY_STAGES.map(stage => [stage, rows.filter(row => row.labelStage === stage).length]))
-  return { exampleCount: rows.length, labelCounts: counts, developmentReady: rows.length >= 5 && JOURNEY_STAGES.every(stage => (counts[stage] || 0) >= 1), productionReady: rows.length >= 150 && JOURNEY_STAGES.every(stage => (counts[stage] || 0) >= 20) }
+  return { exampleCount: rows.length, labelCounts: counts, developmentReady: rows.length >= 100 && JOURNEY_STAGES.every(stage => (counts[stage] || 0) >= 10), productionReady: rows.length >= 150 && JOURNEY_STAGES.every(stage => (counts[stage] || 0) >= 20) }
 }

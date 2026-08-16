@@ -90,3 +90,9 @@ The direct owner-facing ML Workbench URL is `https://discovstack-kfpqmdfb.manus.
 ### r13 繁體中文 owner 後台驗證
 
 在既有 owner session 下，正式 `/audit-lab?release=zh-hant-r13` 已確認命中 Nitro r13，並顯示繁體中文的私有稽核實驗室、導航、工作區、來源卡與資料治理內容。驗證也發現少數非安全、可見的動態 readiness 與輔助文字仍為英文，例如 `Needs Two Consented Candidates`、`Not Ready` 與工作區儲存提示中的一句英文；它們不代表授權或部署失敗，將在同一中文化範圍內改為繁體中文。技術識別字、模型名稱、URL 與安全代號維持原樣。
+
+### 公開 SEO／GEO 訓練基準觀測
+
+2026-08-16 以已授權的 owner session 開啟 `https://discovstack-kfpqmdfb.manus.space/audit-lab`。正式 r13 介面顯示 **0** 筆已同意候選資料、BGE-M3 需要兩筆已同意候選資料，且舊版監督式學習仍顯示尚未就緒；未建立公開 Source Card、未發起 Firecrawl ingestion，亦未送出 Hugging Face job。
+
+此觀測僅作為新版本上線前的基準。新版將以來源權利／robots／條款審核、100 筆已核准公開 dataset manifest 與 SEO／GEO 多任務標籤取代舊版 consent-only 訓練準備訊號；真實遠端訓練仍須待新版部署、資料集完成與 owner 在提交前確認後才會執行。

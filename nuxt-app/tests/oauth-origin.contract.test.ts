@@ -84,10 +84,13 @@ describe('OAuth frontend-origin contract', () => {
     expect(auditLab).toContain("owner_research: '擁有者研究'")
     expect(auditLab).toContain('儲存此記錄<strong>不會啟動爬蟲</strong>')
     expect(auditLab).toContain('displayLabel(assessment.assessmentStatus)')
+    expect(auditLab).toContain('SEO／GEO 多維人工標註')
+    expect(auditLab).toContain('核准訓練 manifest')
     expect(mlLab).toContain('機器學習工作台')
     expect(mlLab).toContain('啟動受限抓取')
     expect(mlLab).toContain('執行 Hugging Face 訓練')
-    expect(mlLab).toContain('開發模式 · 至少 5 筆樣本且涵蓋每個階段')
+    expect(mlLab).toContain('開發模式 · 至少 100 筆樣本、每個階段至少 10 筆')
+    expect(mlLab).toContain('已核准公開資料集')
     expect(mlLab).toContain('尚未有訓練執行')
     expect(mlLab).toContain("TRAINING_GATE_NOT_MET: '未達訓練門檻'")
     expect(mlLab).not.toContain('ML Workbench · DiscoveryStack')
@@ -153,7 +156,7 @@ describe('OAuth frontend-origin contract', () => {
 
   it('requires the production image to build a clean Nitro artifact with the current OAuth release marker', () => {
     expect(dockerfile).toContain('rm -rf .nuxt .output')
-    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r13' .output/server")
+    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r14' .output/server")
     expect(dockerfile).toContain('CMD ["node", ".output/server/index.mjs"]')
   })
 

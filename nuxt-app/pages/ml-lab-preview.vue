@@ -2,7 +2,8 @@
 type Source = { id: number, sourceName: string | null, domain: string | null, allowedUse: string, reviewStatus: string, robotsStatus: string, termsStatus: string, copyrightRisk: string, piiStatus: string, removedAt: string | null }
 type CrawlResult = { url: string, depth: number, status: string, httpStatus: number | null, cleanedCharacterCount: number | null, piiOutcome: string | null, artifactId: number | null, errorCode: string | null }
 type Job = { id: number, sourceId: number, sourceName: string | null, requestedUrl: string, collectionMode: string, status: string, httpStatus: number | null, cleanedCharacterCount: number | null, piiOutcome: string, primaryArtifactId: number | null, maxPages: number | null, maxDepth: number | null, pagesFetched: number, pagesCleaned: number, artifactsCreated: number, crawlResults: CrawlResult[] | null, errorCode: string | null, requestedAt: string, completedAt: string | null }
-type TrainingRun = { id: number, mode: string, provider: string, modelFamily: string, modelVersion: string, status: string, exampleCount: number, trainCount: number, validationCount: number, testCount: number, labelCounts: Record<string, number>, metrics: { validation?: Record<string, number | null>, test?: Record<string, number | null> } | null, modelArtifact: { engine?: string, modelRepo?: string, baseModel?: string, hardware?: string } | null, remoteJobId: string | null, remoteJobUrl: string | null, baseModelId: string | null, modelRepoId: string | null, errorCode: string | null, createdAt: string, completedAt: string | null }
+type TrainingRun = { id: number, datasetBuildId: number | null, mode: string, provider: string, modelFamily: string, modelVersion: string, status: string, exampleCount: number, trainCount: number, validationCount: number, testCount: number, labelCounts: Record<string, number>, metrics: { validation?: Record<string, number | null>, test?: Record<string, number | null> } | null, modelArtifact: { engine?: string, modelRepo?: string, baseModel?: string, hardware?: string } | null, remoteJobId: string | null, remoteJobUrl: string | null, baseModelId: string | null, modelRepoId: string | null, errorCode: string | null, createdAt: string, completedAt: string | null }
+type PublicDataset = { id: number, datasetName: string, datasetVersion: string, intendedUse: string, status: string, labelTaxonomyVersion: string | null, manifestHash: string, artifactCount: number, approvedAt: string | null }
 type ProviderStatus = { firecrawl: { configured: boolean, last4?: string | null, source?: string }, huggingface: { configured: boolean, last4?: string | null, source?: string, namespace: string, baseModelId: string }, updatedAt?: string | null }
 
 const state = ref<'loading' | 'signin' | 'ready' | 'error'>('loading')
@@ -10,6 +11,7 @@ const errorMessage = ref('')
 const sources = ref<Source[]>([])
 const jobs = ref<Job[]>([])
 const trainingRuns = ref<TrainingRun[]>([])
+const publicDatasets = ref<PublicDataset[]>([])
 const providerStatus = ref<ProviderStatus>({ firecrawl: { configured: false }, huggingface: { configured: false, namespace: '', baseModelId: '' } })
 const providerForm = reactive({ firecrawlApiKey: '', huggingFaceApiToken: '', huggingFaceNamespace: '' })
 const providerSaveStatus = ref<'idle' | 'saving' | 'success' | 'error'>('idle')
@@ -20,6 +22,7 @@ const crawlMessage = ref('')
 const trainingMessage = ref('')
 const expandedJobId = ref<number | null>(null)
 const trainingMode = ref<'development' | 'production'>('development')
+const trainingDatasetId = ref(0)
 const crawlForm = reactive({ sourceId: 0, requestedUrl: '', maxPages: 5, maxDepth: 1 })
 
 useHead({ title: '機器學習工作台 · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }, { name: 'description', content: '私有、受限的爬取、清洗與監督式訓練工作台。' }] })
@@ -30,20 +33,23 @@ const completedJobs = computed(() => jobs.value.filter(job => job.status === 'co
 const cleanedPages = computed(() => jobs.value.reduce((sum, job) => sum + (job.pagesCleaned || 0), 0))
 const latestRun = computed(() => trainingRuns.value[0] || null)
 const latestCompletedRun = computed(() => trainingRuns.value.find(run => run.status === 'completed') || null)
+const approvedTrainingDatasets = computed(() => publicDatasets.value.filter(dataset => dataset.status === 'approved' && dataset.intendedUse === 'training' && dataset.labelTaxonomyVersion === 'seo-geo-journey-v1' && dataset.artifactCount >= 100))
 
 async function loadWorkbench() {
   state.value = 'loading'
   try {
-    const [sourceRows, jobRows, runRows, providerRows] = await Promise.all([
+    const [sourceRows, jobRows, runRows, providerRows, datasetRows] = await Promise.all([
       $fetch<Source[]>('/api/intelligence/sources'),
       $fetch<Job[]>('/api/intelligence/ingestion-jobs'),
       $fetch<TrainingRun[]>('/api/intelligence/training-runs'),
       $fetch<ProviderStatus>('/api/intelligence/providers'),
+      $fetch<PublicDataset[]>('/api/intelligence/datasets'),
     ])
     sources.value = sourceRows
     jobs.value = jobRows
     trainingRuns.value = runRows
     providerStatus.value = providerRows
+    publicDatasets.value = datasetRows
     providerForm.huggingFaceNamespace = providerRows.huggingface.namespace || ''
     state.value = 'ready'
   } catch (error: unknown) {
@@ -93,7 +99,7 @@ async function startTraining() {
   trainingStatus.value = 'running'
   trainingMessage.value = ''
   try {
-    const result = await $fetch<{ message: string, status: string }>('/api/intelligence/training-runs', { method: 'POST', body: { mode: trainingMode.value } })
+    const result = await $fetch<{ message: string, status: string }>('/api/intelligence/training-runs', { method: 'POST', body: { mode: trainingMode.value, datasetBuildId: trainingDatasetId.value } })
     trainingStatus.value = result.status === 'blocked' || result.status === 'failed' ? 'error' : 'success'
     trainingMessage.value = result.message
     await refreshRuns()
@@ -179,12 +185,12 @@ onMounted(loadWorkbench)
       </section>
 
       <section class="workbench-section" aria-labelledby="train-title">
-        <div class="section-intro"><p class="eyebrow">03／訓練</p><h2 id="train-title">用合格標籤訓練可檢查的模型。</h2><p>抓取產生的是特徵產物，不是標籤。訓練只會讀取稽核實驗室中有明確同意、人工審核、品質通過且未撤回的去識別樣本。開發模式用於驗證流程；正式模式仍要求至少 150 筆、每個旅程階段至少 20 筆。</p></div>
+        <div class="section-intro"><p class="eyebrow">03／訓練</p><h2 id="train-title">用 100 筆以上合格標籤訓練可檢查的模型。</h2><p>抓取產生的是特徵產物，不是標籤。訓練只會讀取已核准的公開 SEO／GEO manifest：每筆均須有可追溯來源、可再利用依據、去重、PII 檢查、品質通過與多維人工標註。開發模式至少 100 筆、每個旅程階段至少 10 筆；正式模式至少 150 筆、每個階段至少 20 筆。</p></div>
         <div class="workbench-card training-card">
           <div class="training-callout"><span class="eyebrow">目前訓練引擎</span><strong>Hugging Face Transformers Trainer</strong><p>這裡會把合格的去識別特徵紀錄組成資料集，提交到 Hugging Face Jobs 的 GPU，使用多語言 DistilBERT 進行監督式微調，完成後把私有模型產物上傳到 Hugging Face 模型儲存庫。未成功提交或完成遠端工作時，不會宣稱模型已訓練。</p><p class="provider-status">Firecrawl：<strong>{{ providerStatus.firecrawl.configured ? '已連接' : '未設定' }}</strong><template v-if="providerStatus.firecrawl.last4"> · ****{{ providerStatus.firecrawl.last4 }}</template> · Hugging Face Jobs：<strong>{{ providerStatus.huggingface.configured ? '已連接' : '未設定' }}</strong><template v-if="providerStatus.huggingface.last4"> · ****{{ providerStatus.huggingface.last4 }}</template><template v-if="providerStatus.huggingface.namespace"> · {{ providerStatus.huggingface.namespace }}</template></p><p class="workbench-hint">你可以直接在這裡設定；金鑰只會加密存放在伺服器資料庫，瀏覽器不會取得完整內容。</p></div>
           <form class="workbench-form provider-settings" @submit.prevent="saveProviderSettings"><label><span>Firecrawl API 金鑰</span><input v-model.trim="providerForm.firecrawlApiKey" type="password" autocomplete="off" placeholder="貼上 Firecrawl 金鑰；留白代表保留原設定"></label><label><span>Hugging Face token</span><input v-model.trim="providerForm.huggingFaceApiToken" type="password" autocomplete="off" placeholder="貼上 Hugging Face token；留白代表保留原設定"></label><label><span>Hugging Face 使用者名稱</span><input v-model.trim="providerForm.huggingFaceNamespace" type="text" autocomplete="username" placeholder="例如 your-name"></label><button class="workbench-button" :disabled="providerSaveStatus === 'saving'" type="submit">{{ providerSaveStatus === 'saving' ? '儲存中…' : '儲存服務設定' }} <span aria-hidden="true">↗</span></button><p v-if="providerSaveMessage" class="workbench-feedback" :class="providerSaveStatus === 'error' ? 'is-error' : 'is-success'" aria-live="polite">{{ providerSaveMessage }}</p></form>
-          <form class="workbench-form training-form" @submit.prevent="startTraining"><label><span>執行模式</span><select v-model="trainingMode"><option value="development">開發模式 · 至少 5 筆樣本且涵蓋每個階段</option><option value="production">正式模式 · 至少 150 筆樣本、每個階段至少 20 筆</option></select></label><button class="workbench-button" :disabled="trainingStatus === 'running'" type="submit">{{ trainingStatus === 'running' ? '正在提交 Hugging Face 工作…' : '執行 Hugging Face 訓練' }} <span aria-hidden="true">↗</span></button><p v-if="trainingMessage" class="workbench-feedback" :class="trainingStatus === 'error' ? 'is-error' : 'is-success'" aria-live="polite">{{ trainingMessage }}</p></form>
-          <div v-if="trainingRuns.length" class="run-list"><article v-for="run in trainingRuns" :key="run.id"><div><strong>#{{ run.id }} · {{ displayStatus(run.mode) }}</strong><span class="status" :class="`status-${run.status}`">{{ displayStatus(run.status) }}</span><small>{{ formatDate(run.createdAt) }} · {{ run.exampleCount }} 筆樣本 · 訓練 {{ run.trainCount }}／驗證 {{ run.validationCount }}／測試 {{ run.testCount }}</small><small>Hugging Face · {{ run.modelFamily }} · {{ run.modelVersion }}</small><a v-if="run.remoteJobUrl" class="run-link" :href="run.remoteJobUrl" target="_blank" rel="noreferrer">開啟遠端工作 ↗</a><a v-if="run.modelRepoId" class="run-link" :href="`https://huggingface.co/${run.modelRepoId}`" target="_blank" rel="noreferrer">開啟私有模型儲存庫 ↗</a></div><dl v-if="run.metrics?.test"><div><dt>測試準確率</dt><dd>{{ run.metrics.test.accuracy ?? '—' }}</dd></div><div><dt>測試 macro-F1</dt><dd>{{ run.metrics.test.macroF1 ?? '—' }}</dd></div><div><dt>標籤</dt><dd>{{ Object.values(run.labelCounts).reduce((sum, count) => sum + count, 0) }}</dd></div></dl><small v-if="run.errorCode" class="run-error">{{ run.errorCode }}</small></article></div><p v-else class="empty-state">尚未有訓練執行。請先在稽核實驗室完成人工觀察、審核、品質閘門與訓練核准。</p>
+          <form class="workbench-form training-form" @submit.prevent="startTraining"><label><span>已核准公開資料集</span><select v-model.number="trainingDatasetId" required><option :value="0" disabled>選擇含至少 100 筆多維人審標籤的 manifest</option><option v-for="dataset in approvedTrainingDatasets" :key="dataset.id" :value="dataset.id">{{ dataset.datasetName }} · {{ dataset.datasetVersion }} · {{ dataset.artifactCount }} 筆</option></select></label><label><span>執行模式</span><select v-model="trainingMode"><option value="development">開發模式 · 至少 100 筆樣本、每個階段至少 10 筆</option><option value="production">正式模式 · 至少 150 筆樣本、每個階段至少 20 筆</option></select></label><button class="workbench-button" :disabled="trainingStatus === 'running' || !trainingDatasetId" type="submit">{{ trainingStatus === 'running' ? '正在提交 Hugging Face 工作…' : '執行 Hugging Face 訓練' }} <span aria-hidden="true">↗</span></button><p v-if="!approvedTrainingDatasets.length" class="workbench-hint">尚無可提交的 manifest。請在稽核實驗室完成來源核准、100 筆去重資料、多維人工標註、品質／PII 審核與 owner manifest 核准。</p><p v-if="trainingMessage" class="workbench-feedback" :class="trainingStatus === 'error' ? 'is-error' : 'is-success'" aria-live="polite">{{ trainingMessage }}</p></form>
+          <div v-if="trainingRuns.length" class="run-list"><article v-for="run in trainingRuns" :key="run.id"><div><strong>#{{ run.id }} · {{ displayStatus(run.mode) }}</strong><span class="status" :class="`status-${run.status}`">{{ displayStatus(run.status) }}</span><small>{{ formatDate(run.createdAt) }} · manifest #{{ run.datasetBuildId || '—' }} · {{ run.exampleCount }} 筆樣本 · 訓練 {{ run.trainCount }}／驗證 {{ run.validationCount }}／測試 {{ run.testCount }}</small><small>Hugging Face · {{ run.modelFamily }} · {{ run.modelVersion }}</small><a v-if="run.remoteJobUrl" class="run-link" :href="run.remoteJobUrl" target="_blank" rel="noreferrer">開啟遠端工作 ↗</a><a v-if="run.modelRepoId" class="run-link" :href="`https://huggingface.co/${run.modelRepoId}`" target="_blank" rel="noreferrer">開啟私有模型儲存庫 ↗</a></div><dl v-if="run.metrics?.test"><div><dt>測試準確率</dt><dd>{{ run.metrics.test.accuracy ?? '—' }}</dd></div><div><dt>測試 macro-F1</dt><dd>{{ run.metrics.test.macroF1 ?? '—' }}</dd></div><div><dt>主標籤</dt><dd>{{ Object.values(run.labelCounts).reduce((sum, count) => sum + count, 0) }}</dd></div></dl><small v-if="run.errorCode" class="run-error">{{ run.errorCode }}</small></article></div><p v-else class="empty-state">尚未有訓練執行。請先在稽核實驗室建立可再利用公開來源、100 筆多維人工標籤並核准訓練 manifest。</p>
         </div>
       </section>
 

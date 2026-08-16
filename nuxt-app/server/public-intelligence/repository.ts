@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { and, desc, eq, inArray, isNull, like, or } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm'
 import { requireAuditDatabase } from '../audit/repository'
 import { publicIntelligenceArtifacts, publicIntelligenceDatasetBuilds, publicIntelligenceDatasetMembers, publicIntelligenceSourceReviews, publicIntelligenceSources } from '../database/schema'
+import { SEO_GEO_LABEL_TAXONOMY_VERSION, seoGeoMultilabelSchema } from './seoGeoTaxonomy'
 import { assertPermittedPublicUse, maximumPermittedUse, PublicUseViolation, type PublicUse } from './policy'
 
 export function sourceFingerprint(url: string) { return createHash('sha256').update(url.trim().toLowerCase()).digest('hex') }
@@ -91,7 +92,31 @@ function useForIntendedDataset(intendedUse: 'research' | 'evaluation' | 'trainin
 
 export async function listOwnerPublicDatasetBuilds(ownerUserId: number) {
   const database = requireAuditDatabase()
-  return database.select({ id: publicIntelligenceDatasetBuilds.id, datasetName: publicIntelligenceDatasetBuilds.datasetName, datasetVersion: publicIntelligenceDatasetBuilds.datasetVersion, intendedUse: publicIntelligenceDatasetBuilds.intendedUse, status: publicIntelligenceDatasetBuilds.status, featureContractVersion: publicIntelligenceDatasetBuilds.featureContractVersion, labelTaxonomyVersion: publicIntelligenceDatasetBuilds.labelTaxonomyVersion, splitVersion: publicIntelligenceDatasetBuilds.splitVersion, manifestHash: publicIntelligenceDatasetBuilds.manifestHash, createdAt: publicIntelligenceDatasetBuilds.createdAt, approvedAt: publicIntelligenceDatasetBuilds.approvedAt }).from(publicIntelligenceDatasetBuilds).where(eq(publicIntelligenceDatasetBuilds.ownerUserId, ownerUserId)).orderBy(desc(publicIntelligenceDatasetBuilds.createdAt))
+  return database.select({ id: publicIntelligenceDatasetBuilds.id, datasetName: publicIntelligenceDatasetBuilds.datasetName, datasetVersion: publicIntelligenceDatasetBuilds.datasetVersion, intendedUse: publicIntelligenceDatasetBuilds.intendedUse, status: publicIntelligenceDatasetBuilds.status, featureContractVersion: publicIntelligenceDatasetBuilds.featureContractVersion, labelTaxonomyVersion: publicIntelligenceDatasetBuilds.labelTaxonomyVersion, splitVersion: publicIntelligenceDatasetBuilds.splitVersion, manifestHash: publicIntelligenceDatasetBuilds.manifestHash, createdAt: publicIntelligenceDatasetBuilds.createdAt, approvedAt: publicIntelligenceDatasetBuilds.approvedAt, artifactCount: sql<number>`count(${publicIntelligenceDatasetMembers.id})` }).from(publicIntelligenceDatasetBuilds).leftJoin(publicIntelligenceDatasetMembers, eq(publicIntelligenceDatasetMembers.datasetBuildId, publicIntelligenceDatasetBuilds.id)).where(eq(publicIntelligenceDatasetBuilds.ownerUserId, ownerUserId)).groupBy(publicIntelligenceDatasetBuilds.id).orderBy(desc(publicIntelligenceDatasetBuilds.createdAt))
+}
+
+export async function approveOwnerPublicDatasetBuild(input: { ownerUserId: number, datasetBuildId: number, reviewNote: string | null }) {
+  const database = requireAuditDatabase()
+  const [build] = await database.select().from(publicIntelligenceDatasetBuilds).where(and(eq(publicIntelligenceDatasetBuilds.id, input.datasetBuildId), eq(publicIntelligenceDatasetBuilds.ownerUserId, input.ownerUserId))).limit(1)
+  if (!build) throw createError({ statusCode: 404, statusMessage: 'The public dataset manifest was not found.' })
+  if (build.intendedUse !== 'training') throw createError({ statusCode: 422, statusMessage: 'Only a training-intended manifest can be approved for a training run.' })
+  if (build.status !== 'ready_for_review') throw createError({ statusCode: 422, statusMessage: 'Only a ready-for-review manifest can be approved.' })
+  if (build.labelTaxonomyVersion !== SEO_GEO_LABEL_TAXONOMY_VERSION) throw createError({ statusCode: 422, statusMessage: 'The manifest must use the active SEO/GEO label taxonomy version.' })
+  const members = await database.select({ artifactId: publicIntelligenceArtifacts.id, sourceUrl: publicIntelligenceArtifacts.sourceUrl, sourceSpanHash: publicIntelligenceArtifacts.sourceSpanHash, fieldData: publicIntelligenceArtifacts.fieldData, artifactType: publicIntelligenceArtifacts.artifactType, qualityStatus: publicIntelligenceArtifacts.qualityStatus, piiStatus: publicIntelligenceArtifacts.piiStatus, memberStatus: publicIntelligenceDatasetMembers.memberStatus, sourceUse: publicIntelligenceSources.allowedUse, sourceReviewStatus: publicIntelligenceSources.reviewStatus, sourceRemovedAt: publicIntelligenceSources.removedAt, artifactRemovedAt: publicIntelligenceArtifacts.removedAt }).from(publicIntelligenceDatasetMembers).innerJoin(publicIntelligenceArtifacts, eq(publicIntelligenceDatasetMembers.artifactId, publicIntelligenceArtifacts.id)).innerJoin(publicIntelligenceSources, eq(publicIntelligenceArtifacts.sourceId, publicIntelligenceSources.id)).where(eq(publicIntelligenceDatasetMembers.datasetBuildId, build.id))
+  const active = members.filter(member => member.memberStatus === 'included')
+  if (active.length < 100) throw createError({ statusCode: 422, statusMessage: `A real public training manifest needs at least 100 included examples; found ${active.length}.` })
+  if (new Set(active.map(member => member.sourceUrl)).size !== active.length || new Set(active.map(member => member.sourceSpanHash)).size !== active.length) throw createError({ statusCode: 422, statusMessage: 'The manifest contains duplicate source URLs or source-span fingerprints and cannot be approved.' })
+  const labels: string[] = []
+  for (const member of active) {
+    if (member.artifactType !== 'human_annotation' || member.qualityStatus !== 'passed' || member.piiStatus !== 'none_detected' || member.sourceUse !== 'training_candidate' || member.sourceReviewStatus !== 'approved' || member.sourceRemovedAt || member.artifactRemovedAt) throw createError({ statusCode: 422, statusMessage: 'Every training member must be an active, quality-passed, PII-cleared human annotation from an approved training source.' })
+    const parsed = seoGeoMultilabelSchema.safeParse(member.fieldData)
+    if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Every training member must use the active multi-dimensional SEO/GEO human-label contract.' })
+    labels.push(parsed.data.primaryJourneyStage)
+  }
+  const missingStages = ['discovery', 'understanding', 'response', 'progression', 'conversion'].filter(stage => labels.filter(label => label === stage).length < 10)
+  if (missingStages.length) throw createError({ statusCode: 422, statusMessage: `The 100-example public manifest needs at least 10 human-reviewed examples for each journey stage; insufficient: ${missingStages.join(', ')}.` })
+  await database.update(publicIntelligenceDatasetBuilds).set({ status: 'approved', reviewerUserId: input.ownerUserId, reviewNote: input.reviewNote, approvedAt: new Date() }).where(eq(publicIntelligenceDatasetBuilds.id, build.id))
+  return { datasetBuildId: build.id, status: 'approved' as const, artifactCount: active.length, labelCounts: Object.fromEntries(['discovery', 'understanding', 'response', 'progression', 'conversion'].map(stage => [stage, labels.filter(label => label === stage).length])) }
 }
 
 export async function listOwnerPublicArtifacts(ownerUserId: number) {
@@ -129,11 +154,11 @@ export async function createOwnerPublicDatasetBuild(input: { ownerUserId: number
 
 export async function createOwnerPublicArtifact(input: { ownerUserId: number, sourceId: number, sourceUrl: string, canonicalUrl: string | null, artifactType: 'page_manifest' | 'structural_features' | 'topic_map' | 'entity_map' | 'semantic_features' | 'technical_seo' | 'derived_excerpt' | 'human_annotation', artifactText: string | null, sourceLocator: string | null, sourceSpanHash: string | null, fieldData: object, language: string | null, extractionMethod: 'manual' | 'public_api' | 'policy_approved_fetch' | 'human_annotation', requestedUse: PublicUse, retentionUntil: Date | null }) {
   const database = requireAuditDatabase()
-  const [source] = await database.select({ id: publicIntelligenceSources.id, allowedUse: publicIntelligenceSources.allowedUse, reviewStatus: publicIntelligenceSources.reviewStatus }).from(publicIntelligenceSources).where(and(eq(publicIntelligenceSources.id, input.sourceId), eq(publicIntelligenceSources.ownerUserId, input.ownerUserId), isNull(publicIntelligenceSources.removedAt))).limit(1)
+  const [source] = await database.select({ id: publicIntelligenceSources.id, allowedUse: publicIntelligenceSources.allowedUse, reviewStatus: publicIntelligenceSources.reviewStatus, piiStatus: publicIntelligenceSources.piiStatus }).from(publicIntelligenceSources).where(and(eq(publicIntelligenceSources.id, input.sourceId), eq(publicIntelligenceSources.ownerUserId, input.ownerUserId), isNull(publicIntelligenceSources.removedAt))).limit(1)
   if (!source) throw createError({ statusCode: 404, statusMessage: 'Public source was not found.' })
   if (source.reviewStatus !== 'approved') throw createError({ statusCode: 422, statusMessage: 'Approve the Source Card before adding artifacts.' })
   try { assertPermittedPublicUse({ requestedUse: input.requestedUse, maximumUse: source.allowedUse }) } catch (error) { if (error instanceof PublicUseViolation) throw createError({ statusCode: 422, statusMessage: error.message }); throw error }
   const artifactHash = artifactFingerprint({ sourceId: source.id, artifactType: input.artifactType, sourceLocator: input.sourceLocator, artifactText: input.artifactText, fieldData: input.fieldData })
-  const result = await database.insert(publicIntelligenceArtifacts).values({ ...input, artifactHash, useSnapshot: input.requestedUse, extractionVersion: 'public-intelligence-v1', qualityStatus: 'pending', piiStatus: 'unreviewed', capturedAt: new Date() })
+  const result = await database.insert(publicIntelligenceArtifacts).values({ ...input, artifactHash, useSnapshot: input.requestedUse, extractionVersion: 'public-intelligence-v1', qualityStatus: 'pending', piiStatus: source.piiStatus === 'none_detected' ? 'none_detected' : 'unreviewed', capturedAt: new Date() })
   return { id: Number(result[0].insertId), artifactHash, useSnapshot: input.requestedUse }
 }

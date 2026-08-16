@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { seoGeoMultilabelSchema } from './seoGeoTaxonomy'
 
 const boundedText = (min: number, max: number) => z.string().trim().min(min).max(max)
 const booleanSignals = z.object({ primaryCta: z.boolean(), serviceRouting: z.boolean(), expertContact: z.boolean(), insights: z.boolean(), trustSignals: z.boolean(), priceOrEstimator: z.boolean(), faqOrGuidedTopics: z.boolean() })
@@ -13,7 +14,10 @@ export const publicFeatureContractSchema = z.discriminatedUnion('artifactType', 
   z.object({ artifactType: z.literal('semantic_features'), fieldData: z.object({ semanticSummary: boundedText(40, 3000), intentVector: z.array(z.number().min(-1).max(1)).min(1).max(4096).optional(), embeddingModel: z.string().trim().max(120).nullable().optional() }) }),
   z.object({ artifactType: z.literal('technical_seo'), fieldData: z.object({ hasH1: z.boolean(), canonicalPresent: z.boolean(), indexability: z.enum(['indexable', 'noindex', 'unknown']), schemaTypes: z.array(boundedText(2, 120)).max(30), internalLinkCount: z.number().int().min(0).max(10000), languageSignal: z.string().trim().min(2).max(24).nullable().optional() }) }),
   z.object({ artifactType: z.literal('derived_excerpt'), fieldData: z.object({ excerptPurpose: z.enum(['positioning', 'service_definition', 'cta_pattern', 'faq_answer', 'technical_signal', 'other']), wordCount: z.number().int().min(1).max(5000) }) }),
-  z.object({ artifactType: z.literal('human_annotation'), fieldData: z.object({ annotationKind: z.enum(['strategy_interpretation', 'taxonomy_label', 'quality_note', 'policy_note']), observation: boundedText(8, 3000), reviewerConfidence: z.number().int().min(1).max(5) }) }),
+  z.object({ artifactType: z.literal('human_annotation'), fieldData: z.union([
+    z.object({ annotationKind: z.enum(['strategy_interpretation', 'taxonomy_label', 'quality_note', 'policy_note']), observation: boundedText(8, 3000), reviewerConfidence: z.number().int().min(1).max(5) }),
+    seoGeoMultilabelSchema,
+  ]) }),
 ])
 
 export const publicArtifactInputSchema = z.object({

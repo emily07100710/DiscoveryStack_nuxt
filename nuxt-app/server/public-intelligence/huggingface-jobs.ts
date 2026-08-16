@@ -11,7 +11,7 @@ export type HuggingFaceJob = {
   [key: string]: unknown
 }
 
-type TrainingRecord = { id: number, label: string, split: 'train' | 'validation' | 'test', featureVector: unknown }
+type TrainingRecord = { id: number, label: string, targets: Record<string, string | string[]>, split: 'train' | 'validation' | 'test', featureVector: unknown }
 
 async function config(ownerUserId?: number) {
   const runtime = useRuntimeConfig()
@@ -71,15 +71,15 @@ function recordText(record: TrainingRecord) {
 }
 
 export function trainingDatasetDigest(records: TrainingRecord[]) {
-  return safeHash(records.map(record => `${record.id}:${record.label}:${record.split}:${recordText(record)}`).join('\n'))
+  return safeHash(records.map(record => `${record.id}:${record.label}:${JSON.stringify(record.targets)}:${record.split}:${recordText(record)}`).join('\n'))
 }
 
 export async function startHuggingFaceTraining(input: { ownerUserId?: number, runId: number, mode: 'development' | 'production', records: TrainingRecord[] }) {
   const { token, baseModelId, flavor } = await config(input.ownerUserId)
   if (!token) providerError(503, 'huggingface_not_configured', 'Set HUGGINGFACE_API_TOKEN in the server environment.')
   const namespace = await resolveNamespace(input.ownerUserId)
-  const modelRepo = `${namespace}/discoverystack-journey-${input.runId}`
-  const dataset = input.records.map(record => JSON.stringify({ text: recordText(record), label: record.label, split: record.split })).join('\n')
+  const modelRepo = `${namespace}/discoverystack-seo-geo-${input.runId}`
+  const dataset = input.records.map(record => JSON.stringify({ text: recordText(record), label: record.label, targets: record.targets, split: record.split })).join('\n')
   const datasetB64 = Buffer.from(dataset, 'utf8').toString('base64')
   const response = await request(`/api/jobs/${encodeURIComponent(namespace)}`, {
     method: 'POST',
@@ -97,7 +97,7 @@ export async function startHuggingFaceTraining(input: { ownerUserId?: number, ru
       },
       flavor,
       timeoutSeconds: input.mode === 'production' ? 14_400 : 7_200,
-      labels: { application: 'discoverystack', feature: 'journey-training', run: String(input.runId) },
+      labels: { application: 'discoverystack', feature: 'seo-geo-multitask-training', run: String(input.runId) },
       attempts: 1,
     }),
   }, input.ownerUserId) as HuggingFaceJob
