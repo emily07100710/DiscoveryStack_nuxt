@@ -45,6 +45,7 @@ export default defineEventHandler(async (event) => {
     const statusCode = callbackStatusCode(error)
     const errorName = error instanceof Error ? error.name : typeof error
     console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; error=${errorName}`)
-    throw createError({ statusCode, statusMessage: callbackFailureMessage(stage) })
+    setResponseStatus(event, statusCode)
+    return { error: callbackFailureMessage(stage) }
   }
 })

@@ -50,3 +50,9 @@ Within My Browser, the page text confirmed the owner OAuth control is rendered o
 After the owner OAuth control became visible in My Browser as a page-interactive element, invoking it failed before navigation with a browser transport error (`Could not establish connection. Receiving end does not exist`). This is a My Browser session-bridge failure; no authorization URL, callback, credential, owner session, or training action was reached or changed.
 
 Using the page handler's required `origin` parameter through My Browser reached the Manus `app-auth` account-selection screen for DiscoveryStack Production. The authenticated browser session presented an account choice without exposing its identifier in this record. The next action is to select that existing session and allow the OAuth callback to verify whether its open ID matches the configured owner.
+
+## OAuth callback reliability retry
+
+After auto-published checkpoint `de57e5d0`, the production `/audit-lab` route continued to show only the anonymous owner gate before sign-in. This confirms that the callback reliability update did not weaken the private-output boundary before a new OAuth round-trip.
+
+The My Browser account-selection flow again reached the correct production callback URL, but the callback still returned a Cloudflare host-level 502 after account selection. This confirms the issue persists after provider-call timeouts and redacted stage diagnostics were deployed. Separate safe probes verified that the deployed callback module returns controlled 400 and 403 responses before provider exchange, the managed MySQL database accepts a local read-only `SELECT 1`, and the configured OAuth provider is reachable and rejects a deliberately invalid authorization code within 2.2 seconds. No real access token, account identity, owner session, database write, or training job was exposed or completed during these probes.

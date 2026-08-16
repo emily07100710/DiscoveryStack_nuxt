@@ -61,6 +61,7 @@ describe('OAuth frontend-origin contract', () => {
   it('bounds provider calls so a failed provider cannot leave the callback without a response', () => {
     expect(oauth).toContain('const OAUTH_PROVIDER_TIMEOUT_MS = 12_000')
     expect(oauth).toContain('timeout: OAUTH_PROVIDER_TIMEOUT_MS')
-    expect(callback).toContain('throw createError({ statusCode, statusMessage: callbackFailureMessage(stage) })')
+    expect(callback).toContain('setResponseStatus(event, statusCode)')
+    expect(callback).toContain('return { error: callbackFailureMessage(stage) }')
   })
 })
