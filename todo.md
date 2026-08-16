@@ -41,3 +41,7 @@
 - [x] 重新發布並驗證正式 OAuth callback 僅命中最新 Nitro runtime，而非外層模板或舊 artifact。
 - [ ] 對齊平台 SDK 的 OAuth HTTP client，修正真實 authorization-code exchange 在 Nitro production 的相容性。
 - [ ] 為 OAuth provider exchange 加入 HTTP JSON header 與無敏感 provider error 分類，辨識真實 callback 502 的上游失敗模式。
+- [x] 重新啟動停止回應的 Nuxt 開發預覽，並確認預覽首頁可正常載入。
+- [ ] 評估不繞過 owner OAuth 與 human-review 的受限代管訓練替代架構，並取得使用者核准後才實作。
+- [ ] 修復 Autoscale hosting 在真實 OAuth callback request 對 Nitro 上游回傳 Cloudflare 502 的問題，並以 owner round-trip 驗收。
+- [ ] 避免以 HTTP 502 回傳 OAuth provider 失敗而被 Cloudflare 覆寫，改用無敏感資訊的受控 callback 回應驗證真實 exchange 結果。

@@ -6,7 +6,12 @@ import { exchangeOAuthCode, type OAuthProviderErrorKind } from '../../utils/oaut
 type CallbackStage = 'exchange' | 'token' | 'identity' | 'database' | 'session'
 const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r4'
 
-function callbackStatusCode(error: unknown) {
+function callbackStatusCode(error: unknown, stage: CallbackStage, providerError: OAuthProviderErrorKind | null) {
+  // Cloudflare turns an origin 502 into a generic Host Error page, which hides
+  // our safe callback diagnostics. A provider failure is an unsuccessful
+  // authorization response, not an application crash, so return a controlled
+  // client-visible response without exposing provider details.
+  if ((stage === 'token' || stage === 'identity') && providerError) return 400
   const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
     ? (error as { statusCode: number }).statusCode
     : 500
@@ -56,7 +61,7 @@ export default defineEventHandler(async (event) => {
   } catch (error: unknown) {
     setHeader(event, 'X-DiscoveryStack-OAuth-Callback', stage)
     if (providerError) setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Error', providerError)
-    const statusCode = callbackStatusCode(error)
+    const statusCode = callbackStatusCode(error, stage, providerError)
     const errorName = error instanceof Error ? error.name : typeof error
     console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; error=${errorName}`)
     setResponseStatus(event, statusCode)
