@@ -1,0 +1,42 @@
+import { describe, expect, it } from 'vitest'
+import { cleanAndExtractPublicDocument, ingestionRequestFingerprint, MAX_PUBLIC_DOCUMENT_BYTES, readBoundedPublicHtml } from '../server/public-intelligence/ingestion'
+
+describe('policy-approved public ingestion contracts', () => {
+  it('extracts bounded structural features and only returns hashes for a public document', () => {
+    const output = cleanAndExtractPublicDocument(`<!doctype html><html><head><title>SEO service</title><link rel="canonical" href="https://example.com/services"><script type="application/ld+json">{"@type":"ProfessionalService"}</script></head><body><h1>SEO services</h1><nav><a href="/services">Services</a></nav><a href="/contact">Contact our expert</a><section>Frequently asked questions</section></body></html>`)
+    expect(output.contentHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(output.cleanedTextHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(output).not.toHaveProperty('html')
+    expect(output).not.toHaveProperty('cleanedText')
+    expect(output.features.documentTitlePresent).toBe(true)
+    expect(output.features.hasH1).toBe(true)
+    expect(output.features.canonicalPresent).toBe(true)
+    expect(output.features.schemaTypes).toContain('ProfessionalService')
+    expect(output.features.signals.primaryCta).toBe(true)
+    expect(output.features.signals.expertContact).toBe(true)
+    expect(output.features.signals.faqOrGuidedTopics).toBe(true)
+  })
+
+  it('records PII detection as redaction-ready metadata without retaining the detected values', () => {
+    const output = cleanAndExtractPublicDocument('<html><body><h1>Contact</h1>Email hello@example.com or call +886 2 1234 5678.</body></html>')
+    expect(output.piiOutcome).toBe('redacted')
+    expect(output.piiFindingCounts.emails).toBe(1)
+    expect(output.piiFindingCounts.phones).toBe(1)
+    expect(JSON.stringify(output)).not.toContain('hello@example.com')
+    expect(JSON.stringify(output)).not.toContain('+886 2 1234 5678')
+  })
+
+  it('rejects an oversized response before it can enter cleaning or persistence', async () => {
+    const response = new Response('small', { headers: { 'content-length': String(MAX_PUBLIC_DOCUMENT_BYTES + 1) } })
+    await expect(readBoundedPublicHtml(response)).rejects.toThrow('response_too_large')
+  })
+
+  it('uses source ID, normalised URL and extractor version for dedupe—not raw page content', () => {
+    const first = ingestionRequestFingerprint({ sourceId: 7, normalizedUrl: 'https://approved.example/service' })
+    const second = ingestionRequestFingerprint({ sourceId: 7, normalizedUrl: 'https://approved.example/service' })
+    const differentUrl = ingestionRequestFingerprint({ sourceId: 7, normalizedUrl: 'https://approved.example/other' })
+    expect(first).toBe(second)
+    expect(first).not.toBe(differentUrl)
+    expect(first).toMatch(/^[a-f0-9]{64}$/)
+  })
+})

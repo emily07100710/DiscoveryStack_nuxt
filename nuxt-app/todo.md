@@ -1,0 +1,113 @@
+# DiscoveryStack Nuxt 重建工作清單
+
+> 狀態規則：只有在實際驗收完成後才能勾選；設計決策、研究或排程不等於功能完成。
+
+## 階段 1／Nuxt 4.5.2 恢復與驗收：已完成
+
+- [x] 從初始化範本恢復 Nuxt 4.5.2、Vue 3、Nitro、Nuxt I18n、Nuxt Content 與 Nuxt Image 的專案基礎。
+- [x] 恢復 `prefix` 雙語路由及 `/en`、`/zh-hant` 的 SSR 初始 HTML；`/` 已在 Nitro 以 302 導向 `/en`。
+- [x] 恢復 SEO／GEO-first 的內容 schema、首頁受控內容來源與共用品牌基礎。
+- [x] `pnpm typecheck`、Nuxt 靜態產生與雙語 HTML 驗證均已通過。
+- [x] 建立第一個具實質驗收內容的可恢復 checkpoint：`d361db12`（淺色四場景 scroll-story、fallback preview、互動診斷與 SEO/GEO readiness）。`976dd49d` 僅為早期無變更 checkpoint，不作為交付驗收依據；後續 checkpoint 均附有對應驗收紀錄。
+
+## 後續階段：未開始
+
+- [x] 建立可持續的 Markdown/MDC content collection 與首發主題叢集：16 個中英可索引入口（首頁、服務、方法論、術語與 publication）。
+- [x] 驗證首發內容叢集通過型別檢查、37 條 Nuxt 靜態預渲染路由、初始 HTML 抽樣，以及桌機／手機閱讀版面檢查。
+- [x] 建立強勢銷售文案、沉浸式雙語前台與受控 AI QA 介面；首頁含語意優先的三段滾動敘事、降低動態效果支援與原創資產的 production 載入路徑。
+- [x] 驗證英文與繁中首頁的桌機全頁視覺、production 靜態產生與 initial HTML；AI QA 目前是受控知識範圍的前端互動，Nitro API／模型接線留待資料層階段實作。
+- [x] 建立 GEO 結構化資料、實體、爬蟲政策、可引用內容與技術 SEO 層：所有公開頁輸出 canonical、`en`／`zh-Hant`／`x-default` hreflang 及與可見內容相符的 `Organization`、`WebSite`、`WebPage`、`Service`、`DefinedTerm` 或 `Article` JSON-LD。
+- [x] 建立 production-aware `robots.txt`、`llms.txt`、sitemap（含雙語 alternate）與 private-path `X-Robots-Tag`；未配置正式網域時，HTML 為 `noindex` 且 robots 全站封鎖，避免 staging 被誤收錄。FAQPage 未加入，因首頁問答在初始 HTML 並非完整可見 FAQ，不能將互動後內容偽裝成可引用結構化資料。
+- [x] 建立 Lead、認證、Nitro API 與資料庫基礎；保留 Nuxt 4 monolith，未採用不相容的 React／Express 升級範本。
+- [x] 以 Nuxt Nitro 建立 `users`／`leads` 資料表、已審核 migration、Zod 輸入驗證、15 分鐘去重、單實例節流、honeypot 與 private-by-default API 回應；已驗證未同意資料處理回傳 422、honeypot 不持久化與正常 API 請求建立資料列後可完全清除。
+- [x] 建立雙語 fit-review 表單，提供可存取的欄位、同意、成功／失敗狀態並串接 server-only Lead API；英文預覽與繁中 initial HTML 均已確認，成功 API 回應已走過，元件會切換至 success state。
+- [x] 建立 Nuxt 原生的 OAuth callback、簽章 session 驗證與 owner-only guard，作為未來 Audit Lab 與設定頁的私有入口；`/api/admin/session-check` 已實際驗證未登入為 401。
+- [x] 使用可刪除的正常測試 Lead 驗證 `/api/leads` 成功持久化，驗證後已立即刪除；資料庫中剩餘測試資料列為 0。
+- [x] 新增並驗證一個受 `requireOwner` 實際保護的 private route，確認未登入為 401。
+- [ ] 在第一次 owner 登入 private Audit Lab 時，完成 OAuth interactive round-trip 與 owner-session 200 回應的人工驗收；此項需要帳號瀏覽器上下文，不能以假 session 取代。
+- [ ] 修正正式 Audit Lab OAuth 的 redirect URI：2026-08-16 實測發現 server-side origin 產生 `a.run.app` callback 而被 OAuth portal 拒絕；需由前端傳遞實際 browser origin、server 以設定 allowlist 驗證並保留 nonce 綁定，完成成功 callback／session 200 後才可勾選。
+- [ ] 修正真實 OAuth 回呼的 nonce cookie 驗證：2026-08-16 已在 My Browser 選擇 owner 帳戶後到達正式 `/api/oauth/callback`，但回傳 403 `Invalid sign-in state`；login 302 已確認以正確 production host 發出 `__Host-discoverystack-oauth-state`、`Path=/`、`HttpOnly`、`Secure`、`SameSite=Lax`、10 分鐘有效期。需追蹤 callback 收到／未收到 cookie 的原因，加入回歸測試後重新走真實 owner flow。
+- [ ] 區分 OAuth provider exchange 與 owner identity 的真實 callback 401：新增不含 code／token／openId／email 的固定 stage header，標示 provider token exchange、provider user-info 或 `OWNER_OPEN_ID` match/mismatch；部署後以 owner browser flow 判斷應修正 OAuth app redirect／app ID，或更新 owner identity 設定。
+- [x] 修正 OAuth 跨站 state cookie 程式契約：state cookie 維持 `__Host-`、HttpOnly、Secure、10 分鐘 expiry、nonce／redirect URI allowlist 驗證，並改為 `SameSite=None` 以支援真實跨站 OAuth callback；新增固定 `cookie-present`／`cookie-missing` privacy-safe diagnostic marker，OAuth contract tests 5 項與 Nuxt typecheck 通過。正式 owner round-trip 仍待部署後驗收。
+- [x] 核對並校正 OAuth code exchange 契約：曾以通用 SDK 描述測試 raw `state` exchange，但唯讀 shipped WebDev SDK 實作明確為先 decode state 的 redirect URI，再以 `{ clientId, grantType, code, redirectUri }` 呼叫 provider；已回復相同 payload，新增 `token`／`identity` 固定安全階段診斷。OAuth、private-output、Audit governance 共 14 項回歸與 Nuxt typecheck 通過。
+- [x] 驗證正式 deployment 的 Nuxt Nitro server route tree 已可用：2026-08-16 production `/api/intelligence/ingestion-jobs` 與 `/api/intelligence/inferences` 已由原本 404 變為匿名 401 `Private administration requires an owner session`，證實最新 owner-only ML API 與 guard 已在正式 runtime 運作。`manus-webdev-logs` 仍顯示 `cloudrun service not found`，但不再阻擋 route serving；OAuth provider exchange 的 owner 401 另列待處理。
+- [x] 提供 Journey Intelligence 機器學習後台的 read-only 導覽預覽：`/ml-lab-preview` 僅展示資料治理流程、taxonomy、人工覆核、dataset manifest 與 readiness 介面結構，不使用或捏造客戶、Source Card、artifact、評價或訓練資料；已生成 42 routes、通過 58 項 regression 與桌機／375px 視覺驗證，真實 Audit Lab 維持 owner-only。
+- [ ] 提供實際 Hugging Face Journey Intelligence 工作台的可檢視導覽：以既有 `/audit-lab` 的真實功能區塊為依據，呈現 Workspace、觀察訊號、Source Card 治理、資料集 manifest、BGE-M3 similarity pilot 與 training readiness；不繞過 owner session、不執行 live crawl、不得加入虛構資料。
+- [ ] 將 Journey Intelligence 擴充為完整且可審核的 ML 工作流：僅針對 owner 核准、Source Card 政策已通過的公開來源建立擷取排程與內容快照；產生可追溯的清洗、去重、PII gate 與多維特徵，提供 BGE-M3 分析、預測服務契約與訓練 readiness；未有足夠同意且人工覆核的資料時，不啟動訓練或宣稱模型預測成效。
+- [x] 實作並自動驗證 Journey Intelligence ingestion／analysis 程式層：新增 owner-triggered HTTPS 單頁 policy-approved fetch、1 MB response cap、禁止 redirect／站點探索、記憶體內清洗、PII 偵測／redaction gate、只保存雜湊與型別化 feature artifact、request hash 去重、friction baseline、BGE-M3 去識別結構特徵 similarity ledger 與 supervised prediction readiness contract；新增 migration 已套用，`pnpm typecheck` 與 64 項 regression tests 均通過。owner-session 實際操作與正式 Nitro hosting 仍另列待驗收。
+- [x] 建立可擴充的 ML taxonomy、人工標註、資料同意、版本、評估與 Audit Lab；未達訓練門檻時系統維持 baseline／readiness，不宣稱已訓練模型。
+- [x] 建立 private Audit Lab 的 workspace、run、page metadata、observation、evidence ledger、friction assessment、review 與 de-identified training-example 資料模型；Audit 不保存原始 HTML、客戶機密或未授權訓練資料。
+- [x] 建立可版本化 Journey Friction taxonomy、規則 baseline、人工覆核與撤回同意機制，讓每個模型候選資料點具備 dataset、split、taxonomy、feature-contract 與品質狀態。
+- [x] 建立 owner-only Audit Lab 的 API 與頁面，提供安全 target guard、公開結構訊號手動紀錄、human review 與 ML readiness；未啟動未經授權的網路爬取。
+- [x] 建立 Hugging Face token 的 server-side status 與 BGE-M3 similarity pilot gate；credential test 已通過，token 不進資料庫、HTML、client bundle 或 Git，pilot 僅處理去識別且已同意的候選資料並只輸出相似度排序供人類覆核。
+- [ ] 當 readiness gate 達成後，建立可重現的 Journey Intelligence 訓練作業：鎖定 dataset／split／taxonomy／feature-contract 版本，保留未見 holdout 集並紀錄評估與失敗案例；未達門檻時不得宣稱已訓練模型或以模型自動決策。
+- [x] 擴充公開研究資料層：建立來源、觀測時間、robots／條款、風險、用途、保留期限與可用欄位的可追溯 Schema／API／private UI；通過政策時可建立比有／沒有更豐富的分析特徵與策略師標註。
+- [ ] 將公開研究素材、明確授權客戶資料與可部署訓練集完成為同一個跨層可建立／可核准的版本化 dataset manifest；公開資料層的 dataset build API、quality review、member lineage 與 private UI 已完成，與 first-party 授權候選資料的統一 manifest 仍待後續訓練階段接線。
+- [x] 完成 `Public Intelligence Source Card` 全生命週期：可建立、搜尋／過濾、用途核准、再審核、查看 append-only history，並能停用來源、撤除其 artifact 與 revoke future dataset members。
+- [x] 完成多維公開研究特徵 contract：以結構、主題、實體、語意、技術 SEO、派生節錄與人工標註的受控欄位取代自由 JSON；private UI 強制收集 locator／selector 與 source span，並自動產生及驗證 SHA-256 hash。
+- [x] 建立資料用途 gate：來源僅可用於研究、可用於評估，或可成為訓練候選必須明確記錄；robots、條款、授權、PII、保留期限、去重及 reviewer decision 都納入可查詢 policy 狀態。
+- [ ] 以 owner session 實際走完 Audit Lab、Source Card、artifact 與資料用途 upgrade 的互動驗收；不可用假 owner session 取代。
+- [ ] 逐筆完成四個既有公開研究網站的 Source Card terms／licence／PII／retention 審核，依結果將其核准為 research、evaluation 或 training candidate；不得以 robots 結果單獨推定訓練用途。
+- [x] 新增 Public Intelligence Source Card 的搜尋／過濾／狀態篩選、停用（remove/revoke）與再審核 history API＋private UI。
+- [x] 為 public intelligence artifacts 建立明確多維 feature contract schema，並在 Audit Lab artifact 建立流程實際收集與驗證 sourceLocator／selector／sourceSpanHash，確保每筆高價值特徵可複核。
+- [ ] 完成效能、可用性、資料安全、搜尋可見度與原版行為驗證；自動 regression、靜態產物與原版對照已通過，正式域名 Lighthouse、owner OAuth 與人工可用性 walkthrough 尚待完成。
+- [ ] 在正式或候選部署網域上執行 Lighthouse／PageSpeed Insights，記錄 LCP、CLS、TBT／INP proxy 與具體優化結論；2026-08-16 對正式英文首頁的匿名 PageSpeed mobile request 被 Google `Queries per day` quota 拒絕，未取得指標，需在配額可用時重跑。
+- [ ] 以真實 owner 帳號完成 private Audit Lab OAuth round-trip，驗證登入後 session 200、owner-only workflow 與關鍵鍵盤操作路徑。
+- [ ] 完成公開首頁與 private Audit Lab 的人工可用性驗收：鍵盤導覽、焦點順序、錯誤訊息朗讀／螢幕閱讀器抽查，並將結果寫入 `VALIDATION_MATRIX.md`。
+- [x] 建立公開雙語路由 HTML snapshot 驗證：16 個可索引 EN／ZH-Hant URL 均包含 H1、canonical、hreflang／x-default、相符 JSON-LD 與可爬取內部連結；private Audit Lab 不在靜態輸出或索引。
+- [x] 驗證私有 API 與資料安全邊界：匿名 owner-only endpoint 已回傳 401；public HTML／資產 regression test 不含 private API 呼叫、server secret marker 或 private data。Audit Lab lazy route 可含 endpoint 字串，但 server guard 才能回傳資料。
+- [x] 驗證可用性與動態效果：公開首頁的 heading／form label、focus-visible CSS 與 `prefers-reduced-motion` scroll-motion gate 均有 regression test；實際螢幕閱讀器與 owner dashboard keyboard walkthrough 留待正式登入驗收。
+- [x] 執行效能與產物檢查：production generate 通過，public output 約 2.4 MB，hero trace 為高優先、case visuals 為 lazy；已記錄 Nuxt Content worker 與字型的 LCP 風險。未取得正式域名 Lighthouse lab data，未虛構 Core Web Vitals。
+- [x] 對照唯讀原始專案的 Lead validation、AI assistant boundary、Audit scope／governance 行為；Nuxt 的保留與刻意調整已由原版測試與新的 regression tests 對照。
+- [x] 讀取唯讀原始專案中 Lead validation 與 AI assistant boundary 的實作／測試，逐項比對 Nuxt 行為與測試契約。
+- [x] 在 `VALIDATION_MATRIX.md` 補上 Lead validation、AI assistant boundary、Audit scope／governance 的保留與刻意調整差異，並以對應程式或測試位置作為驗收依據。
+- [x] 完成文件、checkpoint 與私有 GitHub repository 推送；早期無變更 checkpoint 為 `976dd49d`，第一個具實質驗收內容的 checkpoint 為 `d361db12`，私有 GitHub `main` 已推送至 `06a53a6`。
+- [x] 撰寫交付 README：Nuxt 4.5.2 架構、雙語 URL、開發／測試／generate、資料庫 migration、server-only secrets、Lead、Audit Lab、Public Intelligence 與訓練 readiness 說明。
+- [x] 撰寫正式網域、canonical、robots、sitemap、Search Console、Bing Webmaster 與 Lighthouse／owner OAuth 人工驗收清單。
+- [x] 整理 git 歷史與安全忽略規則；已設定私有遠端 `emily07100710/DiscoveryStack_nuxt`，本機 Nuxt source replacement commit 為 `c24da45`，token／binary ignore 與 tracked-file scan 已通過。
+- [x] 補上並驗證 `.gitignore` 對 secret/binary 類型的明確規則（例如 PEM、key、token dump 與 binary artifact），並完成 `git check-ignore` 與 tracked-file 安全掃描。
+- [x] 將 git 安全驗證結果寫入交付文件，列出已驗證的 `.output`、`.nitro`、`.env*`、DB、secret 及 binary artifact ignore 規則。
+- [x] 建立第一個可恢復 WebDev checkpoint，將 checkpoint version 與 Git commit／remote push 結果記入交付文件。
+- [x] 修復並驗證使用者可存取的 Nuxt 預覽：維持 preview server、提供英文與繁中實際可檢視畫面，並排除 My Browser 暫時 proxy 顯示 unavailable 的問題。
+- [x] 從唯讀舊 DiscoveryStack 網站萃取米色＋藍色的實際色碼、背景／邊框／文字／按鈕使用比例，不以主觀近似色取代原有視覺 token。
+- [x] 將公開首頁、內容頁、Journey sequence、AI QA、fit-review 與 private Audit Lab 改為一致的淺米色＋藍色系，保留字級、留白、語意與動效邊界。
+- [x] 重新驗證淺色版本的文字對比、focus-visible、錯誤狀態、英文／繁中全頁截圖與 production HTML，並提供更新後的實際預覽畫面；`FIT_REVIEW_LIGHT_THEME_VERIFICATION.md` 記錄 native invalid-state、EN／ZH 預覽、SSR H1／hreflang 與正式 CSS 的 `:user-invalid` deployment 驗證。
+- [x] 修復靜態 preview 在 client hydration 時出現的 `Cannot access 'm' before initialization` 500，並確認 `/en` 與 `/zh-hant` 可用互動式預覽載入。
+- [x] 實際打開英文與繁中 SEO/GEO 內容頁及 private Audit Lab 的未登入 gate，確認淺色版標題、留白、對比與 private session gate 正常呈現。
+- [ ] 以 owner session 完成 private Audit Lab 的鍵盤 focus、錯誤狀態與動效邊界驗收，並與公開雙語內容頁的完整可及性結果一併記錄。
+- [x] 修復互動預覽中 `/manus-storage/*` 的資產 404：完整 `.output/public` 掃描無此類參考，16 條 EN／ZH-Hant preview 路由均為 200，production Audit Lab 未登入 gate 亦已實際驗收。
+- [x] 重新設計首頁為高品質 scroll-story：加入多段全螢幕 sticky scene、文字分鏡、需求路徑節點連動、米藍抽象視覺場景、游標／視差微互動與受限轉場，同時保留完整的 SSR 語意內容與 reduced-motion 路徑。
+- [x] 建立互動敘事驗收：已檢查桌機 production 可逆回捲、手機垂直閱讀、鍵盤 focus 保持、native hydration pointer、reduced-motion runtime 回退與 public HTML 抽取性；CLS/INP 僅記錄實作風險與待測邊界，未虛構 Lighthouse 指標，詳見 `INTERACTIVE_STORY_VALIDATION.md`。
+- [x] 建立 SEO/GEO production-readiness 稽核，將已完成技術基礎、正式網域／Search Console／Bing／Lighthouse／權威內容／外部連結／收錄資料等待辦分成可驗證狀態，避免以架構完成取代排名或權威成果。
+- [x] 為首頁 scroll-story 補上實際游標／視差微互動，例如 pointer-based parallax layer 與 cursor-reactive scene element，並維持 `prefers-reduced-motion` 保護。
+- [x] 新增游標／視差微互動的回歸測試或可驗證腳本，證明公開首頁實際執行互動且不影響 SSR 內容、鍵盤焦點或可及性回退。
+- [x] 為首頁游標／視差互動新增可重複的鍵盤驗證，至少涵蓋 Tab 導覽、focus order、focus-visible 持續存在，並確認 pointer 事件不攔截鍵盤焦點。
+- [x] 在正常 Nuxt hydration 互動預覽路徑完成首頁 pointer/parallax 實測；以 `scripts/verify-native-pointer-parallax.mjs` 在 native `/en?nuxt=1` URL 測得 pointer move 寫入 `--pointer-x/y`、pointerleave 歸零且 story SSR 文字仍存在，證據見 `NATIVE_POINTER_PARALLAX_VERIFICATION.md`。
+- [x] 建立並驗證受管 preview 相容的 Nuxt dev 常駐 wrapper：3101 埠 12 秒實測中 Nuxt child exit 0 後由 `dev:nuxt` 自動重啟，wrapper 直到外部 timeout 才終止；3000 預設維持穩定 static preview，`generate` 已重建 40 routes。直接本機 `build` 受 sandbox 終止限制，未誤報為成功，詳見 `MANAGED_NUXT_DEV_WRAPPER_VERIFICATION.md`。
+- [x] 建立受管 preview 相容的常駐 static server，以最新 `.output/public` 提供 3000 埠的雙語可檢視網站；明確記錄此 preview 的互動／API 範圍與正式 Nitro runtime 的差異。
+- [x] 修復受管 static preview 的 `/` 根路由 404，使其與 Nuxt route rule 一致地 302 導向 `/en`，避免 preview UI 預設入口顯示錯誤頁。
+- [x] 將 AI QA 改為固定右下角的可展開 floating dock；桌機維持不遮擋主要內容，手機採用 safe-area-aware 底部 dock 並可開關。
+- [x] 實測 AI QA floating dock 的桌機與手機左右／底部安全距離、展開後不超出 viewport、Tab／Escape 鍵盤操作、focus-visible 與 reduced-motion 行為。
+- [x] 以實際瀏覽器或可重複 headless 驗證 AI QA 的 Tab 導覽、focus-visible 與 Escape 收合後焦點回到 launcher，並記錄結果。
+- [x] 在 375x812 手機 viewport 記錄 AI QA 收合／展開時的左右與底部安全距離、sheet 高度及輸入欄邊界，確認均未超出視窗。
+- [x] 在 `prefers-reduced-motion: reduce` 下實際驗證 AI QA 仍可開關且無展開動畫，補上可重複測試或驗證證據。
+- [x] 以私人銀行／控制室規格作為參考方向，將全站色彩與材質收斂為暖米、深藍、少量黃銅金與紙張顆粒，同時保留必要的可讀性與互動判斷。
+- [x] 將首頁操作字體與 display 排印升級為 Manrope、Newsreader、Noto Serif TC，並在首頁實作 1180px／彈性 10vw 格線與 fixed blur header。
+- [x] 完成 Newsreader／Noto Serif TC／Manrope 與 1180px／10vw 格線的桌機＋手機實測，至少涵蓋 `/en`、`/zh-hant` 與一個雙語內容頁。
+- [x] 補齊排印／格線驗收文件，明確記錄 76px fixed blur header、內容頁橫列式閱讀規則與字體在 EN／ZH-Hant 的實際結果；若內容頁尚未完全套用新格線，先完成 CSS 調整再驗收。
+- [x] 將 scroll-story 升級為可逆的連續捲動時間軸：髮絲進度線、hero 視差、sticky pin 視覺連續變形與 reduced-motion／touch 回退已完成，並於正式首頁擷取中段 scene 驗證。
+- [x] 評估是否需要為 scroll-story 加入速度傾斜／連續 wipe；保留現有連續 progress／核心轉向，不加入會使文字與核心跟隨滾動速度抖動的額外傾斜，維持可讀性、INP 與 reduced-motion 回退。
+- [x] 完成參考式視覺驗收的正式 runtime 回捲測試，再合併既有桌機／手機色彩、中文字距、無自訂游標及 AI QA dock 安全區證據。
+- [x] 將 AI QA 的英文與繁中文案改為溫和、陪伴式的策略顧問口吻，同時維持不保證排名與人類商業判斷的事實邊界。
+- [x] 縮小英文與繁中首頁 hero 標題，重新調整桌機／手機字級、行高與最大寬度，保留戲劇張力但優先讓一眼閱讀舒適。
+- [x] 加強首頁 scroll-story 的可感知動態：加入連續場景核心變形、路徑／節點推進與反向回捲同步；保留 SSR 文字、reduced-motion 與觸控閱讀回退。
+- [x] 將 closed AI QA 由文字工具列改為小型右下助手 icon，保留語意名稱、focus-visible、展開 dock、手機 safe-area 與鍵盤操作。
+- [x] 修復小型助手 icon 的 `sr-only` 輔助文字在 preview 外漏，確保視覺上只顯示 icon、但螢幕閱讀器仍可讀取 AI QA 名稱與用途。
+- [x] 以已驗證的 SSR 首頁快照緊急恢復受管 3000 preview，實測 `/en` 與 `/zh-hant` 首頁可重新載入；此項僅代表首頁回復，不代表完整 preview pipeline 已修復。
+- [x] 修復受管 preview 啟動流程，使 3000 不依賴首頁快照或一次性暫存產物；至少穩定提供 `/en`、`/zh-hant` 與一個內容頁的實際預覽。
+- [x] 補上受管 preview 恢復驗證：連續重啟兩次後實測 `/en`、`/zh-hant` 與一個內容頁均可載入，且本輪啟動未出現 bootstrap `fetch failed` 或 `Preview route not found`。
+- [x] 提高 AI QA dock 的文字輸入欄辨識性：以更淺的填色、清楚但克制的邊界與 focus 狀態，讓它與面板背景和快捷提問按鈕明確區分。
+- [x] 修復 production build 因 `better-sqlite3` 原生 binding 未編譯而失敗的問題，並以 production build 驗證 Nuxt Content 可在部署映像中初始化；Docker 化正式 runtime 已在 2026-08-16 成功監聽 3000。
+- [x] 修復正式 Nuxt SSR 在公開首頁與內容頁因 JSON-LD callback 讀取未初始化 SEO helper 而產生的 `Cannot access 's' before initialization` 500，並以正式網域驗證 `/en` 與一個內容頁均可回應。
+- [x] 找出並修復正式 `/en` 仍回報 `Cannot access 'p' before initialization` 的其餘 module 初始化循環；完成後需在正式網域實測英文首頁與英文內容頁為非 500。
+- [x] 在可完成 Nuxt generate 的環境重建 `.output/public`，再執行全量 artifact regression（public HTML snapshots、private-output boundary）；2026-08-16 已成功 prerender 40 routes，且全量 15 個 Vitest 檔、52 項測試均通過。

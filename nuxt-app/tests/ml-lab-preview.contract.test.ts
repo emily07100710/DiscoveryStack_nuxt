@@ -1,0 +1,70 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+const root = process.cwd()
+const workbench = readFileSync(join(root, 'pages/ml-lab-preview.vue'), 'utf8')
+const crawlApi = readFileSync(join(root, 'server/api/intelligence/ingestion-jobs.post.ts'), 'utf8')
+const trainingApi = readFileSync(join(root, 'server/api/intelligence/training-runs.post.ts'), 'utf8')
+const config = readFileSync(join(root, 'nuxt.config.ts'), 'utf8')
+const crawlService = readFileSync(join(root, 'server/public-intelligence/crawl-repository.ts'), 'utf8')
+const firecrawlService = readFileSync(join(root, 'server/public-intelligence/firecrawl.ts'), 'utf8')
+const trainingService = readFileSync(join(root, 'server/public-intelligence/training.ts'), 'utf8')
+const hfJobs = readFileSync(join(root, 'server/public-intelligence/huggingface-jobs.ts'), 'utf8')
+const hfScript = readFileSync(join(root, 'server/public-intelligence/hf-training-script.ts'), 'utf8')
+const providerApi = readFileSync(join(root, 'server/api/intelligence/providers.post.ts'), 'utf8')
+const providerRepository = readFileSync(join(root, 'server/public-intelligence/provider-repository.ts'), 'utf8')
+const providerVault = readFileSync(join(root, 'server/utils/provider-vault.ts'), 'utf8')
+
+describe('ML Workbench contract', () => {
+  it('is private and noindex while preserving the Audit Lab escape route', () => {
+    expect(workbench).toContain("content: 'noindex, nofollow, noarchive'")
+    expect(workbench).toContain('to="/audit-lab"')
+    expect(config).toContain("'/ml-lab-preview': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } }")
+  })
+
+  it('exposes real crawl, clean and training controls instead of fabricated records', () => {
+    expect(workbench).toContain('Crawl.')
+    expect(workbench).toContain('Clean. Train.')
+    expect(workbench).toContain("'/api/intelligence/ingestion-jobs'")
+    expect(workbench).toContain("mode: 'site'")
+    expect(workbench).toContain("'/api/intelligence/training-runs'")
+    expect(workbench).toContain('raw HTML')
+    expect(workbench).toContain('清洗後正文')
+    expect(workbench).toContain('Hugging Face Transformers Trainer')
+    expect(workbench).toContain('Run Hugging Face training')
+    expect(workbench).toContain('Open remote job')
+    expect(workbench).not.toContain('Prototype centroid classifier')
+    expect(workbench).not.toContain('testimonial')
+  })
+
+  it('lets the owner configure providers inside the private workbench without exposing secrets', () => {
+    expect(workbench).toContain('saveProviderSettings')
+    expect(workbench).toContain('providerForm.firecrawlApiKey')
+    expect(workbench).toContain('providerForm.huggingFaceApiToken')
+    expect(providerApi).toContain('requireOwner')
+    expect(providerApi).toContain('saveOwnerProviderCredentials')
+    expect(providerRepository).toContain('encryptProviderSecret')
+    expect(providerRepository).toContain('redactProviderSecret')
+    expect(providerVault).toContain("'aes-256-gcm'")
+    expect(workbench).not.toContain('firecrawlApiKeyCiphertext')
+    expect(workbench).not.toContain('huggingFaceApiTokenCiphertext')
+  })
+
+  it('keeps the server actions owner-gated and bounded', () => {
+    expect(crawlApi).toContain("z.enum(['document', 'site'])")
+    expect(crawlApi).toContain('maxPages')
+    expect(crawlApi).toContain('maxDepth')
+    expect(trainingApi).toContain('runSupervisedTraining')
+    expect(trainingApi).toContain('requireOwner')
+    expect(crawlService).toContain("provider: 'firecrawl'")
+    expect(firecrawlService).toContain("'/crawl'")
+    expect(trainingService).toContain('startHuggingFaceTraining')
+    expect(trainingService).not.toContain('prototype_centroid')
+    expect(hfJobs).toContain('/api/jobs/')
+    expect(hfJobs).toContain('HF_TOKEN')
+    expect(hfScript).toContain('from transformers import')
+    expect(hfScript).toContain('AutoModelForSequenceClassification')
+    expect(hfScript).toContain('Trainer(')
+  })
+})

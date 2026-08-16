@@ -1,0 +1,22 @@
+# Project TODO
+
+- [x] 以 GitHub `main` 的 commit `065c559e8765c01b14aab4a10ef9daac2390d14d` 為基準，盤點 Nuxt/Nitro 專案、Dockerfile、runtime config 與部署相容性。
+- [x] 維持目前 Autoscale hosting，不啟用 24 小時常駐 Reserved Hosting；所有服務均由 Nitro request handler 直接執行，不啟動常駐 background worker。
+- [x] 將 Nuxt 4 SSR 與 Nitro server production build 移入 Manus hosting 專案，不使用 `pnpm generate` 作為正式 runtime。
+- [x] 保留 `/en/**` 與 `/zh-hant/**` route-based i18n、SSR public content、canonical、hreflang、x-default、JSON-LD、robots.txt、llms.txt 及 sitemap.xml。
+- [x] 保留 Lead Capture 的 Zod 驗證、privacy consent、honeypot、防重複與節流，以及 MySQL 持久化。
+- [x] 保留 Manus OAuth 登入、`OWNER_OPEN_ID` 單一 owner session 驗證，以及 Audit Lab 的 `X-Robots-Tag: noindex, nofollow, noarchive` 邊界。
+- [x] 保留 Source Card CRUD、artifact workflow、可版本化 taxonomy、人工 review、consent revoke、dataset manifest lineage 與 audit governance 功能。
+- [x] 保留 Firecrawl 有界單頁 ingestion 與記憶體內 PII 清洗，確保 token 與 server-side 邏輯不進入前端 bundle。
+- [x] 保留 Hugging Face BGE-M3 similarity ranking 與受控 training API，確保僅以 server-side token 執行並限制為人類 review。
+- [x] 以 hosting secrets 設定正式環境變數；不得將 API keys、資料庫連線、session secret 寫入 Git、HTML 或 client bundle。
+- [x] 建立 MySQL schema：Lead Capture、Audit Lab、Source Card、typed artifact、review、taxonomy、dataset manifest lineage、ingestion、inference、training run 與 provider credentials tables。
+- [x] 設定並以 Firecrawl 唯讀 credit-usage 與 Hugging Face 唯讀 whoami 端點驗證 server-only provider secrets。
+- [x] 設定正式 HTTPS `NUXT_PUBLIC_SITE_URL` 與 `OAUTH_ALLOWED_ORIGIN`，使 canonical、hreflang、sitemap、robots、llms 與 Owner OAuth 指向實際正式網域。
+- [x] 驗證並記錄 Autoscale 模式下 OAuth、Lead Capture、Firecrawl ingestion 與 Hugging Face ranking 均由 request handler 呼叫，且不依賴常駐背景程序。
+- [x] 檢查 canonical、hreflang、x-default、JSON-LD 的實作與 SSR 輸出，確認 `/en/**`、`/zh-hant/**` 的公開頁保留完整 SEO/GEO 標記。
+- [x] 執行 21 個 Vitest 檔案、71 項 regression test 與 Nitro SSR security header 驗證；Provider credentials、公開 SEO 頁及 Audit Lab noindex header 均通過。
+- [x] 逐項核對 Lead Capture、owner guard、Source Card 資料治理、Firecrawl PII 清洗、Hugging Face human-review gate 與 request-scoped 實作證據。
+- [x] 執行 SSR production artifact、Vitest、SSR 與安全標頭驗證；確認部署所需的 OAuth／資料庫／provider secrets。
+- [ ] Nuxt typecheck 在目前 sandbox 的 Node 768 MB heap 上因 OOM 中止；production artifact 與 71 項 regression tests 已通過，仍應在資源更高的 CI 環境補跑 typecheck。
+- [ ] 建立 production checkpoint，並回報正式網址、HTTPS、長期 hosting 設定、未提供 secrets 與驗證結果。
