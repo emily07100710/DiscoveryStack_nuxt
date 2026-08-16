@@ -9,13 +9,17 @@ const fromBase64 = (value: string) => Buffer.from(value, 'base64').toString('utf
 
 export function oauthConfig(event: H3Event) {
   const config = useRuntimeConfig(event)
-  if (!config.oauthServerUrl || !config.oauthPortalUrl || !config.oauthAppId || !config.oauthAllowedOrigin) {
+  const serverUrl = typeof config.oauthServerUrl === 'string' ? config.oauthServerUrl : ''
+  const portalUrl = typeof config.oauthPortalUrl === 'string' ? config.oauthPortalUrl : ''
+  const appId = typeof config.oauthAppId === 'string' ? config.oauthAppId : ''
+  const configuredOrigin = typeof config.oauthAllowedOrigin === 'string' ? config.oauthAllowedOrigin : ''
+  if (!serverUrl || !portalUrl || !appId || !configuredOrigin) {
     throw createError({ statusCode: 503, statusMessage: 'Private sign-in is not configured.' })
   }
   let allowedOrigin = ''
-  try { allowedOrigin = new URL(config.oauthAllowedOrigin).origin } catch { throw createError({ statusCode: 503, statusMessage: 'Private sign-in origin is not configured correctly.' }) }
+  try { allowedOrigin = new URL(configuredOrigin).origin } catch { throw createError({ statusCode: 503, statusMessage: 'Private sign-in origin is not configured correctly.' }) }
   if (!allowedOrigin.startsWith('https://')) throw createError({ statusCode: 503, statusMessage: 'Private sign-in origin must use HTTPS.' })
-  return { serverUrl: config.oauthServerUrl, portalUrl: config.oauthPortalUrl, appId: config.oauthAppId, allowedOrigin }
+  return { serverUrl, portalUrl, appId, allowedOrigin }
 }
 
 export function beginOAuthLogin(event: H3Event, requestedOrigin: string) {

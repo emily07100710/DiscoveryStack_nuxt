@@ -20,3 +20,6 @@
 - [x] 執行 SSR production artifact、Vitest、SSR 與安全標頭驗證；確認部署所需的 OAuth／資料庫／provider secrets。
 - [x] 記錄 Nuxt typecheck 的 sandbox 限制：`nuxi typecheck` 與 640 MB heap 的 `vue-tsc --noEmit` 均因 Node OOM 中止；production SSR artifact 與 71 項 regression tests 已通過，應在較高記憶體 CI 補跑完整 typecheck。
 - [x] 建立 production checkpoint `856131d2`，並準備回報正式網址、HTTPS、Autoscale hosting、secrets 與驗證結果；正式公開仍需由使用者在管理介面按 Publish。
+- [x] 實作 Docker production build 修復：完整 source 複製後重新執行 `nuxt prepare`，並對 OAuth／Owner runtime config 進行顯式字串收斂；fresh generated imports 與 71 項 regression tests 均通過。
+- [ ] 以正式 Docker container build 重新驗證 Nuxt/Nitro SSR artifact、完整 Vitest 與 server-only security boundary；本地 Nuxt full build 仍受 sandbox Node 768 MB heap OOM 限制。
+- [ ] 建立 deployment-fix checkpoint，並請使用者重新按 Publish 驗證正式 HTTPS 網址。

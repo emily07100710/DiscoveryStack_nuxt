@@ -8,10 +8,12 @@ type AdminSession = { openId: string, name: string, role: 'admin' }
 
 function authConfig(event: H3Event) {
   const config = useRuntimeConfig(event)
-  if (!config.sessionSecret || !config.ownerOpenId) {
+  const sessionSecret = typeof config.sessionSecret === 'string' ? config.sessionSecret : ''
+  const ownerOpenId = typeof config.ownerOpenId === 'string' ? config.ownerOpenId : ''
+  if (!sessionSecret || !ownerOpenId) {
     throw createError({ statusCode: 503, statusMessage: 'Private administration is not configured.' })
   }
-  return { secret: new TextEncoder().encode(config.sessionSecret), ownerOpenId: config.ownerOpenId }
+  return { secret: new TextEncoder().encode(sessionSecret), ownerOpenId }
 }
 
 export async function setOwnerSession(event: H3Event, user: { openId: string, name?: string | null }) {

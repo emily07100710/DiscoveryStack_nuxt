@@ -17,8 +17,11 @@ RUN npm install -g corepack@latest \
 
 COPY nuxt-app/ ./
 
-# This creates .output/server/index.mjs and preserves live Nitro API routes.
-RUN DISCOVERYSTACK_SKIP_PRERENDER=1 corepack pnpm run build
+# `pnpm install` runs the package prepare hook before the application source is
+# copied into this layer. Regenerate Nuxt's auto-import and module types after
+# the full source tree exists, then build the live Nitro SSR server.
+RUN corepack pnpm exec nuxt prepare \
+  && DISCOVERYSTACK_SKIP_PRERENDER=1 corepack pnpm run build
 
 ENV NODE_ENV=production
 ENV NITRO_HOST=0.0.0.0
