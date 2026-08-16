@@ -75,16 +75,16 @@ export async function exchangeOAuthCode(
 ) {
   const { serverUrl, appId } = oauthConfig(event)
   const statePayload = validateOAuthState(event, state)
+  // Keep the provider transport behavior identical to the platform's shipped SDK.
+  // Axios serializes this JSON body and supplies its standard Accept/Content-Type headers.
+  const providerClient = axios.create({ baseURL: serverUrl, timeout: OAUTH_PROVIDER_TIMEOUT_MS })
   onStage?.('token')
   let exchange: { accessToken?: string }
   let exchangeStatus: number | null = null
   try {
-    const response = await axios.post<{ accessToken?: string }>(`${serverUrl}/webdev.v1.WebDevAuthPublicService/ExchangeToken`, {
+    const response = await providerClient.post<{ accessToken?: string }>('/webdev.v1.WebDevAuthPublicService/ExchangeToken', {
       // Match the shipped SDK: it decodes redirectUri from state, then posts redirectUri to the provider.
       clientId: appId, grantType: 'authorization_code', code, redirectUri: statePayload.redirectUri,
-    }, {
-      timeout: OAUTH_PROVIDER_TIMEOUT_MS,
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     })
     exchangeStatus = response.status
     exchange = response.data
@@ -102,11 +102,8 @@ export async function exchangeOAuthCode(
   let user: { openId?: string, name?: string, email?: string, platform?: string, loginMethod?: string }
   let identityStatus: number | null = null
   try {
-    const response = await axios.post<{ openId?: string, name?: string, email?: string, platform?: string, loginMethod?: string }>(`${serverUrl}/webdev.v1.WebDevAuthPublicService/GetUserInfo`, {
+    const response = await providerClient.post<{ openId?: string, name?: string, email?: string, platform?: string, loginMethod?: string }>('/webdev.v1.WebDevAuthPublicService/GetUserInfo', {
       accessToken: exchange.accessToken,
-    }, {
-      timeout: OAUTH_PROVIDER_TIMEOUT_MS,
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     })
     identityStatus = response.status
     user = response.data

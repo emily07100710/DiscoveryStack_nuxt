@@ -30,7 +30,7 @@ describe('OAuth frontend-origin contract', () => {
     expect(oauth).toContain('const expectedRedirect = `${allowedOrigin}/api/oauth/callback`')
     expect(readFileSync(join(root, 'server/api/oauth/callback.get.ts'), 'utf8')).toContain("export { default } from '../auth/callback.get'")
     expect(oauth).toContain('parsed.nonce !== expectedNonce')
-    expect(oauth).toContain('axios.post<{ accessToken?: string }>')
+    expect(oauth).toContain("providerClient.post<{ accessToken?: string }>('/webdev.v1.WebDevAuthPublicService/ExchangeToken'")
     expect(oauth).toContain("clientId: appId, grantType: 'authorization_code', code, redirectUri: statePayload.redirectUri")
     expect(oauth).not.toContain("clientId: appId, grantType: 'authorization_code', code, state")
   })
@@ -76,8 +76,10 @@ describe('OAuth frontend-origin contract', () => {
     expect(oauth).toContain("import axios from 'axios'")
     expect(oauth).not.toContain('$fetch<')
     expect(oauth).toContain('const OAUTH_PROVIDER_TIMEOUT_MS = 25_000')
-    expect(oauth).toContain('timeout: OAUTH_PROVIDER_TIMEOUT_MS')
-    expect(oauth).toContain("headers: { Accept: 'application/json', 'Content-Type': 'application/json' }")
+    expect(oauth).toContain("const providerClient = axios.create({ baseURL: serverUrl, timeout: OAUTH_PROVIDER_TIMEOUT_MS })")
+    expect(oauth).toContain("providerClient.post<{ accessToken?: string }>('/webdev.v1.WebDevAuthPublicService/ExchangeToken'")
+    expect(oauth).toContain("providerClient.post<{ openId?: string, name?: string, email?: string, platform?: string, loginMethod?: string }>('/webdev.v1.WebDevAuthPublicService/GetUserInfo'")
+    expect(oauth).not.toContain("headers: { Accept: 'application/json', 'Content-Type': 'application/json' }")
     expect(oauth).toContain("if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') return { kind: 'timeout', status }")
     expect(oauth).toContain("return { kind: 'response', status }")
     expect(oauth).toContain("let exchangeStatus: number | null = null")
@@ -95,7 +97,7 @@ describe('OAuth frontend-origin contract', () => {
 
   it('requires the production image to build a clean Nitro artifact with the current OAuth release marker', () => {
     expect(dockerfile).toContain('rm -rf .nuxt .output')
-    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r6' .output/server")
+    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r7' .output/server")
     expect(dockerfile).toContain('CMD ["node", ".output/server/index.mjs"]')
   })
 
