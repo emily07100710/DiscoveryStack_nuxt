@@ -18,5 +18,5 @@
 - [x] 執行 21 個 Vitest 檔案、71 項 regression test 與 Nitro SSR security header 驗證；Provider credentials、公開 SEO 頁及 Audit Lab noindex header 均通過。
 - [x] 逐項核對 Lead Capture、owner guard、Source Card 資料治理、Firecrawl PII 清洗、Hugging Face human-review gate 與 request-scoped 實作證據。
 - [x] 執行 SSR production artifact、Vitest、SSR 與安全標頭驗證；確認部署所需的 OAuth／資料庫／provider secrets。
-- [ ] Nuxt typecheck 在目前 sandbox 的 Node 768 MB heap 上因 OOM 中止；production artifact 與 71 項 regression tests 已通過，仍應在資源更高的 CI 環境補跑 typecheck。
-- [ ] 建立 production checkpoint，並回報正式網址、HTTPS、長期 hosting 設定、未提供 secrets 與驗證結果。
+- [x] 記錄 Nuxt typecheck 的 sandbox 限制：`nuxi typecheck` 與 640 MB heap 的 `vue-tsc --noEmit` 均因 Node OOM 中止；production SSR artifact 與 71 項 regression tests 已通過，應在較高記憶體 CI 補跑完整 typecheck。
+- [x] 建立 production checkpoint `856131d2`，並準備回報正式網址、HTTPS、Autoscale hosting、secrets 與驗證結果；正式公開仍需由使用者在管理介面按 Publish。
