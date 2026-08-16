@@ -5,7 +5,7 @@ import { exchangeOAuthCode, type OAuthProviderError } from '../../utils/oauth'
 
 type CallbackStage = 'exchange' | 'token' | 'identity' | 'database' | 'session'
 type SessionFailureKind = 'owner_mismatch' | 'configuration' | 'jwt_session' | 'unknown'
-const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r11'
+const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r12'
 
 function errorStatusCode(error: unknown) {
   const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
@@ -61,11 +61,9 @@ export default defineEventHandler(async (event) => {
     stage = 'database'
     const database = getDatabase()
     if (!database) throw createError({ statusCode: 503, statusMessage: 'Private administration is temporarily unavailable.' })
-    const config = useRuntimeConfig(event)
-    setHeader(event, 'X-DiscoveryStack-OAuth-Owner', user.openId === config.ownerOpenId ? 'match' : 'mismatch')
     await database.insert(users).values({
       openId: user.openId!, name: user.name || null, email: user.email || null, loginMethod: user.loginMethod || user.platform || null,
-      role: user.openId === config.ownerOpenId ? 'admin' : 'user', lastSignedIn: new Date(),
+      role: 'user', lastSignedIn: new Date(),
     }).onDuplicateKeyUpdate({ set: { name: user.name || null, email: user.email || null, loginMethod: user.loginMethod || user.platform || null, lastSignedIn: new Date() } })
     stage = 'session'
     await setOwnerSession(event, { openId: user.openId!, name: user.name })

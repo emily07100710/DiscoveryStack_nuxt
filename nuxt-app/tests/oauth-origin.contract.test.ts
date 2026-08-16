@@ -46,11 +46,17 @@ describe('OAuth frontend-origin contract', () => {
 
   it('reads owner session secrets only on the server at request time when hosting injects them after build', () => {
     expect(auth).toContain("process.env.NUXT_SESSION_SECRET || process.env.JWT_SECRET || ''")
-    expect(auth).toContain("process.env.NUXT_OWNER_OPEN_ID || process.env.OWNER_OPEN_ID || ''")
     expect(auth).toContain("process.env.JWT_SECRET || ''")
-    expect(auth).toContain("process.env.OWNER_OPEN_ID || ''")
     expect(auth).toContain("const SESSION_COOKIE = '__Host-discoverystack-session'")
     expect(auth).toContain("httpOnly: true, secure: true, sameSite: 'lax'")
+  })
+
+  it('uses a persistent admin role as the revocable single-owner allowlist without emitting an open ID', () => {
+    expect(auth).toContain("return user?.role === 'admin'")
+    expect(auth).toContain("!await isAdminOpenId(user.openId)")
+    expect(auth).toContain("!await isAdminOpenId(payload.openId)")
+    expect(callback).toContain("role: 'user', lastSignedIn: new Date()")
+    expect(callback).not.toContain('X-DiscoveryStack-OAuth-Owner')
   })
 
   it('offers a secret-free server configuration probe for secure deployment validation', () => {
@@ -74,7 +80,7 @@ describe('OAuth frontend-origin contract', () => {
     expect(callback).toContain('const user = await exchangeOAuthCode(')
     expect(callback).toContain('(nextStage) => { stage = nextStage }')
     expect(callback).toContain('(failure) => { providerFailure.value = failure }')
-    expect(callback).toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Owner', user.openId === config.ownerOpenId ? 'match' : 'mismatch')")
+    expect(callback).not.toContain('X-DiscoveryStack-OAuth-Owner')
     expect(callback).toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Error', providerFailure.value.kind)")
     expect(callback).toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Status', String(providerFailure.value.status))")
     expect(callback).toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Reason', providerFailure.value.reason)")
@@ -128,7 +134,7 @@ describe('OAuth frontend-origin contract', () => {
 
   it('requires the production image to build a clean Nitro artifact with the current OAuth release marker', () => {
     expect(dockerfile).toContain('rm -rf .nuxt .output')
-    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r11' .output/server")
+    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r12' .output/server")
     expect(dockerfile).toContain('CMD ["node", ".output/server/index.mjs"]')
   })
 

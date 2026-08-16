@@ -60,3 +60,5 @@
 - [ ] 以 server-only request-time environment fallback 讀取 JWT_SECRET 與 OWNER_OPEN_ID，修正 Nuxt production build-time runtimeConfig 遺失 hosting secrets 的 session configuration failure。
 - [ ] 設定 NUXT_SESSION_SECRET 與 NUXT_OWNER_OPEN_ID 為 Nuxt runtimeConfig 的 production aliases，避免 build-time default 覆蓋 hosting secrets。
 - [ ] 以不回傳任何值的 private configuration probe 驗證正式 container 已讀到 Nuxt session／owner aliases。
+- [ ] 釐清既有 OWNER_OPEN_ID 與目前代理瀏覽器 Manus 帳戶的 owner mismatch，僅在使用者明確指定授權 owner 帳戶後更新 allowlist。
+- [ ] 依使用者明確授權，將目前已完成 OAuth identity 驗證的帳戶安全遷移為唯一 owner，避免在 Git、公開回應或聊天室暴露 open ID。

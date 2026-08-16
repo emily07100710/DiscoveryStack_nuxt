@@ -24,7 +24,7 @@ COPY nuxt-app/ ./
 RUN rm -rf .nuxt .output \
   && corepack pnpm exec nuxt prepare \
   && DISCOVERYSTACK_SKIP_PRERENDER=1 corepack pnpm run build \
-  && grep -R -q 'nitro-oauth-20260816-r11' .output/server
+  && grep -R -q 'nitro-oauth-20260816-r12' .output/server
 
 ENV NODE_ENV=production
 ENV NITRO_HOST=0.0.0.0
