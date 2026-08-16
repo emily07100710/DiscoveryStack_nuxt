@@ -51,6 +51,8 @@ async function loadWorkbench() {
     providerStatus.value = providerRows
     publicDatasets.value = datasetRows
     providerForm.huggingFaceNamespace = providerRows.huggingface.namespace || ''
+    const approvedSources = sourceRows.filter(source => source.reviewStatus === 'approved' && !source.removedAt && source.allowedUse !== 'blocked' && source.robotsStatus === 'reviewed_allow' && ['allows_research', 'allows_evaluation', 'allows_training'].includes(source.termsStatus) && source.copyrightRisk === 'low' && source.piiStatus === 'none_detected')
+    if (approvedSources.length === 1 && crawlForm.sourceId === 0) crawlForm.sourceId = approvedSources[0].id
     state.value = 'ready'
   } catch (error: unknown) {
     const statusCode = (error as { statusCode?: number, status?: number }).statusCode ?? (error as { status?: number }).status
@@ -165,7 +167,7 @@ onMounted(loadWorkbench)
         <div class="section-intro"><p class="eyebrow">01／抓取</p><h2 id="crawl-title">抓取已核准的頁面。</h2><p>這不是無限制爬蟲。起點必須屬於來源卡的網域，最多 10 頁、深度最多 2，只接受 HTTPS HTML，並以手動重新導向控管防止意外離開範圍。</p></div>
         <div class="workbench-card">
           <form class="workbench-form" @submit.prevent="startCrawl">
-            <label><span>已核准來源卡</span><select v-model.number="crawlForm.sourceId" required><option :value="0" disabled>選擇已通過政策審核的來源</option><option v-for="source in eligibleSources" :key="source.id" :value="source.id">{{ source.sourceName || source.domain }} · {{ displayStatus(source.allowedUse) }}</option></select></label>
+            <label><span>已核准來源卡</span><select v-model.number="crawlForm.sourceId" required><option :value="0" disabled>選擇已通過政策審核的來源</option><option v-for="source in eligibleSources" :key="source.id" :value="source.id">{{ source.sourceName || source.domain }} · {{ displayStatus(source.allowedUse) }}</option></select><small v-if="eligibleSources.length === 1">已安全預選唯一通過政策審核的來源；仍受網域、頁數、深度與 PII 閘門限制。</small></label>
             <label><span>起始 URL</span><input v-model.trim="crawlForm.requestedUrl" required type="url" placeholder="https://approved-source.example/" inputmode="url"></label>
             <div class="form-grid"><label><span>最多頁數</span><input v-model.number="crawlForm.maxPages" type="number" min="1" max="10"></label><label><span>最大深度</span><input v-model.number="crawlForm.maxDepth" type="number" min="0" max="2"></label></div>
             <button class="workbench-button" :disabled="crawlStatus === 'saving' || !eligibleSources.length" type="submit">{{ crawlStatus === 'saving' ? '正在抓取與清洗…' : '啟動受限抓取' }} <span aria-hidden="true">↗</span></button>

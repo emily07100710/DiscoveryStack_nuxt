@@ -83,5 +83,6 @@
 - [ ] 僅在 100 筆資料集通過來源政策與訓練 gate 後，實際提交一次 Hugging Face 遠端 development job，保存 job ID、資料集摘要、模型版本、狀態、metrics 或失敗證據；在此之前不得宣稱訓練完成。
 - [x] 將遠端 Hugging Face 訓練從僅預測單一 journey stage，升級為共享編碼器加多個可稽核輸出頭的 SEO／GEO 多任務訓練；至少涵蓋 journey stage、搜尋意圖、內容型態、技術 SEO 訊號與行動摩擦／修復優先度。
 - [x] 在遠端訓練資料與結果中保留完整多維標籤 schema、每個輸出頭的可用樣本數、損失與評估指標；無標註維度必須遮罩，不得捏造負例或將缺值當成 `no`。
-- [ ] 提升 Nuxt release marker 並在正式網域驗證已載入公開資料 100 筆 gate 與 SEO／GEO 多任務訓練 bundle，再開始建立或抓取訓練資料。
-- [ ] 修復 r14 production Docker build：使 inference API 傳遞新版訓練服務所需的已核准 dataset manifest 識別，並以 production build 驗證，不得回退或放寬 100 筆 dataset gate。
+- [x] 提升 Nuxt release marker 並在正式網域驗證已載入公開資料 100 筆 gate 與 SEO／GEO 多任務訓練 bundle，再開始建立或抓取訓練資料。
+- [x] 修復 r14 production Docker build：使 inference API 傳遞新版訓練服務所需的已核准 dataset manifest 識別，並以 production build 驗證，不得回退或放寬 100 筆 dataset gate。
+- [ ] 修復 ML Workbench 在僅有一個已核准來源時的選擇器可用性：可安全預選唯一來源，但在有多個來源時仍要求 owner 明確選擇，且不得繞過來源核准檢查。

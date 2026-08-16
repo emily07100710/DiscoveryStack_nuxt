@@ -51,6 +51,17 @@ Creative Commons 說明 CC BY 允許在歸屬前提下改作與商業使用；CC
 
 2026-08-17 已在正式 Search Central 文件索引實測確認：該索引將候選內容劃分為「搜尋基礎入門、SEO 基礎知識、檢索及建立索引、排名與搜尋外觀、監控和偵錯、網站專屬指南」，並在頁尾標示「除非另有註明，否則內容採 CC BY 4.0、程式碼範例採 Apache 2.0」。首批資料僅從這些 SEO 文件分類中逐頁挑選；每頁仍要再次檢驗該頁的授權頁尾、canonical URL、是否含另行授權媒材和原始內容雜湊，才可建立訓練 artifact。[6]
 
+### Google Search Central 第一張來源卡的準備證據
+
+| 欄位 | 已保存的值／限制 |
+|---|---|
+| 名稱 | Google Search Central Documentation（CC BY 4.0） |
+| 允許範圍 | `https://developers.google.com/search/docs`；僅挑選 Search Central 文件索引所列的個別 SEO 文件。 |
+| robots 證據 | `https://developers.google.com/robots.txt`；每個候選 URL 仍必須在擷取當下重新檢核。 |
+| 授權／條款證據 | `https://developers.google.com/site-policies`；資料集 manifest 保存作者／來源、頁名、URL、CC BY 4.0 與修改說明。 |
+| 排除範圍 | 非 Search Central 路徑、帳號／使用者內容、限制 robots 路徑、商標與品牌素材、圖片／影音、另行標示權利的內容，均不可納入。 |
+| 狀態 | 僅完成來源卡送審前的證據準備；尚未儲存來源卡、尚未抓取頁面、尚未建立 artifact 或訓練資料。 |
+
 ## 五、完成定義
 
 此任務只有在 owner-only ML Workbench 顯示一筆**非 BLOCKED**、至少 100 筆的已核准 dataset manifest、完整標籤分布與一個真實遠端 Hugging Face job ID 時才算完成。若遠端工作失敗，系統必須保留失敗證據並明確顯示「未完成」，而不是把送出請求或建立空白 run 視為訓練成功。

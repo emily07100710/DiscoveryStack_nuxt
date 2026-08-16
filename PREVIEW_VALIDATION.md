@@ -96,3 +96,43 @@ The direct owner-facing ML Workbench URL is `https://discovstack-kfpqmdfb.manus.
 2026-08-16 以已授權的 owner session 開啟 `https://discovstack-kfpqmdfb.manus.space/audit-lab`。正式 r13 介面顯示 **0** 筆已同意候選資料、BGE-M3 需要兩筆已同意候選資料，且舊版監督式學習仍顯示尚未就緒；未建立公開 Source Card、未發起 Firecrawl ingestion，亦未送出 Hugging Face job。
 
 此觀測僅作為新版本上線前的基準。新版將以來源權利／robots／條款審核、100 筆已核准公開 dataset manifest 與 SEO／GEO 多任務標籤取代舊版 consent-only 訓練準備訊號；真實遠端訓練仍須待新版部署、資料集完成與 owner 在提交前確認後才會執行。
+
+### r14 公開資料與多任務訓練版正式驗證
+
+2026-08-16 無快取探測正式 `/api/__release` 回傳 `nitro-oauth-20260816-r14` 與 Nitro handler，確認包含 100 筆已核准 dataset manifest gate、版本化 SEO／GEO taxonomy 與受控多任務訓練的 bundle 已到達正式網域。
+
+在既有 owner session 下，正式 `/audit-lab` 成功載入繁體中文私有介面。動態 readiness 文案顯示為「需要兩筆已同意候選資料」及「尚未就緒」，工作區文案明示儲存範圍不會啟動爬蟲。來源卡表單可收集來源 URL／類型、robots 與條款／授權審核、著作權風險、PII 檢查、證據 URL、授權參考與審核備註。驗證期間未建立來源卡、artifact、ingestion job、dataset manifest 或訓練工作；目前資料計數仍為零。
+
+同一 owner session 的正式 `/ml-lab-preview` 亦以繁體中文正常載入。訓練區清楚要求「已核准公開 SEO／GEO manifest」：每筆需具有可追溯來源、再利用依據、去重、PII／品質檢查與多維人工標註；開發模式須至少 100 筆、每一旅程階段至少 10 筆，正式模式須至少 150 筆、每階段至少 20 筆。頁面目前顯示 0 個核准來源、0 個清洗頁面、0 個完成抓取、無可提交 manifest，以及既有 #1 的 `TRAINING_GATE_NOT_MET` blocked run；沒有遠端 Hugging Face job 或模型產物被宣稱為已完成。
+
+為建立第一個可稽核來源卡，已確認 Audit Lab 表單可選擇文件來源、授權匯入發現方式、已審核公開 robots 路徑、允許訓練的條款／授權、低使用風險及未偵測到 PII，並可保存 robots URL、授權 URL、授權參考與審核備註。候選來源為 `https://developers.google.com/search/docs` 及其 Search Central 文件範圍；其授權與 robots 證據已保存在 `PUBLIC_TRAINING_SOURCE_POLICY.md`。此時尚未送出來源卡或任何抓取工作。
+
+後續在同一張來源卡中已暫填名稱、限定文件範圍、robots URL、條款 URL 與 CC BY 4.0 授權參考，仍停留在提交前狀態。**沒有儲存來源卡、沒有核准來源、沒有啟動 Firecrawl、沒有建立 artifact／dataset manifest、沒有提交 Hugging Face job。**
+
+### r14 — Owner 確認的受限公開資料收集範圍
+
+使用者已明確確認可建立上述來源卡，並以最多 **120 個候選 URL**進行受限收集、去重、PII 檢查、SEO／GEO 多維標註與人工審核。只有不少於 **100 筆**去重、可追溯、可再利用、PII／品質通過、附多維人工標註的資料被寫入已核准 dataset manifest 後，才可提交一次真實遠端 Hugging Face 訓練。
+
+限定範圍為 Google Search Central 文件索引下逐頁確認的 Search Central 文件。任何非 Search Central 路徑、登入或使用者內容、媒體、robots 不允許的資源，或有不同／更嚴格權利註記的頁面都必須排除。此確認不是授權繞過每頁權利、來源政策、人工審核、100 筆 manifest gate 或訓練提交記錄。
+
+### r14 — 已確認來源卡的提交前狀態
+
+在 owner 已確認行動後，正式表單仍處於提交前狀態，已填入來源名稱、`https://developers.google.com/search/docs`、robots URL、條款 URL 與 CC BY 4.0 授權參考。來源類型、發現方式與審核 enum 尚未在 My Browser 的原生 select 控制項中可靠地提交，因此**尚未寫入來源卡、未核准任何來源、未啟動 Firecrawl、未建立 artifact／manifest，亦未提交 Hugging Face job**。這保留了使用者確認的收集範圍，同時避免將不完整的稽核欄位當作已審核資料。
+
+### r14 — 已建立第一筆受控公開來源卡
+
+使用者確認後，正式 owner session 已成功建立來源卡 `Google Search Central Documentation（CC BY 4.0）`，範圍為 `https://developers.google.com/search/docs`。表單已重設，且來源登錄顯示該卡處於**待處理**、**僅限研究**，robots／條款／風險／PII 均仍未審核；這證實儲存來源卡本身沒有核准資料、啟動 Firecrawl、建立 artifact／dataset manifest 或提交 Hugging Face job。下一步仍須以已保存的逐頁授權與 robots 證據完成來源審核，才可進入受限收集。
+
+正式頁面的來源登錄再次確認該來源卡保有「核准研究用途／重新審核／歷程／停用」控制項；目前尚未按下任何審核或停用操作。頁面不存在已建立的 ingestion job、artifact、manifest 或遠端 job 顯示。
+
+已開啟該來源卡的「重新審核」表單，表單顯示 robots、條款、著作權風險、PII 與申請用途的獨立欄位。至此僅為開啟表單；沒有儲存審核、核准用途、啟動收集或變更任何允許範圍。
+
+### r14 — ML Workbench 再次檢查
+
+正式 `/ml-lab-preview` 已成功載入 r14 的受控收集與 100 筆公開 manifest gate，但仍顯示 **0 個已核准來源**、**0 個已清洗頁面**及 **0 次完成抓取**。因此在此觀測當下，尚未開始收集、建立資料集或提交遠端訓練；來源卡必須先成功完成可追溯的政策審核。
+
+### r14 — 已核准來源卡確認
+
+在限定範圍的來源審核寫入後，正式 ML Workbench 顯示 **1 個已核准來源**：`Google Search Central Documentation（CC BY 4.0）· training candidate`。頁面仍顯示 0 個已清洗頁面與 0 次完成抓取，並維持無可提交 manifest；這確認來源核准本身不會自動收集或訓練，下一步才是受 owner 確認上限約束的候選收集。
+
+工作台的受限抓取控制項指定：起始 URL 必須屬於已核准網域、單次最多 10 頁、深度最多 2、只接受 HTTPS HTML，且不會跟隨 redirect 或保存原始 HTML／清洗正文。這些限制與 owner 已確認的整體最多 120 個候選 URL 範圍一致。
