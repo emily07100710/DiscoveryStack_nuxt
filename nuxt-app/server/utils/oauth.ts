@@ -77,6 +77,7 @@ export async function exchangeOAuthCode(
   const statePayload = validateOAuthState(event, state)
   onStage?.('token')
   let exchange: { accessToken?: string }
+  let exchangeStatus: number | null = null
   try {
     const response = await axios.post<{ accessToken?: string }>(`${serverUrl}/webdev.v1.WebDevAuthPublicService/ExchangeToken`, {
       // Match the shipped SDK: it decodes redirectUri from state, then posts redirectUri to the provider.
@@ -85,14 +86,21 @@ export async function exchangeOAuthCode(
       timeout: OAUTH_PROVIDER_TIMEOUT_MS,
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     })
+    exchangeStatus = response.status
     exchange = response.data
   } catch (error) {
     onProviderError?.(classifyProviderError(error))
     throw createError({ statusCode: 502, statusMessage: 'The sign-in provider could not exchange the authorization code.' })
   }
-  if (!exchange.accessToken) throw createError({ statusCode: 502, statusMessage: 'The sign-in provider did not return an access token.' })
+  if (!exchange.accessToken) {
+    // A 2xx response with no required token is still a provider contract failure.
+    // Record only its HTTP status; never include the response body in diagnostics.
+    onProviderError?.({ kind: 'response', status: exchangeStatus })
+    throw createError({ statusCode: 502, statusMessage: 'The sign-in provider did not return an access token.' })
+  }
   onStage?.('identity')
   let user: { openId?: string, name?: string, email?: string, platform?: string, loginMethod?: string }
+  let identityStatus: number | null = null
   try {
     const response = await axios.post<{ openId?: string, name?: string, email?: string, platform?: string, loginMethod?: string }>(`${serverUrl}/webdev.v1.WebDevAuthPublicService/GetUserInfo`, {
       accessToken: exchange.accessToken,
@@ -100,11 +108,16 @@ export async function exchangeOAuthCode(
       timeout: OAUTH_PROVIDER_TIMEOUT_MS,
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     })
+    identityStatus = response.status
     user = response.data
   } catch (error) {
     onProviderError?.(classifyProviderError(error))
     throw createError({ statusCode: 502, statusMessage: 'The sign-in provider could not load the account identity.' })
   }
-  if (!user.openId) throw createError({ statusCode: 502, statusMessage: 'The sign-in provider did not return an account identity.' })
+  if (!user.openId) {
+    // Preserve the same redaction boundary for a malformed successful identity response.
+    onProviderError?.({ kind: 'response', status: identityStatus })
+    throw createError({ statusCode: 502, statusMessage: 'The sign-in provider did not return an account identity.' })
+  }
   return user
 }

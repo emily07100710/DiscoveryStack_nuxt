@@ -48,4 +48,8 @@
 - [ ] 以遞增 OAuth Nitro release 標記驗證 Autoscale 已載入最新 callback 修復，而非沿用先前 container image。
 - [ ] 在 hosting 修復後確認正式網域回傳 OAuth Nitro r5，再重跑 owner OAuth 與受控訓練驗收。
 - [ ] 在不暴露 provider 回應內容的前提下觀測 OAuth exchange HTTP status，辨識有效 authorization code 被拒絕的原因。
-- [ ] 修正 callback provider error closure 的 TypeScript 型別收斂，讓 production Docker build 可完成。
+- [x] 修正 callback provider error closure 的 TypeScript 型別收斂，讓 production Docker build 可完成。
+- [x] 將缺少 access token 或 identity 的成功 HTTP provider payload 納入安全分類，取得不含憑證的 exchange 結果診斷。
+- [ ] 以最新 production release 再次驗證 owner OAuth callback 的安全 provider status，據以完成 exchange 修復。
+- [ ] 部署包含 successful-payload 安全分類的最新 checkpoint，並以無快取 probe 確認正式網域已載入新版本。
+- [ ] 以代理瀏覽器重跑 owner OAuth callback，記錄最新 production 的安全 provider error/status，不暴露授權碼、token 或帳戶資料。
