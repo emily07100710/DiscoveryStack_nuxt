@@ -14,3 +14,7 @@ The deployed homepage at `https://discovstack-kfpqmdfb.manus.space/en` renders s
 ## Production-domain recheck
 
 After checkpoint `e86c514f`, the production homepage and Audit Lab remained available and the Audit Lab continued to return `X-Robots-Tag: noindex, nofollow, noarchive`. The page still returned the prior canonical and hreflang origin, so this must be rechecked after deployment propagation and, if persistent, traced through the container runtime environment.
+
+## Production-domain final verification
+
+After checkpoint `cfef5ad4`, `https://discovstack-kfpqmdfb.manus.space/en` rendered successfully over HTTPS. The DOM reported canonical `https://discovstack-kfpqmdfb.manus.space/en` and `en`, `zh-Hant`, and `x-default` alternate links on the same public domain. Fetching `/audit-lab` returned HTTP 200 with `X-Robots-Tag: noindex, nofollow, noarchive`.
