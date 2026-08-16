@@ -40,3 +40,4 @@
 - [x] 為正式 Nitro API 回應加入無快取 release 觀測，確認網域不再輪替至舊 deployment 或不存在的上游服務。
 - [x] 重新發布並驗證正式 OAuth callback 僅命中最新 Nitro runtime，而非外層模板或舊 artifact。
 - [ ] 對齊平台 SDK 的 OAuth HTTP client，修正真實 authorization-code exchange 在 Nitro production 的相容性。
+- [ ] 為 OAuth provider exchange 加入 HTTP JSON header 與無敏感 provider error 分類，辨識真實 callback 502 的上游失敗模式。

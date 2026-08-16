@@ -3,12 +3,20 @@ import type { H3Event } from 'h3'
 
 const OAUTH_STATE_COOKIE = '__Host-discoverystack-oauth-state'
 const OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60
-const OAUTH_PROVIDER_TIMEOUT_MS = 12_000
+const OAUTH_PROVIDER_TIMEOUT_MS = 25_000
 
 type OAuthState = { redirectUri: string, nonce: string }
+export type OAuthProviderErrorKind = 'timeout' | 'response' | 'network' | 'unknown'
 
 const toBase64 = (value: string) => Buffer.from(value, 'utf8').toString('base64')
 const fromBase64 = (value: string) => Buffer.from(value, 'base64').toString('utf8')
+
+function classifyProviderError(error: unknown): OAuthProviderErrorKind {
+  if (!axios.isAxiosError(error)) return 'unknown'
+  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') return 'timeout'
+  if (error.response) return 'response'
+  return 'network'
+}
 
 export function oauthConfig(event: H3Event) {
   const config = useRuntimeConfig(event)
@@ -56,7 +64,13 @@ export function validateOAuthState(event: H3Event, state: string) {
   return parsed
 }
 
-export async function exchangeOAuthCode(event: H3Event, code: string, state: string, onStage?: (stage: 'token' | 'identity') => void) {
+export async function exchangeOAuthCode(
+  event: H3Event,
+  code: string,
+  state: string,
+  onStage?: (stage: 'token' | 'identity') => void,
+  onProviderError?: (kind: OAuthProviderErrorKind) => void,
+) {
   const { serverUrl, appId } = oauthConfig(event)
   const statePayload = validateOAuthState(event, state)
   onStage?.('token')
@@ -67,9 +81,11 @@ export async function exchangeOAuthCode(event: H3Event, code: string, state: str
       clientId: appId, grantType: 'authorization_code', code, redirectUri: statePayload.redirectUri,
     }, {
       timeout: OAUTH_PROVIDER_TIMEOUT_MS,
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     })
     exchange = response.data
-  } catch {
+  } catch (error) {
+    onProviderError?.(classifyProviderError(error))
     throw createError({ statusCode: 502, statusMessage: 'The sign-in provider could not exchange the authorization code.' })
   }
   if (!exchange.accessToken) throw createError({ statusCode: 502, statusMessage: 'The sign-in provider did not return an access token.' })
@@ -80,9 +96,11 @@ export async function exchangeOAuthCode(event: H3Event, code: string, state: str
       accessToken: exchange.accessToken,
     }, {
       timeout: OAUTH_PROVIDER_TIMEOUT_MS,
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     })
     user = response.data
-  } catch {
+  } catch (error) {
+    onProviderError?.(classifyProviderError(error))
     throw createError({ statusCode: 502, statusMessage: 'The sign-in provider could not load the account identity.' })
   }
   if (!user.openId) throw createError({ statusCode: 502, statusMessage: 'The sign-in provider did not return an account identity.' })

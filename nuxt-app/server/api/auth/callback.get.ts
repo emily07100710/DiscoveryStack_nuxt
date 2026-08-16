@@ -1,7 +1,7 @@
 import { getDatabase } from '../../database'
 import { users } from '../../database/schema'
 import { setOwnerSession } from '../../utils/auth'
-import { exchangeOAuthCode } from '../../utils/oauth'
+import { exchangeOAuthCode, type OAuthProviderErrorKind } from '../../utils/oauth'
 
 type CallbackStage = 'exchange' | 'token' | 'identity' | 'database' | 'session'
 const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r4'
@@ -31,8 +31,15 @@ export default defineEventHandler(async (event) => {
     return { error: 'Private sign-in could not be completed.' }
   }
   let stage: CallbackStage = 'exchange'
+  let providerError: OAuthProviderErrorKind | null = null
   try {
-    const user = await exchangeOAuthCode(event, code, state, (nextStage) => { stage = nextStage })
+    const user = await exchangeOAuthCode(
+      event,
+      code,
+      state,
+      (nextStage) => { stage = nextStage },
+      (kind) => { providerError = kind },
+    )
     stage = 'database'
     const database = getDatabase()
     if (!database) throw createError({ statusCode: 503, statusMessage: 'Private administration is temporarily unavailable.' })
@@ -48,6 +55,7 @@ export default defineEventHandler(async (event) => {
     return sendRedirect(event, '/audit-lab', 302)
   } catch (error: unknown) {
     setHeader(event, 'X-DiscoveryStack-OAuth-Callback', stage)
+    if (providerError) setHeader(event, 'X-DiscoveryStack-OAuth-Provider-Error', providerError)
     const statusCode = callbackStatusCode(error)
     const errorName = error instanceof Error ? error.name : typeof error
     console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; error=${errorName}`)
