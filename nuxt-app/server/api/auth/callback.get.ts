@@ -3,12 +3,28 @@ import { users } from '../../database/schema'
 import { setOwnerSession } from '../../utils/auth'
 import { exchangeOAuthCode } from '../../utils/oauth'
 
+type CallbackStage = 'exchange' | 'token' | 'identity' | 'database' | 'session'
+
+function callbackStatusCode(error: unknown) {
+  const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+    ? (error as { statusCode: number }).statusCode
+    : 500
+  return statusCode >= 400 && statusCode < 600 ? statusCode : 500
+}
+
+function callbackFailureMessage(stage: CallbackStage) {
+  if (stage === 'token' || stage === 'identity') return 'The sign-in provider is temporarily unavailable.'
+  if (stage === 'database') return 'Private administration is temporarily unavailable.'
+  if (stage === 'session') return 'Private sign-in could not be completed.'
+  return 'Private sign-in could not be completed.'
+}
+
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const code = typeof query.code === 'string' ? query.code : ''
   const state = typeof query.state === 'string' ? query.state : ''
   if (!code || !state) throw createError({ statusCode: 400, statusMessage: 'Sign-in callback requires code and state.' })
-  let stage = 'exchange'
+  let stage: CallbackStage = 'exchange'
   try {
     const user = await exchangeOAuthCode(event, code, state, (nextStage) => { stage = nextStage })
     stage = 'database'
@@ -24,8 +40,11 @@ export default defineEventHandler(async (event) => {
     await setOwnerSession(event, { openId: user.openId!, name: user.name })
     setHeader(event, 'X-DiscoveryStack-OAuth-Callback', 'complete')
     return sendRedirect(event, '/audit-lab', 302)
-  } catch (error) {
+  } catch (error: unknown) {
     setHeader(event, 'X-DiscoveryStack-OAuth-Callback', stage)
-    throw error
+    const statusCode = callbackStatusCode(error)
+    const errorName = error instanceof Error ? error.name : typeof error
+    console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; error=${errorName}`)
+    throw createError({ statusCode, statusMessage: callbackFailureMessage(stage) })
   }
 })

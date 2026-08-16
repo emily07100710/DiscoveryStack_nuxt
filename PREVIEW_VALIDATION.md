@@ -40,3 +40,13 @@ After the browser completed the public-site consent flow, the standard Manus log
 With the public-site consent flow completed and the standard Manus login page demonstrably functional, the production Audit Lab `app-auth` authorization URL still rendered only a blank loading state. The issue is therefore not caused by the public cookie notice or the DiscoveryStack origin, callback URI, app ID, state encoding, or anonymous Audit Lab state transition.
 
 The proxy browser console reported no client-side error. Its final document state after the `app-auth` redirect was `about:blank` with a completed empty document and no loaded resources, which confirms that the external authorization route clears the browsing context before the DiscoveryStack callback is invoked.
+
+The existing My Browser connector was enabled for this task and could open the production Audit Lab directly. The page correctly remained in its anonymous owner-gated state, so no private Audit Lab data or training controls were exposed before an OAuth session was established.
+
+An address-bar navigation to `/api/auth/login` returned the expected `400 This sign-in origin is not allowed`, because it did not carry the page-origin context required by the endpoint's allowlist. Returning to the Audit Lab rendered the normal anonymous gate. Subsequent authentication testing must invoke the page's own sign-in handler rather than directly browse to the protected login endpoint.
+
+Within My Browser, the page text confirmed the owner OAuth control is rendered only on the anonymous Audit Lab gate. The browser automation did not expose the button as an indexed interactive element, so the next test must invoke its page handler from the loaded DOM while retaining the originating page context.
+
+After the owner OAuth control became visible in My Browser as a page-interactive element, invoking it failed before navigation with a browser transport error (`Could not establish connection. Receiving end does not exist`). This is a My Browser session-bridge failure; no authorization URL, callback, credential, owner session, or training action was reached or changed.
+
+Using the page handler's required `origin` parameter through My Browser reached the Manus `app-auth` account-selection screen for DiscoveryStack Production. The authenticated browser session presented an account choice without exposing its identifier in this record. The next action is to select that existing session and allow the OAuth callback to verify whether its open ID matches the configured owner.

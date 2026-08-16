@@ -1,5 +1,6 @@
 const OAUTH_STATE_COOKIE = '__Host-discoverystack-oauth-state'
 const OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60
+const OAUTH_PROVIDER_TIMEOUT_MS = 12_000
 import type { H3Event } from 'h3'
 
 type OAuthState = { redirectUri: string, nonce: string }
@@ -61,7 +62,7 @@ export async function exchangeOAuthCode(event: H3Event, code: string, state: str
   try {
     exchange = await $fetch<{ accessToken?: string }>(`${serverUrl}/webdev.v1.WebDevAuthPublicService/ExchangeToken`, {
       // Match the shipped SDK: it decodes redirectUri from state, then posts redirectUri to the provider.
-      method: 'POST', body: { clientId: appId, grantType: 'authorization_code', code, redirectUri: statePayload.redirectUri }, retry: 0,
+      method: 'POST', body: { clientId: appId, grantType: 'authorization_code', code, redirectUri: statePayload.redirectUri }, retry: 0, timeout: OAUTH_PROVIDER_TIMEOUT_MS,
     })
   } catch {
     throw createError({ statusCode: 502, statusMessage: 'The sign-in provider could not exchange the authorization code.' })
@@ -71,7 +72,7 @@ export async function exchangeOAuthCode(event: H3Event, code: string, state: str
   let user: { openId?: string, name?: string, email?: string, platform?: string, loginMethod?: string }
   try {
     user = await $fetch<{ openId?: string, name?: string, email?: string, platform?: string, loginMethod?: string }>(`${serverUrl}/webdev.v1.WebDevAuthPublicService/GetUserInfo`, {
-      method: 'POST', body: { accessToken: exchange.accessToken }, retry: 0,
+      method: 'POST', body: { accessToken: exchange.accessToken }, retry: 0, timeout: OAUTH_PROVIDER_TIMEOUT_MS,
     })
   } catch {
     throw createError({ statusCode: 502, statusMessage: 'The sign-in provider could not load the account identity.' })

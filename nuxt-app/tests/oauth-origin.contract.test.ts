@@ -52,5 +52,15 @@ describe('OAuth frontend-origin contract', () => {
     expect(callback).not.toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Callback', code)")
     expect(callback).not.toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Callback', user.email)")
     expect(callback).not.toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Callback', exchange.accessToken)")
+    expect(callback).toContain('console.error(`[DiscoveryStack OAuth] callback failed at stage=${stage}; error=${errorName}`)')
+    expect(callback).not.toContain('console.error(error)')
+    expect(callback).not.toContain('console.error(code)')
+    expect(callback).not.toContain('console.error(user.email)')
+  })
+
+  it('bounds provider calls so a failed provider cannot leave the callback without a response', () => {
+    expect(oauth).toContain('const OAUTH_PROVIDER_TIMEOUT_MS = 12_000')
+    expect(oauth).toContain('timeout: OAUTH_PROVIDER_TIMEOUT_MS')
+    expect(callback).toContain('throw createError({ statusCode, statusMessage: callbackFailureMessage(stage) })')
   })
 })

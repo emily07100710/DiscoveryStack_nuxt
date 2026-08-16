@@ -35,3 +35,5 @@
 - [ ] 記錄 OAuth 與受控訓練實測結果，並補足必要的 regression coverage。
 - [ ] 診斷並修正正式 owner OAuth 登入導向顯示空白頁的問題。
 - [ ] 以代理瀏覽器完成 owner OAuth 與 ML Workbench 實測，不要求使用者接手瀏覽器。
+- [ ] 隔離並修正帳戶選擇後正式 OAuth callback 產生 Cloudflare 502 的 server-side 失敗階段。
+- [ ] 為 OAuth provider exchange 加入不洩漏憑證的逾時與結構化錯誤診斷，避免 callback 無回應。
