@@ -1,4 +1,4 @@
-const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r12'
+const OAUTH_NITRO_RELEASE = 'nitro-oauth-20260816-r13'
 
 export default defineEventHandler((event) => {
   // This endpoint is intentionally limited to non-sensitive deployment identity.
