@@ -53,3 +53,4 @@
 - [ ] 以最新 production release 再次驗證 owner OAuth callback 的安全 provider status，據以完成 exchange 修復。
 - [ ] 部署包含 successful-payload 安全分類的最新 checkpoint，並以無快取 probe 確認正式網域已載入新版本。
 - [ ] 以代理瀏覽器重跑 owner OAuth callback，記錄最新 production 的安全 provider error/status，不暴露授權碼、token 或帳戶資料。
+- [ ] 建立僅存在於 Nuxt Nitro 的無敏感 release endpoint，隔離 production 網域是否仍指向舊 revision 或殘留 callback handler。

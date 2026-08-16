@@ -7,6 +7,7 @@ const config = readFileSync(join(root, 'nuxt.config.ts'), 'utf8')
 const oauth = readFileSync(join(root, 'server/utils/oauth.ts'), 'utf8')
 const login = readFileSync(join(root, 'server/api/auth/login.get.ts'), 'utf8')
 const callback = readFileSync(join(root, 'server/api/auth/callback.get.ts'), 'utf8')
+const releaseProbe = readFileSync(join(root, 'server/api/__release.get.ts'), 'utf8')
 const auditLab = readFileSync(join(root, 'pages/audit-lab.vue'), 'utf8')
 const dockerfile = readFileSync(join(root, '..', 'Dockerfile'), 'utf8')
 
@@ -96,5 +97,13 @@ describe('OAuth frontend-origin contract', () => {
     expect(dockerfile).toContain('rm -rf .nuxt .output')
     expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r6' .output/server")
     expect(dockerfile).toContain('CMD ["node", ".output/server/index.mjs"]')
+  })
+
+  it('exposes a no-store Nuxt-only release probe without deployment secrets', () => {
+    expect(releaseProbe).toContain("setHeader(event, 'Cache-Control', 'no-store, max-age=0')")
+    expect(releaseProbe).toContain("setHeader(event, 'X-DiscoveryStack-OAuth-Release', OAUTH_NITRO_RELEASE)")
+    expect(releaseProbe).toContain("setHeader(event, 'X-DiscoveryStack-Handler', 'nitro')")
+    expect(releaseProbe).toContain("return { release: OAUTH_NITRO_RELEASE, handler: 'nitro' }")
+    expect(releaseProbe).not.toContain('process.env.')
   })
 })
