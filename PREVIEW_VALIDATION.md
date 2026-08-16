@@ -82,3 +82,7 @@ After the user explicitly confirmed the browser action, the authenticated owner 
 ### Controlled-training architecture decision
 
 The production Autoscale request-handler design was validated as sufficient for owner-authorized training submission, database status recording and the human-review/data-quality gates. No managed-background workaround, direct token route or owner-bypass alternative is appropriate: any real remote training remains contingent on owner authentication and a qualifying de-identified dataset. The next action is data governance work in Audit Lab, not infrastructure replacement.
+
+### Owner Workbench entry visibility
+
+The direct owner-facing ML Workbench URL is `https://discovstack-kfpqmdfb.manus.space/ml-lab-preview`. With the authorized owner session, it renders the Crawl / Clean / Train workspace, connection-masked provider status, Development and Production run gates, and the auditable blocked run #1. The related owner governance route remains `https://discovstack-kfpqmdfb.manus.space/audit-lab`. Visitors must complete Manus OAuth before these private routes display their protected controls.
