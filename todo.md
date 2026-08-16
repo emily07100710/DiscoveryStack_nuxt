@@ -21,5 +21,10 @@
 - [x] 記錄 Nuxt typecheck 的 sandbox 限制：`nuxi typecheck` 與 640 MB heap 的 `vue-tsc --noEmit` 均因 Node OOM 中止；production SSR artifact 與 71 項 regression tests 已通過，應在較高記憶體 CI 補跑完整 typecheck。
 - [x] 建立 production checkpoint `856131d2`，並準備回報正式網址、HTTPS、Autoscale hosting、secrets 與驗證結果；正式公開仍需由使用者在管理介面按 Publish。
 - [x] 實作 Docker production build 修復：完整 source 複製後重新執行 `nuxt prepare`，並對 OAuth／Owner runtime config 進行顯式字串收斂；fresh generated imports 與 71 項 regression tests 均通過。
-- [ ] 以正式 Docker container build 重新驗證 Nuxt/Nitro SSR artifact、完整 Vitest 與 server-only security boundary；本地 Nuxt full build 仍受 sandbox Node 768 MB heap OOM 限制。
-- [ ] 建立 deployment-fix checkpoint，並請使用者重新按 Publish 驗證正式 HTTPS 網址。
+- [x] 以正式 Docker container build 成功部署 Nuxt/Nitro SSR artifact，並以完整 Vitest 與 server-only security boundary 驗證；本地 full build 仍受 sandbox Node 768 MB heap OOM 限制。
+- [x] 建立 deployment-fix checkpoint `ceef14b6` 並成功發布至正式 HTTPS 網址。
+- [x] 重新啟動已停止回應的開發伺服器，並確認預覽 URL 可正常回應。
+- [x] 將開發預覽啟動命令改為直接執行 `nuxt-app` 的 Nuxt server，避免預覽誤顯示外層模板 Example Page。
+- [x] 修正 Nuxt 開發預覽 `/en` 路由回傳 unavailable 的問題，並確認可顯示 DiscoveryStack SSR 首頁。
+- [x] 將 `NUXT_PUBLIC_SITE_URL` 與 `OAUTH_ALLOWED_ORIGIN` 更新為正式 Manus 網域，並以 SSR integration test 驗證 canonical 與 OAuth origin 一致。
+- [ ] 重新發布並驗證正式網域的 canonical/hreflang 及 Audit Lab noindex header。

@@ -20,6 +20,7 @@ const publicPrerenderRoutes = [
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-16',
+  buildDir: process.env.NUXT_BUILD_DIR || '.nuxt',
   devtools: { enabled: true },
   modules: ['@nuxt/content', '@nuxtjs/i18n', '@nuxt/image'],
   css: ['~/assets/css/main.css', '~/assets/css/immersive.css'],

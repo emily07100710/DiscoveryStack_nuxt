@@ -15,6 +15,6 @@ describe('production HTTPS origin', () => {
 
     const { response, html } = await fetchSsrHtml('/en')
     expect(response.ok).toBe(true)
-    expect(html).toContain(`https://discoverystack-production.manus.space/en`)
+    expect(html).toContain(`${siteUrl}/en`)
   })
 })
