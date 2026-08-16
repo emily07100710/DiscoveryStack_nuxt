@@ -18,3 +18,19 @@ After checkpoint `e86c514f`, the production homepage and Audit Lab remained avai
 ## Production-domain final verification
 
 After checkpoint `cfef5ad4`, `https://discovstack-kfpqmdfb.manus.space/en` rendered successfully over HTTPS. The DOM reported canonical `https://discovstack-kfpqmdfb.manus.space/en` and `en`, `zh-Hant`, and `x-default` alternate links on the same public domain. Fetching `/audit-lab` returned HTTP 200 with `X-Robots-Tag: noindex, nofollow, noarchive`.
+
+## Owner access verification — initial state
+
+On the production Audit Lab route, a browser without an owner session received the private landing state and only the `SIGN IN TO AUDIT LAB` action. Audit evidence, review decisions, and training controls were not rendered before authentication.
+
+## Owner OAuth redirect reproduction
+
+Selecting the production Audit Lab sign-in control generated the expected Manus OAuth authorization URL with the production callback origin and a nonce-bearing state value. In the sandbox browser, the external `manus.im/app-auth` page remained a blank loading view; no authorization code, session, or application data was exposed.
+
+Reopening the proxy browser restored the production Audit Lab sign-in state. Its console contained no application-side errors before the authorization redirect, which narrows the blank loading state to the external authorization page or its browser-session prerequisites rather than the public SSR page.
+
+A second proxy-browser reproduction navigated to the same correctly parameterized external authorization URL, showed only a loading spinner, and then resolved to `about:blank`. This occurred before the DiscoveryStack callback endpoint and confirms that the current blocker is an external portal/browser handoff, not a callback failure or owner-session failure.
+
+The proxy browser can load the public Manus homepage normally, but it presents a `Sign in` control, confirming that the browser has no authenticated Manus owner session. The standard public sign-in control did not initiate a usable owner session in this browser context. Consequently, a live owner OAuth authorization cannot be completed by the proxy browser without a connected authenticated browser session.
+
+After accepting the public-site notice, the standard Manus login page rendered correctly in the proxy browser and presented account-bound sign-in choices (social identity providers, email, and passkey). No owner credential or pre-authenticated session is available to the proxy browser, and no credential was entered or submitted during this diagnostic.

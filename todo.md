@@ -30,3 +30,8 @@
 - [x] 重新發布並驗證正式網域的 canonical/hreflang 及 Audit Lab noindex header。
 - [x] 改用未與平台系統環境變數衝突的 `NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL`，讓 SEO、robots、llms 與 sitemap 在 container runtime 使用實際正式網域。
 - [x] 對 managed Nuxt preview 的 `/en` 執行 canonical/hreflang integration test，確認它使用 `NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL` 而非平台預設 URL。
+- [ ] 在正式網域實測 owner OAuth 登入，確認 session 僅授予設定的 owner。
+- [ ] 於 owner-only ML Workbench 執行一筆可追溯的受控訓練流程，驗證 human-review gate 與訓練狀態紀錄。
+- [ ] 記錄 OAuth 與受控訓練實測結果，並補足必要的 regression coverage。
+- [ ] 診斷並修正正式 owner OAuth 登入導向顯示空白頁的問題。
+- [ ] 以代理瀏覽器完成 owner OAuth 與 ML Workbench 實測，不要求使用者接手瀏覽器。
