@@ -86,3 +86,7 @@ The production Autoscale request-handler design was validated as sufficient for 
 ### Owner Workbench entry visibility
 
 The direct owner-facing ML Workbench URL is `https://discovstack-kfpqmdfb.manus.space/ml-lab-preview`. With the authorized owner session, it renders the Crawl / Clean / Train workspace, connection-masked provider status, Development and Production run gates, and the auditable blocked run #1. The related owner governance route remains `https://discovstack-kfpqmdfb.manus.space/audit-lab`. Visitors must complete Manus OAuth before these private routes display their protected controls.
+
+### r13 繁體中文 owner 後台驗證
+
+在既有 owner session 下，正式 `/audit-lab?release=zh-hant-r13` 已確認命中 Nitro r13，並顯示繁體中文的私有稽核實驗室、導航、工作區、來源卡與資料治理內容。驗證也發現少數非安全、可見的動態 readiness 與輔助文字仍為英文，例如 `Needs Two Consented Candidates`、`Not Ready` 與工作區儲存提示中的一句英文；它們不代表授權或部署失敗，將在同一中文化範圍內改為繁體中文。技術識別字、模型名稱、URL 與安全代號維持原樣。

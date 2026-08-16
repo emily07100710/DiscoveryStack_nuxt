@@ -45,7 +45,8 @@ const labelMap: Record<string, string> = {
   low: '低', medium: '中', high: '高', research_only: '僅限研究', evaluation_candidate: '評估候選', training_candidate: '訓練候選',
   discovery: '探索', understanding: '理解', response: '回應', progression: '推進', conversion: '轉換',
   completed: '已完成', running: '處理中', failed: '失敗', queued: '排隊中', human_annotation: '人工註記',
-  website: '網站', dataset: '資料集', publication: '出版品', document: '文件', owner_research: 'Owner 研究', public_search: '公開搜尋', api_catalogue: 'API 目錄', licensed_import: '授權匯入',
+  pilot_ready: '可執行試行分析', needs_two_consented_candidates: '需要兩筆已同意候選資料', not_ready: '尚未就緒',
+  website: '網站', dataset: '資料集', publication: '出版品', document: '文件', owner_research: '擁有者研究', public_search: '公開搜尋', api_catalogue: 'API 目錄', licensed_import: '授權匯入',
   page_manifest: '頁面清單', structural_features: '結構特徵', topic_map: '主題地圖', entity_map: '實體地圖', semantic_features: '語意特徵', technical_seo: '技術 SEO', derived_excerpt: '衍生摘錄',
   home: '首頁', service: '服務頁', insight: '洞察頁', case: '案例頁', contact: '聯絡頁', pricing: '定價頁', faq: '常見問答', other: '其他',
   informational: '資訊型', commercial: '商業型', transactional: '交易型', navigational: '導覽型', organisation: '組織', person: '人物', industry: '產業', location: '地點', product: '產品', concept: '概念',
@@ -279,9 +280,9 @@ async function runFrictionBaseline(ingestionJobId: number) {
   try {
     const result = await $fetch<{ status: string }>('/api/intelligence/inferences', { method: 'POST', body: { action: 'run_friction_baseline', ingestionJobId } })
     analysisStatus.value = 'success'
-    mlMessage.value = `Baseline result recorded as ${result.status.replaceAll('_', ' ')}. A strategist review is still required.`
+    mlMessage.value = `基準結果已記錄為「${displayLabel(result.status)}」。仍需要策略師人工審核。`
     await loadPublicInferences()
-  } catch (error: unknown) { analysisStatus.value = 'error'; mlMessage.value = (error as { statusMessage?: string }).statusMessage || 'The baseline could not run.' }
+  } catch (error: unknown) { analysisStatus.value = 'error'; mlMessage.value = (error as { statusMessage?: string }).statusMessage || '無法執行基準分析。' }
 }
 
 async function runBgeSimilarity() {
@@ -290,9 +291,9 @@ async function runBgeSimilarity() {
   try {
     const result = await $fetch<{ status: string }>('/api/intelligence/inferences', { method: 'POST', body: { action: 'run_bge_similarity', ingestionJobIds: bgeJobIds.value } })
     analysisStatus.value = 'success'
-    mlMessage.value = `BGE-M3 similarity recorded as ${result.status.replaceAll('_', ' ')}. Similarity is not a performance prediction.`
+    mlMessage.value = `BGE-M3 相似度結果已記錄為「${displayLabel(result.status)}」。相似度不是成效預測。`
     await loadPublicInferences()
-  } catch (error: unknown) { analysisStatus.value = 'error'; mlMessage.value = (error as { statusMessage?: string }).statusMessage || 'BGE-M3 similarity could not run.' }
+  } catch (error: unknown) { analysisStatus.value = 'error'; mlMessage.value = (error as { statusMessage?: string }).statusMessage || '無法執行 BGE-M3 相似度分析。' }
 }
 
 async function requestPredictionReadiness() {
@@ -302,11 +303,11 @@ async function requestPredictionReadiness() {
     const result = await $fetch<{ message: string }>('/api/intelligence/inferences', { method: 'POST', body: { action: 'request_supervised_prediction' } })
     analysisStatus.value = 'success'
     mlMessage.value = result.message
-  } catch (error: unknown) { analysisStatus.value = 'error'; mlMessage.value = (error as { statusMessage?: string }).statusMessage || 'Prediction readiness could not be checked.' }
+  } catch (error: unknown) { analysisStatus.value = 'error'; mlMessage.value = (error as { statusMessage?: string }).statusMessage || '無法檢查預測就緒度。' }
 }
 
 async function reviewArtifactQuality(artifactId: number, qualityStatus: 'passed' | 'needs_revision' | 'rejected') {
-  try { await $fetch(`/api/intelligence/artifacts/${artifactId}/quality`, { method: 'POST', body: { qualityStatus, qualityNote: 'Owner quality review.' } }); await loadPublicArtifacts() } catch (error: unknown) { errorMessage.value = (error as { statusMessage?: string }).statusMessage || 'The artifact quality review could not be saved.' }
+  try { await $fetch(`/api/intelligence/artifacts/${artifactId}/quality`, { method: 'POST', body: { qualityStatus, qualityNote: '擁有者品質審核。' } }); await loadPublicArtifacts() } catch (error: unknown) { errorMessage.value = (error as { statusMessage?: string }).statusMessage || '無法儲存產物品質審核。' }
 }
 
 async function createDatasetManifest() {
@@ -316,7 +317,7 @@ async function createDatasetManifest() {
     datasetStatus.value = 'success'
     datasetForm.artifactIds = []
     await loadPublicDatasets()
-  } catch (error: unknown) { datasetStatus.value = 'error'; errorMessage.value = (error as { statusMessage?: string }).statusMessage || 'The dataset manifest could not be created.' }
+  } catch (error: unknown) { datasetStatus.value = 'error'; errorMessage.value = (error as { statusMessage?: string }).statusMessage || '無法建立資料集清單。' }
 }
 
 onMounted(loadOverview)
@@ -350,7 +351,7 @@ onMounted(loadOverview)
         <div class="audit-panel audit-panel-wide">
           <p class="eyebrow">01／授權工作區</p>
           <h2>先設定公開使用邊界，不直接開始爬取。</h2>
-          <p class="audit-panel-copy">工作區會記錄你獲授權審核的目標。儲存此記錄<strong>does not start a crawler</strong>；它會建立日後人工審核觀察所需的同意與範圍邊界。</p>
+          <p class="audit-panel-copy">工作區會記錄你獲授權審核的目標。儲存此記錄<strong>不會啟動爬蟲</strong>；它會建立日後人工審核觀察所需的同意與範圍邊界。</p>
           <form class="audit-workspace-form" @submit.prevent="createWorkspace">
             <label><span>工作區名稱</span><input v-model.trim="workspaceForm.displayName" required maxlength="160" autocomplete="off"></label>
             <label><span>公開目標 URL</span><input v-model.trim="workspaceForm.targetUrl" required type="url" placeholder="https://example.com" inputmode="url"></label>

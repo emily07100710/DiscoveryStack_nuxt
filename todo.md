@@ -68,3 +68,4 @@
 - [ ] 將 ML Workbench 可見導覽、爬取／清洗／訓練控制項、資料門檻與 blocked-run 狀態改為繁體中文。
 - [ ] 以正式 owner session 驗證中文 Audit Lab、中文 ML Workbench 與既有訓練 gate 均可正常運作。
 - [ ] 以新的 Nuxt release marker 強制並驗證 production 載入繁體中文 owner 後台 bundle，而非先前英文 revision。
+- [ ] 將 r13 正式驗證發現的動態 readiness、狀態與輔助提示英文文案完整改為繁體中文，再次確認 owner 後台無非技術性英文殘留。
