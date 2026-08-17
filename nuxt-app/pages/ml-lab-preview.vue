@@ -52,7 +52,7 @@ async function loadWorkbench() {
     publicDatasets.value = datasetRows
     providerForm.huggingFaceNamespace = providerRows.huggingface.namespace || ''
     const approvedSources = sourceRows.filter(source => source.reviewStatus === 'approved' && !source.removedAt && source.allowedUse !== 'blocked' && source.robotsStatus === 'reviewed_allow' && ['allows_research', 'allows_evaluation', 'allows_training'].includes(source.termsStatus) && source.copyrightRisk === 'low' && source.piiStatus === 'none_detected')
-    if (approvedSources.length === 1 && crawlForm.sourceId === 0) crawlForm.sourceId = approvedSources[0].id
+    if (approvedSources.length === 1 && crawlForm.sourceId === 0) crawlForm.sourceId = approvedSources[0]!.id
     state.value = 'ready'
   } catch (error: unknown) {
     const statusCode = (error as { statusCode?: number, status?: number }).statusCode ?? (error as { status?: number }).status

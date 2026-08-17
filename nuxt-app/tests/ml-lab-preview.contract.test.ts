@@ -79,7 +79,7 @@ describe('ML Workbench contract', () => {
   it('only preselects a source when exactly one source has passed every policy gate', () => {
     expect(workbench).toContain('const approvedSources = sourceRows.filter')
     expect(workbench).toContain("approvedSources.length === 1 && crawlForm.sourceId === 0")
-    expect(workbench).toContain("crawlForm.sourceId = approvedSources[0].id")
+    expect(workbench).toContain("crawlForm.sourceId = approvedSources[0]!.id")
     expect(workbench).toContain('仍受網域、頁數、深度與 PII 閘門限制')
   })
 })
