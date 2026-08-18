@@ -104,3 +104,6 @@
 - [x] Implement and test a server-side per-owner rate limit for expanded bounded crawls.
 - [x] Add an end-to-end governance test proving expanded crawl artifacts require human review before dataset inclusion or training use.
 - [x] Add a bounded-crawl lifecycle integration test that persists a completed structural artifact through the real collection service before confirming manifest admission rejects it without a reviewed human annotation.
+- [ ] 修復 Audit Lab 產物品質審核操作的錯誤可見性、送出中狀態與正式 API 成功／失敗回饋，避免審核未持久化時無提示。
+- [ ] 對應實際程式碼版本更新並驗證正式 Nuxt release probe，確保 Autoscale 載入含 r15 bounded crawl 與品質審核修復的 bundle。
+- [ ] 依 owner 已授權的審核結論，完成 artifact #1 的品質核准與首筆 SEO／GEO 多維人工標註，保留來源、證據與理由。
