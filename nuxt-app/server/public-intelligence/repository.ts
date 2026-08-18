@@ -96,6 +96,38 @@ export async function listOwnerPublicDatasetBuilds(ownerUserId: number) {
   return database.select({ id: publicIntelligenceDatasetBuilds.id, datasetName: publicIntelligenceDatasetBuilds.datasetName, datasetVersion: publicIntelligenceDatasetBuilds.datasetVersion, intendedUse: publicIntelligenceDatasetBuilds.intendedUse, status: publicIntelligenceDatasetBuilds.status, featureContractVersion: publicIntelligenceDatasetBuilds.featureContractVersion, labelTaxonomyVersion: publicIntelligenceDatasetBuilds.labelTaxonomyVersion, splitVersion: publicIntelligenceDatasetBuilds.splitVersion, manifestHash: publicIntelligenceDatasetBuilds.manifestHash, createdAt: publicIntelligenceDatasetBuilds.createdAt, approvedAt: publicIntelligenceDatasetBuilds.approvedAt, artifactCount: sql<number>`count(${publicIntelligenceDatasetMembers.id})` }).from(publicIntelligenceDatasetBuilds).leftJoin(publicIntelligenceDatasetMembers, eq(publicIntelligenceDatasetMembers.datasetBuildId, publicIntelligenceDatasetBuilds.id)).where(eq(publicIntelligenceDatasetBuilds.ownerUserId, ownerUserId)).groupBy(publicIntelligenceDatasetBuilds.id).orderBy(desc(publicIntelligenceDatasetBuilds.createdAt))
 }
 
+/** Counts only active public human annotations that satisfy the immutable training-manifest admission policy. */
+export async function getOwnerPublicManifestCandidateReadiness(ownerUserId: number) {
+  const database = requireAuditDatabase()
+  const rows = await database.select({ sourceUrl: publicIntelligenceArtifacts.sourceUrl, sourceSpanHash: publicIntelligenceArtifacts.sourceSpanHash, fieldData: publicIntelligenceArtifacts.fieldData })
+    .from(publicIntelligenceArtifacts)
+    .innerJoin(publicIntelligenceSources, eq(publicIntelligenceArtifacts.sourceId, publicIntelligenceSources.id))
+    .where(and(
+      eq(publicIntelligenceSources.ownerUserId, ownerUserId),
+      eq(publicIntelligenceSources.reviewStatus, 'approved'),
+      eq(publicIntelligenceSources.allowedUse, 'training_candidate'),
+      eq(publicIntelligenceSources.piiStatus, 'none_detected'),
+      isNull(publicIntelligenceSources.removedAt),
+      eq(publicIntelligenceArtifacts.artifactType, 'human_annotation'),
+      eq(publicIntelligenceArtifacts.extractionMethod, 'human_annotation'),
+      eq(publicIntelligenceArtifacts.useSnapshot, 'training_candidate'),
+      eq(publicIntelligenceArtifacts.qualityStatus, 'passed'),
+      eq(publicIntelligenceArtifacts.piiStatus, 'none_detected'),
+      isNull(publicIntelligenceArtifacts.removedAt),
+    ))
+  const uniqueUrls = new Set<string>()
+  const uniqueSpans = new Set<string>()
+  const stageCounts: Record<string, number> = {}
+  for (const row of rows) {
+    const labels = seoGeoMultilabelSchema.safeParse(row.fieldData)
+    if (!labels.success || !row.sourceSpanHash || uniqueUrls.has(row.sourceUrl) || uniqueSpans.has(row.sourceSpanHash)) continue
+    uniqueUrls.add(row.sourceUrl)
+    uniqueSpans.add(row.sourceSpanHash)
+    stageCounts[labels.data.primaryJourneyStage] = (stageCounts[labels.data.primaryJourneyStage] || 0) + 1
+  }
+  return { approvedHumanAnnotations: uniqueUrls.size, stageCounts }
+}
+
 export async function approveOwnerPublicDatasetBuild(input: { ownerUserId: number, datasetBuildId: number, reviewNote: string | null }) {
   const database = requireAuditDatabase()
   const [build] = await database.select().from(publicIntelligenceDatasetBuilds).where(and(eq(publicIntelligenceDatasetBuilds.id, input.datasetBuildId), eq(publicIntelligenceDatasetBuilds.ownerUserId, input.ownerUserId))).limit(1)

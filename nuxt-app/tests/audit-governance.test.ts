@@ -4,7 +4,7 @@ import { serialiseDeidentifiedFeature } from '../server/audit/huggingface'
 import { assertSafeAuditTarget } from '../server/audit/targetGuard'
 import { buildApprovedTrainingExample } from '../server/audit/training'
 import { publicResearchCases } from '../server/audit/researchCases'
-import { buildBaselineReadiness } from '../server/audit/baselines'
+import { buildBaselineReadiness, buildPublicManifestReadiness } from '../server/audit/baselines'
 
 const observations = [
   { id: 1, observationKey: 'seo.title_present', valueText: 'false', evidenceQuote: 'No title tag recorded', sourceUrl: 'https://example.com/' },
@@ -58,5 +58,16 @@ describe('Journey Intelligence governance', () => {
     expect(readiness.bgeM3.similarityOnly).toBe(true)
     expect(readiness.supervisedLearning.status).toBe('not_ready')
     expect(readiness.supervisedLearning.requiresHumanReview).toBe(true)
+  })
+
+  it('uses 100 reviewed public human annotations and 10 examples per journey stage for immutable manifest readiness', () => {
+    const collecting = buildPublicManifestReadiness({ approvedHumanAnnotations: 4, stageCounts: { understanding: 4 } })
+    expect(collecting.manifestAdmission.status).toBe('collecting_public_examples')
+    expect(collecting.manifestAdmission.minimumCandidates).toBe(100)
+    expect(collecting.manifestAdmission.minimumPerStage).toBe(10)
+    expect(collecting.manifestAdmission.requiresImmutableManifest).toBe(true)
+
+    const ready = buildPublicManifestReadiness({ approvedHumanAnnotations: 100, stageCounts: { discovery: 10, understanding: 60, response: 10, progression: 10, conversion: 10 } })
+    expect(ready.manifestAdmission.status).toBe('ready_for_manifest_review')
   })
 })

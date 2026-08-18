@@ -79,7 +79,7 @@ describe('OAuth frontend-origin contract', () => {
     expect(auditLab).toContain('人工審核')
     expect(auditLab).toContain('受政策控管的公開來源')
     expect(auditLab).toContain('儲存人工審核')
-    expect(auditLab).toContain("needs_two_consented_candidates: '需要兩筆已同意候選資料'")
+    expect(auditLab).toContain("collecting_public_examples: '持續收集公開範例'")
     expect(auditLab).toContain("not_ready: '尚未就緒'")
     expect(auditLab).toContain("owner_research: '擁有者研究'")
     expect(auditLab).toContain('儲存此記錄<strong>不會啟動爬蟲</strong>')

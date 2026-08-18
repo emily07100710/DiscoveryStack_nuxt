@@ -2,9 +2,8 @@
 type Readiness = {
   contracts: { feature: string, taxonomy: string, label: string }
   stageCoverage: Record<string, number>
-  consentedCandidates: number
-  bgeM3: { model: string, status: string, similarityOnly: boolean, maxCandidatesPerRun: number }
-  supervisedLearning: { status: string, minimumCandidates: number, minimumPerStage: number, requiresHumanReview: boolean }
+  approvedHumanAnnotations: number
+  manifestAdmission: { status: string, minimumCandidates: number, minimumPerStage: number, requiresHumanReview: boolean, requiresImmutableManifest: boolean }
 }
 type Overview = { owner: { name: string, role: string }, workspaces: Array<{ id: number, displayName: string, targetDomain: string, language: string, publicAuditAuthorization: boolean, trainingConsent: boolean, consentRevokedAt: string | null }>, readiness: Readiness, researchCases: Array<{ id: string, market: string, category: string, sourceName: string, sourceUrl: string, signals: Record<string, boolean>, researchNote: string, status: string, restrictions: readonly string[] }> }
 type PublicSource = { id: number, sourceName: string | null, sourceUrl: string, domain: string | null, sourceType: string, allowedUse: string, reviewStatus: string, robotsStatus: string, termsStatus: string, copyrightRisk: string, piiStatus: string, lastReviewedAt: string | null, retentionUntil: string | null, removedAt: string | null }
@@ -47,7 +46,7 @@ const labelMap: Record<string, string> = {
   low: '低', medium: '中', high: '高', research_only: '僅限研究', evaluation_candidate: '評估候選', training_candidate: '訓練候選',
   discovery: '探索', understanding: '理解', response: '回應', progression: '推進', conversion: '轉換',
   completed: '已完成', running: '處理中', failed: '失敗', queued: '排隊中', human_annotation: '人工註記',
-  pilot_ready: '可執行試行分析', needs_two_consented_candidates: '需要兩筆已同意候選資料', not_ready: '尚未就緒',
+  pilot_ready: '可執行試行分析', needs_two_consented_candidates: '需要兩筆已同意候選資料', not_ready: '尚未就緒', collecting_public_examples: '持續收集公開範例', ready_for_manifest_review: '可建立資料集 manifest',
   website: '網站', dataset: '資料集', publication: '出版品', document: '文件', owner_research: '擁有者研究', public_search: '公開搜尋', api_catalogue: 'API 目錄', licensed_import: '授權匯入',
   page_manifest: '頁面清單', structural_features: '結構特徵', topic_map: '主題地圖', entity_map: '實體地圖', semantic_features: '語意特徵', technical_seo: '技術 SEO', derived_excerpt: '衍生摘錄',
   home: '首頁', service: '服務頁', insight: '洞察頁', case: '案例頁', contact: '聯絡頁', pricing: '定價頁', faq: '常見問答', other: '其他',
@@ -398,9 +397,9 @@ onMounted(loadOverview)
 
     <template v-else-if="overview">
       <section class="audit-summary" aria-label="ML readiness summary">
-        <div><span>已同意候選資料</span><strong>{{ overview.readiness.consentedCandidates }}</strong><small>僅限已人工審核的去識別候選資料。</small></div>
-        <div><span>BGE-M3 試行分析</span><strong>{{ displayLabel(overview.readiness.bgeM3.status) }}</strong><small>{{ overview.readiness.bgeM3.similarityOnly ? '僅進行相似度排序；不可宣稱已有訓練模型。' : '' }}</small></div>
-        <div><span>監督式學習</span><strong>{{ displayLabel(overview.readiness.supervisedLearning.status) }}</strong><small>每個旅程階段至少需要 {{ overview.readiness.supervisedLearning.minimumPerStage }} 筆，且總共至少需要 {{ overview.readiness.supervisedLearning.minimumCandidates }} 筆已取得同意的候選資料。</small></div>
+        <div><span>已核准多維標註</span><strong>{{ overview.readiness.approvedHumanAnnotations }}</strong><small>僅計入已通過來源、PII、品質與去重檢查的 SEO／GEO 人工標註。</small></div>
+        <div><span>資料集 manifest</span><strong>{{ displayLabel(overview.readiness.manifestAdmission.status) }}</strong><small>尚未建立或核准的資料集不會進入遠端訓練。</small></div>
+        <div><span>遠端訓練門檻</span><strong>{{ overview.readiness.approvedHumanAnnotations }}／{{ overview.readiness.manifestAdmission.minimumCandidates }}</strong><small>五個旅程階段各至少 {{ overview.readiness.manifestAdmission.minimumPerStage }} 筆，並需建立、核准不可變 manifest。</small></div>
       </section>
 
       <section class="audit-grid">
