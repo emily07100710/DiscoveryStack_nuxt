@@ -1,4 +1,4 @@
-const OAUTH_NITRO_RELEASE = 'nitro-public-intelligence-20260818-r15-quality-feedback'
+const OAUTH_NITRO_RELEASE = 'nitro-public-intelligence-20260818-r16-quality-feedback'
 
 export default defineEventHandler((event) => {
   // This endpoint is intentionally limited to non-sensitive deployment identity.

@@ -156,7 +156,7 @@ describe('OAuth frontend-origin contract', () => {
 
   it('requires the production image to build a clean Nitro artifact with the current OAuth release marker', () => {
     expect(dockerfile).toContain('rm -rf .nuxt .output')
-    expect(dockerfile).toContain("grep -R -q 'nitro-oauth-20260816-r14' .output/server")
+    expect(dockerfile).toContain("grep -R -q 'nitro-public-intelligence-20260818-r16-quality-feedback' .output/server")
     expect(dockerfile).toContain('CMD ["node", ".output/server/index.mjs"]')
   })
 
