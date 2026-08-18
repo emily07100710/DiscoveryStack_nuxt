@@ -86,6 +86,6 @@
 - [x] 提升 Nuxt release marker 並在正式網域驗證已載入公開資料 100 筆 gate 與 SEO／GEO 多任務訓練 bundle，再開始建立或抓取訓練資料。
 - [x] 修復 r14 production Docker build：使 inference API 傳遞新版訓練服務所需的已核准 dataset manifest 識別，並以 production build 驗證，不得回退或放寬 100 筆 dataset gate。
 - [x] 修復 ML Workbench 在僅有一個已核准來源時的選擇器可用性：可安全預選唯一來源，但在有多個來源時仍要求 owner 明確選擇，且不得繞過來源核准檢查。
-- [ ] Audit GitHub main for remaining LERN files, CI workflows, package references, and documentation.
-- [ ] Remove only confirmed LERN-specific content while preserving DiscoveryStack OAuth, database, Firecrawl, and Hugging Face integrations.
-- [ ] Verify the cleaned repository and push the result to GitHub main.
+- [x] Audit GitHub main for remaining LERN files, CI workflows, package references, and documentation.
+- [x] Remove only confirmed LERN-specific content while preserving DiscoveryStack OAuth, database, Firecrawl, and Hugging Face integrations.
+- [x] Verify the cleaned repository and push the result to GitHub main.
