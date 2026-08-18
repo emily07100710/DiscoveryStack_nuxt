@@ -4,6 +4,7 @@ import { requireAuditDatabase } from '../audit/repository'
 import { publicIntelligenceArtifacts, publicIntelligenceDatasetBuilds, publicIntelligenceDatasetMembers, publicIntelligenceSourceReviews, publicIntelligenceSources } from '../database/schema'
 import { SEO_GEO_LABEL_TAXONOMY_VERSION, seoGeoMultilabelSchema } from './seoGeoTaxonomy'
 import { assertPermittedPublicUse, maximumPermittedUse, PublicUseViolation, type PublicUse } from './policy'
+import { trainingMemberAdmissionError } from './training-admission'
 
 export function sourceFingerprint(url: string) { return createHash('sha256').update(url.trim().toLowerCase()).digest('hex') }
 export function artifactFingerprint(input: { sourceId: number, artifactType: string, sourceLocator?: string | null, artifactText?: string | null, fieldData: object }) { return createHash('sha256').update(JSON.stringify({ sourceId: input.sourceId, artifactType: input.artifactType, sourceLocator: input.sourceLocator || '', artifactText: input.artifactText || '', fieldData: input.fieldData })).digest('hex') }
@@ -108,7 +109,7 @@ export async function approveOwnerPublicDatasetBuild(input: { ownerUserId: numbe
   if (new Set(active.map(member => member.sourceUrl)).size !== active.length || new Set(active.map(member => member.sourceSpanHash)).size !== active.length) throw createError({ statusCode: 422, statusMessage: 'The manifest contains duplicate source URLs or source-span fingerprints and cannot be approved.' })
   const labels: string[] = []
   for (const member of active) {
-    if (member.artifactType !== 'human_annotation' || member.qualityStatus !== 'passed' || member.piiStatus !== 'none_detected' || member.sourceUse !== 'training_candidate' || member.sourceReviewStatus !== 'approved' || member.sourceRemovedAt || member.artifactRemovedAt) throw createError({ statusCode: 422, statusMessage: 'Every training member must be an active, quality-passed, PII-cleared human annotation from an approved training source.' })
+    if (trainingMemberAdmissionError(member)) throw createError({ statusCode: 422, statusMessage: 'Every training member must be an active, quality-passed, PII-cleared human annotation from an approved training source.' })
     const parsed = seoGeoMultilabelSchema.safeParse(member.fieldData)
     if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Every training member must use the active multi-dimensional SEO/GEO human-label contract.' })
     labels.push(parsed.data.primaryJourneyStage)

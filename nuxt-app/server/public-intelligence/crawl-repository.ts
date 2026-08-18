@@ -1,31 +1,17 @@
-import { and, eq, isNull } from 'drizzle-orm'
+import { and, count, eq, gte, isNull } from 'drizzle-orm'
 import { createError } from 'h3'
 import { assertSafeAuditTarget } from '../audit/targetGuard'
 import { publicIntelligenceIngestionJobs, publicIntelligenceSources } from '../database/schema'
 import { requireAuditDatabase } from '../audit/repository'
-import { cleanAndExtractPublicDocument, ingestionRequestFingerprint, PUBLIC_INGESTION_EXTRACTOR_VERSION } from './ingestion'
+import { cleanAndExtractPublicDocument, PUBLIC_INGESTION_EXTRACTOR_VERSION } from './ingestion'
 import { createOwnerPublicArtifact } from './repository'
 import { isFirecrawlConfigured, runFirecrawlBoundedCrawl } from './firecrawl'
+import { CRAWL_RATE_LIMIT_WINDOW_MS, crawlRequestFingerprint, getBoundedCrawlLimits, getCrawlPolicyBlockReason, getCrawlRateLimitDecision, isWithinApprovedHost, MAX_CRAWL_DEPTH, MAX_CRAWL_PAGES, type BoundedCrawlSource } from './crawl-policy'
 
-type CrawlSource = Pick<typeof publicIntelligenceSources.$inferSelect, 'id' | 'sourceUrl' | 'domain' | 'sourceType' | 'allowedUse' | 'reviewStatus' | 'robotsStatus' | 'termsStatus' | 'copyrightRisk' | 'piiStatus' | 'retentionUntil' | 'removedAt' | 'policyEvidence' | 'language'>
+type CrawlSource = BoundedCrawlSource & Pick<typeof publicIntelligenceSources.$inferSelect, 'policyEvidence' | 'language'>
 type CrawlResult = { url: string, depth: number, status: 'cleaned' | 'skipped' | 'failed', httpStatus: number | null, cleanedCharacterCount: number | null, piiOutcome: string | null, artifactId: number | null, errorCode: string | null }
 
-export const MAX_CRAWL_PAGES = 10
-export const MAX_CRAWL_DEPTH = 2
-
-function hostnameFor(url: string) { return new URL(url).hostname.toLowerCase().replace(/^www\./, '') }
-function approvedHost(source: CrawlSource) { return (source.domain || hostnameFor(source.sourceUrl)).toLowerCase().replace(/^www\./, '') }
-function isWithinHost(source: CrawlSource, url: string) { const host = hostnameFor(url); const root = approvedHost(source); return host === root || host.endsWith(`.${root}`) }
-function blockReason(source: CrawlSource) {
-  if (source.removedAt || source.reviewStatus !== 'approved' || source.allowedUse === 'blocked') return 'source_not_approved'
-  if (!['website', 'document'].includes(source.sourceType)) return 'unsupported_source_type'
-  if (source.robotsStatus !== 'reviewed_allow') return 'robots_not_approved_for_crawl'
-  if (!['allows_research', 'allows_evaluation', 'allows_training'].includes(source.termsStatus)) return 'terms_do_not_allow_crawl'
-  if (source.copyrightRisk !== 'low') return 'copyright_risk_requires_review'
-  if (source.piiStatus !== 'none_detected') return 'source_pii_requires_review'
-  if (source.retentionUntil && source.retentionUntil.getTime() <= Date.now()) return 'source_retention_expired'
-  return null
-}
+export { MAX_CRAWL_DEPTH, MAX_CRAWL_PAGES }
 function policySnapshot(source: CrawlSource) { return { provider: 'firecrawl', reviewStatus: source.reviewStatus, allowedUse: source.allowedUse, robotsStatus: source.robotsStatus, termsStatus: source.termsStatus, copyrightRisk: source.copyrightRisk, piiStatus: source.piiStatus, retentionUntil: source.retentionUntil?.toISOString() ?? null, sourcePolicyEvidence: source.policyEvidence } }
 function safeCode(error: unknown) {
   const message = error instanceof Error ? error.message : 'firecrawl_failed'
@@ -39,15 +25,17 @@ export async function crawlApprovedPublicSite(input: { ownerUserId: number, sour
   const database = requireAuditDatabase()
   const safeTarget = assertSafeAuditTarget(input.requestedUrl)
   if (new URL(safeTarget.normalizedUrl).protocol !== 'https:') throw createError({ statusCode: 422, statusMessage: 'Bounded crawl requires an HTTPS URL.' })
-  const maxPages = Math.min(MAX_CRAWL_PAGES, Math.max(1, input.maxPages || 5))
-  const maxDepth = Math.min(MAX_CRAWL_DEPTH, Math.max(0, input.maxDepth || 1))
+  const { maxPages, maxDepth } = getBoundedCrawlLimits(input)
   const [source] = await database.select().from(publicIntelligenceSources).where(and(eq(publicIntelligenceSources.id, input.sourceId), eq(publicIntelligenceSources.ownerUserId, input.ownerUserId), isNull(publicIntelligenceSources.removedAt))).limit(1)
   if (!source) throw createError({ statusCode: 404, statusMessage: 'Approved public source was not found.' })
-  if (!isWithinHost(source, safeTarget.normalizedUrl)) throw createError({ statusCode: 422, statusMessage: 'The crawl start URL must remain within the approved Source Card host.' })
-  const policyError = blockReason(source)
-  const requestFingerprint = ingestionRequestFingerprint({ sourceId: source.id, normalizedUrl: safeTarget.normalizedUrl, extractorVersion: `${PUBLIC_INGESTION_EXTRACTOR_VERSION}-firecrawl-${maxPages}-${maxDepth}` })
+  if (!isWithinApprovedHost(source, safeTarget.normalizedUrl)) throw createError({ statusCode: 422, statusMessage: 'The crawl start URL must remain within the approved Source Card host.' })
+  const policyError = getCrawlPolicyBlockReason(source)
+  const requestFingerprint = crawlRequestFingerprint({ sourceId: source.id, normalizedUrl: safeTarget.normalizedUrl, maxPages, maxDepth })
   const duplicate = await database.select({ id: publicIntelligenceIngestionJobs.id, status: publicIntelligenceIngestionJobs.status, primaryArtifactId: publicIntelligenceIngestionJobs.primaryArtifactId }).from(publicIntelligenceIngestionJobs).where(and(eq(publicIntelligenceIngestionJobs.ownerUserId, input.ownerUserId), eq(publicIntelligenceIngestionJobs.requestFingerprint, requestFingerprint), eq(publicIntelligenceIngestionJobs.status, 'completed'))).limit(1)
   if (duplicate[0]) return { jobId: duplicate[0].id, status: 'duplicate' as const, primaryArtifactId: duplicate[0].primaryArtifactId, message: 'An identical Firecrawl bounded crawl was already processed.' }
+  const windowStart = new Date(Date.now() - CRAWL_RATE_LIMIT_WINDOW_MS)
+  const [recent] = await database.select({ total: count() }).from(publicIntelligenceIngestionJobs).where(and(eq(publicIntelligenceIngestionJobs.ownerUserId, input.ownerUserId), eq(publicIntelligenceIngestionJobs.collectionMode, 'owner_triggered_bounded_crawl'), gte(publicIntelligenceIngestionJobs.requestedAt, windowStart)))
+  if (!getCrawlRateLimitDecision(Number(recent?.total || 0)).allowed) throw createError({ statusCode: 429, statusMessage: 'Bounded crawl rate limit reached. Please wait before starting another multi-page collection.' })
 
   const providerError = !policyError && !(await isFirecrawlConfigured(input.ownerUserId)) ? 'firecrawl_not_configured' : null
   const initialError = policyError || providerError
@@ -65,7 +53,7 @@ export async function crawlApprovedPublicSite(input: { ownerUserId: number, sour
   try {
     const crawl = await runFirecrawlBoundedCrawl({ ownerUserId: input.ownerUserId, url: safeTarget.normalizedUrl, maxPages, maxDepth })
     for (const page of crawl.pages) {
-      if (!isWithinHost(source, page.url)) continue
+      if (!isWithinApprovedHost(source, page.url)) continue
       pagesFetched += 1
       const depth = Number(page.metadata.depth || page.metadata.discoveryDepth || 0) || 0
       const result: CrawlResult = { url: page.url, depth, status: 'failed', httpStatus: page.statusCode, cleanedCharacterCount: null, piiOutcome: null, artifactId: null, errorCode: null }

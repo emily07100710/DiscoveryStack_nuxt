@@ -89,3 +89,18 @@
 - [x] Audit GitHub main for remaining LERN files, CI workflows, package references, and documentation.
 - [x] Remove only confirmed LERN-specific content while preserving DiscoveryStack OAuth, database, Firecrawl, and Hugging Face integrations.
 - [x] Verify the cleaned repository and push the result to GitHub main.
+- [ ] Execute the first bounded crawl from the approved Google Search Central CC BY 4.0 source.
+- [ ] Clean, deduplicate, PII-check, and manually label each real public training example across the SEO/GEO taxonomy.
+- [ ] Accumulate at least 100 eligible reviewed examples and create an immutable owner-approved dataset manifest.
+- [ ] Submit one controlled Hugging Face multi-task development job only after the 100-example gate passes, then record job ID and metrics.
+- [x] Fix Audit Lab approved-source selection and ingestion feedback so a sole eligible source is safely preselected and errors are visible.
+- [x] Render first-attempt approved-document ingestion feedback beside the Audit Lab form even when no ingestion job exists.
+- [x] Add a regression test proving first-attempt ingestion errors remain visible in Traditional Chinese.
+- [ ] Redeploy and re-verify the production approved-document ingestion flow after the feedback fix.
+- [ ] Expand owner-only collection from one approved document to a maximum of 10 low-depth pages for each fully policy-approved source; production-verify the current Google Search Central source first.
+- [x] Preserve and test source-domain allowlisting, robots, terms, PII, deduplication, rate-limit, and human-review gates for the expanded collection scope.
+- [x] Add backend regression tests for the bounded site crawl: same-host allowlisting, policy blocking, PII skip behavior, deduplication, and 1–10 page/depth 0–2 limits.
+- [ ] Production-verify one bounded crawl from the approved Google Search Central source and record its auditable result.
+- [x] Implement and test a server-side per-owner rate limit for expanded bounded crawls.
+- [x] Add an end-to-end governance test proving expanded crawl artifacts require human review before dataset inclusion or training use.
+- [x] Add a bounded-crawl lifecycle integration test that persists a completed structural artifact through the real collection service before confirming manifest admission rejects it without a reviewed human annotation.
