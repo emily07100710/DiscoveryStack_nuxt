@@ -172,3 +172,22 @@ Observed live readiness text: supervised learning not ready; each journey stage 
 已依逐頁人工閱讀結論，在來源卡仍同時符合 `approved`、`training_candidate`、`reviewed_allow`、`allows_training`、低著作權風險與 `none_detected` PII 條件下，完成 #120002、#120003、#120007 三筆父 artifact 的品質核准。接著建立其對應的三筆 `human_annotation`：#150003（canonicalization）、#150001（JavaScript SEO）及 #150002（robots directives）。每筆使用 `seo-geo-journey-v1`、`human_annotation` extraction method、`none_detected` PII，並在父 artifact 已通過、annotation taxonomy 完整及來源限制仍有效時完成獨立品質核准。
 
 截至此紀錄，已通過品質與完整多維標註、可進入後續 manifest admission 計算的真實公開候選為 **4／100**。其中三筆第二批標註均為 understanding／informational／editorial、全球適用、面向 practitioner 與 technical evaluator，但保有不同的 canonicalization、JavaScript rendering 與 robots control 主題群集、技術訊號與人工理由；這些標籤不會寫入模型輸入文字。
+
+## 2026-08-18 Batch-03 candidate evidence
+
+本輪再次以 Google Search Central 的 crawling/indexing 官方主題入口確認候選文件皆位於既有核准的 `developers.google.com`／`/search/docs/` 範圍。以下英文 canonical URL 已公開讀取，並在頁尾明示 **Creative Commons Attribution 4.0**（程式碼範例另以 Apache 2.0 授權）：
+
+| URL | 人工審閱可用主題 | 初步可標註面向 |
+|---|---|---|
+| `https://developers.google.com/search/docs/crawling-indexing/sitemaps/overview?hl=en` | sitemap、網站規模、內部連結、媒體與新聞內容 | discoverability、site architecture、information retrieval |
+| `https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap?hl=en` | sitemap formats、canonical URLs、規模限制、語系與提交方式 | technical SEO、internationalization、implementation |
+| `https://developers.google.com/search/docs/crawling-indexing/ask-google-to-recrawl?hl=en` | URL inspection、recrawl、sitemap、索引時間與限制 | monitoring、indexing workflow、expectation management |
+| `https://developers.google.com/search/docs/crawling-indexing/robots/intro?hl=en` | robots.txt、crawl traffic、noindex、資源檔與規則限制 | crawl control、privacy boundary、technical remediation |
+
+這僅是外部證據與候選清單；尚未建立任何新 artifact。所有 URL 在收集時仍須經既有來源政策、robots、PII、去重、品質待審與人工標註閘門。
+
+## 2026-08-18 Batch-03 collection and review outcome
+
+第三批的 sitemap overview 與既有 artifact #60003 完全重複，維持既有紀錄而未重複計算。sitemap build URL 則成功建立 structural artifact #180001；其 `piiStatus=none_detected`、父 artifact 與來源卡均通過品質／用途／robots／條款／低著作權風險限制後，已完成獨立品質核准並建立 human annotation #180004。標註採用 `seo-geo-journey-v1`，涵蓋 sitemap formats、canonical URL selection、sitemap size limits 及 URL discovery，且模型輸入僅為去識別的事實性摘要，不含標籤、理由、信心度或品質決策。
+
+ask-google-to-recrawl 與 robots intro 兩頁本輪僅記錄為 `request_failed`，未建立 artifact、未列入品質審核或訓練計數。至此，完整通過來源追溯、PII、父品質與 annotation 品質檢核的真實公開多維訓練候選仍為 **4／100**。

@@ -4,6 +4,7 @@ import { publicIntelligenceArtifacts, publicIntelligenceIngestionJobs, publicInt
 import { cleanAndExtractPublicDocument, ingestionRequestFingerprint, PUBLIC_INGESTION_EXTRACTOR_VERSION, readBoundedPublicHtml } from './ingestion'
 import { createOwnerPublicArtifact } from './repository'
 import { requireAuditDatabase } from '../audit/repository'
+import { isWithinApprovedSourceHost, MAX_APPROVED_PUBLIC_REDIRECTS, resolveApprovedPublicRedirect } from './redirect-policy'
 
 type FetchableSource = Pick<typeof publicIntelligenceSources.$inferSelect, 'id' | 'sourceUrl' | 'domain' | 'sourceType' | 'allowedUse' | 'reviewStatus' | 'robotsStatus' | 'termsStatus' | 'copyrightRisk' | 'piiStatus' | 'retentionUntil' | 'removedAt' | 'policyEvidence'>
 
@@ -16,16 +17,6 @@ function publicFetchBlockReason(source: FetchableSource) {
   if (source.piiStatus !== 'none_detected') return 'source_pii_requires_review'
   if (source.retentionUntil && source.retentionUntil.getTime() <= Date.now()) return 'source_retention_expired'
   return null
-}
-
-function hostnameFor(url: string) {
-  return new URL(url).hostname.toLowerCase().replace(/^www\./, '')
-}
-
-function isWithinApprovedSourceHost(source: FetchableSource, targetUrl: string) {
-  const sourceHost = (source.domain || hostnameFor(source.sourceUrl)).toLowerCase().replace(/^www\./, '')
-  const targetHost = hostnameFor(targetUrl)
-  return targetHost === sourceHost || targetHost.endsWith(`.${sourceHost}`)
 }
 
 function policySnapshot(source: FetchableSource) {
@@ -82,8 +73,9 @@ export async function listOwnerIngestionJobs(ownerUserId: number) {
 }
 
 /**
- * Performs one explicitly requested document fetch. It never follows redirects, never crawls a site graph,
- * never stores HTML or cleaned text, and does not create a usable artifact when PII is found.
+ * Performs one explicitly requested document fetch. It accepts at most three same-host HTTPS redirects,
+ * validates every target without crawling a site graph, never stores HTML or cleaned text, and does not
+ * create a usable artifact when PII is found.
  */
 export async function ingestApprovedPublicDocument(input: { ownerUserId: number, sourceId: number, requestedUrl: string }) {
   const database = requireAuditDatabase()
@@ -121,22 +113,29 @@ export async function ingestApprovedPublicDocument(input: { ownerUserId: number,
   }
 
   try {
-    const response = await fetch(safeTarget.normalizedUrl, { redirect: 'manual', signal: AbortSignal.timeout(20_000), headers: { Accept: 'text/html,application/xhtml+xml;q=0.9' } })
-    if (response.status >= 300 && response.status < 400) throw new Error('unexpected_redirect')
+    let finalTargetUrl = safeTarget.normalizedUrl
+    let response: Response | null = null
+    for (let redirectCount = 0; redirectCount <= MAX_APPROVED_PUBLIC_REDIRECTS; redirectCount += 1) {
+      response = await fetch(finalTargetUrl, { redirect: 'manual', signal: AbortSignal.timeout(20_000), headers: { Accept: 'text/html,application/xhtml+xml;q=0.9' } })
+      if (response.status < 300 || response.status >= 400) break
+      if (redirectCount === MAX_APPROVED_PUBLIC_REDIRECTS) throw new Error('unexpected_redirect')
+      finalTargetUrl = resolveApprovedPublicRedirect({ source, currentUrl: finalTargetUrl, location: response.headers.get('location') })
+    }
+    if (!response) throw new Error('fetch_failed')
     if (!response.ok) throw new Error('non_success_response')
     const contentType = response.headers.get('content-type') || ''
     if (!/^(text\/html|application\/xhtml\+xml)\b/i.test(contentType)) throw new Error('unexpected_content_type')
     const { html, byteLength } = await readBoundedPublicHtml(response)
     const extracted = cleanAndExtractPublicDocument(html)
     if (extracted.piiOutcome === 'redacted') {
-      await markJob({ jobId, status: 'needs_human_review', patch: { finalUrl: response.url || safeTarget.normalizedUrl, httpStatus: response.status, contentHash: extracted.contentHash, cleanedTextHash: extracted.cleanedTextHash, responseByteLength: byteLength, cleanedCharacterCount: extracted.cleanedCharacterCount, piiOutcome: extracted.piiOutcome, piiFindingCounts: extracted.piiFindingCounts, errorCode: 'pii_detected_requires_review' } })
+      await markJob({ jobId, status: 'needs_human_review', patch: { finalUrl: finalTargetUrl, httpStatus: response.status, contentHash: extracted.contentHash, cleanedTextHash: extracted.cleanedTextHash, responseByteLength: byteLength, cleanedCharacterCount: extracted.cleanedCharacterCount, piiOutcome: extracted.piiOutcome, piiFindingCounts: extracted.piiFindingCounts, errorCode: 'pii_detected_requires_review' } })
       return { jobId, status: 'needs_human_review' as const, primaryArtifactId: null, message: 'Potential personal data was redacted in memory. No artifact was created; review the source policy before another request.' }
     }
     const primaryJourneyStage = !extracted.features.documentTitlePresent || !extracted.features.hasH1 ? 'discovery' : !extracted.features.signals.primaryCta ? 'progression' : !extracted.features.signals.expertContact ? 'response' : 'understanding'
     const artifact = await createOwnerPublicArtifact({
       ownerUserId: input.ownerUserId,
       sourceId: source.id,
-      sourceUrl: safeTarget.normalizedUrl,
+      sourceUrl: finalTargetUrl,
       canonicalUrl: null,
       artifactType: 'structural_features',
       artifactText: null,
@@ -148,7 +147,7 @@ export async function ingestApprovedPublicDocument(input: { ownerUserId: number,
       requestedUse: source.allowedUse,
       retentionUntil: source.retentionUntil,
     })
-    await markJob({ jobId, status: 'completed', patch: { finalUrl: response.url || safeTarget.normalizedUrl, httpStatus: response.status, contentHash: extracted.contentHash, cleanedTextHash: extracted.cleanedTextHash, responseByteLength: byteLength, cleanedCharacterCount: extracted.cleanedCharacterCount, piiOutcome: extracted.piiOutcome, piiFindingCounts: extracted.piiFindingCounts, primaryArtifactId: artifact.id } })
+    await markJob({ jobId, status: 'completed', patch: { finalUrl: finalTargetUrl, httpStatus: response.status, contentHash: extracted.contentHash, cleanedTextHash: extracted.cleanedTextHash, responseByteLength: byteLength, cleanedCharacterCount: extracted.cleanedCharacterCount, piiOutcome: extracted.piiOutcome, piiFindingCounts: extracted.piiFindingCounts, primaryArtifactId: artifact.id } })
     return { jobId, status: 'completed' as const, primaryArtifactId: artifact.id, message: 'A bounded approved document was processed into a pending structural artifact. Raw HTML and cleaned text were not stored.' }
   } catch (error: unknown) {
     const code = error instanceof DOMException && error.name === 'TimeoutError' ? 'fetch_timeout' : stableErrorCode(error)

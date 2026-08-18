@@ -109,3 +109,5 @@
 - [x] 依 owner 已授權的審核結論，完成 artifact #1 的品質核准與首筆 SEO／GEO 多維人工標註，保留來源、證據與理由。
 - [x] 以已核准 Google Search Central CC BY 4.0 Source Card 執行第一批 10 頁同網域、非語系重複的受控文件收集；逐筆保留 PII、去重、品質與人工標註閘門。
 - [x] 以相同核准來源執行第二批 Google Search Central 英文 canonical 文件收集，並只將逐頁人工審閱、品質通過、去識別的標註計入 100 筆門檻。
+- [x] 以相同核准來源執行第三批 Google Search Central 英文 canonical 文件收集，並只將逐頁人工審閱、品質通過、去識別的標註計入 100 筆門檻。
+- [ ] 為受控公開文件收集加入可測試的同網域、逐跳重新導向處理；每個最終 URL 必須重新通過 HTTPS、來源範圍與既有 PII／去重／審核閘門。
