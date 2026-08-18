@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-export const PUBLIC_INGESTION_EXTRACTOR_VERSION = 'public-ingestion-v1'
+export const PUBLIC_INGESTION_EXTRACTOR_VERSION = 'public-ingestion-v2'
 export const MAX_PUBLIC_DOCUMENT_BYTES = 1_000_000
 export const MAX_PUBLIC_TEXT_CHARACTERS = 120_000
 
@@ -60,6 +60,15 @@ function countMatches(value: string, pattern: RegExp) {
   return [...value.matchAll(pattern)].length
 }
 
+/**
+ * Google Developers documentation includes a public pod.link numeric URL identifier in its footer.
+ * It is not a telephone number; normalise only this exact URL form before PII scanning so it cannot
+ * suppress valid public documentation while every other phone-like token remains fail-closed.
+ */
+function removeKnownNonPersonalUrlIdentifiers(value: string) {
+  return value.replace(/\bhttps?:\/\/(?:www\.)?pod\.link\/\d{8,}\b/gi, '[public-url-identifier]')
+}
+
 function extractSchemaTypes(value: string) {
   const types = new Set<string>()
   for (const match of value.matchAll(/"@type"\s*:\s*"([A-Za-z][A-Za-z0-9._-]{1,80})"/g)) types.add(match[1]!)
@@ -98,13 +107,14 @@ function extractDocumentFeatures(html: string, cleanedText: string): PublicDocum
 export function cleanAndExtractPublicDocument(rawHtml: string): CleanedPublicDocument {
   const boundedHtml = rawHtml.slice(0, MAX_PUBLIC_DOCUMENT_BYTES)
   const cleanedText = stripMarkup(boundedHtml).slice(0, MAX_PUBLIC_TEXT_CHARACTERS)
+  const piiScanText = removeKnownNonPersonalUrlIdentifiers(cleanedText)
   const piiFindingCounts: PiiFindingCounts = {
-    emails: countMatches(cleanedText, /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi),
-    phones: countMatches(cleanedText, /(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)/g),
-    nationalIds: countMatches(cleanedText, /\b[A-Z][12]\d{8}\b/g),
+    emails: countMatches(piiScanText, /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi),
+    phones: countMatches(piiScanText, /(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)/g),
+    nationalIds: countMatches(piiScanText, /\b[A-Z][12]\d{8}\b/g),
   }
   const piiDetected = Object.values(piiFindingCounts).some(count => count > 0)
-  const redacted = cleanedText
+  const redacted = piiScanText
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]')
     .replace(/(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)/g, '[redacted-phone]')
     .replace(/\b[A-Z][12]\d{8}\b/g, '[redacted-id]')

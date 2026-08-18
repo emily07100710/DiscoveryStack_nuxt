@@ -1,0 +1,10 @@
+{"requestedUrl":"https://developers.google.com/search/docs/fundamentals/seo-starter-guide","status":"failed","statusMessage":"request_failed"}
+{"requestedUrl":"https://developers.google.com/search/docs/fundamentals/get-on-google","status":"failed","statusMessage":"request_failed"}
+{"requestedUrl":"https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data","status":"failed","statusMessage":"request_failed"}
+{"requestedUrl":"https://developers.google.com/search/docs/appearance/snippet","status":"failed","statusMessage":"request_failed"}
+{"requestedUrl":"https://developers.google.com/search/docs/crawling-indexing/sitemaps/overview","status":"failed","statusMessage":"request_failed"}
+{"requestedUrl":"https://developers.google.com/search/docs/crawling-indexing/robots/intro","status":"needs_human_review","jobId":60006,"artifactId":null}
+{"requestedUrl":"https://developers.google.com/search/docs/crawling-indexing/ask-google-to-recrawl","status":"needs_human_review","jobId":60007,"artifactId":null}
+{"requestedUrl":"https://developers.google.com/search/docs/crawling-indexing/overview-indexing","status":"failed","statusMessage":"request_failed"}
+{"requestedUrl":"https://developers.google.com/search/docs/appearance/title-link","status":"needs_human_review","jobId":60009,"artifactId":null}
+{"requestedUrl":"https://developers.google.com/search/docs/appearance/structured-data/search-gallery","status":"needs_human_review","jobId":60010,"artifactId":null}

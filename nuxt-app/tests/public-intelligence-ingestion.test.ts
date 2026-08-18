@@ -26,6 +26,16 @@ describe('policy-approved public ingestion contracts', () => {
     expect(JSON.stringify(output)).not.toContain('+886 2 1234 5678')
   })
 
+  it('does not classify the known public pod.link footer identifier as a phone number, while retaining fail-closed detection for an actual phone', () => {
+    const identifierOnly = cleanAndExtractPublicDocument('<html><body><a href="https://pod.link/1512522198">Podcast</a></body></html>')
+    const mixed = cleanAndExtractPublicDocument('<html><body><a href="https://pod.link/1512522198">Podcast</a> Call +886 2 1234 5678.</body></html>')
+
+    expect(identifierOnly.piiOutcome).toBe('not_detected')
+    expect(identifierOnly.piiFindingCounts.phones).toBe(0)
+    expect(mixed.piiOutcome).toBe('redacted')
+    expect(mixed.piiFindingCounts.phones).toBe(1)
+  })
+
   it('rejects an oversized response before it can enter cleaning or persistence', async () => {
     const response = new Response('small', { headers: { 'content-length': String(MAX_PUBLIC_DOCUMENT_BYTES + 1) } })
     await expect(readBoundedPublicHtml(response)).rejects.toThrow('response_too_large')
