@@ -11,6 +11,8 @@ describe('artifact quality review UI contract', () => {
     expect(auditLab).toContain("artifactQualityStatus.value = 'error'")
     expect(auditLab).toContain('正在儲存產物品質審核…')
     expect(auditLab).toContain('產物 #${artifactId} 已儲存為')
+    expect(auditLab).toContain('function requestFailureMessage')
+    expect(auditLab).toContain('failure.data?.statusMessage')
   })
 
   it('keeps the owner-only quality endpoint and reloads persisted artifacts after a successful review', () => {

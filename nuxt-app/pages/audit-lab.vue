@@ -56,6 +56,12 @@ const labelMap: Record<string, string> = {
   strategy_interpretation: '策略解讀', taxonomy_label: '分類標籤', quality_note: '品質備註', policy_note: '政策備註',
 }
 function displayLabel(value: string | null | undefined) { return value ? (labelMap[value] || value.replaceAll('_', ' ')) : '—' }
+function requestFailureMessage(error: unknown, fallback: string) {
+  const failure = error as { statusCode?: number, status?: number, statusMessage?: string, data?: { statusMessage?: string, message?: string }, message?: string }
+  const statusCode = failure.statusCode ?? failure.status
+  const message = failure.statusMessage || failure.data?.statusMessage || failure.data?.message || failure.message || fallback
+  return statusCode ? `HTTP ${statusCode}：${message}` : message
+}
 const artifactForm = reactive({ sourceId: 0, sourceUrl: '', artifactType: 'structural_features' as 'page_manifest' | 'structural_features' | 'topic_map' | 'entity_map' | 'semantic_features' | 'technical_seo' | 'derived_excerpt' | 'human_annotation', sourceLocator: '', sourceSpanText: '', language: '', requestedUse: 'research_only' as 'research_only' | 'evaluation_candidate' | 'training_candidate' })
 const artifactFeatures = reactive({ pageType: 'service' as 'home' | 'service' | 'insight' | 'case' | 'contact' | 'pricing' | 'faq' | 'other', hierarchyDepth: 0, market: '', navigationDepth: 0, serviceRoutes: 0, primaryJourneyStage: 'understanding' as 'discovery' | 'understanding' | 'response' | 'progression' | 'conversion', primaryCta: false, serviceRouting: false, expertContact: false, insights: false, trustSignals: false, priceOrEstimator: false, faqOrGuidedTopics: false, topics: '', primaryTopic: '', searchIntent: 'informational' as 'informational' | 'commercial' | 'transactional' | 'navigational', entityName: '', entityType: 'organisation' as 'organisation' | 'person' | 'service' | 'industry' | 'location' | 'product' | 'concept', entityRelationship: '', semanticSummary: '', embeddingModel: '', hasH1: false, canonicalPresent: false, indexability: 'unknown' as 'indexable' | 'noindex' | 'unknown', schemaTypes: '', internalLinkCount: 0, excerptPurpose: 'positioning' as 'positioning' | 'service_definition' | 'cta_pattern' | 'faq_answer' | 'technical_signal' | 'other', annotationKind: 'strategy_interpretation' as 'strategy_interpretation' | 'taxonomy_label' | 'quality_note' | 'policy_note', observation: '', reviewerConfidence: 3 })
 const publicArtifacts = ref<PublicArtifact[]>([])
@@ -346,7 +352,7 @@ async function reviewArtifactQuality(artifactId: number, qualityStatus: 'passed'
     artifactQualityMessage.value = `產物 #${artifactId} 已儲存為「${displayLabel(qualityStatus)}」。`
   } catch (error: unknown) {
     artifactQualityStatus.value = 'error'
-    errorMessage.value = (error as { statusMessage?: string }).statusMessage || '無法儲存產物品質審核。'
+    errorMessage.value = requestFailureMessage(error, '無法儲存產物品質審核。')
     artifactQualityMessage.value = errorMessage.value
   }
 }
