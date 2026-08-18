@@ -95,4 +95,9 @@ export default defineNuxtConfig({
   // starts a production SSR build under a short process-start budget, so it
   // skips the duplicate Vite checker only in that isolated preview branch.
   typescript: { typeCheck: !(isManagedPreviewSsr || isFastPreviewGenerate) },
+  // Nuxt 4.5 emits `vue-router/volar/sfc-route-blocks` for typed pages. The
+  // installed Vue Router 4.x package no longer exports that Volar-only path,
+  // while runtime routing remains unaffected. Keep type checking enabled and
+  // disable only the optional generated typed-route declarations.
+  experimental: { typedPages: false },
 })

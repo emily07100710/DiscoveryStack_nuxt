@@ -4,6 +4,7 @@ type Readiness = {
   stageCoverage: Record<string, number>
   approvedHumanAnnotations: number
   manifestAdmission: { status: string, minimumCandidates: number, minimumPerStage: number, requiresHumanReview: boolean, requiresImmutableManifest: boolean }
+  bgeM3: { model: string, status: 'token_not_configured' | 'needs_two_consented_candidates' | 'pilot_ready' }
 }
 type Overview = { owner: { name: string, role: string }, workspaces: Array<{ id: number, displayName: string, targetDomain: string, language: string, publicAuditAuthorization: boolean, trainingConsent: boolean, consentRevokedAt: string | null }>, readiness: Readiness, researchCases: Array<{ id: string, market: string, category: string, sourceName: string, sourceUrl: string, signals: Record<string, boolean>, researchNote: string, status: string, restrictions: readonly string[] }> }
 type PublicSource = { id: number, sourceName: string | null, sourceUrl: string, domain: string | null, sourceType: string, allowedUse: string, reviewStatus: string, robotsStatus: string, termsStatus: string, copyrightRisk: string, piiStatus: string, lastReviewedAt: string | null, retentionUntil: string | null, removedAt: string | null }

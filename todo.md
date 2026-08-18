@@ -112,3 +112,4 @@
 - [x] 以相同核准來源執行第三批 Google Search Central 英文 canonical 文件收集，並只將逐頁人工審閱、品質通過、去識別的標註計入 100 筆門檻。
 - [ ] 為受控公開文件收集加入可測試的同網域、逐跳重新導向處理；每個最終 URL 必須重新通過 HTTPS、來源範圍與既有 PII／去重／審核閘門。
 - [ ] 將 Audit Lab 的就緒度摘要改為顯示實際品質通過多維標註計數與 100 筆 immutable manifest 門檻，不再顯示過時的 consent-only 150 筆門檻。
+- [ ] 修復正式 Docker build 的 Audit Lab `bgeM3` 遺留型別參照與 `vue-router/volar/sfc-route-blocks` 相依解析問題，讓 immutable manifest readiness 版本可成功發布。

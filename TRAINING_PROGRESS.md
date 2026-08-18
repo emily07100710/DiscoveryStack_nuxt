@@ -191,3 +191,9 @@ Observed live readiness text: supervised learning not ready; each journey stage 
 第三批的 sitemap overview 與既有 artifact #60003 完全重複，維持既有紀錄而未重複計算。sitemap build URL 則成功建立 structural artifact #180001；其 `piiStatus=none_detected`、父 artifact 與來源卡均通過品質／用途／robots／條款／低著作權風險限制後，已完成獨立品質核准並建立 human annotation #180004。標註採用 `seo-geo-journey-v1`，涵蓋 sitemap formats、canonical URL selection、sitemap size limits 及 URL discovery，且模型輸入僅為去識別的事實性摘要，不含標籤、理由、信心度或品質決策。
 
 ask-google-to-recrawl 與 robots intro 兩頁本輪僅記錄為 `request_failed`，未建立 artifact、未列入品質審核或訓練計數。至此，完整通過來源追溯、PII、父品質與 annotation 品質檢核的真實公開多維訓練候選仍為 **4／100**。
+
+## 2026-08-18 Audit Lab readiness deployment verification
+
+本機的 immutable-manifest readiness 修正已通過 28 項回歸測試並保存為 checkpoint `e2fbf09b`。該修正只會計入 owner 的 active、來源核准、`training_candidate`、PII `none_detected`、品質 `passed`、去重 human annotation，並以 100 筆總量與五個旅程階段各 10 筆為 manifest readiness 門檻。
+
+然而，在 checkpoint 後以唯一 query string 驗證正式 `audit-lab` 頁面時，正式網域仍回傳舊有「已同意候選資料／BGE-M3／150 筆」摘要，而非新文案。正式執行日誌服務同時回應 `cloudrun service not found`，無法取得 container runtime 日誌。此為部署路由或舊 revision 切換問題的可稽核證據；在正式頁面顯示新摘要前，相關待辦維持未完成，且不影響資料庫內已確認的 **4／100** 真實候選計數。
