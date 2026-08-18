@@ -4,16 +4,14 @@ import { publicIntelligenceSources } from '../server/database/schema.ts'
 import { ingestApprovedPublicDocument } from '../server/public-intelligence/ingestion-repository.ts'
 
 const candidateUrls = [
-  'https://developers.google.com/search/docs/fundamentals/seo-starter-guide?hl=en',
-  'https://developers.google.com/search/docs/fundamentals/get-on-google?hl=en',
+  'https://developers.google.com/search/docs/crawling-indexing/links-crawlable?hl=en',
+  'https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls?hl=en',
+  'https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics?hl=en',
+  'https://developers.google.com/search/docs/crawling-indexing/mobile/mobile-sites-mobile-first-indexing?hl=en',
+  'https://developers.google.com/search/docs/fundamentals/how-search-works?hl=en',
   'https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data?hl=en',
-  'https://developers.google.com/search/docs/appearance/snippet?hl=en',
-  'https://developers.google.com/search/docs/crawling-indexing/sitemaps/overview?hl=en',
-  'https://developers.google.com/search/docs/crawling-indexing/robots/intro?hl=en',
-  'https://developers.google.com/search/docs/crawling-indexing/ask-google-to-recrawl?hl=en',
-  'https://developers.google.com/search/docs/crawling-indexing/overview-google-crawlers?hl=en',
-  'https://developers.google.com/search/docs/appearance/title-link?hl=en',
-  'https://developers.google.com/search/docs/appearance/structured-data/search-gallery?hl=en',
+  'https://developers.google.com/search/docs/appearance/structured-data/sd-policies?hl=en',
+  'https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag?hl=en',
 ]
 
 const database = getDatabase()

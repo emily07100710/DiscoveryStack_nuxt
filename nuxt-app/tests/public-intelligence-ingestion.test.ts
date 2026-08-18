@@ -36,6 +36,12 @@ describe('policy-approved public ingestion contracts', () => {
     expect(mixed.piiFindingCounts.phones).toBe(1)
   })
 
+  it('does not classify an ISO publication date as a phone number', () => {
+    const output = cleanAndExtractPublicDocument('<html><body>Last updated 2025-12-10.</body></html>')
+    expect(output.piiOutcome).toBe('not_detected')
+    expect(output.piiFindingCounts.phones).toBe(0)
+  })
+
   it('rejects an oversized response before it can enter cleaning or persistence', async () => {
     const response = new Response('small', { headers: { 'content-length': String(MAX_PUBLIC_DOCUMENT_BYTES + 1) } })
     await expect(readBoundedPublicHtml(response)).rejects.toThrow('response_too_large')

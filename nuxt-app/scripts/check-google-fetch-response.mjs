@@ -1,7 +1,7 @@
 const urls = [
-  'https://developers.google.com/search/docs/fundamentals/seo-starter-guide',
-  'https://developers.google.com/search/docs/fundamentals/get-on-google',
-  'https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data',
+  'https://developers.google.com/search/docs/fundamentals/seo-starter-guide?hl=en',
+  'https://developers.google.com/search/docs/fundamentals/get-on-google?hl=en',
+  'https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data?hl=en',
 ]
 
 for (const url of urls) {

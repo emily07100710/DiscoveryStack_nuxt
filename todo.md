@@ -107,4 +107,5 @@
 - [ ] 修復 Audit Lab 產物品質審核操作的錯誤可見性、送出中狀態與正式 API 成功／失敗回饋，避免審核未持久化時無提示。
 - [ ] 對應實際程式碼版本更新並驗證正式 Nuxt release probe，確保 Autoscale 載入含 r15 bounded crawl 與品質審核修復的 bundle。
 - [x] 依 owner 已授權的審核結論，完成 artifact #1 的品質核准與首筆 SEO／GEO 多維人工標註，保留來源、證據與理由。
-- [ ] 以已核准 Google Search Central CC BY 4.0 Source Card 執行第一批 10 頁同網域、非語系重複的受控文件收集；逐筆保留 PII、去重、品質與人工標註閘門。
+- [x] 以已核准 Google Search Central CC BY 4.0 Source Card 執行第一批 10 頁同網域、非語系重複的受控文件收集；逐筆保留 PII、去重、品質與人工標註閘門。
+- [x] 以相同核准來源執行第二批 Google Search Central 英文 canonical 文件收集，並只將逐頁人工審閱、品質通過、去識別的標註計入 100 筆門檻。

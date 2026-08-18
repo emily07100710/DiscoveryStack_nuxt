@@ -1,0 +1,10 @@
+{"requestedUrl":"https://developers.google.com/search/docs/fundamentals/seo-starter-guide?hl=en","status":"needs_human_review","jobId":120001,"artifactId":null}
+{"requestedUrl":"https://developers.google.com/search/docs/fundamentals/get-on-google?hl=en","status":"completed","jobId":120002,"artifactId":60001}
+{"requestedUrl":"https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data?hl=en","status":"needs_human_review","jobId":120003,"artifactId":null}
+{"requestedUrl":"https://developers.google.com/search/docs/appearance/snippet?hl=en","status":"completed","jobId":120004,"artifactId":60002}
+{"requestedUrl":"https://developers.google.com/search/docs/crawling-indexing/sitemaps/overview?hl=en","status":"completed","jobId":120005,"artifactId":60003}
+{"requestedUrl":"https://developers.google.com/search/docs/crawling-indexing/robots/intro?hl=en","status":"failed","statusMessage":"request_failed"}
+{"requestedUrl":"https://developers.google.com/search/docs/crawling-indexing/ask-google-to-recrawl?hl=en","status":"failed","statusMessage":"request_failed"}
+{"requestedUrl":"https://developers.google.com/search/docs/crawling-indexing/overview-google-crawlers?hl=en","status":"failed","statusMessage":"request_failed"}
+{"requestedUrl":"https://developers.google.com/search/docs/appearance/title-link?hl=en","status":"completed","jobId":120009,"artifactId":60006}
+{"requestedUrl":"https://developers.google.com/search/docs/appearance/structured-data/search-gallery?hl=en","status":"failed","statusMessage":"request_failed"}

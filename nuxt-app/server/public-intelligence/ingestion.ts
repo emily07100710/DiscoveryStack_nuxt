@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-export const PUBLIC_INGESTION_EXTRACTOR_VERSION = 'public-ingestion-v2'
+export const PUBLIC_INGESTION_EXTRACTOR_VERSION = 'public-ingestion-v3'
 export const MAX_PUBLIC_DOCUMENT_BYTES = 1_000_000
 export const MAX_PUBLIC_TEXT_CHARACTERS = 120_000
 
@@ -66,7 +66,9 @@ function countMatches(value: string, pattern: RegExp) {
  * suppress valid public documentation while every other phone-like token remains fail-closed.
  */
 function removeKnownNonPersonalUrlIdentifiers(value: string) {
-  return value.replace(/\bhttps?:\/\/(?:www\.)?pod\.link\/\d{8,}\b/gi, '[public-url-identifier]')
+  return value
+    .replace(/\bhttps?:\/\/(?:www\.)?pod\.link\/\d{8,}\b/gi, '[public-url-identifier]')
+    .replace(/\b(?:19|20)\d{2}-\d{2}-\d{2}\b/g, '[public-iso-date]')
 }
 
 function extractSchemaTypes(value: string) {
