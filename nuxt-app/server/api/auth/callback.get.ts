@@ -5,7 +5,7 @@ import { exchangeOAuthCode, type OAuthProviderError } from '../../utils/oauth'
 
 type CallbackStage = 'exchange' | 'token' | 'identity' | 'database' | 'session'
 type SessionFailureKind = 'owner_mismatch' | 'configuration' | 'jwt_session' | 'unknown'
-const OAUTH_NITRO_RELEASE = 'nitro-public-intelligence-20260818-r16-quality-feedback'
+const OAUTH_NITRO_RELEASE = 'nitro-public-intelligence-20260818-r17-immutable-readiness-ssr'
 
 function errorStatusCode(error: unknown) {
   const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'

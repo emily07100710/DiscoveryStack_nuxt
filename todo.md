@@ -113,3 +113,8 @@
 - [ ] 為受控公開文件收集加入可測試的同網域、逐跳重新導向處理；每個最終 URL 必須重新通過 HTTPS、來源範圍與既有 PII／去重／審核閘門。
 - [ ] 將 Audit Lab 的就緒度摘要改為顯示實際品質通過多維標註計數與 100 筆 immutable manifest 門檻，不再顯示過時的 consent-only 150 筆門檻。
 - [ ] 修復正式 Docker build 的 Audit Lab `bgeM3` 遺留型別參照與 `vue-router/volar/sfc-route-blocks` 相依解析問題，讓 immutable manifest readiness 版本可成功發布。
+- [ ] 驗證 checkpoint `ba4916cd` 的正式 Autoscale revision 已載入 immutable manifest readiness API，並以 owner-only Audit Lab 完成 UI 摘要驗收。
+- [x] 對齊根目錄 Dockerfile 的 release marker guard 與目前 Nuxt release endpoint，避免未來部署誤通過舊 bundle。
+- [ ] 建立並執行 Google Search Central batch-04 受控收集，只接受同網域 HTTPS、允許 robots、CC BY 4.0、PII none_detected 且未去重的真實 structural artifact。
+- [ ] 逐筆人工審閱 batch-04 成功產物，完成品質審核與跨五個 journey stage 的 SEO/GEO 多維人工標註。
+- [ ] 以 `git push --force-with-lease github main:main` 同步最新 DiscoveryStack 專案至 `emily07100710/DiscoveryStack_nuxt`。

@@ -197,3 +197,13 @@ ask-google-to-recrawl 與 robots intro 兩頁本輪僅記錄為 `request_failed`
 本機的 immutable-manifest readiness 修正已通過 28 項回歸測試並保存為 checkpoint `e2fbf09b`。該修正只會計入 owner 的 active、來源核准、`training_candidate`、PII `none_detected`、品質 `passed`、去重 human annotation，並以 100 筆總量與五個旅程階段各 10 筆為 manifest readiness 門檻。
 
 然而，在 checkpoint 後以唯一 query string 驗證正式 `audit-lab` 頁面時，正式網域仍回傳舊有「已同意候選資料／BGE-M3／150 筆」摘要，而非新文案。正式執行日誌服務同時回應 `cloudrun service not found`，無法取得 container runtime 日誌。此為部署路由或舊 revision 切換問題的可稽核證據；在正式頁面顯示新摘要前，相關待辦維持未完成，且不影響資料庫內已確認的 **4／100** 真實候選計數。
+
+## 2026-08-18 post-build compatibility deployment verification
+
+checkpoint `ba4916cd` 已保存並等待 Autoscale 切換。帶唯一 query string 的 `/api/__release` 回覆既有的 `nitro-public-intelligence-20260818-r16-quality-feedback` marker 與 `handler=nitro`，故僅能確認 Nitro handler 仍存在，不能用來判定本次摘要修正是否已生效。相同版本的 `/audit-lab` 則可載入 owner-only 繁體中文 shell，但在初始快照仍停留「正在載入私有稽核實驗室…」。需等待 overview API 完成並確認其回傳的公開 manifest readiness 計數後，才可宣告正式 UI 切換完成。
+
+### Overview API direct verification
+
+正式 owner session 對 `/api/audit/overview?probe=ba4916cd` 的直接讀取，已回傳 `approvedHumanAnnotations=9`、`minimumCandidates=100`、`minimumPerStage=10`、`requiresHumanReview=true` 與 `requiresImmutableManifest=true`。各旅程階段覆蓋目前為 discovery 0、understanding 9、response 0、progression 0、conversion 0。這以正式資料庫查詢確認，先前 4／100 的舊摘要已過時；現況為 **9／100** 合格多維人工標註，但尚未達五個階段各 10 筆。
+
+同時，瀏覽器首次載入 `/audit-lab` 仍呈現舊式「已同意候選資料／150 筆」卡片。因此問題已縮小為正式前端 HTML／hydration 資產未與最新 API 同步，而非 immutable readiness 後端或資料庫計數錯誤；在 UI 顯示 9／100 與 100／10 門檻前，此部署驗收仍維持待完成。

@@ -156,8 +156,13 @@ describe('OAuth frontend-origin contract', () => {
 
   it('requires the production image to build a clean Nitro artifact with the current OAuth release marker', () => {
     expect(dockerfile).toContain('rm -rf .nuxt .output')
-    expect(dockerfile).toContain("grep -R -q 'nitro-public-intelligence-20260818-r16-quality-feedback' .output/server")
+    expect(dockerfile).toContain("grep -R -q 'nitro-public-intelligence-20260818-r17-immutable-readiness-ssr' .output/server")
     expect(dockerfile).toContain('CMD ["node", ".output/server/index.mjs"]')
+  })
+
+  it('marks private Audit Lab SSR pages as non-cacheable so owner-specific readiness cannot serve stale HTML', () => {
+    expect(config).toContain("'/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } }")
+    expect(config).toContain("'/audit-lab/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } }")
   })
 
   it('exposes a no-store Nuxt-only release probe without deployment secrets', () => {

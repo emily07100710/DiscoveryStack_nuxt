@@ -53,8 +53,8 @@ export default defineNuxtConfig({
   },
   routeRules: {
     '/': { redirect: { to: '/en', statusCode: 302 } },
-    '/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
-    '/audit-lab/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
+    '/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
+    '/audit-lab/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
     '/ml-lab-preview': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/en/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/zh-hant/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },

@@ -1,6 +1,6 @@
 import { beginOAuthLogin } from '../../utils/oauth'
 
-const OAUTH_NITRO_RELEASE = 'nitro-public-intelligence-20260818-r16-quality-feedback'
+const OAUTH_NITRO_RELEASE = 'nitro-public-intelligence-20260818-r17-immutable-readiness-ssr'
 
 export default defineEventHandler((event) => {
   const query = getQuery(event)
