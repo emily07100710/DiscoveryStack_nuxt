@@ -883,3 +883,19 @@ jobs **1140001–1140004** 對 Recipe、SoftwareApplication、Carousel 與 canon
 | 1770004 | Canonicalization troubleshooting | response | canonical diagnosis、URL Inspection、hreflang、server／redirect／soft-404／compromise／syndication remediation 與 preference 非決定性。 |
 
 四筆 annotations 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 source URL、source span 與 approved CC BY 4.0 source lineage。active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 現為 **70／101**；primary journey 分布為 discovery 15、understanding 13、response 16、progression 12、conversion 14。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **31** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。
+
+### Batch-34 candidate review: Googlebot and supported meta tags
+
+在來源文件 duplicate preflight 中，`robots-meta-tag` 已存在 active eligible human annotation，因此明確排除。`/crawling-indexing/googlebot?hl=en` 與 `/crawling-indexing/special-tags?hl=en` 均未命中 active eligible human annotation，且人工閱讀頁面底部確認「Except as otherwise noted」下的 CC BY 4.0 內容授權。
+
+Googlebot 文件說明 Smartphone／Desktop crawler、相同 robots product token、mobile-first indexing、短期 crawl rate 波動、supported file 2MB 與 PDF 64MB fetch limit、crawling／indexing／access control 的差異，以及以 reverse DNS 或 published IP ranges 驗證 crawler identity。頁內示例與說明未見 email、電話或身分證樣式。
+
+Supported meta tags 文件說明 meta description、robots／googlebot directive 的較限制性衝突規則、X-Robots-Tag 對 non-HTML 的適用性、notranslate、charset、meta refresh 應以 server-side 301 取代、viewport、SafeSearch rating、data-nosnippet、有效 HTML head 與避免以 JavaScript 動態注入／修改 meta tags；並提醒使用 URL Inspection 驗證。文件中含示例性 site-verification 值，後續仍必須以 `public-ingestion-v4` 的 PII fail-closed 結果決定是否可收集或必須排除，絕不依人工初篩繞過 gate。
+
+### Batch-34 ingestion ledger and human annotation
+
+batch-34 對 Googlebot 與 supported meta tags 兩頁執行 approved-source policy-gated ingestion。Googlebot job **1170001** 為 HTTP 200、`completed`、`piiOutcome=not_detected`，finding counts emails 0／phones 0／national IDs 0，建立 structural artifact **1800001**。Supported meta tags job **1170002** 雖為 HTTP 200，但偵測到 PII pattern，結果為 `piiOutcome=redacted`、`status=needs_human_review`、`errorCode=pii_detected_requires_review`，未建立 artifact、未人工標註且絕不納入訓練；PII gate 未放寬。
+
+Googlebot structural artifact 經逐頁人工品質審閱後設為 `qualityStatus=passed`。完整多維 labels 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **1800002**，primary journey 為 `understanding`。去識別摘要保留 Smartphone／Desktop crawler、shared robots token、mobile-first indexing、crawl rate、crawler identity verification、file-size limits、crawling／indexing／access control boundary，以及非保證性；不將任一技術設定陳述為搜尋排名或結果顯示保證。annotation 1800002 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 source URL、source span 與 approved CC BY 4.0 source lineage。
+
+active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 現為 **71／101**；primary journey 分布為 discovery 15、understanding 14、response 16、progression 12、conversion 14。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **30** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。

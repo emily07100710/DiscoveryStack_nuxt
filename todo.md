@@ -154,3 +154,4 @@
 - [x] 執行 Google Search Central batch-31 的 sitemap index、sitemap extensions 與 canonicalization 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維人工標註。
 - [x] 執行 Google Search Central batch-32 的 Course、Dataset 與 Image license metadata 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維人工標註。
 - [x] 執行 Google Search Central batch-33 的 Recipe、SoftwareApplication、Carousel 與 canonicalization troubleshooting 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維人工標註。
+- [x] 執行 Google Search Central batch-34 的 Googlebot 與 supported meta tags 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維人工標註。
