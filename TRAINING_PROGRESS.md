@@ -729,3 +729,28 @@ batch-26 對 Page Experience 文件執行一次 approved-source policy-gated ing
 structural artifact 1320001 經逐頁人工品質審閱後設為 `qualityStatus=passed`。完整 labels 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **1350001**。去識別摘要將 Core Web Vitals、HTTPS、mobile display、advertising interference、intrusive interstitials 與 main-content distinction 表述為 user-centred diagnostic checks；它同時保留 Search Console／diagnostic tool 的後續 remediation 作用，以及單一 score 不保證 top ranking、多訊號與 page-specific／site-wide 判斷界線。
 
 annotation 1350001 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，其 primary journey 為 `response`，並保留 approved CC BY 4.0 source、source URL 和 source-span lineage。active eligible duplicate query 回傳 0 列。immutable manifest readiness 為 **49／100**；primary journey 分布為 discovery 10、understanding 11、response 10、progression 10、conversion 8。response 已達每階段最低 10 筆；尚缺 51 筆總量，conversion 差 2。未建立或核准 manifest，未提交 Hugging Face job。
+
+### Candidate disposition: Lazy-loading URL excluded
+
+Lazy-loading 候選（`https://developers.google.com/search/docs/crawling-indexing/lazy-loading?hl=en`）在官方頁面實測回傳 **404 Page Not Found**。不以搜尋索引殘留、舊 URL 名稱或第三方摘要替代可收集正文；因此該 URL 已排除，不建立 ingestion job、artifact、human annotation 或 training candidate。
+
+### Batch-27 candidate research: JavaScript lazy loading and localized versions
+
+經 active human annotation 查核，sitemap overview 已有 active eligible annotation，不重複收集；以下兩個 URL 尚無 artifact。人工閱讀 **Fix lazy-loaded content**（`https://developers.google.com/search/docs/crawling-indexing/javascript/lazy-loading?hl=en`）確認其為技術 conversion 候選：需讓 relevant content 在 viewport 可見時載入、避免依賴 scroll／click 以符合 Google Search 的非互動式處理、以 persistent unique URL／stable content／sequential links 使 infinite-scroll 具 paginated loading、並透過 URL Inspection rendered HTML 驗證。本文頁尾顯示 Google Developers CC BY 4.0，且 `pod.link` 8+ 位 URL 型式屬 extractor v4 的既有非電話正規化範圍，仍須由正式 gate 判定。
+
+人工閱讀 **Tell Google about localized versions of your page**（`https://developers.google.com/search/docs/specialty/international/localized-versions?hl=en`）確認其為 multilingual／country-aware technical SEO 候選：`hreflang` 可透過 HTML、HTTP header 或 sitemap 提供 alternate pages，方法等效且不宜重複實作；alternate URLs 要 fully-qualified、含 self-reference、由 mutual／bidirectional links 維持，並以 `x-default` 處理未匹配 language／locale。文件同時澄清 Google 不以 `hreflang` 或 `lang` attribute 偵測頁面語言，而用自己的 algorithms。頁尾為 CC BY 4.0，示例只有 domains／language-region code，未構成 PII 例外；仍須通過正式 source、robots、redirect、PII、fingerprint、source-document 去重與人工品質 gate。
+
+### Batch-27 ingestion ledger
+
+batch-27 對兩頁執行 approved-source policy-gated ingestion。JavaScript lazy loading job **960001** 建立 structural artifact **1380001**；localized versions job **960002** 建立 structural artifact **1380002**。兩筆 job 都為 `completed`、`piiOutcome=not_detected`，finding counts 均為 emails 0、phones 0、national IDs 0；兩筆 artifact 都是 `piiStatus=none_detected`、`qualityStatus=pending`、`useSnapshot=training_candidate`，並保留 source URL、source span 與 approved Google Search Central CC BY 4.0 source lineage。它們尚不是訓練樣本；每筆必須先經逐頁人工品質審核、`seoGeoMultilabelSchema.parse()`、source-document duplicate check 與獨立 annotation quality approval，才可進入 immutable manifest readiness。
+
+### Batch-27 human quality review and annotations
+
+兩筆 structural artifacts 均經逐頁人工品質審閱後設為 `qualityStatus=passed`。每組完整 labels 皆先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotations **1410001** 與 **1410002**。
+
+| Human annotation | 來源頁 | primary journey | 人工審核摘要 |
+|---:|---|---|---|
+| 1410001 | Fix lazy-loaded content | conversion | non-interactive rendering、visible-content loading、persistent unique URL、sequential pagination links、infinite-scroll fallback 與 URL Inspection rendered HTML verification。 |
+| 1410002 | Tell Google about localized versions | understanding | hreflang 的 HTML／HTTP header／sitemap 等效實作、fully-qualified／self／mutual alternates、x-default、語言偵測與 annotation boundary。 |
+
+兩筆皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL、source span lineage。active eligible source-document duplicate query 回傳 0 列。immutable manifest readiness 為 **51／100**；primary journey 分布為 discovery 10、understanding 12、response 10、progression 10、conversion 9。尚缺 49 筆總量，conversion 差 1 才符合每個 journey stage 最少 10 筆的分布門檻。未建立或核准 manifest，未提交 Hugging Face job。
