@@ -207,3 +207,80 @@ checkpoint `ba4916cd` 已保存並等待 Autoscale 切換。帶唯一 query stri
 正式 owner session 對 `/api/audit/overview?probe=ba4916cd` 的直接讀取，已回傳 `approvedHumanAnnotations=9`、`minimumCandidates=100`、`minimumPerStage=10`、`requiresHumanReview=true` 與 `requiresImmutableManifest=true`。各旅程階段覆蓋目前為 discovery 0、understanding 9、response 0、progression 0、conversion 0。這以正式資料庫查詢確認，先前 4／100 的舊摘要已過時；現況為 **9／100** 合格多維人工標註，但尚未達五個階段各 10 筆。
 
 同時，瀏覽器首次載入 `/audit-lab` 仍呈現舊式「已同意候選資料／150 筆」卡片。因此問題已縮小為正式前端 HTML／hydration 資產未與最新 API 同步，而非 immutable readiness 後端或資料庫計數錯誤；在 UI 顯示 9／100 與 100／10 門檻前，此部署驗收仍維持待完成。
+
+### r17 Autoscale rollout observation
+
+checkpoint `6a3e75f7` 已自動發布，內容為私有 `/audit-lab` 的 `private, no-store, max-age=0` SSR header 與新 release marker `nitro-public-intelligence-20260818-r17-immutable-readiness-ssr`。發布後以兩個不同 query string 對正式 `/api/__release` 讀取（中間等待 30 秒），兩次仍均回傳既有 `r16-quality-feedback` marker。這表示 r17 尚未完成 Autoscale image 切換或其 build 尚在處理；此時不得將 r17 視為正式已驗收，也不能以舊 UI 反駁已由正式 overview API 驗證的 9／100 immutable readiness 資料。
+
+稍後平台回報 deployment successful，正式 `/api/__release?checkpoint=6a3e75f7&deployed=1` 已回傳 `nitro-public-intelligence-20260818-r17-immutable-readiness-ssr` 與 `handler=nitro`，確認 Docker guard 與 Autoscale revision 均已切換。以同一 revision 的 `/audit-lab` 初始 SSR 回應檢查，private shell 正確為繁體中文且不再輸出舊 consent-only／150 筆卡片；初始 HTML 只呈現「正在載入私有稽核實驗室…」，仍需等待 client-side owner overview fetch 完成，才可驗證渲染中的 9／100 readiness 卡片。
+
+Owner session 的 client-side overview 已完成並顯示「已核准多維標註 9」、「遠端訓練門檻 9／100」，且正文明確標示「五個旅程階段各至少 10 筆，並需建立、核准不可變 MANIFEST」。舊 consent-only／150 筆卡片已不在 r17 頁面中。至此，Docker compatibility、release guard、正式 API 與 owner UI 摘要的 deployment 驗收完成；此結果只證實資料集目前 **9／100** 且僅理解階段有覆蓋，並不代表已建立 manifest 或已提交任何遠端訓練。
+
+## Batch-04 candidate research — 2026-08-18
+
+Google Developers 的 Site Policies 說明：頁面在標示 CC BY 4.0 notice 時可重用與改作，但需正確標示 Google 及連回原始頁；商標、品牌元素、另有註記的影音／圖片或外部連結不在該授權範圍內。Google Search Central 的每個候選文件頁尾均明示「Except as otherwise noted」之 CC BY 4.0 文字內容授權與程式碼 Apache 2.0 的分離條款。後續服務仍會逐頁執行既有的 HTTPS、同網域 redirect、robots、PII、去重、品質與人工標註閘門；本節僅是候選研究，尚未增加訓練樣本。
+
+| 預定 URL | 官方主題與初步標註方向 | 主要 journey stage 候選 |
+|---|---|---|
+| `https://developers.google.com/search/docs/fundamentals/how-search-works?hl=en` | Crawl／index／serve 的全流程與 canonical、language、device signals | `discovery` |
+| `https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data?hl=en` | JSON-LD、rich result eligibility、驗證與量測 | `progression` |
+| `https://developers.google.com/search/docs/appearance/structured-data/sd-policies?hl=en` | structured-data access、quality、completeness 與 anti-misleading policy | `response` |
+| `https://developers.google.com/search/docs/crawling-indexing/links-crawlable?hl=en` | crawlable links、anchor context、internal／external link hygiene | `progression` |
+| `https://developers.google.com/search/docs/crawling-indexing/mobile/mobile-sites-mobile-first-indexing?hl=en` | mobile-first index、content parity、robots、structured data、metadata | `response` |
+| `https://developers.google.com/search/docs/essentials?hl=en` | technical requirements、spam policy、people-first baseline practices | `discovery` |
+
+來源：Google Developers [Site Policies](https://developers.google.com/terms/site-policies)；[How Search Works](https://developers.google.com/search/docs/fundamentals/how-search-works?hl=en)；[Introduction to structured data](https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data?hl=en)；[General structured data guidelines](https://developers.google.com/search/docs/appearance/structured-data/sd-policies?hl=en)；[Link best practices](https://developers.google.com/search/docs/crawling-indexing/links-crawlable?hl=en)；[Mobile-first indexing](https://developers.google.com/search/docs/crawling-indexing/mobile/mobile-sites-mobile-first-indexing?hl=en)；[Google Search Essentials](https://developers.google.com/search/docs/essentials?hl=en)。
+
+### Batch-04 actual collection and page-reading evidence
+
+第一次 batch-04 因 artifact fingerprint 只使用 `sourceId`、類型、locator 與結構欄位，將特徵相同的不同官方文件誤判為重複；job 210001、210003–210006 因資料庫 unique conflict 被安全錯誤碼折疊為 `fetch_failed`，並**沒有**建立 artifact。以相同 Node fetch headers 與 20 秒 timeout 直接讀取時，五個 URL 都回應 HTTP 200、`text/html; charset=utf-8`，回應大小介於 172,150–205,431 bytes，因此沒有降低同網域、HTTPS、1 MB、robots、授權或 PII 限制。修正 fingerprint 以納入 `sourceUrl` 與 `sourceSpanHash` 後，重送建立下列真實 pending structural artifacts：
+
+| job ID | structural artifact ID | 結果 | 人工閱讀的內容重點 |
+|---:|---:|---|---|
+| 240001 | 240001 | `completed` | **How Search Works** 說明 crawling、indexing、serving 三階段；URL discovery、robots／伺服器可及性、rendering、canonical clustering、語言／地區／裝置信號及不保證收錄或排序。 |
+| 240003 | 240002 | `completed` | **General structured data guidelines** 說明 rich-result eligibility 非保證；JSON-LD／Microdata／RDFa、可爬與可索引性、可見內容一致性、反誤導、required/recommended properties、specific schema、image 可及性與多項目關聯。 |
+| 240004 | 240003 | `completed` | **Link best practices** 說明可爬 `<a href>`、解析 URL、anchor text、rendered HTML 驗證、內部連結 discoverability、外部引用與 `nofollow`／`sponsored`／`ugc` 的情境。 |
+| 240005 | 240004 | `completed` | **Mobile-first indexing** 說明以 smartphone agent 的 mobile content 用於 indexing／ranking；responsive 建議、desktop/mobile content and metadata parity、robots／render access、structured data、media、separate URLs 與 troubleshooting。 |
+| 240006 | 240005 | `completed` | **Google Search Essentials** 將 eligibility 與成效整理成 technical requirements、spam policies、people-first best practices、crawlable links、搜尋詞與 title／heading／alt／link text、其他內容格式與 appearance controls。 |
+
+每個已收集文件頁尾均顯示「Except as otherwise noted」的 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 文字內容授權及 Apache 2.0 code-sample 分離條款。`intro-structured-data`（job 240002）仍偵測到兩個電話樣式，狀態為 `needs_human_review`、未建立 artifact，維持 fail-closed，不納入本批審核或訓練候選。
+
+完成逐頁人工閱讀後，五筆 structural artifact 均以 `passed` 品質狀態核准，並建立、品質核准相同 `sourceUrl` 和 `sourceSpanHash` 的 human annotation。每筆 annotation 僅保留 153–272 字的去識別化實質摘要，而非網頁完整 raw capture；標籤則符合 `seo-geo-journey-v1` 且包含 journey、intent、content type、audience、topics、entities、geo、citation readiness、technical SEO、friction、action priority、人工 rationale 與 confidence。結果如下：
+
+| structural artifact | human annotation | primary journey | 審核結論 |
+|---:|---:|---|---|
+| 240001 | 270001 | understanding | How Search Works；通過 |
+| 240002 | 270002 | progression | Structured Data Guidelines；通過 |
+| 240003 | 270003 | progression | Link Best Practices；通過 |
+| 240004 | 270004 | response | Mobile-first Indexing；通過 |
+| 240005 | 270005 | discovery | Search Essentials；通過 |
+
+資料庫 admission 查核結果：**14／100** active、quality-passed、`none_detected`、`training_candidate` 的 human annotations。五個 primary journey 的目前分布為 discovery 1、understanding 10、response 1、progression 2、conversion 0；仍未建立 dataset manifest、沒有提交 Hugging Face job，且尚未將 PII `needs_human_review` 文件計入任何訓練數量。
+
+### Batch-05 candidate research evidence
+
+為補足 conversion 與 response coverage，已逐頁研究以下 Google Search Central 英文 official candidates；每頁頁尾均載明「Except as otherwise noted」的 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 內容授權以及 Apache 2.0 code sample 分離條款：
+
+| 官方 URL | 預定 primary journey | 人工閱讀重點 |
+|---|---|---|
+| [LocalBusiness structured data](https://developers.google.com/search/docs/appearance/structured-data/local-business?hl=en) | conversion | Google Search／Maps 的 knowledge panel 與 local carousel；business hours、departments、reservation／order action、build-test-release、Rich Results Test、URL Inspection、re-crawl 與 sitemap，並提醒 rich result appearance 非保證。 |
+| [Introduction to Product structured data](https://developers.google.com/search/docs/appearance/structured-data/product?hl=en) | conversion | product snippets 與 merchant listings 的不同使用情境；price、availability、reviews、shipping、returns、product variants、Merchant Center feed 與 structured data 雙軌驗證，及 search experience changes / eligibility 的不保證性。 |
+| [Merchant listing structured data](https://developers.google.com/search/docs/appearance/structured-data/merchant-listing?hl=en) | conversion | 可購買頁面的 Product／Offer，shopping knowledge panel、Google Images、popular products、price／availability／shipping／returns、Rich Results Test、URL Inspection、re-crawl、sitemap 及 offer price state 的規範。 |
+| [Ask Google to recrawl your URLs](https://developers.google.com/search/docs/crawling-indexing/ask-google-to-recrawl?hl=en) | response | 僅 property owner／full user 可 request indexing；需以 Index Status 或 URL Inspection 監測，crawling 須數日到數週、不保證即時或一定 inclusion、重複請求不會加速；大量 URL 應提交 sitemap。 |
+
+這四篇均在已核准 Google Search Central Source Card 的同一 `developers.google.com` domain；尚未進行 ingestion、品質核准或人工 annotation，故尚未計入 14／100。
+
+### Batch-05 controlled ingestion and annotation result
+
+batch-05 以既有 owner-triggered、policy-gated ingestion service 處理四個已研究 URL，並保留每一筆 ingestion ledger。結果如下：
+
+| URL | Job | 結果 | 後續處理 |
+|---|---:|---|---|
+| Product structured data | 270002 | `completed`，structural artifact #300001，PII `not_detected` | 人工品質核准並建立 human annotation #330001（primary `conversion`） |
+| Ask Google to recrawl | 270004 | `completed`，structural artifact #300002，PII `not_detected` | 人工品質核准並建立 human annotation #330002（primary `response`） |
+| LocalBusiness structured data | 270001 | `needs_human_review`，PII `redacted`，16 phone detections | 維持 fail-closed；未建立 artifact、未標註、未計入訓練 |
+| Merchant listing structured data | 270003 | `needs_human_review`，PII `redacted`，24 phone detections | 維持 fail-closed；未建立 artifact、未標註、未計入訓練 |
+
+人工審閱 #300001 後的摘要：產品頁可利用 product markup 表達 price、availability、shipping、returns、ratings 與 reviews；product snippets 與 merchant listings 對應不同頁面情境，且可搭配 Merchant Center feed，但 rich experience eligibility 並不保證展示。人工審閱 #300002 後的摘要：已驗證 property owner/full user 可用 URL Inspection request indexing 處理少量 URL；大量 URL 應交 sitemap，crawling 可歷時數日或數週，重複 request 不會加速亦不保證 inclusion。
+
+batch-05 後資料庫 manifest admission 查核：**16／100**。primary journey 分布為 discovery 1、understanding 10、response 2、progression 2、conversion 1。沒有建立 dataset manifest，沒有提交 Hugging Face job；兩筆 PII human-review 文件明確排除在計數與訓練資料之外。

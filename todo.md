@@ -110,11 +110,13 @@
 - [x] 以已核准 Google Search Central CC BY 4.0 Source Card 執行第一批 10 頁同網域、非語系重複的受控文件收集；逐筆保留 PII、去重、品質與人工標註閘門。
 - [x] 以相同核准來源執行第二批 Google Search Central 英文 canonical 文件收集，並只將逐頁人工審閱、品質通過、去識別的標註計入 100 筆門檻。
 - [x] 以相同核准來源執行第三批 Google Search Central 英文 canonical 文件收集，並只將逐頁人工審閱、品質通過、去識別的標註計入 100 筆門檻。
-- [ ] 為受控公開文件收集加入可測試的同網域、逐跳重新導向處理；每個最終 URL 必須重新通過 HTTPS、來源範圍與既有 PII／去重／審核閘門。
-- [ ] 將 Audit Lab 的就緒度摘要改為顯示實際品質通過多維標註計數與 100 筆 immutable manifest 門檻，不再顯示過時的 consent-only 150 筆門檻。
-- [ ] 修復正式 Docker build 的 Audit Lab `bgeM3` 遺留型別參照與 `vue-router/volar/sfc-route-blocks` 相依解析問題，讓 immutable manifest readiness 版本可成功發布。
-- [ ] 驗證 checkpoint `ba4916cd` 的正式 Autoscale revision 已載入 immutable manifest readiness API，並以 owner-only Audit Lab 完成 UI 摘要驗收。
+- [x] 為受控公開文件收集加入可測試的同網域、逐跳重新導向處理；每個最終 URL 必須重新通過 HTTPS、來源範圍與既有 PII／去重／審核閘門。
+- [x] 將 Audit Lab 的就緒度摘要改為顯示實際品質通過多維標註計數與 100 筆 immutable manifest 門檻，不再顯示過時的 consent-only 150 筆門檻。
+- [x] 修復正式 Docker build 的 Audit Lab `bgeM3` 遺留型別參照與 `vue-router/volar/sfc-route-blocks` 相依解析問題，讓 immutable manifest readiness 版本可成功發布。
+- [x] 驗證 checkpoint `ba4916cd` 的正式 Autoscale revision 已載入 immutable manifest readiness API，並以 owner-only Audit Lab 完成 UI 摘要驗收。
 - [x] 對齊根目錄 Dockerfile 的 release marker guard 與目前 Nuxt release endpoint，避免未來部署誤通過舊 bundle。
-- [ ] 建立並執行 Google Search Central batch-04 受控收集，只接受同網域 HTTPS、允許 robots、CC BY 4.0、PII none_detected 且未去重的真實 structural artifact。
+- [x] 建立並執行 Google Search Central batch-04 受控收集，只接受同網域 HTTPS、允許 robots、CC BY 4.0、PII none_detected 且未去重的真實 structural artifact。
 - [ ] 逐筆人工審閱 batch-04 成功產物，完成品質審核與跨五個 journey stage 的 SEO/GEO 多維人工標註。
 - [ ] 以 `git push --force-with-lease github main:main` 同步最新 DiscoveryStack 專案至 `emily07100710/DiscoveryStack_nuxt`。
+- [x] 修正 public artifact fingerprint 未納入來源 URL 與來源 span 而造成不同官方文件被誤判重複的問題，並以回歸測試驗證真正同頁同內容仍維持去重。
+- [x] 執行 Google Search Central batch-05 conversion／response 文件受控收集，僅將 PII none_detected 的 Product structured data 與 Ask Google to recrawl 完成品質核准與多維人工標註；維持其餘 PII human-review 結果排除於訓練。

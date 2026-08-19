@@ -7,7 +7,17 @@ import { assertPermittedPublicUse, maximumPermittedUse, PublicUseViolation, type
 import { trainingMemberAdmissionError } from './training-admission'
 
 export function sourceFingerprint(url: string) { return createHash('sha256').update(url.trim().toLowerCase()).digest('hex') }
-export function artifactFingerprint(input: { sourceId: number, artifactType: string, sourceLocator?: string | null, artifactText?: string | null, fieldData: object }) { return createHash('sha256').update(JSON.stringify({ sourceId: input.sourceId, artifactType: input.artifactType, sourceLocator: input.sourceLocator || '', artifactText: input.artifactText || '', fieldData: input.fieldData })).digest('hex') }
+export function artifactFingerprint(input: { sourceId: number, sourceUrl: string, sourceSpanHash?: string | null, artifactType: string, sourceLocator?: string | null, artifactText?: string | null, fieldData: object }) {
+  return createHash('sha256').update(JSON.stringify({
+    sourceId: input.sourceId,
+    sourceUrl: input.sourceUrl,
+    sourceSpanHash: input.sourceSpanHash || '',
+    artifactType: input.artifactType,
+    sourceLocator: input.sourceLocator || '',
+    artifactText: input.artifactText || '',
+    fieldData: input.fieldData,
+  })).digest('hex')
+}
 
 type SourcePolicyInput = { robotsStatus: 'unreviewed' | 'reviewed_allow' | 'reviewed_restrict' | 'unavailable' | 'not_applicable', robotsUrl: string | null, termsStatus: 'unreviewed' | 'allows_research' | 'allows_evaluation' | 'allows_training' | 'prohibits_automation' | 'prohibits_training' | 'unknown', termsUrl: string | null, licenceReference: string | null, copyrightRisk: 'unreviewed' | 'low' | 'medium' | 'high' | 'blocked', piiStatus: 'unreviewed' | 'none_detected' | 'possible' | 'restricted', retentionUntil: Date | null, policyEvidence: object, reviewNote: string | null }
 
@@ -191,7 +201,7 @@ export async function createOwnerPublicArtifact(input: { ownerUserId: number, so
   if (!source) throw createError({ statusCode: 404, statusMessage: 'Public source was not found.' })
   if (source.reviewStatus !== 'approved') throw createError({ statusCode: 422, statusMessage: 'Approve the Source Card before adding artifacts.' })
   try { assertPermittedPublicUse({ requestedUse: input.requestedUse, maximumUse: source.allowedUse }) } catch (error) { if (error instanceof PublicUseViolation) throw createError({ statusCode: 422, statusMessage: error.message }); throw error }
-  const artifactHash = artifactFingerprint({ sourceId: source.id, artifactType: input.artifactType, sourceLocator: input.sourceLocator, artifactText: input.artifactText, fieldData: input.fieldData })
+  const artifactHash = artifactFingerprint({ sourceId: source.id, sourceUrl: input.sourceUrl, sourceSpanHash: input.sourceSpanHash, artifactType: input.artifactType, sourceLocator: input.sourceLocator, artifactText: input.artifactText, fieldData: input.fieldData })
   const result = await database.insert(publicIntelligenceArtifacts).values({ ...input, artifactHash, useSnapshot: input.requestedUse, extractionVersion: 'public-intelligence-v1', qualityStatus: 'pending', piiStatus: source.piiStatus === 'none_detected' ? 'none_detected' : 'unreviewed', capturedAt: new Date() })
   return { id: Number(result[0].insertId), artifactHash, useSnapshot: input.requestedUse }
 }

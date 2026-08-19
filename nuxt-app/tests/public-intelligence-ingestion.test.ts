@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cleanAndExtractPublicDocument, ingestionRequestFingerprint, MAX_PUBLIC_DOCUMENT_BYTES, readBoundedPublicHtml } from '../server/public-intelligence/ingestion'
+import { artifactFingerprint } from '../server/public-intelligence/repository'
 
 describe('policy-approved public ingestion contracts', () => {
   it('extracts bounded structural features and only returns hashes for a public document', () => {
@@ -54,5 +55,21 @@ describe('policy-approved public ingestion contracts', () => {
     expect(first).toBe(second)
     expect(first).not.toBe(differentUrl)
     expect(first).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('distinguishes separate source documents with coincident structural features while retaining exact-document deduplication', () => {
+    const shared = {
+      sourceId: 1,
+      artifactType: 'structural_features',
+      sourceLocator: 'document:derived-structural-features',
+      artifactText: null,
+      fieldData: { signals: { primaryCta: false }, primaryJourneyStage: 'progression', navigationDepth: 0, serviceRoutes: 0 },
+    }
+    const first = artifactFingerprint({ ...shared, sourceUrl: 'https://developers.google.com/search/docs/one?hl=en', sourceSpanHash: 'a'.repeat(64) })
+    const sameDocument = artifactFingerprint({ ...shared, sourceUrl: 'https://developers.google.com/search/docs/one?hl=en', sourceSpanHash: 'a'.repeat(64) })
+    const differentDocument = artifactFingerprint({ ...shared, sourceUrl: 'https://developers.google.com/search/docs/two?hl=en', sourceSpanHash: 'b'.repeat(64) })
+
+    expect(first).toBe(sameDocument)
+    expect(first).not.toBe(differentDocument)
   })
 })
