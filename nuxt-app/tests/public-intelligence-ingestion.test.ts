@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cleanAndExtractPublicDocument, ingestionRequestFingerprint, MAX_PUBLIC_DOCUMENT_BYTES, readBoundedPublicHtml } from '../server/public-intelligence/ingestion'
-import { artifactFingerprint } from '../server/public-intelligence/repository'
+import { artifactFingerprint, humanAnnotationSourceIdentity } from '../server/public-intelligence/repository'
 
 describe('policy-approved public ingestion contracts', () => {
   it('extracts bounded structural features and only returns hashes for a public document', () => {
@@ -82,5 +82,15 @@ describe('policy-approved public ingestion contracts', () => {
 
     expect(first).toBe(sameDocument)
     expect(first).not.toBe(differentDocument)
+  })
+
+  it('identifies a human annotation by its source document rather than a recrawl-specific source span', () => {
+    const initialCapture = humanAnnotationSourceIdentity({ sourceId: 1, sourceUrl: 'https://developers.google.com/search/docs/appearance/title-link?hl=en' })
+    const laterCapture = humanAnnotationSourceIdentity({ sourceId: 1, sourceUrl: 'https://developers.google.com/search/docs/appearance/title-link?hl=en' })
+    const otherDocument = humanAnnotationSourceIdentity({ sourceId: 1, sourceUrl: 'https://developers.google.com/search/docs/appearance/snippet?hl=en' })
+
+    expect(initialCapture).toBe(laterCapture)
+    expect(initialCapture).not.toBe(otherDocument)
+    expect(initialCapture).toMatch(/^[a-f0-9]{64}$/)
   })
 })

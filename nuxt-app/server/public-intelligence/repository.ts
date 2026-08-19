@@ -19,6 +19,19 @@ export function artifactFingerprint(input: { sourceId: number, sourceUrl: string
   })).digest('hex')
 }
 
+/**
+ * Human annotations have a stricter identity than derived artifacts: an active
+ * training candidate may represent each canonical source document only once,
+ * even when a recrawl yields a different source-span fingerprint.
+ */
+export function humanAnnotationSourceIdentity(input: { sourceId: number, sourceUrl: string }) {
+  return createHash('sha256').update(JSON.stringify({
+    sourceId: input.sourceId,
+    sourceUrl: input.sourceUrl.trim(),
+    artifactType: 'human_annotation',
+  })).digest('hex')
+}
+
 type SourcePolicyInput = { robotsStatus: 'unreviewed' | 'reviewed_allow' | 'reviewed_restrict' | 'unavailable' | 'not_applicable', robotsUrl: string | null, termsStatus: 'unreviewed' | 'allows_research' | 'allows_evaluation' | 'allows_training' | 'prohibits_automation' | 'prohibits_training' | 'unknown', termsUrl: string | null, licenceReference: string | null, copyrightRisk: 'unreviewed' | 'low' | 'medium' | 'high' | 'blocked', piiStatus: 'unreviewed' | 'none_detected' | 'possible' | 'restricted', retentionUntil: Date | null, policyEvidence: object, reviewNote: string | null }
 
 function sourcePolicySnapshot(source: Pick<typeof publicIntelligenceSources.$inferSelect, 'robotsStatus' | 'robotsUrl' | 'termsStatus' | 'termsUrl' | 'licenceReference' | 'copyrightRisk' | 'piiStatus' | 'retentionUntil' | 'policyEvidence'>) {
@@ -201,6 +214,18 @@ export async function createOwnerPublicArtifact(input: { ownerUserId: number, so
   if (!source) throw createError({ statusCode: 404, statusMessage: 'Public source was not found.' })
   if (source.reviewStatus !== 'approved') throw createError({ statusCode: 422, statusMessage: 'Approve the Source Card before adding artifacts.' })
   try { assertPermittedPublicUse({ requestedUse: input.requestedUse, maximumUse: source.allowedUse }) } catch (error) { if (error instanceof PublicUseViolation) throw createError({ statusCode: 422, statusMessage: error.message }); throw error }
+  if (input.artifactType === 'human_annotation') {
+    const [existing] = await database.select({ id: publicIntelligenceArtifacts.id }).from(publicIntelligenceArtifacts).where(and(
+      eq(publicIntelligenceArtifacts.sourceId, source.id),
+      eq(publicIntelligenceArtifacts.artifactType, 'human_annotation'),
+      eq(publicIntelligenceArtifacts.sourceUrl, input.sourceUrl.trim()),
+      isNull(publicIntelligenceArtifacts.removedAt),
+    )).limit(1)
+    if (existing) {
+      const identity = humanAnnotationSourceIdentity({ sourceId: source.id, sourceUrl: input.sourceUrl })
+      throw createError({ statusCode: 422, statusMessage: `An active human annotation already exists for this source document (${identity.slice(0, 12)}). Review the existing annotation instead of creating a second training candidate.` })
+    }
+  }
   const artifactHash = artifactFingerprint({ sourceId: source.id, sourceUrl: input.sourceUrl, sourceSpanHash: input.sourceSpanHash, artifactType: input.artifactType, sourceLocator: input.sourceLocator, artifactText: input.artifactText, fieldData: input.fieldData })
   const result = await database.insert(publicIntelligenceArtifacts).values({ ...input, artifactHash, useSnapshot: input.requestedUse, extractionVersion: 'public-intelligence-v1', qualityStatus: 'pending', piiStatus: source.piiStatus === 'none_detected' ? 'none_detected' : 'unreviewed', capturedAt: new Date() })
   return { id: Number(result[0].insertId), artifactHash, useSnapshot: input.requestedUse }

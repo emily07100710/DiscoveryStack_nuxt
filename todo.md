@@ -134,3 +134,6 @@
 - [x] 執行 Google Search Central batch-16 的電商網站架構與高品質評論文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion 多維人工標註。
 - [x] 執行 Google Search Central batch-17 的電商 URL 結構與 Discover 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion／discovery 多維人工標註。
 - [x] 執行 Google Search Central batch-18 的 Search Console 入門與重新檢索文件受控收集，逐筆依 PII 結果完成或保留品質審核與 response 多維人工標註。
+- [x] 執行 Google Search Central batch-19 的 title links、snippets 與電商內容出現位置文件受控收集，逐筆依 PII 結果完成或保留品質審核與 discovery／conversion 多維人工標註。
+- [x] 修正 batch-19 查核發現的同 URL human annotation 重複：保留既有已核准標註，透過可稽核品質審核撤銷新重複項目的訓練資格，並重新驗證 readiness。
+- [x] 強化 human annotation repository 去重：拒絕同一 source URL 的第二筆 active human annotation，並以回歸測試鎖定此 manifest 對齊規則。

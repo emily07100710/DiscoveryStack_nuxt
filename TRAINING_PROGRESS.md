@@ -572,3 +572,31 @@ human annotation 930001 的 `piiStatus=none_detected`、`qualityStatus=passed`�
 | 990002 | Ask Google to recrawl | response | 依 URL 規模選擇 inspection request 或 sitemap，保留 quota、等待期及不保證收錄的邊界，並以 Index Status／inspection 監測。 |
 
 兩筆 human annotation 均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 source URL、source span 與 approved CC BY 4.0 source lineage。查核 immutable manifest readiness 為 **47／100**；primary journey 分布為 discovery 8、understanding 12、response 10、progression 11、conversion 6。此批使 response 已達每階段最低 10 筆，但仍尚缺 53 筆總量、discovery 差 2、conversion 差 4。未建立或核准 manifest，未提交 Hugging Face job。
+
+## Batch-19 candidate research
+
+`https://developers.google.com/search/docs/appearance/title-link?hl=en` 已以官方頁面人工檢視。頁尾明示正文為 CC BY 4.0；內容說明 title link 是搜尋結果中讓使用者初步判斷結果相關性的主要訊號，應有 unique、descriptive、concise title，避免 keyword stuffing／template 重複、使主 H1 明確、與主要內容維持 writing-system／language 一致，並理解 title link 可能從 title、visible heading、`og:title`、anchor text 與 WebSite structured data 自動生成。對 robots disallow／`noindex` 的差異及 reprocess 需要數天到數週亦有明確邊界。列為 **discovery** 候選；公開文字初步未見 email／phone，但只以正式 PII gate 決定是否可建立 artifact。
+
+`https://developers.google.com/search/docs/appearance/snippet?hl=en` 亦經官方頁面人工檢視，頁尾明示正文為 CC BY 4.0。內容指出 snippet 主要由頁面內容自動產生，meta description 僅在更精確時採用；提供 `nosnippet`、`max-snippet`、`data-nosnippet` 控制，要求按頁 unique／accurate description，允許有界、可讀的 programmatic descriptions，並說明 Read more deep link 對 visible content、scroll behavior 與 hash fragment 的要求。列為 **discovery** 候選。頁內示例包含營業時間（`Monday-Friday 8-5pm`）與一般地點描述，但未見 email 或電話；仍不預先認定 PII 結果，須經既有 extractor v4 的正式 fail-closed gate。
+
+`https://developers.google.com/search/docs/specialty/ecommerce/where-ecommerce-data-can-appear-on-google?hl=en` 經官方頁面人工檢視，頁尾明示正文為 CC BY 4.0。內容區分 Google Search、Images、Lens、Shopping tab、Business Profile 與 Maps 等出現面，並將 Merchant Center、product listing opt-in、image indexing、inventory location data、不同 search intent 與 shopping journey 的 company story／offers／reviews／catalog／education／live streams／return and shipping policies／support touchpoints 連結為可見度與轉換信任訊號。文件明確說明實際呈現可能不同，不得視為曝光保證。列為 **conversion** 候選；文中未提供 email 或電話範例，仍只由正式 PII gate 決定是否收集。
+
+### Batch-19 policy-gated ingestion ledger
+
+batch-19 以 source id 1 的唯一 approved Google Search Central CC BY 4.0 Source Card 執行；逐頁維持同網域 HTTPS、robots、terms、license、redirect、PII 與 fingerprint gate。
+
+| URL | 本次 ingestion 結果 | PII／artifact 結果 | 後續處置 |
+|---|---|---|---|
+| `appearance/title-link` | job 720001 `completed` | artifact 1020001；`piiStatus=none_detected`、`qualityStatus=pending` | 可進入獨立人工品質審核與 discovery 標註。 |
+| `appearance/snippet` | job 720002 `completed` | artifact 1020002；`piiStatus=none_detected`、`qualityStatus=pending` | 可進入獨立人工品質審核與 discovery 標註。 |
+| `specialty/ecommerce/where-ecommerce-data-can-appear-on-google` | 服務回傳既有 job 450005／artifact 540005 | 舊 artifact 540005 已為 `piiStatus=none_detected`、`qualityStatus=passed`，故本批不建立第二份 artifact | 依去重政策不計為新樣本；不得將同頁重新計入 manifest。 |
+
+查核亦發現更早期同 URL 的 failed PII jobs 90004／90009，以及已 quality-passed 的舊 structural artifacts 60002／60006。它們不改變本批結果：沒有任何既有 `human_annotation` 可計入這兩個 source URL；batch-19 將只對本次兩筆 PII clean、pending structural artifacts 做一次人工審核與一次 human annotation，並維持每份來源文件最多一份 admission。尚未因 structural artifact 或 ingestion completion 計入 readiness。
+
+### Batch-19 duplicate-annotation remediation and final disposition
+
+人工標註後的資料庫查核發現 title-link 與 snippets 各已有一筆較早的 `qualityStatus=passed` human annotation（title-link artifact 90004；snippets artifact 90002）。本批因 recrawl 產生不同 source-span hash，原本的 span-only idempotence 檢查未偵測跨 capture 的同 URL 重複，因而暫時建立後續 artifacts 1050001／1050002。這兩筆未進入任何 manifest，也未提交任何訓練。
+
+已透過既有 `reviewOwnerPublicArtifact` 稽核流程，而非直接刪除資料，將 1050001（title-link）與 1050002（snippets）設為 `qualityStatus=rejected`；quality note 明示保留較早已核准 artifact 90004／90002，拒絕後續同來源 URL 的重複訓練候選。查核確認兩個 URL 各僅有 **1** 筆 `passed`／`training_candidate`／`piiStatus=none_detected` human annotation。
+
+repository 現新增 source-document 層級的 `humanAnnotationSourceIdentity()`，並在建立 active `human_annotation` 前拒絕相同 source ID 與 source URL 的第二筆 annotation，即使 recrawl source-span hash 不同。batch-19 審核腳本已重跑，兩頁均回傳 `retained_existing` 並引用既有 artifacts，未再新增 candidate。公開 ingestion regression 共 **9/9** 通過。由於三個 batch-19 URL 分別已有既有有效 human annotation 或是既有 structural artifact，**本批不新增 manifest admission**；immutable readiness 如實維持 **47／100**，分布為 discovery 8、understanding 12、response 10、progression 11、conversion 6。未建立或核准 manifest，未提交 Hugging Face job。
