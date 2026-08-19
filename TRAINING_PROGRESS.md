@@ -768,3 +768,31 @@ batch-28 對 Dynamic Rendering 文件執行一次 approved-source policy-gated i
 structural artifact 1440001 經逐頁人工品質審閱後設為 `qualityStatus=passed`。完整 labels 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **1470001**。去識別摘要將 dynamic rendering 僅表述為 public JavaScript content 對 crawler 不可用時的 workaround，優先保留 SSR／static rendering／hydration 的長期替代方案；並包含 crawler capability、renderer routing、per-page scope、resource trade-off、rendered HTML 和 user／crawler similarity 以防止 cloaking。它不將 technical compliance 表述為 indexing 或 displayed result guarantee。
 
 annotation 1470001 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，primary journey 為 `conversion`，並保留 approved CC BY 4.0 source、source URL、source-span lineage。active eligible source-document duplicate query 回傳 0 列。immutable manifest readiness 為 **52／100**；primary journey 分布為 discovery 10、understanding 12、response 10、progression 10、conversion 10。至此所有 journey stage 均已達每階段至少 10 筆的分布門檻，但仍缺 **48** 筆唯一且 eligible 的公開訓練樣本；未建立或核准 manifest，未提交 Hugging Face job。
+
+### Batch-29 candidate reading record (not yet ingested)
+
+在任何 ingestion 前，以 SQL 查核下列候選 URL 不存在 `artifactType=human_annotation`、`qualityStatus=passed`、`piiStatus=none_detected`、`useSnapshot=training_candidate` 且未移除的 active annotation。人工閱讀均透過官方 Google Search Central English documentation，頁尾明載 Content 為 **Creative Commons Attribution 4.0**、code samples 為 Apache 2.0。閱讀過程未見實際 email、電話或身分證樣式；最終是否納入仍必須由 `public-ingestion-v4` PII gate 的實際結果決定。
+
+- `https://developers.google.com/search/docs/crawling-indexing/qualify-outbound-links?hl=en`：說明 `rel=sponsored`、`ugc`、`nofollow`、多 rel 值與其對 crawl relationship 的限制。預計若 PII clean，標註為 technical SEO／content integrity／outbound-link governance 的證據。
+- `https://developers.google.com/search/docs/crawling-indexing/valid-page-metadata?hl=en`：說明 `<head>` 中允許的元素，以及 invalid element 使 Google 停止讀取後續 metadata 的風險。預計若 PII clean，標註為 metadata integrity、title/canonical-related technical SEO evidence。
+- `https://developers.google.com/search/docs/crawling-indexing/pause-online-business?hl=en`：說明暫停電商時優先保留站點、限制 cart 功能、清楚告知延遲、更新 structured data／Merchant Center、避免不必要下線，以及 503、robots、noindex 的風險。預計若 PII clean，標註為 conversion friction／remediation priority／technical SEO evidence；文件雖討論「contact customer service」概念，但未出現實際聯絡資料。
+- `https://developers.google.com/search/docs/crawling-indexing/remove-information?hl=en`：說明 removals tool 的暫時性、永久移除的內容更新／access control／noindex 選項與 robots.txt 限制。預計若 PII clean，標註為 response／progression 的 information-control evidence；頁面僅指向 privacy guidance，未呈現個人資料。
+- `https://developers.google.com/search/docs/appearance/featured-snippets?hl=en`：說明 featured snippets、`nosnippet`、`data-nosnippet`、`max-snippet` 的效果與不保證性，以及 click-to-section 行為。預計若 PII clean，標註為 discovery／response、citation readiness 與 search appearance control evidence。
+
+候選 `/crawling-indexing/faceted-navigation?hl=en` 經人工驗證為 HTTP 404，因此不得收集、標註或計入訓練；改以 Google Crawling Infrastructure 的另一 URL 並非目前已核准 Search Central source-card 的收集範圍，亦不併入本批。
+
+### Batch-29 ingestion ledger and human annotations
+
+batch-29 對五頁已完成人工閱讀與 preflight source-document 查核的 Google Search Central 文件執行 approved-source policy-gated ingestion。jobs **1020001–1020005** 全部為 `completed`、HTTP 200，分別建立 structural artifacts **1500001–1500005**；每筆的 `piiOutcome=not_detected`，finding counts 都為 emails 0、phones 0、national IDs 0，且無 ingestion error code。所有 structural artifacts 均保留 source URL、source span 與 approved Google Search Central CC BY 4.0 lineage。
+
+五筆 structural artifacts 都經逐頁人工品質審閱後設為 `qualityStatus=passed`。每一組完整 labels 均先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotations **1530001–1530005**：
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 1530001 | Qualify outbound links | progression | sponsored／ugc／nofollow、multiple rel values 與 relationship-metadata 的不保證性。 |
+| 1530002 | Valid page metadata | response | valid HTML head、invalid markup 中斷後續 metadata parsing、title／canonical／robots 依賴關係。 |
+| 1530003 | Temporarily pause or disable website | conversion | 站點持續可用、cart／delay communication、structured data／Merchant Center 及 503／robots／noindex 的範圍。 |
+| 1530004 | Remove a page hosted on your site | response | temporary removal、source-content correction、access control、noindex 與 robots.txt limitation。 |
+| 1530005 | Featured snippets | discovery | search appearance、nosnippet／data-nosnippet／max-snippet、citation context、click-to-section 與不保證性。 |
+
+五筆 annotations 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 source URL、source span 與 approved CC BY 4.0 source lineage。active eligible source-document duplicate query 回傳 **0**。immutable manifest readiness 現為 **57／100**；primary journey 分布為 discovery 11、understanding 12、response 12、progression 11、conversion 11。五個 stage 皆維持每階段至少 10 筆門檻，仍缺 **43** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。

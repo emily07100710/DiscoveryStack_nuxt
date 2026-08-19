@@ -148,3 +148,4 @@
 - [x] 執行 Google Search Central batch-27 的 JavaScript lazy loading 與 localized versions 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion／understanding 多維人工標註。
 - [x] 執行 Google Search Central batch-28 的 Dynamic Rendering 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion 多維人工標註。
 - [x] 執行 Google Search Central batch-28 的 Dynamic Rendering 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion 多維人工標註。
+- [x] 執行 Google Search Central batch-29 的 outbound links、valid metadata、temporary site pause、content removal 與 featured snippets 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維人工標註。
