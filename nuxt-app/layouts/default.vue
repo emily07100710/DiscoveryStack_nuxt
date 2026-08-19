@@ -8,27 +8,95 @@ const htmlLang = computed(() => isZh.value ? 'zh-Hant' : 'en-US')
 useHead({
   htmlAttrs: { lang: htmlLang, dir: 'ltr' },
 })
+
+// 導覽選單狀態
+const navOpen = ref(false)
+const toggleNav = () => { navOpen.value = !navOpen.value }
+
+// 頁首 sticky 狀態
+const headerStuck = ref(false)
+onMounted(() => {
+  let ticking = false
+  const onScroll = () => {
+    headerStuck.value = window.scrollY > 12
+    ticking = false
+  }
+  window.addEventListener('scroll', () => {
+    if (!ticking) {
+      ticking = true
+      requestAnimationFrame(onScroll)
+    }
+  }, { passive: true })
+  onScroll()
+})
 </script>
 
 <template>
-  <a class="skip-link" href="#main-content">{{ isZh ? '跳至主要內容' : 'Skip to content' }}</a>
-  <div class="site-shell">
-    <header class="site-header">
-      <NuxtLink :to="isZh ? '/zh-hant' : '/en'" class="brand" :aria-label="isZh ? 'DiscoveryStack 首頁' : 'DiscoveryStack home'">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span>DISCOVERYSTACK</span>
+  <div class="route-rail" aria-hidden="true"></div>
+  
+  <header class="site-header" :class="{ 'is-stuck': headerStuck }" id="siteHeader">
+    <div class="shell header-inner">
+      <NuxtLink :to="isZh ? '/zh-hant' : '/en'" class="brand">
+        DISCOVERYSTACK<span>.</span>
       </NuxtLink>
-      <nav class="site-nav" :aria-label="isZh ? '主要導覽' : 'Primary navigation'">
-        <NuxtLink :to="isZh ? '/zh-hant' : '/en'">{{ isZh ? '首頁' : 'Home' }}</NuxtLink>
-        <NuxtLink :to="isZh ? '/zh-hant/methodology/journey-intelligence' : '/en/methodology/journey-intelligence'">{{ isZh ? '方法' : 'Approach' }}</NuxtLink>
-        <NuxtLink :to="isZh ? '/zh-hant/methodology/bounded-ai-assistant' : '/en/methodology/bounded-ai-assistant'">AI QA</NuxtLink>
+      <nav class="site-nav" :class="{ 'is-open': navOpen }" id="siteNav" :aria-label="isZh ? '主要導覽' : 'Primary navigation'">
+        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#approach`" @click="navOpen = false">{{ isZh ? '方法' : 'Approach' }}</NuxtLink>
+        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#journey`" @click="navOpen = false">{{ isZh ? '需求路徑' : 'Journey' }}</NuxtLink>
+        <NuxtLink :to="isZh ? '/zh-hant/services/seo-geo-growth-system' : '/en/services/seo-geo-growth-system'" @click="navOpen = false">{{ isZh ? '服務' : 'Services' }}</NuxtLink>
+        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#qa`" @click="navOpen = false">AI QA</NuxtLink>
+        <NuxtLink :to="isZh ? '/zh-hant/glossary/seo' : '/en/glossary/seo'" @click="navOpen = false">{{ isZh ? '詞彙' : 'Glossary' }}</NuxtLink>
+        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#fit`" @click="navOpen = false">{{ isZh ? '合作諮詢' : 'Fit Review' }}</NuxtLink>
       </nav>
-      <NuxtLink class="locale-switch" :to="isZh ? '/en' : '/zh-hant'" :aria-label="isZh ? 'Switch to English' : '切換至繁體中文'">{{ isZh ? 'EN' : '繁' }}</NuxtLink>
-    </header>
-    <main id="main-content"><slot /></main>
-    <footer class="site-footer">
-      <span>© {{ new Date().getFullYear() }} DiscoveryStack</span>
-      <span>{{ isZh ? '需求不是消失；它在路徑裡失去推進力。' : 'Demand does not vanish. It loses momentum on the route.' }}</span>
-    </footer>
-  </div>
+      <div style="display:flex; align-items:center; gap:0.75rem;">
+        <NuxtLink class="lang-switch" :to="isZh ? '/en' : '/zh-hant'" :aria-label="isZh ? 'Switch to English' : '切換至繁體中文'">{{ isZh ? 'EN' : '繁' }}</NuxtLink>
+        <button class="nav-toggle" id="navToggle" :aria-expanded="navOpen" aria-controls="siteNav" @click="toggleNav">
+          {{ navOpen ? (isZh ? '關閉' : 'Close') : (isZh ? '選單' : 'Menu') }}
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="top"><slot /></main>
+
+  <footer class="site-footer">
+    <div class="shell">
+      <p class="footer-statement">{{ isZh ? '需求不是消失；它在路徑裡失去推進力。' : 'Demand does not vanish. It loses momentum on the route.' }}</p>
+
+      <div class="footer-cols">
+        <div class="footer-col">
+          <h4>{{ isZh ? '服務' : 'Services' }}</h4>
+          <ul>
+            <li><NuxtLink :to="isZh ? '/zh-hant/services/seo-geo-growth-system' : '/en/services/seo-geo-growth-system'">{{ isZh ? 'SEO／GEO 成長系統' : 'SEO/GEO Growth System' }}</NuxtLink></li>
+            <li><NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#fit`">{{ isZh ? '需求路徑診斷' : 'Demand Path Diagnosis' }}</NuxtLink></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>{{ isZh ? '方法' : 'Methodology' }}</h4>
+          <ul>
+            <li><NuxtLink :to="isZh ? '/zh-hant/methodology/journey-intelligence' : '/en/methodology/journey-intelligence'">{{ isZh ? '需求路徑情報' : 'Journey Intelligence' }}</NuxtLink></li>
+            <li><NuxtLink :to="isZh ? '/zh-hant/methodology/bounded-ai-assistant' : '/en/methodology/bounded-ai-assistant'">{{ isZh ? '有邊界的 AI 助理' : 'Bounded AI Assistant' }}</NuxtLink></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>{{ isZh ? '詞彙' : 'Glossary' }}</h4>
+          <ul>
+            <li><NuxtLink :to="isZh ? '/zh-hant/glossary/seo' : '/en/glossary/seo'">SEO</NuxtLink></li>
+            <li><NuxtLink :to="isZh ? '/zh-hant/glossary/geo' : '/en/glossary/geo'">GEO</NuxtLink></li>
+            <li><NuxtLink :to="isZh ? '/zh-hant/glossary/journey-intelligence' : '/en/glossary/journey-intelligence'">{{ isZh ? '需求路徑情報' : 'Journey Intelligence' }}</NuxtLink></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>{{ isZh ? '出版品' : 'Publications' }}</h4>
+          <ul>
+            <li><NuxtLink :to="isZh ? '/zh-hant/publications/what-a-public-website-can-tell-you' : '/en/publications/what-a-public-website-can-tell-you'">{{ isZh ? '一個公開網站能告訴你什麼' : 'What a Public Website Can Tell You' }}</NuxtLink></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer-base">
+        <span>© {{ new Date().getFullYear() }} DiscoveryStack</span>
+        <span>{{ isZh ? '繁體中文' : 'English' }} · {{ isZh ? 'English' : '繁體中文' }}</span>
+      </div>
+    </div>
+  </footer>
 </template>

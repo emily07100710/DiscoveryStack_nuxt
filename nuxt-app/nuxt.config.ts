@@ -23,7 +23,7 @@ export default defineNuxtConfig({
   buildDir: process.env.NUXT_BUILD_DIR || '.nuxt',
   devtools: { enabled: true },
   modules: ['@nuxt/content', '@nuxtjs/i18n', '@nuxt/image'],
-  css: ['~/assets/css/main.css', '~/assets/css/immersive.css'],
+  css: ['~/assets/css/redesign.css', '~/assets/css/immersive.css'],
   app: {
     head: {
       htmlAttrs: { lang: 'en-US', dir: 'ltr' },
@@ -37,7 +37,7 @@ export default defineNuxtConfig({
         ...faviconLink,
         { rel: 'preconnect' as const, href: 'https://fonts.googleapis.com' },
         { rel: 'preconnect' as const, href: 'https://fonts.gstatic.com', crossorigin: 'anonymous' },
-        { rel: 'stylesheet' as const, href: 'https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600;6..72,700&family=Noto+Serif+TC:wght@500;600;700&display=swap' },
+        { rel: 'stylesheet' as const, href: 'https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700;900&display=swap' },
       ],
     },
   },
