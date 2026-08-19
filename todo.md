@@ -140,3 +140,5 @@
 - [x] 執行 Google Search Central batch-20 的電商網站發布與 pagination 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion 多維人工標註。
 - [x] 執行 Google Search Central batch-21 的 Product Variants 與 Google Images 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion／discovery 多維人工標註。
 - [x] 稽核並修正歷史 active human annotation 的 source-document 重複：保留最早已核准項目、以可稽核 review 撤銷較晚重複，並重算 manifest readiness。
+- [x] 執行 Google Search Central batch-22 的 SEO Starter Guide 單頁受控收集，逐筆依 PII 結果完成或保留品質審核與 SEO/GEO 多維人工標註。
+- [x] 執行 Google Search Central batch-23 的 File types indexable by Google 單頁受控收集，逐筆依 PII 結果完成或保留品質審核與 response 多維人工標註。

@@ -662,3 +662,25 @@ annotation 1170001 為 `piiStatus=none_detected`、`qualityStatus=passed`、`use
 | Search Console start guide | 390002 | 990001 |
 
 修正後，active eligible human annotation 的 duplicate query 回傳 **0** 列；因此先前以未去重 annotation 得出的 50／100 僅是暫時 raw count，**不得作為訓練或 manifest 進度主張**。不可變 manifest readiness 已如實校正為 **45／100**，primary journey 分布為 discovery 8、understanding 11、response 8、progression 10、conversion 8。尚缺 55 筆總量，且 discovery、response、conversion 各差 2 才符合每個旅程至少 10 筆的分布門檻。未建立或核准 manifest，未提交 Hugging Face job；後續所有新標註均受 source-document 級 active human annotation 去重強制保護。
+
+### Batch-22 candidate research: SEO Starter Guide
+
+人工閱讀 Google Search Central 的 **Search Engine Optimization (SEO) Starter Guide**（`https://developers.google.com/search/docs/fundamentals/seo-starter-guide?hl=en`）後，確認其為待正式 policy gate 的新候選；active human annotation 查核未發現同 URL。文件明確說明 Search Essentials 僅提升符合資格／被發現的可能性，並不保證加入索引或排名；內容涵蓋 crawlable resources、site discovery、sitemap、URL／directory organization、canonicalization、people-first content、query language、relevant links 與 Search Console inspection。頁面呈現 Google Developers 的 CC BY 4.0 licensing footer。文中 public `example.com`／`wikipedia.org` URL 與一般示例不作為 PII 豁免理由；正式 ingestion 仍必須重新套用 source、robots、同網域 HTTPS redirect、PII、fingerprint 和 source-document 去重 gate。
+
+### Batch-22 ingestion result: SEO Starter Guide excluded by PII gate
+
+batch-22 對 SEO Starter Guide 執行 approved-source policy-gated ingestion，建立 job **810001**。job 回傳 `status=needs_human_review`、`piiOutcome=redacted`、`errorCode=pii_detected_requires_review`，`piiFindingCounts` 為 emails 0、phones 1、national IDs 0，且 `primaryArtifactId=NULL`。因此不建立 structural artifact、品質審核、human annotation 或 training candidate；不得以候選的 SEO 相關性、CC BY 4.0 頁尾、或該示例是否看似公開而繞過 fail-closed PII gate。immutable manifest readiness 維持 **45／100**，未建立 manifest，未提交 Hugging Face job。
+
+### Batch-23 candidate research: File types indexable by Google
+
+人工閱讀 **File types indexable by Google**（`https://developers.google.com/search/docs/crawling-indexing/indexable-file-types?hl=en`）後，確認 active human annotation 查核未發現同 URL。文件提供 `Content-Type` header、extension fallback 與 re-parsing 的 technical decision boundary，列舉可索引的 flat、encoded 與 media file formats，並說明 `filetype:` operator 的 scoped search use case；因此適合作為以 technical indexability decision 為中心的 response 候選，而不是承諾 file type 必定被收錄。頁尾提供 Google Developers CC BY 4.0 license。雖然本文只見一般格式範例、`galway` 搜尋字與網站 footer，正式收集仍須再次經過 robots、同網域 HTTPS redirect、PII、fingerprint 及 source-document 去重 gate。
+
+### Batch-23 ingestion ledger
+
+batch-23 對 indexable-file-types 文件執行一次 approved-source policy-gated ingestion。job **840001** 為 `completed`，建立 structural artifact **1200001**；`piiOutcome=not_detected`，finding counts 為 emails 0、phones 0、national IDs 0。artifact 1200001 的 `piiStatus=none_detected`、`qualityStatus=pending`、`useSnapshot=training_candidate`，且保留 source URL、source span 與 Google Search Central CC BY 4.0 lineage。此 structural artifact 尚不是訓練樣本；只有在逐頁人工品質審核、schema-validated response multilabel annotation 與獨立 annotation quality approval 完成後，才可計入 readiness。
+
+### Batch-23 human quality review and annotation
+
+structural artifact 1200001 經逐頁人工品質審閱後設為 `qualityStatus=passed`。完整 labels 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **1230001**。去識別摘要以 Content-Type header 為首要技術判斷、保留 extension fallback／re-parsing 及 flat／encoded／media formats 的界線，將 `filetype:` operator 限定為 scoped discovery query，並明確不將 supported type list 表示成個別檔案必然收錄或露出的承諾。
+
+annotation 1230001 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，其 primary journey 為 `response`。source-document duplicate query 回傳 0 列，因此本筆是唯一 active eligible human annotation。immutable manifest readiness 為 **46／100**；primary journey 分布為 discovery 8、understanding 11、response 9、progression 10、conversion 8。未建立或核准 manifest，未提交 Hugging Face job；尚缺 54 筆總量，且 discovery 差 2、response 差 1、conversion 差 2 才符合每個旅程至少 10 筆的最低分布門檻。
