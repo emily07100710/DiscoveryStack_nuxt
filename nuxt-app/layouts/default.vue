@@ -44,6 +44,7 @@ onMounted(() => {
         <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#analysis`" @click="navOpen = false">{{ isZh ? '免費分析' : 'Free analysis' }}</NuxtLink>
         <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#journey`" @click="navOpen = false">{{ isZh ? '合作流程' : 'Process' }}</NuxtLink>
         <NuxtLink :to="isZh ? '/zh-hant/services/seo-geo-growth-system' : '/en/services/seo-geo-growth-system'" @click="navOpen = false">SEO／GEO</NuxtLink>
+        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#pricing`" @click="navOpen = false">{{ isZh ? '合作預算' : 'Pricing' }}</NuxtLink>
         <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#fit`" @click="navOpen = false">{{ isZh ? '合作諮詢' : 'Fit Review' }}</NuxtLink>
       </nav>
       <div style="display:flex; align-items:center; gap:0.75rem;">

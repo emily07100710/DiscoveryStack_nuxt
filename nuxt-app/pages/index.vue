@@ -133,23 +133,27 @@ const modelLayers = computed(() => isZh.value
 
 const modelGovernance = computed(() => isZh.value
   ? [
-      { term: 'DATASET LINEAGE', value: 'Approved manifest', detail: 'manifestHash / datasetDigest' },
-      { term: 'VERSION CONTROL', value: '三層契約版本', detail: 'feature / taxonomy / split' },
-      { term: 'EVALUATION', value: '獨立驗證與測試集', detail: 'accuracy / macro-F1' },
-      { term: 'MODEL REGISTRY', value: 'Private artifact', detail: 'job status / version history' },
-      { term: 'GOVERNANCE GATES', value: '五道資料閘門', detail: 'consent / quality / PII / policy / review' },
+      { term: 'DATASET LINEAGE', value: 'Approved manifest', detail: 'manifestHash / datasetDigest', desc: '每一批資料都必須先形成核准清單，並以摘要值留下來源與內容版本；事後可以追查模型到底學過哪一版資料。' },
+      { term: 'VERSION CONTROL', value: '三層契約版本', detail: 'feature / taxonomy / split', desc: '特徵定義、標籤分類與資料切分各自版本化，避免模型成效改變時，團隊卻不知道究竟是哪一層發生差異。' },
+      { term: 'EVALUATION', value: '獨立驗證與測試集', detail: 'accuracy / macro-F1', desc: '訓練資料不等於考題。模型必須在未參與訓練的驗證集與測試集上評估，並同時觀察 accuracy 與類別平衡後的 macro-F1。' },
+      { term: 'MODEL REGISTRY', value: 'Private artifact', detail: 'job status / version history', desc: '遠端訓練完成並產生私有模型 artifact 後，才會登錄為可用版本；只送出 training job 不代表已經訓練成功。' },
+      { term: 'GOVERNANCE GATES', value: '五道資料閘門', detail: 'consent / quality / PII / policy / review', desc: '資料需依序通過同意、品質、個資、政策與人工覆核，沒有因為能被抓到，就自動取得拿來訓練的資格。' },
     ]
   : [
-      { term: 'DATASET LINEAGE', value: 'Approved manifest', detail: 'manifestHash / datasetDigest' },
-      { term: 'VERSION CONTROL', value: 'Three versioned contracts', detail: 'feature / taxonomy / split' },
-      { term: 'EVALUATION', value: 'Held-out validation and test', detail: 'accuracy / macro-F1' },
-      { term: 'MODEL REGISTRY', value: 'Private artifact', detail: 'job status / version history' },
-      { term: 'GOVERNANCE GATES', value: 'Five data gates', detail: 'consent / quality / PII / policy / review' },
+      { term: 'DATASET LINEAGE', value: 'Approved manifest', detail: 'manifestHash / datasetDigest', desc: 'Every dataset batch is approved and hashed so the exact source and content version used by the model remains traceable.' },
+      { term: 'VERSION CONTROL', value: 'Three versioned contracts', detail: 'feature / taxonomy / split', desc: 'Feature definitions, label taxonomy and data splits are versioned independently, making performance changes explainable.' },
+      { term: 'EVALUATION', value: 'Held-out validation and test', detail: 'accuracy / macro-F1', desc: 'Training data is not the exam. Performance is evaluated against held-out sets using both accuracy and class-balanced macro-F1.' },
+      { term: 'MODEL REGISTRY', value: 'Private artifact', detail: 'job status / version history', desc: 'A model becomes available only after the remote job finishes and produces a private artifact; starting a job does not count as training success.' },
+      { term: 'GOVERNANCE GATES', value: 'Five data gates', detail: 'consent / quality / PII / policy / review', desc: 'Data must pass consent, quality, privacy, policy and human-review gates before it is eligible for learning.' },
     ])
 
 const modelTaskHeads = computed(() => isZh.value
   ? ['旅程階段', '搜尋意圖', '內容型態', '受眾角色', 'GEO 訊號', '引用準備度', '技術 SEO', '摩擦訊號', '行動優先序']
   : ['Journey stage', 'Search intent', 'Content type', 'Audience role', 'GEO signals', 'Citation readiness', 'Technical SEO', 'Friction signals', 'Action priority'])
+
+const activeModelLayerIndex = ref<number | null>(null)
+const activeModelGovernanceIndex = ref<number | null>(null)
+const modelTaskHeadsOpen = ref(false)
 
 const modelTerms = ['ENTITY MAP', 'CITATION READINESS', 'MULTI-TASK LEARNING', 'MACRO-F1', 'DATASET LINEAGE', 'HUMAN-IN-THE-LOOP']
 
@@ -178,20 +182,6 @@ const visibilityServices = computed(() => isZh.value
 const activeVisibilityIndex = ref(0)
 const activeVisibility = computed(() => visibilityServices.value[activeVisibilityIndex.value] || visibilityServices.value[0]!)
 
-const measurementSignals = computed(() => isZh.value
-  ? [
-      { code: 'SEARCH', title: '搜尋需求', detail: '曝光、排名、非品牌字與自然流量品質' },
-      { code: 'ANSWER', title: 'AI 能見度', detail: '提示詞覆蓋、品牌提及、引用來源與描述準確度' },
-      { code: 'ACTION', title: '轉換行為', detail: '有效詢問、表單完成、預約與成交來源' },
-      { code: 'SYSTEM', title: '營運效率', detail: '資料完整度、自動化覆蓋與人工交接時間' },
-    ]
-  : [
-      { code: 'SEARCH', title: 'Search demand', detail: 'Impressions, rankings, non-brand terms and organic traffic quality' },
-      { code: 'ANSWER', title: 'AI visibility', detail: 'Prompt coverage, mentions, citation sources and description accuracy' },
-      { code: 'ACTION', title: 'Conversion', detail: 'Qualified enquiries, form completion, bookings and revenue source' },
-      { code: 'SYSTEM', title: 'Operations', detail: 'Data completeness, automation coverage and hand-off time' },
-    ])
-
 const faqs = computed(() => isZh.value
   ? [
       { q: 'SEO、GEO 和 AEO 到底差在哪裡？', a: 'SEO 處理網站被搜尋引擎抓取、理解與排名的基礎；GEO 關注品牌是否會被生成式 AI 檢索、描述與引用；AEO 則讓內容更容易成為直接答案。三者共享技術、內容與權威基礎，不應拆成互不相干的三包服務。' },
@@ -208,6 +198,48 @@ const faqs = computed(() => isZh.value
       { q: 'Is an AI chatbot just a generic model connection?', a: 'No. We define knowledge, permissions, refusal boundaries, human hand-off and data write-back before choosing RAG, workflows, our own model or another model mix.' },
       { q: 'How quickly will we see results?', a: 'Site and tracking fixes can be validated sooner. Rankings, authority and AI citations depend on the starting point, competition and platform cycles. We provide baselines and stage-level signals rather than a fixed-day promise.' },
       { q: 'Can we ask for help if we do not know which service to buy?', a: 'Yes. Start with the free analysis or fit review. We route the problem to the right departments instead of asking you to diagnose it first.' },
+    ])
+
+const pricingOptions = computed(() => isZh.value
+  ? [
+      {
+        code: '00', kicker: '先自己看看', title: 'AI 網站快篩', price: '免費', unit: '不用先承諾合作',
+        summary: '輸入公開網址，先看 SEO／GEO、品牌、內容與使用體驗的基礎分數。',
+        details: ['公開網址即可開始', '先看快篩分數，再決定是否解鎖報告', '完整報告會清楚標示哪些是公開訊號、哪些仍需真人確認'],
+        note: '目前為介面與流程示範；正式模型 API 接線後才會提供真實分數。', cta: '先免費看看', href: '#analysis',
+      },
+      {
+        code: '01', kicker: '讓客戶找到你', title: 'SEO／GEO 成長', price: 'NT$28,800', unit: '／月起',
+        summary: '從技術基礎、搜尋需求到 AI 引用與內容優先序，先把最影響能見度的地方做對。',
+        details: ['SEO／GEO 基準與競品差距', '搜尋需求、提示詞與內容優先序', '技術、實體、Schema 與可引用性建議', '每月檢查進度並決定下一輪工作'],
+        note: '可先用三個月建立基準與驗證方向；不以保證排名取代真實交付。', cta: '說明你的現況', href: '#fit',
+      },
+      {
+        code: '02', kicker: '把網站變成生意入口', title: '品牌成長型官網', price: 'NT$78,800', unit: '起',
+        summary: '適合需要重新整理品牌、服務邏輯、手機體驗與詢問路徑的企業官網。',
+        details: ['網站架構與主要轉換路徑', '客製視覺與響應式介面', '基礎 SEO、追蹤與表單設定', '依實際頁數、內容與功能確認最終報價'],
+        note: '採階段付款；電商、會員、預約及客製系統會先確認規格再另行報價。', cta: '談談網站需求', href: '#fit',
+      },
+    ]
+  : [
+      {
+        code: '00', kicker: 'Look first', title: 'AI website scan', price: 'Free', unit: 'No commitment required',
+        summary: 'Enter a public URL to see a foundation score across SEO/GEO, brand, content and user experience.',
+        details: ['Start with a public URL', 'See the quick score before choosing whether to unlock the report', 'The full report separates public signals from questions that still need human confirmation'],
+        note: 'This is currently an interface and journey demo. Real scores begin only after the production model API is connected.', cta: 'Scan for free', href: '#analysis',
+      },
+      {
+        code: '01', kicker: 'Be found', title: 'SEO / GEO Growth', price: 'NT$28,800', unit: '/ month from',
+        summary: 'Fix the highest-impact technical, demand, citation and content priorities first.',
+        details: ['SEO/GEO baseline and competitor gaps', 'Search demand, prompt and content priorities', 'Technical, entity, schema and citation-readiness guidance', 'Monthly progress review and next-cycle priorities'],
+        note: 'Start with a three-month baseline and validation period. We deliver inspectable work, not ranking guarantees.', cta: 'Share your situation', href: '#fit',
+      },
+      {
+        code: '02', kicker: 'Build a growth entry point', title: 'Brand growth website', price: 'NT$78,800', unit: 'from',
+        summary: 'For businesses that need clearer positioning, service logic, mobile experience and enquiry routes.',
+        details: ['Site architecture and primary conversion route', 'Custom visual and responsive interface', 'Foundational SEO, tracking and forms', 'Final scope based on pages, content and functionality'],
+        note: 'Paid by milestones. Commerce, membership, booking and custom systems are scoped separately.', cta: 'Discuss the website', href: '#fit',
+      },
     ])
 
 let visibilityObserver: IntersectionObserver | undefined
@@ -390,12 +422,12 @@ const submitForm = async () => {
           <div>
             <p class="eyebrow">{{ isZh ? '台灣第一間 · OWNED SEARCH INTELLIGENCE MODEL' : 'TAIWAN’S FIRST · OWNED SEARCH INTELLIGENCE MODEL' }}</p>
             <h2>
-              <span>{{ isZh ? '不是把 AI 接上網站；' : 'Not an AI wrapper;' }}</span>
-              <span>{{ isZh ? '是把市場訊號訓練成決策系統。' : 'a market-signal decision system.' }}</span>
+              <span>{{ isZh ? 'DiscoveryStack 是台灣第一間' : 'Not an AI wrapper;' }}</span>
+              <span>{{ isZh ? '以自研機器學習模型驅動的整合行銷公司。' : 'a market-signal decision system.' }}</span>
             </h2>
           </div>
           <div class="model-proof-intro">
-            <p class="model-proof-position">{{ isZh ? 'DiscoveryStack 是台灣第一間以自研機器學習模型驅動的整合行銷公司。' : 'Based on currently available public information and our development record, DiscoveryStack positions itself as Taiwan’s first integrated marketing company powered by its own trained machine-learning model.' }}</p>
+              <p class="model-proof-position">{{ isZh ? '不是把 AI 接上網站；是把市場訊號訓練成決策系統。' : 'Based on currently available public information and our development record, DiscoveryStack positions itself as Taiwan’s first integrated marketing company powered by its own trained machine-learning model.' }}</p>
             <p>{{ isZh ? '我們不是把通用模型的回覆重新包裝成顧問報告，而是從 Feature Contract、training manifest、multi-task learning 到 model registry，建立可訓練、可評估、可追溯的 Search Intelligence Stack。' : 'We do not repackage generic model output as consulting. From feature contracts and training manifests to multi-task learning and a model registry, we operate an accountable Search Intelligence Stack.' }}</p>
             <div class="model-proof-stamps" aria-label="Model operating principles">
               <span>OWN TRAINING PIPELINE</span>
@@ -415,14 +447,39 @@ const submitForm = async () => {
               <p><i aria-hidden="true"></i>{{ isZh ? '版本化架構' : 'Versioned architecture' }}</p>
             </header>
             <ol>
-              <li v-for="layer in modelLayers" :key="layer.code" class="model-pipeline-layer">
-                <div class="model-layer-index">{{ layer.code.slice(0, 2) }}</div>
-                <div class="model-layer-copy">
-                  <p>{{ layer.code.slice(5) }}</p>
-                  <h4>{{ layer.title }}</h4>
-                  <span>{{ layer.desc }}</span>
-                </div>
-                <code>{{ layer.stack }}</code>
+              <li
+                v-for="(layer, index) in modelLayers"
+                :key="layer.code"
+                class="model-pipeline-layer"
+                :class="{ 'is-open': activeModelLayerIndex === index }"
+              >
+                <button
+                  class="model-layer-trigger"
+                  type="button"
+                  :aria-expanded="activeModelLayerIndex === index"
+                  :aria-controls="`model-layer-detail-${index}`"
+                  @click="activeModelLayerIndex = activeModelLayerIndex === index ? null : index"
+                >
+                  <span class="model-layer-index">{{ layer.code.slice(0, 2) }}</span>
+                  <span class="model-layer-copy">
+                    <small>{{ layer.code.slice(5) }}</small>
+                    <strong>{{ layer.title }}</strong>
+                  </span>
+                  <span class="model-expand-label">
+                    {{ activeModelLayerIndex === index ? (isZh ? '收起' : 'Close') : (isZh ? '查看步驟' : 'View step') }}
+                    <i aria-hidden="true"></i>
+                  </span>
+                </button>
+                <Transition name="model-detail">
+                  <div
+                    v-if="activeModelLayerIndex === index"
+                    :id="`model-layer-detail-${index}`"
+                    class="model-layer-detail"
+                  >
+                    <p>{{ layer.desc }}</p>
+                    <code>{{ layer.stack }}</code>
+                  </div>
+                </Transition>
               </li>
             </ol>
           </section>
@@ -434,20 +491,49 @@ const submitForm = async () => {
                 <h3>{{ isZh ? '不是黑盒子；每一步都有紀錄。' : 'Not a black box. Every step is recorded.' }}</h3>
               </div>
             </header>
-            <dl>
-              <div v-for="item in modelGovernance" :key="item.term">
-                <dt>{{ item.term }}</dt>
-                <dd>
-                  <strong>{{ item.value }}</strong>
-                  <code>{{ item.detail }}</code>
-                </dd>
-              </div>
-            </dl>
+            <div class="model-governance-list">
+              <article
+                v-for="(item, index) in modelGovernance"
+                :key="item.term"
+                :class="{ 'is-open': activeModelGovernanceIndex === index }"
+              >
+                <button
+                  type="button"
+                  :aria-expanded="activeModelGovernanceIndex === index"
+                  :aria-controls="`model-governance-detail-${index}`"
+                  @click="activeModelGovernanceIndex = activeModelGovernanceIndex === index ? null : index"
+                >
+                  <span>
+                    <small>{{ item.term }}</small>
+                    <strong>{{ item.value }}</strong>
+                  </span>
+                  <i aria-hidden="true"></i>
+                </button>
+                <Transition name="model-detail">
+                  <div
+                    v-if="activeModelGovernanceIndex === index"
+                    :id="`model-governance-detail-${index}`"
+                    class="model-governance-detail"
+                  >
+                    <p>{{ item.desc }}</p>
+                    <code>{{ item.detail }}</code>
+                  </div>
+                </Transition>
+              </article>
+            </div>
             <div class="model-task-heads">
-              <p>SHARED ENCODER / 9 TASK HEADS</p>
-              <ul>
-                <li v-for="task in modelTaskHeads" :key="task">{{ task }}</li>
-              </ul>
+              <button type="button" :aria-expanded="modelTaskHeadsOpen" aria-controls="model-task-head-list" @click="modelTaskHeadsOpen = !modelTaskHeadsOpen">
+                <span>
+                  <small>SHARED ENCODER</small>
+                  <strong>{{ isZh ? '查看模型同時判斷的 9 種任務' : 'See the model’s 9 concurrent tasks' }}</strong>
+                </span>
+                <i aria-hidden="true"></i>
+              </button>
+              <Transition name="model-detail">
+                <ul v-if="modelTaskHeadsOpen" id="model-task-head-list">
+                  <li v-for="task in modelTaskHeads" :key="task">{{ task }}</li>
+                </ul>
+              </Transition>
             </div>
             <p class="model-governance-note">{{ isZh ? '模型負責縮小未知；人類負責承擔判斷。任何改善建議仍需通過資料同意、去識別、政策檢查與策略覆核。' : 'The model narrows uncertainty; people remain accountable. Recommendations still pass consent, de-identification, policy and strategy review.' }}</p>
           </aside>
@@ -538,26 +624,6 @@ const submitForm = async () => {
       </div>
     </section>
 
-    <!-- ============ 衡量訊號 ============ -->
-    <section class="measurement-system">
-      <div class="measurement-heading shell">
-        <p class="eyebrow">{{ isZh ? '不交一份看完就忘的月報' : 'Not another report nobody acts on' }}</p>
-        <h2>{{ isZh ? '我們追蹤的是「下一步有沒有發生」。' : 'We measure whether the next move happened.' }}</h2>
-      </div>
-      <div class="measurement-marquee" aria-hidden="true">
-        <div>
-          <span v-for="(signal, index) in [...measurementSignals, ...measurementSignals]" :key="index">{{ signal.code }} ↗</span>
-        </div>
-      </div>
-      <div class="measurement-list shell">
-        <article v-for="(signal, index) in measurementSignals" :key="signal.code">
-          <p>0{{ index + 1 }} / {{ signal.code }}</p>
-          <h3>{{ signal.title }}</h3>
-          <span>{{ signal.detail }}</span>
-        </article>
-      </div>
-    </section>
-
     <!-- ============ FAQ ============ -->
     <section class="section faq-system" id="faq">
       <div class="shell faq-grid">
@@ -571,6 +637,53 @@ const submitForm = async () => {
             <summary><span>0{{ index + 1 }}</span>{{ faq.q }}<i aria-hidden="true">＋</i></summary>
             <p>{{ faq.a }}</p>
           </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 合作預算 ============ -->
+    <section class="section pricing-system" id="pricing">
+      <div class="shell">
+        <header class="pricing-head reveal">
+          <div>
+            <p class="eyebrow">{{ isZh ? '合作預算／先知道大概，不必先承諾' : 'Working budget / Know the range before committing' }}</p>
+            <h2>{{ isZh ? '先從負擔得起的下一步開始。' : 'Start with the next step you can justify.' }}</h2>
+          </div>
+          <div class="pricing-intro">
+            <p>{{ isZh ? '這些是常見合作起價，不是把所有公司塞進同一個套餐。真正報價會依目標、現況與需要進場的部門確認；如果不需要某一項，就不會硬包進去。' : 'These are common starting points, not rigid packages. The final scope follows the objective, current state and departments actually needed.' }}</p>
+            <span>{{ isZh ? '以下價格為未稅起價' : 'Starting prices before tax' }}</span>
+          </div>
+        </header>
+
+        <div class="pricing-list">
+          <details
+            v-for="option in pricingOptions"
+            :key="option.code"
+            name="pricing-options"
+            :class="{ 'pricing-card-free': option.code === '00' }"
+          >
+            <summary>
+              <span class="pricing-code">{{ option.code }}</span>
+              <span class="pricing-name"><small>{{ option.kicker }}</small><strong>{{ option.title }}</strong></span>
+              <span class="pricing-price"><strong>{{ option.price }}</strong><small>{{ option.unit }}</small></span>
+              <i aria-hidden="true"></i>
+            </summary>
+            <div class="pricing-detail">
+              <p>{{ option.summary }}</p>
+              <ul><li v-for="item in option.details" :key="item">{{ item }}</li></ul>
+              <small>{{ option.note }}</small>
+              <a :href="option.href">{{ option.cta }} <span aria-hidden="true">↗</span></a>
+            </div>
+          </details>
+        </div>
+
+        <div class="pricing-safety-net">
+          <div>
+            <p class="eyebrow">{{ isZh ? '還不知道該選哪個？' : 'Not sure where to start?' }}</p>
+            <h3>{{ isZh ? '先做一次人工深度診斷。' : 'Begin with one human-led diagnosis.' }}</h3>
+          </div>
+          <p>{{ isZh ? 'NT$8,800／次。30 天內進入後續合作可全額折抵；我們會先指出真正的問題，不會先把最高方案推給你。' : 'NT$8,800 once, fully credited when a project starts within 30 days. We identify the real problem before recommending a larger engagement.' }}</p>
+          <a href="#fit">{{ isZh ? '預約診斷' : 'Book a diagnosis' }} <span aria-hidden="true">→</span></a>
         </div>
       </div>
     </section>
