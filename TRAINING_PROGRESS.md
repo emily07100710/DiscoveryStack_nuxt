@@ -623,3 +623,28 @@ structural artifacts 1080001 與 1080002 都經逐頁人工品質審核而設為
 | 1110002 | Pagination, incremental page loading, and their impact on Google Search | conversion | pagination／load-more／infinite-scroll 的 UX 取捨、可爬取 `href` navigation、unique URL 與 canonical、fragment 限制、filter／sort URL index control、product discovery。 |
 
 兩筆均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL 與 source span lineage。查核後 immutable manifest readiness 為 **49／100**；primary journey 分布為 discovery 8、understanding 12、response 10、progression 11、conversion 8。未建立或核准 manifest，未提交 Hugging Face job；尚缺 51 筆總量，並且 discovery 差 2、conversion 差 2 才符合每階段 10 筆的最低分布門檻。
+
+### Batch-21 candidate research (not ingested)
+
+已逐頁人工閱讀兩篇 Google Search Central 官方文件，均位於已核准 source 的文件範圍；未建立 ingestion job、artifact 或 human annotation，也沒有計入 readiness。
+
+| 候選頁 | 預期 primary journey | 人工閱讀的有界證據 | 收集前仍須執行的閘門 |
+|---|---|---|---|
+| Product Variant Structured Data (`product-variants`) | conversion | ProductGroup／Product、`hasVariant`、`variesBy`、`productGroupID`、variant-specific SKU／GTIN／name／description，以及 merchant listing variant information。 | 正式來源、robots、HTTPS redirect、PII v4、URL identity 去重與人工品質審核。JSON-LD 範例不得因預篩而略過 PII gate。 |
+| Share your product data with Google (`share-your-product-data-with-google`) | conversion | product page structured data、Merchant Center feeds／Content API、small versus frequently updated catalog 的資料同步、crawling update delay、stock／price inconsistency、Search／Images／Shopping／Lens experiences 的 eligibility distinction。頁尾明示 CC BY 4.0。 | 同上；不得將 structured data 或 Merchant Center participation 誤述為必然曝光、收錄或銷售。 |
+
+下一步先查核這兩個 canonical URL 是否已有 active human annotation；只有未重複且 PII `not_detected` 的 structural artifact 才能進入逐頁人工審核與 schema-validated conversion 標註。
+
+另已人工閱讀 Google Image SEO Best Practices（`https://developers.google.com/search/docs/appearance/google-images?hl=en`）。該頁對 discovery 提供有界首方證據：Google Images、Discover 與 text-result image 的一般可見度原則；以標準 `<img src>` 而非 CSS image 讓 crawler 可發現；image sitemap 與 CDN domain ownership；responsive images 的 `src` fallback；supported image formats；quality／speed trade-off；landing-page metadata、`primaryImageOfPage`、`og:image`；相關 title／snippet guidance；以及 structured data badges。頁面含 JSON-LD 與 URL 範例，但在正式 PII v4 fetch 前不假設其為 clean。資料庫已確認 URL 尚無 active human annotation；仍須逐頁套用來源、robots、HTTPS redirect、PII、source-document identity 去重、人工品質與 multilabel schema gate，未建立任何 artifact 或計入 readiness。
+
+### Batch-21 ingestion ledger
+
+batch-21 對兩頁均執行既有的 approved-source、same-host HTTPS redirect、robots、terms、fingerprint 與 PII v4 gate。Product Variant Structured Data job **780001** 的 status 為 `needs_human_review`，`piiOutcome=redacted`，finding counts 為 phones **12**（emails 0、national IDs 0），未建立 artifact。其可能的 structured-data 聯絡範例維持 fail-closed：不得人工略過、不得改作訓練樣本，亦不計入 readiness。
+
+Google Image SEO Best Practices job **780002** 則為 `completed`，建立 structural artifact **1140001**；`piiOutcome=not_detected`，finding counts 為 emails 0、phones 0、national IDs 0，artifact 的 `piiStatus=none_detected`、`qualityStatus=pending`、`useSnapshot=training_candidate`。artifact 1140001 不是訓練樣本；僅能在逐頁人工品質審核、`seoGeoMultilabelSchema.parse()` 驗證的 discovery multilabel annotation 與獨立 annotation quality approval 全數通過後，才可能進入 immutable manifest readiness。
+
+### Batch-21 human quality review and annotation
+
+Google Images structural artifact 1140001 經逐頁人工品質審閱後設為 `qualityStatus=passed`。其後，完整 labels 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **1170001**。去識別摘要涵蓋 Google Images／Discover／text-result image surfaces、標準 `img src`、responsive fallback、image sitemap 與 CDN verification、supported formats、頁面語意和 alt text、quality／performance、structured-data／Open Graph preview metadata、title／snippet guidance，以及 Search Console monitoring；不宣稱任一措施保證可見度。
+
+annotation 1170001 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，保留 approved CC BY 4.0 source、source URL 與 source-span lineage。immutable manifest readiness 現為 **50／100**；primary journey 分布為 discovery 9、understanding 12、response 10、progression 11、conversion 8。Product Variant Structured Data job 780001 因 12 個 phone findings 仍完整排除。未建立或核准 manifest，未提交 Hugging Face job；尚缺 50 筆總量，且 discovery 差 1、conversion 差 2 才符合每個旅程至少 10 筆的最低分布門檻。

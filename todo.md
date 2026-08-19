@@ -138,3 +138,4 @@
 - [x] 修正 batch-19 查核發現的同 URL human annotation 重複：保留既有已核准標註，透過可稽核品質審核撤銷新重複項目的訓練資格，並重新驗證 readiness。
 - [x] 強化 human annotation repository 去重：拒絕同一 source URL 的第二筆 active human annotation，並以回歸測試鎖定此 manifest 對齊規則。
 - [x] 執行 Google Search Central batch-20 的電商網站發布與 pagination 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion 多維人工標註。
+- [x] 執行 Google Search Central batch-21 的 Product Variants 與 Google Images 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion／discovery 多維人工標註。
