@@ -37,10 +37,21 @@ describe('policy-approved public ingestion contracts', () => {
     expect(mixed.piiFindingCounts.phones).toBe(1)
   })
 
-  it('does not classify an ISO publication date as a phone number', () => {
-    const output = cleanAndExtractPublicDocument('<html><body>Last updated 2025-12-10.</body></html>')
+  it('does not classify ISO publication dates or timezone-qualified timestamps as phone numbers', () => {
+    const output = cleanAndExtractPublicDocument('<html><body>Last updated 2025-12-10. Starts 2025-07-21T19:00-05:00 and ends 2025-07-21T23:00:00Z.</body></html>')
     expect(output.piiOutcome).toBe('not_detected')
     expect(output.piiFindingCounts.phones).toBe(0)
+  })
+
+  it('keeps actual phone, email and national-ID-like strings fail-closed beside ISO timestamps', () => {
+    const output = cleanAndExtractPublicDocument('<html><body>Published 2025-07-21T19:00-05:00. Call +886 2 1234 5678, email hello@example.com, ID A123456789.</body></html>')
+    expect(output.piiOutcome).toBe('redacted')
+    expect(output.piiFindingCounts.emails).toBe(1)
+    expect(output.piiFindingCounts.nationalIds).toBe(1)
+    expect(output.piiFindingCounts.phones).toBeGreaterThanOrEqual(1)
+    expect(JSON.stringify(output)).not.toContain('+886 2 1234 5678')
+    expect(JSON.stringify(output)).not.toContain('hello@example.com')
+    expect(JSON.stringify(output)).not.toContain('A123456789')
   })
 
   it('rejects an oversized response before it can enter cleaning or persistence', async () => {

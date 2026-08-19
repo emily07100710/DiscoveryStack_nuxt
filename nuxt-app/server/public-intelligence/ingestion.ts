@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-export const PUBLIC_INGESTION_EXTRACTOR_VERSION = 'public-ingestion-v3'
+export const PUBLIC_INGESTION_EXTRACTOR_VERSION = 'public-ingestion-v4'
 export const MAX_PUBLIC_DOCUMENT_BYTES = 1_000_000
 export const MAX_PUBLIC_TEXT_CHARACTERS = 120_000
 
@@ -68,7 +68,10 @@ function countMatches(value: string, pattern: RegExp) {
 function removeKnownNonPersonalUrlIdentifiers(value: string) {
   return value
     .replace(/\bhttps?:\/\/(?:www\.)?pod\.link\/\d{8,}\b/gi, '[public-url-identifier]')
-    .replace(/\b(?:19|20)\d{2}-\d{2}-\d{2}\b/g, '[public-iso-date]')
+    // Documentation code samples contain ISO publication/event timestamps such as
+    // 2025-07-21T19:00-05:00. These are standard non-personal temporal values,
+    // not phone numbers; remove only that precise ISO family before phone scanning.
+    .replace(/\b(?:19|20)\d{2}-\d{2}-\d{2}(?:[Tt ][0-2]\d:[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:[Zz]|[+-][0-2]\d:?[0-5]\d)?)?\b/g, '[public-iso-date-time]')
 }
 
 function extractSchemaTypes(value: string) {

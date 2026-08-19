@@ -120,3 +120,7 @@
 - [ ] 以 `git push --force-with-lease github main:main` 同步最新 DiscoveryStack 專案至 `emily07100710/DiscoveryStack_nuxt`。
 - [x] 修正 public artifact fingerprint 未納入來源 URL 與來源 span 而造成不同官方文件被誤判重複的問題，並以回歸測試驗證真正同頁同內容仍維持去重。
 - [x] 執行 Google Search Central batch-05 conversion／response 文件受控收集，僅將 PII none_detected 的 Product structured data 與 Ask Google to recrawl 完成品質核准與多維人工標註；維持其餘 PII human-review 結果排除於訓練。
+- [x] 執行 Google Search Central batch-06 的 SEO Starter、generative AI optimization、Search Console start 與 crawler overview 受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
+- [x] 執行 Google Search Central batch-07 的 structured data introduction、search gallery、Article 與 Breadcrumb 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
+- [x] 執行 Google Search Central batch-08 的 Event、Job posting 與 Video structured data 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
+- [x] 修正 PII extractor 對 ISO 8601 日期時間與時區 offset 的 phone 誤判，新增回歸測試以確保真實電話、email 與身分證樣式仍 fail-closed，之後才重送 batch-08。

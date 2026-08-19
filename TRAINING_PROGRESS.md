@@ -284,3 +284,59 @@ batch-05 以既有 owner-triggered、policy-gated ingestion service 處理四個
 人工審閱 #300001 後的摘要：產品頁可利用 product markup 表達 price、availability、shipping、returns、ratings 與 reviews；product snippets 與 merchant listings 對應不同頁面情境，且可搭配 Merchant Center feed，但 rich experience eligibility 並不保證展示。人工審閱 #300002 後的摘要：已驗證 property owner/full user 可用 URL Inspection request indexing 處理少量 URL；大量 URL 應交 sitemap，crawling 可歷時數日或數週，重複 request 不會加速亦不保證 inclusion。
 
 batch-05 後資料庫 manifest admission 查核：**16／100**。primary journey 分布為 discovery 1、understanding 10、response 2、progression 2、conversion 1。沒有建立 dataset manifest，沒有提交 Hugging Face job；兩筆 PII human-review 文件明確排除在計數與訓練資料之外。
+
+### Batch-06 candidate research evidence
+
+已逐頁研究下列同一已核准 Google Search Central `developers.google.com` domain 的英文文件；各頁均於頁尾確認「Except as otherwise noted」之 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 內容授權與 Apache 2.0 code sample 分離條款，尚未 ingestion 或計入 16／100。
+
+| 官方 URL | 預定 primary journey | 人工閱讀證據與擬標註方向 |
+|---|---|---|
+| [SEO Starter Guide](https://developers.google.com/search/docs/fundamentals/seo-starter-guide?hl=en) | discovery | 以使用者與搜尋引擎的可發現性為核心，涵蓋 crawl/index、site query、sitemap、resource accessibility、descriptive URL、logical directory、canonical、people-first content、title/snippet/image/video、自然 promotion 與不保證排名。 |
+| [Optimizing for generative AI features](https://developers.google.com/search/docs/fundamentals/ai-optimization-guide?hl=en) | progression | 明確將 AEO/GEO 視為 SEO 延伸：RAG／query fan-out、non-commodity people-first content、technical crawlability、semantic HTML／JavaScript、page experience、duplicate reduction、local／ecommerce details、Search Console visibility 與不保證 crawl/index/serve。 |
+| [Get started with Search Console](https://developers.google.com/search/docs/monitor-debug/search-console-start?hl=en) | response | ownership verification、Index Coverage、sitemap、Search performance metrics（query/page/country、impressions/clicks）、manual actions、removals、migration、rich-result status、URL Inspection、security issues 與 Core Web Vitals。 |
+| [Overview of Google crawlers and fetchers](https://developers.google.com/search/docs/crawling-indexing/overview-google-crawlers?hl=en) | understanding | common／special-case crawlers、user-triggered fetchers、robots.txt、IP／country、HTTP/1.1／2、content encoding、15 MB file limit、host load、ETag/Last-Modified 與 crawler verification。 |
+
+上述候選皆需再次通過既有同網域 HTTPS redirect、robots、條款、PII、去重與 pending-quality gate；研究與授權確認不構成任何 training admission。
+
+### Batch-06 controlled ingestion and annotation result
+
+batch-06 對四篇已研究 Google Search Central 文件執行既有 policy-gated ingestion。SEO Starter Guide（job #300001）雖獲 HTTP 200，但 PII extractor 回報 1 個 phone pattern，狀態為 `needs_human_review`／`redacted`；未建立 structural artifact、未建立 annotation、未納入訓練。其餘三筆均為 HTTP 200、PII `not_detected` 並建立 structural artifact：Generative AI optimization #360001、Search Console start #360002、Google crawlers overview #360003。
+
+三筆 PII clean structural artifact 均已逐頁人工品質核准，並以 `seo-geo-journey-v1` 完成完整多維 human annotations：#390001（Generative AI optimization，primary `progression`）、#390002（Search Console start，primary `response`）、#390003（Google crawlers overview，primary `understanding`）。第三篇文件在既有逐跳同網域 HTTPS redirect 政策下安全導向 `developers.google.com/crawling/docs/crawlers-fetchers/overview-google-crawlers?hl=en`；annotation 使用該實際 final artifact URL，仍保有 job #300004 的 requested/final URL ledger。 
+
+batch-06 後 manifest admission 查核為 **19／100**；primary journey 分布為 discovery 1、understanding 11、response 3、progression 3、conversion 1。未建立 dataset manifest，未提交 Hugging Face job；上述 PII human-review 文件繼續完全排除。
+
+### Batch-07 candidate research evidence
+
+已人工閱讀下列未出現在現有 manifest-admission URL 清單中的 Google Search Central 文件。每頁均於正文底部確認 Google Developers 的 CC BY 4.0 content license 與 Apache 2.0 code sample 分離聲明；僅是收集前研究，尚未 ingestion 或計入 19／100。
+
+| 官方 URL | 預定 primary journey | 人工閱讀證據與擬標註方向 |
+|---|---|---|
+| [Introduction to structured data](https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data?hl=en) | progression | 解釋以 visible-page information 的 JSON-LD/Microdata/RDFa 顯式描述內容、required/recommended properties、Rich Results Test、URL Inspection、Search Console status reports、deployment 後驗證與 before/after performance measurement；rich results eligibility 不保證展示。 |
+| [Structured data search gallery](https://developers.google.com/search/docs/appearance/structured-data/search-gallery?hl=en) | discovery | 依電商、組織、職缺、教育、新聞等商務情境呈現 Google 支援的 rich-result feature catalogue，並指出實際 appearance 可能不同、可用 Rich Results Test preview。 |
+| [Article structured data](https://developers.google.com/search/docs/appearance/structured-data/article?hl=en) | progression | 以 Article/NewsArticle/BlogPosting 說明可使 title、image、date 等內容更易理解，並提供 markup、validation、crawl/index access、sitemap、canonical、author identity 與 troubleshooting 的部署流程。 |
+| [Breadcrumb structured data](https://developers.google.com/search/docs/appearance/structured-data/breadcrumb?hl=en) | progression | 說明 hierarchy navigation、multiple trails、required markup、Rich Results Test、URL Inspection、recrawl、sitemap、template release 後 Search Console monitoring 及 rich-result troubleshooting。 |
+
+所有候選仍必須以既有 service 重新通過同網域 HTTPS redirect、robots、terms、PII、去重與 pending-quality gate；授權研究不構成 training admission。
+
+### Batch-07 controlled ingestion and annotation result
+
+batch-07 對四篇已研究 official structured-data documents 執行既有 policy-gated ingestion。Introduction to structured data（job #330001）取得 HTTP 200，但 PII extractor 回報 2 個 phone patterns；Article structured data（job #330003）同樣為 HTTP 200，但有 8 個 phone patterns。兩筆皆保留 `needs_human_review`／`redacted`／`pii_detected_requires_review`，未建立 artifact、未標註、未計入訓練。
+
+其餘兩篇取得 PII `not_detected` 並建立 structural artifacts：Structured data search gallery #420001（job #330002）與 Breadcrumb #420002（job #330004）。兩篇均完成逐頁人工品質核准，並以完整 `seo-geo-journey-v1` taxonomy 建立、核准 human annotations：#420003（primary `discovery`）及 #420004（primary `progression`）。Search gallery 標註涵蓋 supported feature catalogue、商務頁面情境、rich-result eligibility 與 preview limitation；Breadcrumb 標註涵蓋 hierarchy navigation、markup、crawl/index accessibility、URL Inspection、sitemap 及 deployment monitoring。
+
+batch-07 後 immutable manifest admission 查核為 **21／100**；primary journey 分布為 discovery 2、understanding 11、response 3、progression 4、conversion 1。沒有建立 dataset manifest，沒有提交 Hugging Face job；兩筆 PII human-review 文件仍完全排除於候選與訓練資料外。
+
+### Batch-08 candidate research evidence
+
+已人工閱讀 Event、Job posting 與 Video structured data 三篇 Google Search Central 文件；各頁正文均包含 Google Developers CC BY 4.0 content license 與 Apache 2.0 code sample 分離聲明。Event 文件連結 event discovery、Google Maps、CMS/third-party 或 direct markup 三種實作路徑、region/language availability、date/location accuracy、Rich Results Test、URL Inspection 與 post-release monitoring，預定 primary `conversion`。Job posting 文件包含 canonical URLs、Googlebot crawlability、content policy、job lifecycle removal、Indexing API、sitemap coverage、geo-restricted remote roles 與 conversion，預定 primary `conversion`。Video 文件涵蓋 VideoObject、watch pages、video result surfaces、Clip/SeekToAction key moments、language support、LIVE badge、Indexing API、驗證及 monitoring，預定 primary `progression`。
+
+`image-metadata?hl=en` 在本次 public text extraction 未能取得正文，故不納入 batch-08；不會以 search snippet 取代逐頁閱讀證據。三篇候選仍未 ingestion，仍須全部通過既有 policy gates。
+
+### PII extractor v4 and Batch-08 result
+
+batch-08 初次 ingestion 顯示 Event、Job posting、Video 都因 phone-pattern PII gate 進入 human review。人工比對 extractor 規則與官方文檔可見的 JSON-LD 範例後，確認 ISO 8601 日期時間（如 `2025-07-21T19:00-05:00`）會被既有電話 regex 誤判。修復只會在掃描前正規化明確的 `YYYY-MM-DD`、`T/space HH:MM[:SS[.fraction]]`、`Z` 或數值時區 offset 時間格式，仍保留所有其他 phone-like 字串的 fail-closed 行為；extractor version 已升為 `public-ingestion-v4`，避免舊版 request fingerprint 重用。對應 regression suite 驗證 ISO timestamp 不再當作電話，且實際電話、email 與 national-ID-like 字串仍被 redaction metadata 捕捉，相關 12 項測試通過。
+
+以 v4 重送 batch-08 後：Event job #390001 仍有 7 個 phone patterns，繼續 `needs_human_review`／`redacted`；Video job #390003 因 `fetch_timeout` 失敗，不建立 artifact；兩者均未計入。Job posting job #390002 為 PII `not_detected`，建立 structural artifact #450001，完成逐頁人工品質核准及 human annotation #450002（primary `conversion`）。該標註涵蓋 JobPosting experience、canonical、Googlebot crawlability、technical/content policy、Rich Results Test、URL Inspection、Indexing API、sitemap、remote location requirements、expired-job removal 與 conversion opportunity。
+
+batch-08 後 immutable manifest admission 查核為 **22／100**；primary journey 分布為 discovery 2、understanding 11、response 3、progression 4、conversion 2。沒有建立 dataset manifest，沒有提交 Hugging Face job；Event、Video 及所有 PII human-review／fetch failure 項目均排除。
