@@ -468,14 +468,6 @@ p { margin: 0; }
   color: var(--ink-mid);
 }
 .department-panel li::before { content: '— '; color: var(--cobalt); }
-.department-panel a {
-  width: fit-content;
-  color: var(--cobalt);
-  font: 500 .7rem/1.4 var(--font-mono);
-  letter-spacing: .08em;
-  text-decoration: none;
-  border-bottom: 1px solid currentColor;
-}
 @media (max-width: 52rem) {
   .department-system { grid-template-columns: 1fr; }
   .department-tabs button { grid-template-columns: 2rem minmax(0, 1fr); }
@@ -486,35 +478,248 @@ p { margin: 0; }
 /* ============================================================
    自研模型：用證據層級說話，不做科技裝飾
    ============================================================ */
-.model-proof { background: var(--cobalt); color: var(--paper); }
-.model-proof .eyebrow { color: rgba(250,247,241,.68); }
-.model-proof-grid {
+.model-proof {
+  overflow: clip;
+  background: linear-gradient(145deg, #314796 0%, var(--cobalt) 58%, #26377e 100%);
+  color: var(--paper);
+}
+.model-proof .eyebrow { color: rgba(250,247,241,.64); }
+.model-proof-head {
   display: grid;
-  grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
-  gap: clamp(3rem, 8vw, 8rem);
+  grid-template-columns: minmax(0, 1.1fr) minmax(22rem, .9fr);
+  gap: clamp(2.5rem, 7vw, 7rem);
+  align-items: end;
+  padding-bottom: clamp(3rem, 6vw, 5rem);
 }
 .model-proof h2 {
-  max-width: 10ch;
+  max-width: 15ch;
   margin-top: 1.4rem;
-  font-size: clamp(2.2rem, 5vw, 4.8rem);
-  line-height: 1.08;
+  font-size: clamp(2.25rem, 4.5vw, 4.5rem);
+  line-height: 1.04;
+  text-wrap: balance;
 }
-.model-proof-copy > p {
-  max-width: 42rem;
+.model-proof h2 span { display: block; }
+.model-proof h2 span:first-child {
+  margin-bottom: .22em;
+  color: rgba(250,247,241,.58);
+  font-family: var(--font-body);
+  font-size: .58em;
+  font-weight: 400;
+  letter-spacing: -.025em;
+}
+.model-proof-intro {
+  padding-left: clamp(1.25rem, 2.5vw, 2.25rem);
+  border-left: 1px solid rgba(250,247,241,.3);
+}
+.model-proof-intro > p {
+  margin: 0;
   color: rgba(250,247,241,.82);
-  font-size: clamp(1rem, 1.4vw, 1.2rem);
+  font-size: clamp(.94rem, 1.15vw, 1.08rem);
+  line-height: 1.85;
 }
-.model-proof-copy dl { margin: 3rem 0 0; }
-.model-proof-copy dl div {
+.model-proof-intro .model-proof-position {
+  margin-bottom: 1rem;
+  color: var(--paper);
+  font-family: var(--font-display);
+  font-size: clamp(1.15rem, 1.6vw, 1.5rem);
+  line-height: 1.55;
+}
+.model-proof-stamps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-top: 1.5rem;
+}
+.model-proof-stamps span {
+  padding: .48rem .68rem;
+  border: 1px solid rgba(250,247,241,.3);
+  font: 500 .58rem/1 var(--font-mono);
+  letter-spacing: .08em;
+}
+.model-proof-board {
   display: grid;
-  grid-template-columns: 3rem minmax(0, 1fr);
-  gap: 1rem;
-  padding-block: 1.1rem;
-  border-top: 1px solid rgba(250,247,241,.25);
+  grid-template-columns: minmax(0, 1.42fr) minmax(20rem, .78fr);
+  border: 1px solid rgba(250,247,241,.28);
+  box-shadow: 1.25rem 1.25rem 0 rgba(17,25,66,.16);
 }
-.model-proof-copy dt { font-family: var(--font-mono); opacity: .62; }
-.model-proof-copy dd { margin: 0; font-family: var(--font-display); font-size: 1.15rem; }
-@media (max-width: 52rem) { .model-proof-grid { grid-template-columns: 1fr; } }
+.model-pipeline { padding: clamp(1.25rem, 3vw, 2.5rem); }
+.model-board-title {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: start;
+  padding-bottom: 1.25rem;
+}
+.model-board-title span,
+.model-task-heads > p {
+  color: rgba(250,247,241,.56);
+  font: 500 .6rem/1.4 var(--font-mono);
+  letter-spacing: .11em;
+}
+.model-board-title h3 {
+  max-width: 22ch;
+  margin-top: .35rem;
+  font-size: clamp(1.35rem, 2vw, 1.9rem);
+  line-height: 1.24;
+}
+.model-board-title > p {
+  display: flex;
+  gap: .55rem;
+  align-items: center;
+  margin: 0;
+  color: rgba(250,247,241,.65);
+  font: 500 .62rem/1.2 var(--font-mono);
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+.model-board-title > p i {
+  width: .46rem;
+  height: .46rem;
+  background: #a9f5c4;
+  box-shadow: 0 0 0 .25rem rgba(169,245,196,.1);
+  animation: model-status 1.8s steps(2, jump-none) infinite;
+}
+.model-pipeline ol { margin: 0; padding: 0; list-style: none; }
+.model-pipeline-layer {
+  display: grid;
+  grid-template-columns: 2.25rem minmax(0, 1fr) minmax(12rem, .66fr);
+  gap: clamp(.75rem, 2vw, 1.5rem);
+  align-items: start;
+  padding-block: clamp(1.2rem, 2.5vw, 1.8rem);
+  border-top: 1px solid rgba(250,247,241,.2);
+  transition: background .35s var(--ease), transform .35s var(--ease);
+}
+.model-pipeline-layer:hover {
+  background: rgba(250,247,241,.055);
+  transform: translateX(.5rem);
+}
+.model-layer-index {
+  padding-top: .15rem;
+  color: rgba(250,247,241,.46);
+  font: 500 .74rem/1.4 var(--font-mono);
+}
+.model-layer-copy > p {
+  margin: 0 0 .35rem;
+  color: #bbc7f1;
+  font: 500 .61rem/1.4 var(--font-mono);
+  letter-spacing: .09em;
+}
+.model-layer-copy h4 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(1.05rem, 1.5vw, 1.32rem);
+  line-height: 1.35;
+}
+.model-layer-copy > span {
+  display: block;
+  max-width: 42rem;
+  margin-top: .55rem;
+  color: rgba(250,247,241,.7);
+  font-size: .86rem;
+  line-height: 1.7;
+}
+.model-pipeline-layer > code {
+  padding-top: 1.15rem;
+  color: rgba(250,247,241,.72);
+  font: 400 .68rem/1.65 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.model-governance {
+  padding: clamp(1.5rem, 3vw, 2.5rem);
+  background: var(--paper);
+  color: var(--ink);
+}
+.model-governance .model-board-title span { color: var(--cobalt); }
+.model-governance dl { margin: .5rem 0 0; }
+.model-governance dl > div {
+  display: grid;
+  grid-template-columns: minmax(7rem, .7fr) minmax(0, 1.3fr);
+  gap: 1rem;
+  padding-block: 1rem;
+  border-top: 1px solid var(--line);
+}
+.model-governance dt {
+  color: var(--ink-soft);
+  font: 500 .58rem/1.4 var(--font-mono);
+  letter-spacing: .09em;
+}
+.model-governance dd { margin: 0; }
+.model-governance dd strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: .98rem;
+}
+.model-governance dd code {
+  display: block;
+  margin-top: .28rem;
+  color: var(--cobalt);
+  font: 400 .61rem/1.45 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.model-task-heads {
+  margin-top: 1.25rem;
+  padding: 1.25rem;
+  background: var(--sand-deep);
+}
+.model-task-heads > p { margin: 0; color: var(--cobalt); }
+.model-task-heads ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .42rem;
+  margin: .9rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.model-task-heads li {
+  padding: .35rem .48rem;
+  border: 1px solid rgba(44,62,143,.22);
+  color: var(--ink-mid);
+  font-size: .68rem;
+}
+.model-governance-note {
+  margin: 1.25rem 0 0;
+  color: var(--ink-mid);
+  font-size: .78rem;
+  line-height: 1.7;
+}
+.model-proof-marquee {
+  display: flex;
+  width: max-content;
+  padding-top: 2rem;
+  animation: model-marquee 32s linear infinite;
+}
+.model-proof-marquee > div { display: flex; }
+.model-proof-marquee span {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  padding-right: 1.5rem;
+  color: rgba(250,247,241,.5);
+  font: 500 .64rem/1 var(--font-mono);
+  letter-spacing: .12em;
+  white-space: nowrap;
+}
+.model-proof-marquee span::after {
+  content: '';
+  width: 1.8rem;
+  height: 1px;
+  background: rgba(250,247,241,.35);
+}
+@keyframes model-status { 50% { opacity: .35; } }
+@keyframes model-marquee { to { transform: translateX(-50%); } }
+@media (max-width: 70rem) {
+  .model-proof-head { grid-template-columns: 1fr; }
+  .model-proof-intro { max-width: 52rem; }
+  .model-proof-board { grid-template-columns: 1fr; }
+  .model-governance { border-top: 1px solid rgba(44,62,143,.18); }
+}
+@media (max-width: 46rem) {
+  .model-proof-intro { padding: 1.25rem 0 0; border-top: 1px solid rgba(250,247,241,.3); border-left: 0; }
+  .model-pipeline-layer { grid-template-columns: 1.75rem minmax(0, 1fr); }
+  .model-pipeline-layer > code { grid-column: 2; padding-top: 0; }
+  .model-board-title > p { display: none; }
+  .model-governance dl > div { grid-template-columns: 1fr; gap: .35rem; }
+}
 
 /* ============================================================
    SEO／GEO：用 sticky 場景讓六個工作層持續推進
@@ -1075,10 +1280,11 @@ button.cta { border: 0; cursor: pointer; font-family: var(--font-mono); }
       animation-range: entry 4% cover 32%;
       transform-origin: top;
     }
-    .model-proof h2 {
+    .model-proof h2,
+    .model-proof-board {
       animation: model-shift linear both;
       animation-timeline: view();
-      animation-range: entry 5% exit 78%;
+      animation-range: entry 5% cover 38%;
     }
     .measurement-marquee {
       animation: strip-turn linear both;

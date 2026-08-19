@@ -117,6 +117,42 @@ const departments = computed(() => isZh.value
 const activeDepartmentIndex = ref(0)
 const activeDepartment = computed(() => departments.value[activeDepartmentIndex.value] || departments.value[0]!)
 
+const modelLayers = computed(() => isZh.value
+  ? [
+      { code: '01 / SIGNAL CONTRACT', title: '先把網站轉成可計算的訊號。', stack: 'page_manifest · entity_map · topic_map · technical_seo', desc: '將抓取、索引、內容實體、主題群與技術 SEO 統一成版本化 Feature Contract，避免模型只讀一堆沒有結構的文字。' },
+      { code: '02 / RETRIEVAL BASELINE', title: '建立語意檢索與相似度基線。', stack: 'BGE-M3 · embeddings · de-identified aggregates', desc: '用去識別後的特徵聚合建立向量表徵與 retrieval baseline；原始頁面內容不會未經治理就直接進入訓練資料。' },
+      { code: '03 / SUPERVISED MULTI-TASK', title: '共享編碼器，同時學九種判斷。', stack: 'multilingual DistilBERT · shared encoder · 9 task heads', desc: '在多語基礎模型上進行 supervised fine-tuning，同步預測旅程階段、搜尋意圖、引用準備度、摩擦訊號與行動優先序。' },
+      { code: '04 / DECISION ORCHESTRATION', title: '模型輸出，最後仍由策略負責。', stack: 'friction signals · action priority · human-in-the-loop', desc: '把預測轉成可執行的 SEO／GEO 與轉換工作；策略師覆核證據、風險與商業脈絡後，才進入客戶決策。' },
+    ]
+  : [
+      { code: '01 / SIGNAL CONTRACT', title: 'Turn the website into computable signals.', stack: 'page_manifest · entity_map · topic_map · technical_seo', desc: 'Crawl, indexation, entities, topic clusters and technical SEO become a versioned feature contract—not an unstructured pile of text.' },
+      { code: '02 / RETRIEVAL BASELINE', title: 'Establish semantic retrieval baselines.', stack: 'BGE-M3 · embeddings · de-identified aggregates', desc: 'De-identified feature aggregates form embeddings and retrieval baselines; raw page content does not enter training without governance.' },
+      { code: '03 / SUPERVISED MULTI-TASK', title: 'One shared encoder, nine concurrent judgements.', stack: 'multilingual DistilBERT · shared encoder · 9 task heads', desc: 'Supervised fine-tuning predicts journey stage, search intent, citation readiness, friction signals and action priority together.' },
+      { code: '04 / DECISION ORCHESTRATION', title: 'The model informs; strategists remain accountable.', stack: 'friction signals · action priority · human-in-the-loop', desc: 'Predictions become executable SEO/GEO and conversion work only after evidence, risk and commercial context are reviewed.' },
+    ])
+
+const modelGovernance = computed(() => isZh.value
+  ? [
+      { term: 'DATASET LINEAGE', value: 'Approved manifest', detail: 'manifestHash / datasetDigest' },
+      { term: 'VERSION CONTROL', value: '三層契約版本', detail: 'feature / taxonomy / split' },
+      { term: 'EVALUATION', value: '獨立驗證與測試集', detail: 'accuracy / macro-F1' },
+      { term: 'MODEL REGISTRY', value: 'Private artifact', detail: 'job status / version history' },
+      { term: 'GOVERNANCE GATES', value: '五道資料閘門', detail: 'consent / quality / PII / policy / review' },
+    ]
+  : [
+      { term: 'DATASET LINEAGE', value: 'Approved manifest', detail: 'manifestHash / datasetDigest' },
+      { term: 'VERSION CONTROL', value: 'Three versioned contracts', detail: 'feature / taxonomy / split' },
+      { term: 'EVALUATION', value: 'Held-out validation and test', detail: 'accuracy / macro-F1' },
+      { term: 'MODEL REGISTRY', value: 'Private artifact', detail: 'job status / version history' },
+      { term: 'GOVERNANCE GATES', value: 'Five data gates', detail: 'consent / quality / PII / policy / review' },
+    ])
+
+const modelTaskHeads = computed(() => isZh.value
+  ? ['旅程階段', '搜尋意圖', '內容型態', '受眾角色', 'GEO 訊號', '引用準備度', '技術 SEO', '摩擦訊號', '行動優先序']
+  : ['Journey stage', 'Search intent', 'Content type', 'Audience role', 'GEO signals', 'Citation readiness', 'Technical SEO', 'Friction signals', 'Action priority'])
+
+const modelTerms = ['ENTITY MAP', 'CITATION READINESS', 'MULTI-TASK LEARNING', 'MACRO-F1', 'DATASET LINEAGE', 'HUMAN-IN-THE-LOOP']
+
 const demandQuestions = computed(() => isZh.value
   ? ['台灣 SEO／GEO 公司怎麼選？', '誰能把網站、系統與行銷一起做好？', '我的品牌為什麼沒有出現在 AI 回答？', '有流量卻沒有詢問，問題在哪裡？', '如何把客服與公司知識接進 AI？']
   : ['How do I choose an SEO/GEO agency?', 'Who can connect web, systems and marketing?', 'Why is my brand absent from AI answers?', 'We have traffic but no enquiries—why?', 'How do we connect company knowledge to AI?'])
@@ -298,9 +334,6 @@ const submitForm = async () => {
       </div>
     </section>
 
-    <!-- 先給訪客一個低門檻、能立即開始的入口 -->
-    <AutomaticSiteAnalysis :locale="locale" @selected="formData.website = $event" />
-
     <!-- ============ 五個專業部門 ============ -->
     <section class="section departments" id="departments">
       <div class="shell">
@@ -342,26 +375,88 @@ const submitForm = async () => {
             <ul>
               <li v-for="service in activeDepartment.services" :key="service">{{ service }}</li>
             </ul>
-            <a href="#fit">{{ isZh ? '讓這個部門加入你的專案' : 'Bring this department into your project' }} <span aria-hidden="true">↗</span></a>
           </article>
         </div>
       </div>
     </section>
 
+    <!-- 第四區：先理解服務能力，再用低門檻分析進入轉換 -->
+    <AutomaticSiteAnalysis :locale="locale" @selected="formData.website = $event" />
+
     <!-- ============ 自研模型 ============ -->
-    <section class="section model-proof">
-      <div class="shell model-proof-grid">
-        <div>
-          <p class="eyebrow">{{ isZh ? '台灣第一間 · 自研機器學習模型' : 'Taiwan’s first · Own trained ML model' }}</p>
-          <h2>{{ isZh ? '台灣第一間，真正訓練自己模型的行銷公司。' : 'Taiwan’s first marketing company to train its own model.' }}</h2>
+    <section id="model" class="section model-proof">
+      <div class="shell">
+        <header class="model-proof-head reveal">
+          <div>
+            <p class="eyebrow">{{ isZh ? '台灣第一間 · OWNED SEARCH INTELLIGENCE MODEL' : 'TAIWAN’S FIRST · OWNED SEARCH INTELLIGENCE MODEL' }}</p>
+            <h2>
+              <span>{{ isZh ? '不是把 AI 接上網站；' : 'Not an AI wrapper;' }}</span>
+              <span>{{ isZh ? '是把市場訊號訓練成決策系統。' : 'a market-signal decision system.' }}</span>
+            </h2>
+          </div>
+          <div class="model-proof-intro">
+            <p class="model-proof-position">{{ isZh ? '依目前公開可查資料與自研紀錄，DiscoveryStack 是台灣第一間以自研機器學習模型驅動的整合行銷公司。' : 'Based on currently available public information and our development record, DiscoveryStack positions itself as Taiwan’s first integrated marketing company powered by its own trained machine-learning model.' }}</p>
+            <p>{{ isZh ? '我們不是把通用模型的回覆重新包裝成顧問報告，而是從 Feature Contract、training manifest、multi-task learning 到 model registry，建立可訓練、可評估、可追溯的 Search Intelligence Stack。' : 'We do not repackage generic model output as consulting. From feature contracts and training manifests to multi-task learning and a model registry, we operate an accountable Search Intelligence Stack.' }}</p>
+            <div class="model-proof-stamps" aria-label="Model operating principles">
+              <span>OWN TRAINING PIPELINE</span>
+              <span>PRIVATE MODEL REGISTRY</span>
+              <span>HUMAN-IN-THE-LOOP</span>
+            </div>
+          </div>
+        </header>
+
+        <div class="model-proof-board">
+          <section class="model-pipeline" :aria-label="isZh ? '模型處理管線' : 'Model pipeline'">
+            <header class="model-board-title">
+              <div>
+                <span>ARCHITECTURE / 04 LAYERS</span>
+                <h3>{{ isZh ? '搜尋情報模型管線' : 'Search intelligence pipeline' }}</h3>
+              </div>
+              <p><i aria-hidden="true"></i>{{ isZh ? '版本化架構' : 'Versioned architecture' }}</p>
+            </header>
+            <ol>
+              <li v-for="layer in modelLayers" :key="layer.code" class="model-pipeline-layer">
+                <div class="model-layer-index">{{ layer.code.slice(0, 2) }}</div>
+                <div class="model-layer-copy">
+                  <p>{{ layer.code.slice(5) }}</p>
+                  <h4>{{ layer.title }}</h4>
+                  <span>{{ layer.desc }}</span>
+                </div>
+                <code>{{ layer.stack }}</code>
+              </li>
+            </ol>
+          </section>
+
+          <aside class="model-governance" :aria-label="isZh ? '模型治理與評估' : 'Model governance and evaluation'">
+            <header class="model-board-title">
+              <div>
+                <span>MLOPS / GOVERNANCE</span>
+                <h3>{{ isZh ? '不是黑盒子；每一步都有紀錄。' : 'Not a black box. Every step is recorded.' }}</h3>
+              </div>
+            </header>
+            <dl>
+              <div v-for="item in modelGovernance" :key="item.term">
+                <dt>{{ item.term }}</dt>
+                <dd>
+                  <strong>{{ item.value }}</strong>
+                  <code>{{ item.detail }}</code>
+                </dd>
+              </div>
+            </dl>
+            <div class="model-task-heads">
+              <p>SHARED ENCODER / 9 TASK HEADS</p>
+              <ul>
+                <li v-for="task in modelTaskHeads" :key="task">{{ task }}</li>
+              </ul>
+            </div>
+            <p class="model-governance-note">{{ isZh ? '模型負責縮小未知；人類負責承擔判斷。任何改善建議仍需通過資料同意、去識別、政策檢查與策略覆核。' : 'The model narrows uncertainty; people remain accountable. Recommendations still pass consent, de-identification, policy and strategy review.' }}</p>
+          </aside>
         </div>
-        <div class="model-proof-copy">
-          <p>{{ isZh ? '依目前公開可查資料與我們的自研紀錄，DiscoveryStack 將自己定位為台灣第一間以自研機器學習模型驅動的整合行銷公司。模型用來整理 SEO／GEO、網站結構與內容訊號；經明確同意、去識別與人工審核的資料，才可能進入後續改善。' : 'Based on currently available public information and our development records, DiscoveryStack positions itself as Taiwan’s first integrated marketing company powered by its own trained machine-learning model. Only consented, de-identified and human-reviewed data can inform later improvements.' }}</p>
-          <dl>
-            <div><dt>01</dt><dd>{{ isZh ? '自研模型與版本紀錄' : 'Owned model and version history' }}</dd></div>
-            <div><dt>02</dt><dd>{{ isZh ? '可追溯訊號與人工覆核' : 'Traceable signals and human review' }}</dd></div>
-            <div><dt>03</dt><dd>{{ isZh ? '同意後才用於改善' : 'Improvement only with consent' }}</dd></div>
-          </dl>
+
+        <div class="model-proof-marquee" aria-hidden="true">
+          <div v-for="repeat in 2" :key="repeat">
+            <span v-for="term in modelTerms" :key="`${repeat}-${term}`">{{ term }}</span>
+          </div>
         </div>
       </div>
     </section>
