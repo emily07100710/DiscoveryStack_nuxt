@@ -1,5 +1,6 @@
 import { and, desc, eq, isNull } from 'drizzle-orm'
 import { auditTrainingExamples, auditWorkspaces, publicIntelligenceArtifacts, publicIntelligenceDatasetBuilds, publicIntelligenceDatasetMembers, publicIntelligenceSources, publicIntelligenceTrainingRuns } from '../database/schema'
+import { PUBLIC_MANIFEST_MINIMUM_CANDIDATES, PUBLIC_MANIFEST_MINIMUM_PER_STAGE } from '../audit/baselines'
 import { requireAuditDatabase } from '../audit/repository'
 import { getHuggingFaceJob, getHuggingFaceJobLogs, isHuggingFaceConfigured, parseTrainingResult, startHuggingFaceTraining } from './huggingface-jobs'
 import { getOwnerProviderCredentials } from './provider-repository'
@@ -58,8 +59,8 @@ function labelCounts(rows: PreparedExample[]) {
 
 function eligibilityMessage(mode: 'development' | 'production', rows: PreparedExample[]) {
   const counts = labelCounts(rows)
-  const minimum = mode === 'production' ? 150 : 100
-  const minimumPerStage = mode === 'production' ? 20 : 10
+  const minimum = mode === 'production' ? 150 : PUBLIC_MANIFEST_MINIMUM_CANDIDATES
+  const minimumPerStage = mode === 'production' ? 20 : PUBLIC_MANIFEST_MINIMUM_PER_STAGE
   const missing = JOURNEY_STAGES.filter(stage => (counts[stage] || 0) < minimumPerStage)
   if (rows.length < minimum) return `Need at least ${minimum} quality-passed, consented examples for a ${mode} run; found ${rows.length}.`
   if (missing.length) return `Need at least ${minimumPerStage} example per journey stage; missing ${missing.join(', ')}.`
@@ -199,5 +200,5 @@ export async function runSupervisedTraining(input: { ownerUserId: number, mode: 
 
 export function trainingReadiness(rows: { labelStage: string }[]) {
   const counts = Object.fromEntries(JOURNEY_STAGES.map(stage => [stage, rows.filter(row => row.labelStage === stage).length]))
-  return { exampleCount: rows.length, labelCounts: counts, developmentReady: rows.length >= 100 && JOURNEY_STAGES.every(stage => (counts[stage] || 0) >= 10), productionReady: rows.length >= 150 && JOURNEY_STAGES.every(stage => (counts[stage] || 0) >= 20) }
+  return { exampleCount: rows.length, labelCounts: counts, developmentReady: rows.length >= PUBLIC_MANIFEST_MINIMUM_CANDIDATES && JOURNEY_STAGES.every(stage => (counts[stage] || 0) >= PUBLIC_MANIFEST_MINIMUM_PER_STAGE), productionReady: rows.length >= 150 && JOURNEY_STAGES.every(stage => (counts[stage] || 0) >= 20) }
 }

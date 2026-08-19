@@ -5,7 +5,7 @@ export const BGE_M3_PILOT_MIN_CANDIDATES = 2
 export const BGE_M3_PILOT_MAX_CANDIDATES = 3
 const minimumPerStage = 20
 const minimumCandidates = 150
-export const PUBLIC_MANIFEST_MINIMUM_CANDIDATES = 100
+export const PUBLIC_MANIFEST_MINIMUM_CANDIDATES = 101
 export const PUBLIC_MANIFEST_MINIMUM_PER_STAGE = 10
 
 export function buildBaselineReadiness(input: { consentedCandidates: number, stageCounts: Record<string, number>, huggingFaceConfigured: boolean }) {

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { and, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm'
+import { PUBLIC_MANIFEST_MINIMUM_CANDIDATES, PUBLIC_MANIFEST_MINIMUM_PER_STAGE } from '../audit/baselines'
 import { requireAuditDatabase } from '../audit/repository'
 import { publicIntelligenceArtifacts, publicIntelligenceDatasetBuilds, publicIntelligenceDatasetMembers, publicIntelligenceSourceReviews, publicIntelligenceSources } from '../database/schema'
 import { SEO_GEO_LABEL_TAXONOMY_VERSION, seoGeoMultilabelSchema } from './seoGeoTaxonomy'
@@ -160,7 +161,7 @@ export async function approveOwnerPublicDatasetBuild(input: { ownerUserId: numbe
   if (build.labelTaxonomyVersion !== SEO_GEO_LABEL_TAXONOMY_VERSION) throw createError({ statusCode: 422, statusMessage: 'The manifest must use the active SEO/GEO label taxonomy version.' })
   const members = await database.select({ artifactId: publicIntelligenceArtifacts.id, sourceUrl: publicIntelligenceArtifacts.sourceUrl, sourceSpanHash: publicIntelligenceArtifacts.sourceSpanHash, fieldData: publicIntelligenceArtifacts.fieldData, artifactType: publicIntelligenceArtifacts.artifactType, qualityStatus: publicIntelligenceArtifacts.qualityStatus, piiStatus: publicIntelligenceArtifacts.piiStatus, memberStatus: publicIntelligenceDatasetMembers.memberStatus, sourceUse: publicIntelligenceSources.allowedUse, sourceReviewStatus: publicIntelligenceSources.reviewStatus, sourceRemovedAt: publicIntelligenceSources.removedAt, artifactRemovedAt: publicIntelligenceArtifacts.removedAt }).from(publicIntelligenceDatasetMembers).innerJoin(publicIntelligenceArtifacts, eq(publicIntelligenceDatasetMembers.artifactId, publicIntelligenceArtifacts.id)).innerJoin(publicIntelligenceSources, eq(publicIntelligenceArtifacts.sourceId, publicIntelligenceSources.id)).where(eq(publicIntelligenceDatasetMembers.datasetBuildId, build.id))
   const active = members.filter(member => member.memberStatus === 'included')
-  if (active.length < 100) throw createError({ statusCode: 422, statusMessage: `A real public training manifest needs at least 100 included examples; found ${active.length}.` })
+  if (active.length < PUBLIC_MANIFEST_MINIMUM_CANDIDATES) throw createError({ statusCode: 422, statusMessage: `A real public training manifest needs at least ${PUBLIC_MANIFEST_MINIMUM_CANDIDATES} included examples; found ${active.length}.` })
   if (new Set(active.map(member => member.sourceUrl)).size !== active.length || new Set(active.map(member => member.sourceSpanHash)).size !== active.length) throw createError({ statusCode: 422, statusMessage: 'The manifest contains duplicate source URLs or source-span fingerprints and cannot be approved.' })
   const labels: string[] = []
   for (const member of active) {
@@ -169,8 +170,8 @@ export async function approveOwnerPublicDatasetBuild(input: { ownerUserId: numbe
     if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Every training member must use the active multi-dimensional SEO/GEO human-label contract.' })
     labels.push(parsed.data.primaryJourneyStage)
   }
-  const missingStages = ['discovery', 'understanding', 'response', 'progression', 'conversion'].filter(stage => labels.filter(label => label === stage).length < 10)
-  if (missingStages.length) throw createError({ statusCode: 422, statusMessage: `The 100-example public manifest needs at least 10 human-reviewed examples for each journey stage; insufficient: ${missingStages.join(', ')}.` })
+  const missingStages = ['discovery', 'understanding', 'response', 'progression', 'conversion'].filter(stage => labels.filter(label => label === stage).length < PUBLIC_MANIFEST_MINIMUM_PER_STAGE)
+  if (missingStages.length) throw createError({ statusCode: 422, statusMessage: `The ${PUBLIC_MANIFEST_MINIMUM_CANDIDATES}-example public manifest needs at least ${PUBLIC_MANIFEST_MINIMUM_PER_STAGE} human-reviewed examples for each journey stage; insufficient: ${missingStages.join(', ')}.` })
   await database.update(publicIntelligenceDatasetBuilds).set({ status: 'approved', reviewerUserId: input.ownerUserId, reviewNote: input.reviewNote, approvedAt: new Date() }).where(eq(publicIntelligenceDatasetBuilds.id, build.id))
   return { datasetBuildId: build.id, status: 'approved' as const, artifactCount: active.length, labelCounts: Object.fromEntries(['discovery', 'understanding', 'response', 'progression', 'conversion'].map(stage => [stage, labels.filter(label => label === stage).length])) }
 }

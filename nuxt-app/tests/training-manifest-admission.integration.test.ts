@@ -23,7 +23,7 @@ vi.stubGlobal('createError', (input: { statusCode: number, statusMessage: string
 const { approveOwnerPublicDatasetBuild } = await import('../server/public-intelligence/repository')
 
 function structuralCrawlMembers() {
-  return Array.from({ length: 100 }, (_, index) => ({
+  return Array.from({ length: 101 }, (_, index) => ({
     artifactId: index + 1,
     sourceUrl: `https://developers.google.com/search/docs/page-${index + 1}`,
     sourceSpanHash: `crawl-span-${index + 1}`,
@@ -47,7 +47,7 @@ describe('Training manifest admission for bounded crawl artifacts', () => {
     ]
   })
 
-  it('rejects 100 policy-cleared crawl artifacts until each record is replaced with a human annotation', async () => {
+  it('rejects 101 policy-cleared crawl artifacts until each record is replaced with a human annotation', async () => {
     await expect(approveOwnerPublicDatasetBuild({ ownerUserId: 1, datasetBuildId: 9, reviewNote: 'owner review' }))
       .rejects.toMatchObject({ statusCode: 422, statusMessage: 'Every training member must be an active, quality-passed, PII-cleared human annotation from an approved training source.' })
   })

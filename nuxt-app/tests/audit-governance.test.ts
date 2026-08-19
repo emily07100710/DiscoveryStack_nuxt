@@ -60,14 +60,14 @@ describe('Journey Intelligence governance', () => {
     expect(readiness.supervisedLearning.requiresHumanReview).toBe(true)
   })
 
-  it('uses 100 reviewed public human annotations and 10 examples per journey stage for immutable manifest readiness', () => {
+  it('uses 101 reviewed public human annotations and 10 examples per journey stage for immutable manifest readiness', () => {
     const collecting = buildPublicManifestReadiness({ approvedHumanAnnotations: 4, stageCounts: { understanding: 4 } })
     expect(collecting.manifestAdmission.status).toBe('collecting_public_examples')
-    expect(collecting.manifestAdmission.minimumCandidates).toBe(100)
+    expect(collecting.manifestAdmission.minimumCandidates).toBe(101)
     expect(collecting.manifestAdmission.minimumPerStage).toBe(10)
     expect(collecting.manifestAdmission.requiresImmutableManifest).toBe(true)
 
-    const ready = buildPublicManifestReadiness({ approvedHumanAnnotations: 100, stageCounts: { discovery: 10, understanding: 60, response: 10, progression: 10, conversion: 10 } })
+    const ready = buildPublicManifestReadiness({ approvedHumanAnnotations: 101, stageCounts: { discovery: 10, understanding: 61, response: 10, progression: 10, conversion: 10 } })
     expect(ready.manifestAdmission.status).toBe('ready_for_manifest_review')
   })
 })
