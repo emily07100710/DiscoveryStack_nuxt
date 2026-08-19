@@ -711,3 +711,21 @@ batch-25 對兩頁執行 approved-source policy-gated ingestion。Video SEO job 
 | 1290002 | Visual Elements gallery of Google Search | discovery | text／rich／image／video result、attribution、title／snippet、exploration feature、device／country／language context 與 controlled versus automated presentation。 |
 
 兩筆皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL 與 source-span lineage。active eligible duplicate query 回傳 0 列。immutable manifest readiness 為 **48／100**；primary journey 分布為 discovery 10、understanding 11、response 9、progression 10、conversion 8。discovery 已達每階段至少 10 筆；尚缺 52 筆總量，response 差 1、conversion 差 2。未建立或核准 manifest，未提交 Hugging Face job。
+
+### 下一批候選搜尋紀錄（未經 ingestion gate）
+
+為補足 response 與 conversion 缺口，官方搜尋結果識別以下待查核候選：**Understanding page experience in Google Search results**（`https://developers.google.com/search/docs/appearance/page-experience`）、**In-Depth Guide to How Google Search Works**（`https://developers.google.com/search/docs/fundamentals/how-search-works`），以及 Google Search Central 的 ecommerce guides index（`https://developers.google.com/search/docs/specialty/ecommerce`）。這些僅為外部搜尋導向，尚未確認是否有 active human annotation、未完成人工閱讀，亦未通過 source、robots、redirect、PII、fingerprint 或 source-document 去重 gate。
+
+### Batch-26 candidate research: Understanding page experience in Google Search results
+
+active human annotation 查核已確認 How Search Works 有既有 eligible annotation，故不再收集。人工閱讀 **Understanding page experience in Google Search results**（`https://developers.google.com/search/docs/appearance/page-experience?hl=en`）確認它是尚未收錄的 response 候選，頁尾列明 Google Developers CC BY 4.0。文件要求以整體 page experience 評估，而非孤立單一 signal：Core Web Vitals、HTTPS、mobile display、ad interference、intrusive interstitials 及 main-content distinction；同時清楚限制為「good reports or tool scores do not guarantee top ranking」，並區分 page-specific 與部分 site-wide evaluation。因此適合將 metric／security／mobile diagnosis 映射到 response remediation，而不將優化誤標為 ranking guarantee。內容未見電話或 email 範例；正式 ingestion 仍須重新通過 source、robots、HTTPS redirect、PII、fingerprint 及 source-document 去重 gate。
+
+### Batch-26 ingestion result
+
+batch-26 對 Page Experience 文件執行一次 approved-source policy-gated ingestion。job **930001** 為 `completed`，建立 structural artifact **1320001**；`piiOutcome=not_detected`，finding counts 為 emails 0、phones 0、national IDs 0。artifact 1320001 的 `piiStatus=none_detected`、`qualityStatus=pending`、`useSnapshot=training_candidate`，並保留 source URL、source span 與 Google Search Central CC BY 4.0 lineage。它尚不是訓練樣本；必須完成逐頁人工品質審核、schema-validated response multilabel annotation、獨立 annotation quality approval 與 source-document duplicate check 才能計入 readiness。
+
+### Batch-26 human quality review and annotation
+
+structural artifact 1320001 經逐頁人工品質審閱後設為 `qualityStatus=passed`。完整 labels 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **1350001**。去識別摘要將 Core Web Vitals、HTTPS、mobile display、advertising interference、intrusive interstitials 與 main-content distinction 表述為 user-centred diagnostic checks；它同時保留 Search Console／diagnostic tool 的後續 remediation 作用，以及單一 score 不保證 top ranking、多訊號與 page-specific／site-wide 判斷界線。
+
+annotation 1350001 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，其 primary journey 為 `response`，並保留 approved CC BY 4.0 source、source URL 和 source-span lineage。active eligible duplicate query 回傳 0 列。immutable manifest readiness 為 **49／100**；primary journey 分布為 discovery 10、understanding 11、response 10、progression 10、conversion 8。response 已達每階段最低 10 筆；尚缺 51 筆總量，conversion 差 2。未建立或核准 manifest，未提交 Hugging Face job。

@@ -144,3 +144,4 @@
 - [x] 執行 Google Search Central batch-23 的 File types indexable by Google 單頁受控收集，逐筆依 PII 結果完成或保留品質審核與 response 多維人工標註。
 - [x] 執行 Google Search Central batch-24 的 HTTP status codes 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 response 多維人工標註。
 - [x] 執行 Google Search Central batch-25 的 Video SEO 與 Visual Elements Gallery 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 discovery 多維人工標註。
+- [x] 執行 Google Search Central batch-26 的 Page Experience 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 response 多維人工標註。
