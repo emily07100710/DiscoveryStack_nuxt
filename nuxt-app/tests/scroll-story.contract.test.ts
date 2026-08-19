@@ -39,10 +39,11 @@ describe('Scroll-story contract', () => {
     expect(styles).toContain('span:nth-child(4)')
   })
 
-  it('keeps the visual motion opt-out and removes the missing hero image dependency', () => {
+  it('keeps the visual motion opt-out and uses the department system instead of a decorative hero graph', () => {
     expect(styles).toMatch(/\.story-sticky/)
     expect(styles).toMatch(/prefers-reduced-motion:reduce/)
-    expect(home).toMatch(/hero-constellation/)
+    expect(home).toMatch(/department-system/)
+    expect(home).not.toMatch(/hero-constellation/)
     expect(home).not.toMatch(/discoverystack-growth-trace-hero/)
   })
 

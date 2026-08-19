@@ -40,11 +40,10 @@ onMounted(() => {
         DISCOVERYSTACK<span>.</span>
       </NuxtLink>
       <nav class="site-nav" :class="{ 'is-open': navOpen }" id="siteNav" :aria-label="isZh ? '主要導覽' : 'Primary navigation'">
-        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#approach`" @click="navOpen = false">{{ isZh ? '方法' : 'Approach' }}</NuxtLink>
-        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#journey`" @click="navOpen = false">{{ isZh ? '需求路徑' : 'Journey' }}</NuxtLink>
-        <NuxtLink :to="isZh ? '/zh-hant/services/seo-geo-growth-system' : '/en/services/seo-geo-growth-system'" @click="navOpen = false">{{ isZh ? '服務' : 'Services' }}</NuxtLink>
-        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#qa`" @click="navOpen = false">AI QA</NuxtLink>
-        <NuxtLink :to="isZh ? '/zh-hant/glossary/seo' : '/en/glossary/seo'" @click="navOpen = false">{{ isZh ? '詞彙' : 'Glossary' }}</NuxtLink>
+        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#departments`" @click="navOpen = false">{{ isZh ? '五個部門' : 'Departments' }}</NuxtLink>
+        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#analysis`" @click="navOpen = false">{{ isZh ? '免費分析' : 'Free analysis' }}</NuxtLink>
+        <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#journey`" @click="navOpen = false">{{ isZh ? '合作流程' : 'Process' }}</NuxtLink>
+        <NuxtLink :to="isZh ? '/zh-hant/services/seo-geo-growth-system' : '/en/services/seo-geo-growth-system'" @click="navOpen = false">SEO／GEO</NuxtLink>
         <NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#fit`" @click="navOpen = false">{{ isZh ? '合作諮詢' : 'Fit Review' }}</NuxtLink>
       </nav>
       <div style="display:flex; align-items:center; gap:0.75rem;">
@@ -64,21 +63,21 @@ onMounted(() => {
 
       <div class="footer-cols">
         <div class="footer-col">
-          <h4>{{ isZh ? '服務' : 'Services' }}</h4>
+          <h3>{{ isZh ? '服務' : 'Services' }}</h3>
           <ul>
             <li><NuxtLink :to="isZh ? '/zh-hant/services/seo-geo-growth-system' : '/en/services/seo-geo-growth-system'">{{ isZh ? 'SEO／GEO 成長系統' : 'SEO/GEO Growth System' }}</NuxtLink></li>
             <li><NuxtLink :to="`${isZh ? '/zh-hant' : '/en'}#fit`">{{ isZh ? '需求路徑診斷' : 'Demand Path Diagnosis' }}</NuxtLink></li>
           </ul>
         </div>
         <div class="footer-col">
-          <h4>{{ isZh ? '方法' : 'Methodology' }}</h4>
+          <h3>{{ isZh ? '方法' : 'Methodology' }}</h3>
           <ul>
             <li><NuxtLink :to="isZh ? '/zh-hant/methodology/journey-intelligence' : '/en/methodology/journey-intelligence'">{{ isZh ? '需求路徑情報' : 'Journey Intelligence' }}</NuxtLink></li>
             <li><NuxtLink :to="isZh ? '/zh-hant/methodology/bounded-ai-assistant' : '/en/methodology/bounded-ai-assistant'">{{ isZh ? '有邊界的 AI 助理' : 'Bounded AI Assistant' }}</NuxtLink></li>
           </ul>
         </div>
         <div class="footer-col">
-          <h4>{{ isZh ? '詞彙' : 'Glossary' }}</h4>
+          <h3>{{ isZh ? '詞彙' : 'Glossary' }}</h3>
           <ul>
             <li><NuxtLink :to="isZh ? '/zh-hant/glossary/seo' : '/en/glossary/seo'">SEO</NuxtLink></li>
             <li><NuxtLink :to="isZh ? '/zh-hant/glossary/geo' : '/en/glossary/geo'">GEO</NuxtLink></li>
@@ -86,7 +85,7 @@ onMounted(() => {
           </ul>
         </div>
         <div class="footer-col">
-          <h4>{{ isZh ? '出版品' : 'Publications' }}</h4>
+          <h3>{{ isZh ? '出版品' : 'Publications' }}</h3>
           <ul>
             <li><NuxtLink :to="isZh ? '/zh-hant/publications/what-a-public-website-can-tell-you' : '/en/publications/what-a-public-website-can-tell-you'">{{ isZh ? '一個公開網站能告訴你什麼' : 'What a Public Website Can Tell You' }}</NuxtLink></li>
           </ul>
