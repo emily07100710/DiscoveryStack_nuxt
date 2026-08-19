@@ -684,3 +684,30 @@ batch-23 對 indexable-file-types 文件執行一次 approved-source policy-gate
 structural artifact 1200001 經逐頁人工品質審閱後設為 `qualityStatus=passed`。完整 labels 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **1230001**。去識別摘要以 Content-Type header 為首要技術判斷、保留 extension fallback／re-parsing 及 flat／encoded／media formats 的界線，將 `filetype:` operator 限定為 scoped discovery query，並明確不將 supported type list 表示成個別檔案必然收錄或露出的承諾。
 
 annotation 1230001 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，其 primary journey 為 `response`。source-document duplicate query 回傳 0 列，因此本筆是唯一 active eligible human annotation。immutable manifest readiness 為 **46／100**；primary journey 分布為 discovery 8、understanding 11、response 9、progression 10、conversion 8。未建立或核准 manifest，未提交 Hugging Face job；尚缺 54 筆總量，且 discovery 差 2、response 差 1、conversion 差 2 才符合每個旅程至少 10 筆的最低分布門檻。
+
+### Batch-24 candidate research: How HTTP status codes affect Google's crawlers
+
+人工閱讀 **How HTTP status codes affect Google's crawlers**（`https://developers.google.com/crawling/docs/troubleshooting/http-status-codes?hl=en`）後，確認 active human annotation 查核未發現同 URL。此 Google Developers CC BY 4.0 文件可提供由 HTTP 2xx／3xx／4xx／429／5xx 狀態分流的 response 取證：2xx 僅使內容可進入下一處理階段、不是收錄保證；redirect signal／hop limit 及 final target processing；4xx 內容忽略與既有 URL 隨時間移除；5xx／429 的暫時降速與後續恢復。文件不含明顯電話或 email 範例，但正式 ingestion 仍必須重新執行 source scope、robots、同網域 HTTPS redirect、PII、fingerprint 與 source-document 去重 gate。
+
+### Batch-24 ingestion result: HTTP status codes excluded by PII gate
+
+batch-24 對 HTTP status codes 文件執行 approved-source policy-gated ingestion，建立 job **870001**。job 回傳 `status=needs_human_review`、`piiOutcome=redacted`、`errorCode=pii_detected_requires_review`，`piiFindingCounts` 為 emails 0、phones 1、national IDs 0，且 `primaryArtifactId=NULL`。因此不建立 structural artifact、品質審核、human annotation 或 training candidate；不得依賴文件的 technical value、CC BY 4.0 頁尾或一般 HTTP 範例而跳過 PII fail-closed gate。immutable manifest readiness 維持 **46／100**，未建立 manifest，未提交 Hugging Face job。
+
+### Batch-25 candidate research: Video SEO and Visual Elements Gallery
+
+active human annotation 查核未發現下列兩個 Search Central URL。人工閱讀 **Video SEO best practices**（`https://developers.google.com/search/docs/appearance/video?hl=en`）確認其將 video Search／Video mode／Images／Discover exposure 拆分為 technical discovery、indexing eligibility、watch page、stable video／thumbnail URL、metadata consistency、feature eligibility、monitoring 與 troubleshooting；文件同時明確區分 eligibility 與 displayed-result guarantee。人工閱讀 **Visual Elements gallery of Google Search**（`https://developers.google.com/search/docs/appearance/visual-elements-gallery?hl=en`）則確認其涵蓋 text／rich／image／video result、attribution、site name、favicon、title link、snippet、sitelinks、exploration features 及 device／country／language variation 的呈現邊界。兩頁頁尾均顯示 Google Developers CC BY 4.0；一般 URL、format、尺寸和 metadata 範例不構成 PII 例外，仍須經正式 source、robots、redirect、PII、fingerprint 與 source-document gate。
+
+### Batch-25 ingestion ledger: Video SEO and Visual Elements Gallery
+
+batch-25 對兩頁執行 approved-source policy-gated ingestion。Video SEO job **900001** 建立 structural artifact **1260001**；Visual Elements Gallery job **900002** 建立 structural artifact **1260002**。兩筆 job 都為 `completed`、`piiOutcome=not_detected`，finding counts 均為 emails 0、phones 0、national IDs 0；相應 artifact 均為 `piiStatus=none_detected`、`qualityStatus=pending`、`useSnapshot=training_candidate`。它們尚不是訓練樣本，必須分別通過逐頁人工品質審核、`seoGeoMultilabelSchema.parse()` 驗證的 discovery multilabel annotation、獨立 annotation quality approval，以及 source-document duplicate check，才可計入 immutable manifest readiness。
+
+### Batch-25 human quality review and annotations
+
+兩筆 structural artifact 均經逐頁人工品質審閱而設為 `qualityStatus=passed`。Video SEO labels 先通過 `seoGeoMultilabelSchema.parse()`，建立 human annotation **1290001**。Visual Elements Gallery 初次標註因 `strategic_planner` 不在 `audienceRoles` enum 而被 schema 拒絕；保留 schema gate，將該角色改為允許的 `decision_maker` 後重跑，才建立 human annotation **1290002**。重跑時 Video annotation 安全回傳 `retained_existing`，沒有新增第二筆同來源 annotation。
+
+| Human annotation | 來源頁 | primary journey | 人工審核摘要 |
+|---:|---|---|---|
+| 1290001 | Video SEO best practices | discovery | rendered discovery、watch-page indexability、stable video／thumbnail URLs、metadata consistency、eligibility vs. display boundary、monitoring 與 troubleshooting。 |
+| 1290002 | Visual Elements gallery of Google Search | discovery | text／rich／image／video result、attribution、title／snippet、exploration feature、device／country／language context 與 controlled versus automated presentation。 |
+
+兩筆皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL 與 source-span lineage。active eligible duplicate query 回傳 0 列。immutable manifest readiness 為 **48／100**；primary journey 分布為 discovery 10、understanding 11、response 9、progression 10、conversion 8。discovery 已達每階段至少 10 筆；尚缺 52 筆總量，response 差 1、conversion 差 2。未建立或核准 manifest，未提交 Hugging Face job。
