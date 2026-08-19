@@ -384,3 +384,38 @@ batch-10 六筆均以 extractor v4 送入既有 policy-gated ingestion。AI feat
 五筆 PII clean structural artifacts 都完成逐頁人工品質核准與完整 `seo-geo-journey-v1` multi-label annotation：#570001（AI features，primary `discovery`）、#570002（Ecommerce overview，`discovery`）、#570003（Multi-regional and multilingual，`progression`）、#570004（Share product data，`conversion`）、#570005（Where ecommerce data can appear，`conversion`）。標註保留的去識別來源摘要與 source span 涵蓋 AI visibility 的 foundational SEO 和 measurement、電商 shopper journey、hreflang/localized URL structure、Merchant Center／Product structured data 的 commerce consistency，以及 Search/Images/Lens/Shopping/Maps/Business Profile 的 global-to-local conversion surfaces；不含 PII。
 
 batch-10 後 immutable manifest admission 查核為 **31／100**；primary journey 分布為 discovery 4、understanding 11、response 4、progression 8、conversion 4。沒有建立 dataset manifest，沒有提交 Hugging Face job；Ecommerce URL structure PII review 與所有其他 blocked/review/failure job 仍排除。
+
+### Batch-11 candidate research evidence
+
+已人工閱讀四篇尚未出現在 manifest-admission URL 清單中的 Google Search Central 文件。四篇均位於既有已核准的 `developers.google.com`／Google Search Central Documentation 來源範圍；Search Essentials 與 favicon 文件頁尾明確聲明內容採 CC BY 4.0、code samples 採 Apache 2.0，另外兩頁仍以既有 Source Card terms／robots／copyright gates 在 ingestion 時復核。以下是收集前研究，尚未計入 31／100。
+
+| 官方 URL | 預定 primary journey | 人工閱讀證據與擬標註方向 |
+|---|---|---|
+| [Optimizing for generative AI features](https://developers.google.com/search/docs/fundamentals/ai-optimization-guide?hl=en) | discovery | 釐清 AEO/GEO 仍是 SEO；RAG 與 query fan-out 可連結 relevant pages；主張 unique/non-commodity people-first content、technical/crawlability、JS, duplicate reduction、page experience、local/ecommerce details、Search Console measurement 與避免 unsupported hacks。 |
+| [Google Search Essentials](https://developers.google.com/search/docs/essentials?hl=en) | understanding | 將 technical requirements、spam policies、key best practices、helpful content、search-language usage、crawlable links、多媒體／structured data／JS guidance、appearance controls 與非保證 crawl/index/serve 整合為治理基線。 |
+| [Provide a site name](https://developers.google.com/search/docs/appearance/site-names?hl=en) | progression | 涵蓋 automated display、WebSite structured data、domain/subdomain scope、homepage/crawlability、canonical/HTTP-HTTPS consistency、alternateName、validation、URL Inspection、recrawl delays 及 troubleshooting。 |
+| [Define a favicon](https://developers.google.com/search/docs/appearance/favicon-in-search?hl=en) | progression | 涵蓋 link rel/href、home-page deployment、Googlebot and Googlebot-Image crawlability、per-host scope、stable URL、square dimension、brand representation、recrawl 與 display non-guarantee。 |
+
+所有候選必須逐筆經既有同網域 HTTPS redirect、robots、terms、PII、dedupe 及 pending-quality gate；外部頁面文字與授權頁尾不可替代服務端 final policy decision。
+
+### Batch-11 controlled ingestion and annotation result
+
+batch-11 四筆均由 extractor v4 的既有 policy-gated service 處理並全部完成。Generative AI optimization job #480001／structural artifact #600001、Search Essentials #480002／#600002、Site names #480003／#600003、Favicon #480004／#600004 都為 HTTP 200、PII `not_detected`，email/phone/national-ID finding counts 全為 0。每筆均完成逐頁人工品質核准與完整 `seo-geo-journey-v1` multi-label human annotation：#630001（Generative AI optimization，primary `discovery`）、#630002（Search Essentials，`understanding`）、#630003（Site names，`progression`）、#630004（Favicon，`progression`）。
+
+四筆標註的去識別來源摘要分別保留：AI retrieval/query fan-out 的 foundational SEO、content/data consistency 和 measurement；Search Essentials 的 technical requirements、spam policies、eligibility／quality distinction 及 non-guarantee；WebSite structured data、homepage/canonical/HTTPS consistency、URL Inspection 和 recrawl expectation；favicon deployment、Googlebot/Googlebot-Image access、stable host-scoped URL 及 brand-display expectation。沒有資料含 PII。
+
+batch-11 後 immutable manifest admission 查核為 **35／100**；primary journey 分布為 discovery 5、understanding 12、response 4、progression 10、conversion 4。沒有建立 dataset manifest，沒有提交 Hugging Face job。
+
+### Batch-12 candidate research evidence (partial)
+
+已以 Google Search Central 官方頁面人工閱讀 [LocalBusiness structured data](https://developers.google.com/search/docs/appearance/structured-data/local-business?hl=en)。該頁位於已核准 `developers.google.com`／Google Search Central Documentation CC BY 4.0 Source Card 範圍，並說明 LocalBusiness markup 能呈現 business hours、departments、reviews 等資訊；address 和 name 屬 required properties，aggregateRating、geo、menu、servesCuisine、telephone、url 等可補充 local result visibility。文件並連結 Search／Maps knowledge panel、carousel 及 Maps Booking API action context，指出 implementation 可用 Rich Results Test、URL Inspection、Googlebot-accessibility、robots/noindex/login checks 與 sitemap／Search Console refresh。擬標註 primary journey 為 `conversion`，涵蓋 local visitor、city_or_local GEO signal、trust/contact/location data、structured data validation 與 booking/order action；尚未 ingestion，仍須通過 service-side policy gates。
+
+已以 Google Search Central 官方頁面人工閱讀 [Organization structured data](https://developers.google.com/search/docs/appearance/structured-data/organization?hl=en)。該頁說明在首頁加入 Organization/OnlineStore JSON-LD 可協助 Google 理解組織行政資訊、disambiguate entities，並可能影響 logo／merchant knowledge panel 等呈現；不要求所有 property，但建議使用與組織相關的 name、url、sameAs、logo、description、address/contact point、shipping、return policy 等資料。擬標註 primary journey 為 `conversion`，涵蓋 organization identity、merchant trust、shipping/returns、country-region fulfillment conditions 與 structured data validation。此頁的程式範例含 example email/telephone／address，現有 PII gate 將是 ingestion 的最終裁決；尚未 ingestion、未計入候選。
+
+已閱讀 [Review snippet structured data](https://developers.google.com/search/docs/appearance/structured-data/review-snippet?hl=en) 與 [Merchant return policy structured data](https://developers.google.com/search/docs/appearance/structured-data/return-policy?hl=en)。Review snippet 文件說明 valid Review/AggregateRating markup 得以在 rich results 或 Knowledge Panels 呈現 stars／summary，支援 Book、Course list、Event、eligible third-party local-business/Organization reviews、Movie、Product、Recipe、Software App，並禁止 self-serving review misuse；擬標註 primary `conversion`，涵蓋 social proof、source authenticity、Rich Results Test、URL Inspection、eligibility non-guarantee。Return policy 文件說明 Organization-level `hasMerchantReturnPolicy` 與 Offer-level override，包含 return-policy URL、conditions、method、fees、refund、country applicability、seasonal override，並結合 Rich Results Test、URL Inspection、accessibility、sitemap／recrawl；擬標註 primary `conversion`，涵蓋 international commerce trust 與 post-purchase journey。兩頁均含 example contacts／address 或 phone-like data，故仍必須由 PII gate final decision；尚未 ingestion、未計入候選。
+
+### Batch-12 controlled ingestion result: PII exclusions
+
+batch-12 四篇均由 extractor v4 的既有 policy-gated ingestion service 處理，但無一建立 structural artifact。LocalBusiness job #510001（16 phone findings）、Organization #510002（5 emails、9 phones）、Review snippet #510003（6 phones）、Merchant return policy #510004（1 email、2 phones）均為 HTTP 200、`needs_human_review`／`redacted`／`pii_detected_requires_review`；所有 requested/final URLs 維持同網域 HTTPS，證實排除原因只是文件中聯絡資訊或 phone-like examples，而非來源授權、robots 或 redirect 放寬。
+
+四筆不會建立 annotation、不可計入 immutable manifest admission、不可進入遠端訓練；此批之後的 admission 仍為 **35／100**（discovery 5、understanding 12、response 4、progression 10、conversion 4）。資料收集策略將優先挑選不含 contact-example code 的 Google Search Central 文件；不會因達成數量目標而關閉、下修或略過 PII gate。

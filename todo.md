@@ -126,3 +126,5 @@
 - [x] 修正 PII extractor 對 ISO 8601 日期時間與時區 offset 的 phone 誤判，新增回歸測試以確保真實電話、email 與身分證樣式仍 fail-closed，之後才重送 batch-08。
 - [x] 執行 Google Search Central batch-09 的 Search traffic drops、URL-changing site move、hosting move 與 mobile-first indexing 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
 - [x] 執行 Google Search Central batch-10 的 AI features、ecommerce、multilingual、product data 與 URL structure 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
+- [x] 執行 Google Search Central batch-11 的 generative AI optimization、Search Essentials、site name 與 favicon 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
+- [x] 執行 Google Search Central batch-12 的 LocalBusiness、Organization、Review snippet 與 Merchant return policy 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
