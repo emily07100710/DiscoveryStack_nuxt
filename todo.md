@@ -132,3 +132,5 @@
 - [x] 執行 Google Search Central batch-14 的 News、Image 與 Video sitemap extension 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
 - [x] 執行 Google Search Central batch-15 的 crawl/indexing overview、supported meta tags 與 `noindex` 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
 - [x] 執行 Google Search Central batch-16 的電商網站架構與高品質評論文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion 多維人工標註。
+- [x] 執行 Google Search Central batch-17 的電商 URL 結構與 Discover 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion／discovery 多維人工標註。
+- [x] 執行 Google Search Central batch-18 的 Search Console 入門與重新檢索文件受控收集，逐筆依 PII 結果完成或保留品質審核與 response 多維人工標註。

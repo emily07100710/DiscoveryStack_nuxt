@@ -514,3 +514,61 @@ batch-15 後使用直接 `human_annotation` artifact count 查核為 **42／100*
 | 870002 | Write high quality reviews | conversion | user perspective、first-hand／expert evidence、benefits／drawbacks、comparisons、decision factors、original content 與 affiliate disclosure。 |
 
 兩筆 human annotation 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`training_candidate`，並保留 Google Search Central CC BY 4.0 source、source URL 與 source span lineage。直接以 eligible `human_annotation` count 查核後，immutable manifest readiness 為 **44／100**；primary journey 分布為 discovery 7、understanding 12、response 8、progression 11、conversion 6。尚未建立或核准 dataset manifest，尚未提交 Hugging Face job；仍缺 56 筆總量，且 discovery 差 3、response 差 2、conversion 差 4 才達每旅程至少 10 筆的分布門檻。
+
+## Batch-17 candidate research
+
+本批只讀人工檢視了下列 Google Search Central 英文 canonical 文件。兩頁頁尾皆明示：除非另有註明，內容採用 Creative Commons Attribution 4.0 License；此研究不等於正式收集或 PII 核准。
+
+- `https://developers.google.com/search/docs/specialty/ecommerce/designing-a-url-structure-for-ecommerce-sites?hl=en`：說明產品頁、變體、fragment、query parameters、canonical、HTML anchors、sitemap 與 indexable category 的 URL 結構。這是 **conversion** 候選，因為其把產品瀏覽路徑、重複 URL 風險與商品頁可發現性連結；公開文字預檢未見 email 或電話格式，仍須由正式 `public-ingestion-v4` 判定。
+- `https://developers.google.com/search/docs/appearance/google-discover?hl=en`：說明 indexed + policy-compliant content 的 Discover eligibility、people-first content、非 clickbait 標題／預覽、high-quality images、page experience、traffic variability 與 Performance report。這是 **discovery** 候選，因為它處理 interest-driven discovery 與觸及品質的關係；公開文字預檢未見 email 或電話格式，仍須由正式 PII gate 判定。
+- `https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap?hl=en`：只讀全文含 sitemap formats、canonical URLs、absolute URLs、`lastmod`、submission 與 cross-site sitemap guidance。可作為 response／discovery 備選，但因本批優先平衡 conversion 與 discovery，尚未列入本次 submission。
+
+兩個主候選都尚未執行 ingestion，不建立 artifact、不計入 readiness，亦不會繞過 robots、same-host redirect、source scope、deduplication、PII、人工品質或多維標註 gate。
+
+### Batch-17 controlled ingestion result
+
+batch-17 經既有 owner-triggered `ingestApprovedPublicDocument` 路徑執行後，兩頁均 HTTP 200、套用 `public-ingestion-v4`，但處理結果不同：
+
+| Ingestion job | URL | PII／狀態 | 後續處理 |
+|---:|---|---|---|
+| 660001 | Ecommerce URL Structure Best Practices | `piiOutcome=redacted`；phones 1、emails 0、national IDs 0；`needs_human_review`；`pii_detected_requires_review` | 未建立 artifact；依 fail-closed 政策排除於本批，未進行品質審核或標註。 |
+| 660002 | Discover and your website | `piiOutcome=not_detected`；phones 0、emails 0、national IDs 0；`completed` | 建立 structural artifact 900001，source span `3772530d61b8…`，`piiStatus=none_detected`、`qualityStatus=pending`。 |
+
+對 job 660001 不會因其內容價值而重新分類、手動跳過或下修 PII gate；資料庫不保存其 structural artifact。job 660002 仍不是訓練樣本，只有在逐頁人工品質審核、schema-validated SEO/GEO multilabel annotation 與 annotation 品質核准都通過後，才可計入 immutable manifest readiness。
+
+### Batch-17 human quality review and annotation
+
+artifact 900001 經逐頁人工品質審閱後設為 `qualityStatus=passed`。其後，`seoGeoMultilabelSchema.parse()` 成功驗證 discovery 多維標籤，建立並獨立核准 human annotation **930001**。去識別摘要涵蓋 indexed + policy-compliant eligibility、people-first content、準確 preview、relevant large images、content freshness／unique insight、traffic variability 與 Discover performance monitoring；不保留 PII，也不將 eligibility 誤標為 guaranteed distribution。
+
+human annotation 930001 的 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，其 primary journey 為 `discovery`，並保留 source URL、source span 與 approved CC BY 4.0 source lineage。與同 URL 的 structural artifact 相比，只有 human annotation 計入 admission。查核後 immutable manifest readiness 為 **45／100**，primary journey 分布為 discovery 8、understanding 12、response 8、progression 11、conversion 6。尚未建立 dataset manifest 或提交 Hugging Face job；尚缺 55 筆總量，並且 discovery 差 2、response 差 2、conversion 差 4 才達每個旅程至少 10 筆的分布門檻。
+
+## Batch-18 candidate research
+
+本批以只讀方式人工檢視兩篇 Google Search Central 英文 canonical 文件；兩頁頁尾均明示正文採 CC BY 4.0，研究階段不形成 artifact 或訓練樣本。
+
+- `https://developers.google.com/search/docs/monitor-debug/search-console-start?hl=en`：說明 website owner 如何以 Search Console 的 ownership verification、Index Coverage、sitemap、Performance report、manual actions、removals、migration、rich-result status、URL Inspection、security issues 與 Core Web Vitals，在發現可見度／索引問題後做有優先序的診斷及回應。列為 **response** 候選；公開文字預檢未見 email／phone 格式，仍由正式 PII gate 判定。
+- `https://developers.google.com/search/docs/crawling-indexing/ask-google-to-recrawl?hl=en`：說明受管理 URL 的 re-indexing request、幾天至數週等待期、不得保證收錄、single-URL inspection quota、large-URL sitemap submission 及 launch/site move 的使用界線。列為 **response** 候選；公開文字預檢未見 email／phone 格式，仍由正式 PII gate 判定。
+
+若任一頁在正式收集階段產生 PII finding，將維持 `needs_human_review`／無 artifact 的 fail-closed 狀態，不以本次人工閱讀或研究價值替代 PII 決策。
+
+### Batch-18 controlled ingestion result
+
+兩頁均經 owner-triggered `ingestApprovedPublicDocument` 路徑收集，HTTP 200、`public-ingestion-v4`、PII finding counts 均為 emails 0／phones 0／national IDs 0，並建立 distinct structural artifact。這只證明資料可進入人工審核，不等於訓練 admission：
+
+| Ingestion job | URL | structural artifact | source span | 當前狀態 |
+|---:|---|---:|---|---|
+| 690001 | Search Console start guide | 960001 | `bcd2a6c78ba0…` | `piiStatus=none_detected`、`qualityStatus=pending` |
+| 690002 | Ask Google to recrawl | 960002 | `5eb03d4ab454…` | `piiStatus=none_detected`、`qualityStatus=pending` |
+
+兩頁尚未建立 human annotation，也尚未計入 readiness；下一步須以人工逐頁品質審核、`seoGeoMultilabelSchema.parse()` 驗證的 response multilabel annotation，並獨立核准 annotation quality。 
+
+### Batch-18 human quality review and annotations
+
+兩筆 PII clean structural artifact 均完成逐頁人工品質審閱，設定為 `qualityStatus=passed` 後，分別以 `seoGeoMultilabelSchema.parse()` 驗證標籤、建立 human annotation，再以獨立 quality decision 核准。腳本初次因 `entitySignals.type='tool'` 不在 schema 允許 enum 而停止；已將 Google 官方產品／報表類實體改為允許的 `service`，沒有略過或弱化 schema gate，重跑後才建立下列 annotation。
+
+| Human annotation | 來源頁 | primary journey | 人工審核摘要 |
+|---:|---|---|---|
+| 990001 | Search Console start guide | response | 以 ownership、indexing／sitemap、performance、manual actions、removals、migration、rich-result、inspection、security 與 Core Web Vitals 訊號分流處置。 |
+| 990002 | Ask Google to recrawl | response | 依 URL 規模選擇 inspection request 或 sitemap，保留 quota、等待期及不保證收錄的邊界，並以 Index Status／inspection 監測。 |
+
+兩筆 human annotation 均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 source URL、source span 與 approved CC BY 4.0 source lineage。查核 immutable manifest readiness 為 **47／100**；primary journey 分布為 discovery 8、understanding 12、response 10、progression 11、conversion 6。此批使 response 已達每階段最低 10 筆，但仍尚缺 53 筆總量、discovery 差 2、conversion 差 4。未建立或核准 manifest，未提交 Hugging Face job。
