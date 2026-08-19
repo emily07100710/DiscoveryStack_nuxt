@@ -128,3 +128,7 @@
 - [x] 執行 Google Search Central batch-10 的 AI features、ecommerce、multilingual、product data 與 URL structure 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
 - [x] 執行 Google Search Central batch-11 的 generative AI optimization、Search Essentials、site name 與 favicon 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
 - [x] 執行 Google Search Central batch-12 的 LocalBusiness、Organization、Review snippet 與 Merchant return policy 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
+- [x] 執行 Google Search Central batch-13 的 robots.txt、redirects 與 crawl-budget 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
+- [x] 執行 Google Search Central batch-14 的 News、Image 與 Video sitemap extension 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
+- [x] 執行 Google Search Central batch-15 的 crawl/indexing overview、supported meta tags 與 `noindex` 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維標註。
+- [x] 執行 Google Search Central batch-16 的電商網站架構與高品質評論文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion 多維人工標註。

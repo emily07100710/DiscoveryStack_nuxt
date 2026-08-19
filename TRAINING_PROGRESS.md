@@ -419,3 +419,98 @@ batch-11 後 immutable manifest admission 查核為 **35／100**；primary journ
 batch-12 四篇均由 extractor v4 的既有 policy-gated ingestion service 處理，但無一建立 structural artifact。LocalBusiness job #510001（16 phone findings）、Organization #510002（5 emails、9 phones）、Review snippet #510003（6 phones）、Merchant return policy #510004（1 email、2 phones）均為 HTTP 200、`needs_human_review`／`redacted`／`pii_detected_requires_review`；所有 requested/final URLs 維持同網域 HTTPS，證實排除原因只是文件中聯絡資訊或 phone-like examples，而非來源授權、robots 或 redirect 放寬。
 
 四筆不會建立 annotation、不可計入 immutable manifest admission、不可進入遠端訓練；此批之後的 admission 仍為 **35／100**（discovery 5、understanding 12、response 4、progression 10、conversion 4）。資料收集策略將優先挑選不含 contact-example code 的 Google Search Central 文件；不會因達成數量目標而關閉、下修或略過 PII gate。
+
+### Batch-13 candidate research evidence
+
+已人工閱讀下列三篇未出現在 manifest-admission URL 清單中的 Google Search Central 文件。三篇均在既有已核准的 Google Search Central Documentation（CC BY 4.0）`developers.google.com` Source Card 範圍，且頁尾明確記載 CC BY 4.0 content license 與 Apache 2.0 code-sample separation。Faceted navigation 頁在公開文字擷取時未回傳正文，因此未納入本批；不會以搜尋摘要替代逐頁人工閱讀。
+
+| 官方 URL | 預定 primary journey | 人工閱讀證據與擬標註方向 |
+|---|---|---|
+| [Introduction to robots.txt](https://developers.google.com/search/docs/crawling-indexing/robots/intro?hl=en) | response | 說明 robots.txt 用於 crawler traffic 而非隱藏頁面；比較 web/media/resource effects、robots rules limitation、noindex/password protection、different crawler syntax 和 disallowed URL 仍可能被 indexing 的風險。 |
+| [Redirects and Google Search](https://developers.google.com/search/docs/crawling-indexing/301-redirects?hl=en) | progression | 對應 site move、canonical destination、merger、removed page；比較 permanent 301/308、temporary 302/303/307、server/meta refresh/JavaScript redirects、redirect chain、alternate canonical URL，並強調 rendering limitation 與 implementation hierarchy。 |
+| [Optimize your crawl budget](https://developers.google.com/search/docs/crawling-indexing/large-site-managing-crawl-budget?hl=en) | response | 說明 large/fast-changing site 的 crawl capacity、demand、host health、inventory/duplicates、sitemap、HTTP 404/410/304、soft 404、redirect chains、server response efficiency 與 Search Console diagnosis；數值僅為 rough estimate。 |
+
+三筆仍需逐一通過同網域 HTTPS redirect、robots、terms、PII、dedupe 及 pending-quality gate；外部 research evidence 不構成 training admission。
+
+### Batch-13 controlled ingestion and annotation result
+
+batch-13 三筆均以 extractor v4 經既有 policy-gated ingestion service 完成，所有 PII finding counts 均為 0。Robots.txt introduction job #540001／structural #660001、Redirects job #540002／#660002、Crawl budget job #540003／#660003 均為 HTTP 200、`not_detected`、`completed`。Crawl budget 的安全 final URL 為 `https://developers.google.com/crawling/docs/crawl-budget?hl=en`，依既有逐跳同網域 HTTPS policy 保留 requested/final ledger traceability。
+
+三筆均完成逐頁人工品質核准與完整 `seo-geo-journey-v1` annotation：#690001（Robots introduction，primary `response`）、#690002（Redirects，`progression`）、#690003（Crawl budget，`response`）。去識別訓練摘要分別保留 robots.txt 的 crawler-control limitation 與 noindex alternatives、redirect implementation/canonical/user-intent alignment、large-site capacity/demand/host-health/URL-inventory/server-efficiency diagnosis，並明確避免以技術措施宣稱不保證的結果。
+
+batch-13 後 immutable manifest admission SQL 查核為 **38／100**；primary journey 分布為 discovery 5、understanding 12、response 6、progression 11、conversion 4。沒有建立 dataset manifest，沒有提交 Hugging Face job。
+
+### Batch-14 candidate research evidence
+
+已人工閱讀下列三篇尚未出現在 manifest-admission URL 清單的 Google Search Central sitemap-extension 文件。三篇均在既有已核准的 Google Search Central Documentation（CC BY 4.0）`developers.google.com` Source Card 範圍，且頁尾明確記載 CC BY 4.0 content license 與 Apache 2.0 code-sample separation。`Build and submit a sitemap` 已有既存完成標註，故不重複納入本批。
+
+| 官方 URL | 預定 primary journey | 人工閱讀證據與擬標註方向 |
+|---|---|---|
+| [News sitemaps](https://developers.google.com/search/docs/crawling-indexing/sitemaps/news-sitemap?hl=en) | response | 涵蓋 generic sitemap extension、recent two-day article URLs、freshness update、empty-sitemap warning、publication name/language（含 Traditional Chinese `zh-tw`）、W3C publication time、title accuracy、Search Console troubleshooting 與 1,000-news-tag split constraint。 |
+| [Image sitemaps](https://developers.google.com/search/docs/crawling-indexing/sitemaps/image-sitemaps?hl=en) | discovery | 以 XML extension 提供 JavaScript-discovered images、separate versus combined sitemap、image loc requirement、cross-domain/CDN Search Console verification、robots accessibility、deprecated caption/location/title/license tags 與 troubleshooting。 |
+| [Video sitemaps and alternatives](https://developers.google.com/search/docs/crawling-indexing/sitemaps/video-sitemaps?hl=en) | progression | 涵蓋 recent/non-discoverable video content、separate/combined sitemap 或 mRSS、host-page relevance、Googlebot access／robots/firewall/login/protocol constraints、content or player URL、metadata parity、geo restriction、device availability、expiration/publication date、validation 與 visual media discovery。 |
+
+三筆仍必須逐一通過同網域 HTTPS redirect、robots、terms、PII、dedupe 及 pending-quality gate；example timestamps or numeric constraints 不取代 extractor v4 的正式檢查。
+
+### Batch-14 controlled ingestion and annotation result
+
+batch-14 News sitemap job #570001／structural #720001 與 Image sitemap #570002／#720002 均為 HTTP 200、extractor v4 PII `not_detected`、所有 email/phone/national-ID findings 為 0。Video sitemap job #570003 雖為 HTTP 200，但有 1 個 phone finding，維持 `needs_human_review`／`redacted`／`pii_detected_requires_review`，沒有建立 structural artifact 或 annotation。
+
+兩筆 PII clean artifacts 完成逐頁人工品質核准及完整 `seo-geo-journey-v1` annotation：News sitemap human annotation #750001（primary `response`）涵蓋 freshness、publication metadata、XML validation、multi-language publication detail、Search Console diagnosis、non-guarantee；Image sitemap #750002（primary `discovery`）涵蓋 JavaScript visual assets、combined/separate sitemap、CDN host verification、robots access、deprecated fields 與 diagnostic workflow。第一輪 annotation 暴露兩個不符合現行 taxonomy 的遺留 enum（`language`、`javascript_dependency`）；已改用有效 `multilingual` 及支援的 technical signals 後冪等重跑，兩筆均驗證通過。此為標註 metadata contract 修正，不涉及 PII policy 放寬。
+
+batch-14 後 immutable manifest admission 查核為 **40／100**；primary journey 分布為 discovery 6、understanding 12、response 7、progression 11、conversion 4。沒有建立 dataset manifest，沒有提交 Hugging Face job；Video sitemap 與所有 PII review/failure job 繼續排除。
+
+### Batch-15 candidate research evidence
+
+已人工閱讀下列三篇未出現在 manifest-admission URL 清單的 Google Search Central 文件；三頁均在既有已核准 `developers.google.com`／Google Search Central Documentation（CC BY 4.0）來源範圍，且頁尾明確載明 CC BY 4.0 content license 與 Apache 2.0 code-sample separation。Soft 404 URL 的 public text extraction 未取得正文，故不以搜尋摘要代替人工閱讀，也不納入本批。
+
+| 官方 URL | 預定 primary journey | 人工閱讀證據與擬標註方向 |
+|---|---|---|
+| [Overview of crawling and indexing topics](https://developers.google.com/search/docs/crawling-indexing) | discovery | 建立 file types、URL structure、sitemaps、crawler management、robots.txt、canonicalization、mobile/AMP/JavaScript、metadata、removals、site moves 等控制 Google content discovery/parsing/visibility 的 knowledge map，並指向 How Search works。 |
+| [`meta` tags and attributes Google supports](https://developers.google.com/search/docs/crawling-indexing/special-tags?hl=en) | progression | 說明 description、robots/googlebot、X-Robots-Tag、notranslate、charset、refresh、viewport、rating、data-nosnippet、rel attributes、valid HTML head、unsupported tags、CMS implementation 和 URL Inspection validation；衝突時 restrictive rule applies。 |
+| [Block Search indexing with `noindex`](https://developers.google.com/search/docs/crawling-indexing/block-indexing?hl=en) | response | 說明 noindex meta/HTTP header、crawler must be able to access page、robots.txt interaction、non-HTML application、crawl/recrawl delay、URL Inspection、Page Indexing report、temporary removal 的 incident response boundary。 |
+
+三筆仍必須逐一通過同網域 HTTPS redirect、robots、terms、PII、dedupe 及 pending-quality gate；外部 research evidence 不構成 training admission。
+
+### Batch-15 controlled ingestion and annotation result
+
+batch-15 ingestion ledger 顯示：Crawling and indexing overview job #600001／structural #780001 及 Block indexing with noindex #600003／#780002 均為 HTTP 200、extractor v4 PII `not_detected`、finding counts 均為零。Supported meta tags job #600002 是 HTTP 200，但有 1 個 phone finding，維持 `needs_human_review`／`redacted`／`pii_detected_requires_review`，不建立 artifact。
+
+兩筆 PII clean structural artifacts 均完成逐頁人工品質核准與完整 `seo-geo-journey-v1` annotation：#810001（Crawling/indexing overview，primary `discovery`）及 #810002（Block indexing with noindex，`response`）。前者的去識別訓練摘要保留 crawler/discovery/control/inspection topic map，後者保留 noindex meta／X-Robots-Tag、robots conflict、crawler access、inspection、recrawl、temporary removal boundary 和 non-guarantee；均不含 PII。Supported meta tags 文件未標註也未計入。
+
+batch-15 後使用直接 `human_annotation` artifact count 查核為 **42／100**；先前一次 JSON outer aggregate 僅回傳五個 journey groups，已立即以直接 count 更正，未將「5」誤記為樣本數。primary journey 分布為 discovery 7、understanding 12、response 8、progression 11、conversion 4。沒有建立 dataset manifest，沒有提交 Hugging Face job。
+
+### Batch-16 candidate research evidence
+
+已人工閱讀下列 Google Search Central 官方候選。兩頁均屬既有已核准 `developers.google.com`／Google Search Central Documentation（CC BY 4.0）Source Card 範圍，且頁尾清楚區分 CC BY 4.0 content license 與 Apache 2.0 code samples。研究證據只用於候選決策，不會取代 ingestion 的 robots、redirect、PII、dedupe 與 quality gate。
+
+| 官方 URL | 預定 primary journey | 人工閱讀證據與擬標註方向 |
+|---|---|---|
+| [Help Google understand your ecommerce website structure](https://developers.google.com/search/docs/specialty/ecommerce/help-google-understand-your-ecommerce-site-structure?hl=en) | conversion | 導覽與 `<a href>` 連結讓 crawler 可到達 category、subcategory、product pages；搜尋框不應是唯一發現路徑；可用 sitemap／Merchant Center feed 補充 URL；以內部連結突出重要 categories/products，但不以 URL structure 推斷 hierarchy。 |
+| [Write high quality reviews](https://developers.google.com/search/docs/specialty/ecommerce/write-high-quality-reviews?hl=en) | conversion | 關注使用者視角、專業性、第一手證據、比較、優缺點、量化測量、決策因素、產品演進、multiple sellers 與 affiliate disclosure；明確偏重內容品質與原創性、非長度。 |
+
+同輪人工閱讀亦確認 [Dataset structured data](https://developers.google.com/search/docs/appearance/structured-data/dataset?hl=en) 的 JSON-LD 範例有 `ContactPoint.telephone` 與 `email`，依 fail-closed PII policy 預先不納入 batch-16；不是以移除 PII gate 來增加樣本數。
+
+候選 URL `https://developers.google.com/search/docs/crawling-indexing/faceted-navigation?hl=en` 經瀏覽器核對為 HTTP 404，故不收集、不建立台帳或產物。搜尋後驗證的 `https://developers.google.com/crawling/docs/faceted-navigation?hl=en` 為「Google Crawling Infrastructure」而非 Google Search Central 文件路徑；雖然正文有 CC BY 4.0 聲明且內容討論 faceted URL 對 crawl discovery、robots、canonical、404 與 URL parameters 的影響，本批仍維持以 Google Search Central 文件為範圍而不納入。這是來源範圍收緊而非資料不足時的放寬。
+
+### Batch-16 controlled ingestion result
+
+已經由既有 `ingestApprovedPublicDocument` 路徑，對以下兩篇已研究的 Google Search Central 文件執行單頁、owner-triggered、policy-gated 收集。每頁均先套用既有核准來源、同網域 HTTPS redirect、robots／terms、內容雜湊去重與 `public-ingestion-v4` PII gate；處理器不保存原始 HTML 或清理後的整頁正文。
+
+| Ingestion job | URL | HTTP／PII outcome | 建立的 structural artifact | 品質狀態 |
+|---:|---|---|---:|---|
+| 630001 | `help-google-understand-your-ecommerce-site-structure?hl=en` | `200`；`not_detected`；emails 0、phones 0、national IDs 0 | 840001；source span `1089885a4686…` | `pending` |
+| 630002 | `write-high-quality-reviews?hl=en` | `200`；`not_detected`；emails 0、phones 0、national IDs 0 | 840002；source span `792ce7c8978f…` | `pending` |
+
+兩筆的 ingestion job 狀態均為 `completed`、artifact type 為 `structural_features`、artifact `piiStatus=none_detected`，extractor 版本為 `public-ingestion-v4`。兩筆目前都**不是**訓練樣本：仍必須完成逐頁人工品質審核、以 schema 驗證的 SEO/GEO 多維人工標註，以及對 human annotation 的品質核准；未建立 dataset manifest，未提交 Hugging Face job。
+
+### Batch-16 human quality review and annotations
+
+兩筆 `structural_features` 均經逐頁人工品質審閱後設為 `qualityStatus=passed`，再以 `seoGeoMultilabelSchema.parse()` 驗證完整標籤，建立並獨立核准以下去識別 `human_annotation`。標註輸入只保留由人工閱讀形成的有界摘要，不包含 quality decision、標籤理由或 reviewer confidence，避免 target leakage。
+
+| Human annotation | 來源頁 | primary journey | 審核與標註重點 |
+|---:|---|---|---|
+| 870001 | Help Google understand your ecommerce website structure | conversion | HTML anchor navigation、category／subcategory／product hierarchy、site search 的 discovery 邊界、sitemap／product feeds 與重要 inventory 的 crawlable path。 |
+| 870002 | Write high quality reviews | conversion | user perspective、first-hand／expert evidence、benefits／drawbacks、comparisons、decision factors、original content 與 affiliate disclosure。 |
+
+兩筆 human annotation 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`training_candidate`，並保留 Google Search Central CC BY 4.0 source、source URL 與 source span lineage。直接以 eligible `human_annotation` count 查核後，immutable manifest readiness 為 **44／100**；primary journey 分布為 discovery 7、understanding 12、response 8、progression 11、conversion 6。尚未建立或核准 dataset manifest，尚未提交 Hugging Face job；仍缺 56 筆總量，且 discovery 差 3、response 差 2、conversion 差 4 才達每旅程至少 10 筆的分布門檻。
