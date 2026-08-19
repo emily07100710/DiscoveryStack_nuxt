@@ -340,3 +340,47 @@ batch-08 初次 ingestion 顯示 Event、Job posting、Video 都因 phone-patter
 以 v4 重送 batch-08 後：Event job #390001 仍有 7 個 phone patterns，繼續 `needs_human_review`／`redacted`；Video job #390003 因 `fetch_timeout` 失敗，不建立 artifact；兩者均未計入。Job posting job #390002 為 PII `not_detected`，建立 structural artifact #450001，完成逐頁人工品質核准及 human annotation #450002（primary `conversion`）。該標註涵蓋 JobPosting experience、canonical、Googlebot crawlability、technical/content policy、Rich Results Test、URL Inspection、Indexing API、sitemap、remote location requirements、expired-job removal 與 conversion opportunity。
 
 batch-08 後 immutable manifest admission 查核為 **22／100**；primary journey 分布為 discovery 2、understanding 11、response 3、progression 4、conversion 2。沒有建立 dataset manifest，沒有提交 Hugging Face job；Event、Video 及所有 PII human-review／fetch failure 項目均排除。
+
+### Batch-09 candidate research evidence
+
+已人工閱讀下列四篇未出現在目前 manifest-admission source URL 的 Google Search Central 文件。它們均在既有、已核准的 Google Search Central Documentation（CC BY 4.0）Source Card 同一 `developers.google.com` 範圍內；Changing your hosting 頁底明確列有 CC BY 4.0 content license 與 Apache 2.0 code-sample separation，其餘三篇仍將在 ingestion 後以既有 source terms/robots/copyright gates 做最終核對。以下僅是收集前研究，尚未計入 22／100。
+
+| 官方 URL | 預定 primary journey | 人工閱讀證據與擬標註方向 |
+|---|---|---|
+| [Debugging drops in Google Search traffic](https://developers.google.com/search/docs/monitor-debug/debugging-search-traffic-drops?hl=en) | response | 以 Performance report、Google Trends、Crawl stats、Page indexing、Security issues 與 Manual Actions 報告區分 algorithmic、technical、security、spam、seasonality、site move 的流量下滑原因；涵蓋 clicks/impressions、query/URL/country/device/search appearance filters 與避免過度修正。 |
+| [How to move a site](https://developers.google.com/search/docs/crawling-indexing/site-move-with-url-changes?hl=en) | progression | 涵蓋 staged migration、seasonal timing、temporary ranking fluctuation、permanent redirects、old/new URL mapping、robots/noindex removal、HTTPS/TLS、Search Console verification、sitemap、server capacity、monitoring 與 rollback-aware migration hygiene。 |
+| [Changing your hosting](https://developers.google.com/search/docs/crawling-indexing/site-move-no-url-changes?hl=en) | progression | 涵蓋 URL-invariant hosting/CDN/DNS migration、testing environment、Googlebot access、DNS TTL、temporary noindex removal、server log/DNS/crawl monitoring、old-host shutdown decision。 |
+| [Mobile site and mobile-first indexing best practices](https://developers.google.com/search/docs/crawling-indexing/mobile/mobile-sites-mobile-first-indexing?hl=en) | progression | 涵蓋 responsive/dynamic/separate-URL architecture、smartphone indexing、renderable primary content、desktop/mobile content/metadata/structured-data parity、ads、images/videos、hreflang 與 common troubleshooting。 |
+
+四筆仍必須逐一通過同網域 HTTPS redirect、robots、terms、PII、dedupe 與 pending-quality gate；研究或 URL 可讀性不構成 training admission。
+
+### Batch-09 controlled ingestion and annotation result
+
+batch-09 四筆均以 extractor v4 經既有 policy-gated ingestion service 完成：Debugging drops in Google Search traffic job #420001／structural artifact #480001、How to move a site job #420002／#480002、Changing your hosting job #420003／#480003、Mobile site and mobile-first indexing job #420004／#480004。每筆 HTTP 200、PII `not_detected`（email/phone/national-ID finding counts 均為零），因此均完成逐頁人工品質核准及 `seo-geo-journey-v1` human annotation：#510001（primary `response`）、#510002（`progression`）、#510003（`progression`）、#510004（`progression`）。
+
+人工標註摘要分別保留：流量下滑的 multi-report diagnosis 與避免過度修正；URL migration 的 mapping、redirect、crawlability、Search Console、sitemap 與觀測；hosting/CDN/DNS migration 的 readiness、TTL、log/crawl monitoring 與 shutdown evidence；mobile-first indexing 的 responsive/dynamic/separate URL 架構、renderability、content/metadata/structured-data parity、media、hreflang 與 troubleshooting。四筆均為來源 URL 可追溯的去識別摘要，不含 PII。
+
+batch-09 後 immutable manifest admission 查核為 **26／100**；primary journey 分布為 discovery 2、understanding 11、response 4、progression 7、conversion 2。未建立 dataset manifest，未提交 Hugging Face job。
+
+### Batch-10 candidate research evidence
+
+已人工閱讀下列六篇尚未列入 manifest-admission source URL 的 Google Search Central 文件，皆在既有已核准 `developers.google.com`／Google Search Central Documentation（CC BY 4.0）來源範圍。六篇頁尾均確認內容採 CC BY 4.0、程式碼範例另採 Apache 2.0；下列僅記錄收集前人工閱讀，不構成 training admission。
+
+| 官方 URL | 預定 primary journey | 人工閱讀證據與擬標註方向 |
+|---|---|---|
+| [AI features and your website](https://developers.google.com/search/docs/appearance/ai-features?hl=en) | discovery | AI Overviews/AI Mode 透過 query fan-out 和 relevant-link selection 支援探索；無額外 SEO requirement，仍需 indexed/snippet eligibility、crawlability、internal links、textual content、matching structured data、Merchant Center/Business Profile freshness、Search Console/Analytics measurement 及 preview control troubleshooting。 |
+| [Best practices for ecommerce sites](https://developers.google.com/search/docs/specialty/ecommerce/overview?hl=en) | discovery | 將 product data、site structure、structured data、launch timing、reviews、URL structure、navigation、pagination 與 incremental loading 對應 shopper journey、discovery 與 online／physical-store commerce。 |
+| [Managing multi-regional and multilingual sites](https://developers.google.com/search/docs/specialty/international/managing-multi-regional-sites?hl=en) | progression | 定義 multilingual/multi-regional，說明 per-language URLs、hreflang/sitemaps、visible-language signals、user-selectable switching、avoid automatic language redirect、ccTLD/gTLD/subdomain/subdirectory trade-offs、canonical 與 geotargeting limitation。 |
+| [Share your product data with Google](https://developers.google.com/search/docs/specialty/ecommerce/share-your-product-data-with-google?hl=en) | conversion | 結合 Product structured data、Merchant Center feeds/Content API、Search/Images/Shopping/Lens surfaces、price/availability/shipping accuracy、scheduled vs immediate updates 與 website/feed data-lag resolution。 |
+| [Where ecommerce content can appear on Google](https://developers.google.com/search/docs/specialty/ecommerce/where-ecommerce-data-can-appear-on-google?hl=en) | conversion | 對應 Search、Images、Lens、Shopping、Business Profile、Maps 與 inventory-location data，並以 company story、offers、product/catalog content、events、live streams、returns/shipping/support touchpoints 鋪陳不同 shopper stages。 |
+| [Designing a URL structure for ecommerce websites](https://developers.google.com/search/docs/specialty/ecommerce/designing-a-url-structure-for-ecommerce-sites?hl=en) | progression | 涵蓋 unique/persistent/descriptive URL、fragment and duplicate semantics、parameter hygiene、variants、canonical、sitemap/internal links、HTML anchors、pagination、empty category `noindex`/404 與 crawler efficiency。 |
+
+全部候選仍必須逐筆通過同網域 HTTPS redirect、robots、terms、PII、dedupe 及 pending-quality gate，且 URL 的外部可讀性與授權頁尾不得取代該服務中的 final policy decision。
+
+### Batch-10 controlled ingestion and annotation result
+
+batch-10 六筆均以 extractor v4 送入既有 policy-gated ingestion。AI features #450001／structural #540001、Ecommerce overview #450002／#540002（安全同網域 redirect 後 final URL 為 `/search/docs/specialty/ecommerce?hl=en`）、Managing multi-regional sites #450003／#540003、Share product data #450004／#540004、Where ecommerce data can appear #450005／#540005 均為 HTTP 200、PII `not_detected`，且 email、phone、national-ID finding counts 均為 0。Ecommerce URL structure #450006 則有 1 個 phone finding，維持 `needs_human_review`／`redacted`、不建立 artifact。
+
+五筆 PII clean structural artifacts 都完成逐頁人工品質核准與完整 `seo-geo-journey-v1` multi-label annotation：#570001（AI features，primary `discovery`）、#570002（Ecommerce overview，`discovery`）、#570003（Multi-regional and multilingual，`progression`）、#570004（Share product data，`conversion`）、#570005（Where ecommerce data can appear，`conversion`）。標註保留的去識別來源摘要與 source span 涵蓋 AI visibility 的 foundational SEO 和 measurement、電商 shopper journey、hreflang/localized URL structure、Merchant Center／Product structured data 的 commerce consistency，以及 Search/Images/Lens/Shopping/Maps/Business Profile 的 global-to-local conversion surfaces；不含 PII。
+
+batch-10 後 immutable manifest admission 查核為 **31／100**；primary journey 分布為 discovery 4、understanding 11、response 4、progression 8、conversion 4。沒有建立 dataset manifest，沒有提交 Hugging Face job；Ecommerce URL structure PII review 與所有其他 blocked/review/failure job 仍排除。
