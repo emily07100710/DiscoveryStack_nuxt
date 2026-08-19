@@ -844,3 +844,21 @@ batch-31 對三頁執行 approved-source policy-gated ingestion。jobs **1080001
 兩筆 PII clean structural artifacts 均經逐頁人工品質審閱，完整多維 labels 皆先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotations **1650001**（Large Sitemaps，primary `progression`）及 **1650002**（Canonicalization，primary `response`）。annotation 1650001 保留 sitemap 不保證 crawling／indexing／ranking／display 的界線；annotation 1650002 保留 canonical preference 非決定性及 user experience／crawl efficiency 的脈絡。兩筆皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 source URL、source span 與 approved CC BY 4.0 source lineage。
 
 active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 現為 **64／101**；primary journey 分布為 discovery 13、understanding 13、response 15、progression 12、conversion 11。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **37** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。
+
+### Batch-32 candidate preflight: structured-data discovery
+
+VacationRental、Course、Dataset、Image license metadata 與 Carousel 五個候選均以 active eligible human annotation 查核，未回傳既有 active annotation；但此結果只代表可進入後續人工閱讀與受控 ingestion，不代表已成為訓練樣本。`/appearance/structured-data/course?hl=en` 為有效 Course list structured-data 文件：規範教育 outcome、instructor／student roster、至少三項 course、summary／all-in-one page、Carousel／ItemList、canonical item URLs 及名稱禁止 promotional／price／discount practices；頁面明示 rich-result feature 並不保證出現在搜尋結果。人工閱讀未見 email、電話或身分證樣式，授權仍以 Google Search Central Documentation 頁尾 CC BY 4.0 為準。
+
+`/appearance/structured-data/dataset?hl=en` 為有效 Dataset／DataCatalog／DataDownload structured-data 文件，涵蓋 dataset discovery、description/name、identifier、license、sameAs、creator、citation、spatial／temporal coverage、distribution 與 catalog linkage；它可用來標註 discoverability、provenance、citation readiness、license and canonical-version signals。人工閱讀未見 email、電話或身分證樣式；仍必須由 `public-ingestion-v4` 的 fail-closed outcome 決定是否可收集與人工標註。
+
+`/appearance/structured-data/vacation-rental?hl=en` 為有效 VacationRental 文件，包含 Hotel Center／Technical Account Manager eligibility、robots／noindex／login access、re-crawl、sitemap、listing metadata、location、ratings 和 reviews 等內容，且明示 interest form 不保證 Early Adopters invitation。然而範例同時包含詳細 street address、地理座標與具名 review-author 表述；即使其可能屬於示例資料，本輪不將此頁納入 ingestion，以免把較高 PII 風險的 listing／review 範例混入訓練語料。此為候選範圍縮小，不是對 PII gate 的放寬。
+
+`/appearance/structured-data/image-license-metadata?hl=en` 為有效 Google Images metadata 文件，涵蓋 creator／credit information、Schema.org `license`、`acquireLicensePage`、IPTC Web Statement of Rights、Licensor URL 與 Licensable badge eligibility。人工閱讀僅見 generic placeholder credit 表述，未見 email、電話或身分證樣式；可用於授權、provenance、image discovery 與 citation-readiness 的多維標註。它仍僅為候選，必須經 `public-ingestion-v4` 的 PII fail-closed 結果、品質審核、schema validation 與來源去重後才可進入資料集。
+
+### Batch-32 ingestion ledger and human annotations
+
+batch-32 對 Course、Dataset 與 Image license metadata 三頁執行 approved-source policy-gated ingestion。Course job **1110001** 與 Image license metadata job **1110003** 均為 HTTP 200、`completed`、`piiOutcome=not_detected`、finding counts emails 0／phones 0／national IDs 0，建立 structural artifacts **1680001**、**1680002**。Dataset job **1110002** 雖取得 HTTP 200，但偵測 emails 2、phones 9，結果為 `piiOutcome=redacted`、`status=needs_human_review`、`errorCode=pii_detected_requires_review`，未建立 artifact、未人工標註且絕不納入訓練；PII gate 未放寬。
+
+兩筆 PII clean structural artifacts 均經逐頁人工品質審閱，完整多維 labels 皆先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotations **1710001**（Course，primary `conversion`）及 **1710002**（Image license metadata，primary `discovery`）。annotation 1710001 保留 Course／CourseInstance、visible-page alignment、validation／monitoring 與 rich-result eligibility 非保證邊界；annotation 1710002 保留 image creator／credit、license、acquireLicensePage、IPTC rights statement、Licensable badge eligibility 與 image discovery 非保證邊界。兩筆皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 source URL、source span 與 approved CC BY 4.0 source lineage。
+
+active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 現為 **66／101**；primary journey 分布為 discovery 14、understanding 13、response 15、progression 12、conversion 12。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **35** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。`tests/public-intelligence-ingestion.test.ts` 的 9 項 PII／fingerprint／source-document dedupe／policy-gated ingestion 回歸測試全數通過。
