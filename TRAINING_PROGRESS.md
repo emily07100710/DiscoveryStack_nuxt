@@ -648,3 +648,17 @@ Google Image SEO Best Practices job **780002** 則為 `completed`，建立 struc
 Google Images structural artifact 1140001 經逐頁人工品質審閱後設為 `qualityStatus=passed`。其後，完整 labels 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **1170001**。去識別摘要涵蓋 Google Images／Discover／text-result image surfaces、標準 `img src`、responsive fallback、image sitemap 與 CDN verification、supported formats、頁面語意和 alt text、quality／performance、structured-data／Open Graph preview metadata、title／snippet guidance，以及 Search Console monitoring；不宣稱任一措施保證可見度。
 
 annotation 1170001 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，保留 approved CC BY 4.0 source、source URL 與 source-span lineage。immutable manifest readiness 現為 **50／100**；primary journey 分布為 discovery 9、understanding 12、response 10、progression 11、conversion 8。Product Variant Structured Data job 780001 因 12 個 phone findings 仍完整排除。未建立或核准 manifest，未提交 Hugging Face job；尚缺 50 筆總量，且 discovery 差 1、conversion 差 2 才符合每個旅程至少 10 筆的最低分布門檻。
+
+### Historical source-document de-duplication audit and readiness correction
+
+在 source-document 級去重規則上線後，對所有 active、`piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate` 的 human annotations 依 `sourceId + sourceUrl` 全量稽核。稽核發現五個舊 URL 在 source-span dedupe 仍然存在兩筆 active annotation。每組均保留較早的已核准 artifact，並以既有 `reviewOwnerPublicArtifact` 建立稽核軌跡，將較晚 artifact 設為 `qualityStatus=rejected`；沒有直接刪除資料，也沒有降低 PII、品質或來源 gate。
+
+| 來源 URL | 保留較早 artifact | 拒絕較晚重複 artifact |
+|---|---:|---:|
+| Ask Google to recrawl | 330002 | 990002 |
+| Mobile-first indexing | 270004 | 510004 |
+| Search Essentials | 270005 | 630002 |
+| AI optimization guide | 390001 | 630001 |
+| Search Console start guide | 390002 | 990001 |
+
+修正後，active eligible human annotation 的 duplicate query 回傳 **0** 列；因此先前以未去重 annotation 得出的 50／100 僅是暫時 raw count，**不得作為訓練或 manifest 進度主張**。不可變 manifest readiness 已如實校正為 **45／100**，primary journey 分布為 discovery 8、understanding 11、response 8、progression 10、conversion 8。尚缺 55 筆總量，且 discovery、response、conversion 各差 2 才符合每個旅程至少 10 筆的分布門檻。未建立或核准 manifest，未提交 Hugging Face job；後續所有新標註均受 source-document 級 active human annotation 去重強制保護。

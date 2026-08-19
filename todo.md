@@ -139,3 +139,4 @@
 - [x] 強化 human annotation repository 去重：拒絕同一 source URL 的第二筆 active human annotation，並以回歸測試鎖定此 manifest 對齊規則。
 - [x] 執行 Google Search Central batch-20 的電商網站發布與 pagination 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion 多維人工標註。
 - [x] 執行 Google Search Central batch-21 的 Product Variants 與 Google Images 文件受控收集，逐筆依 PII 結果完成或保留品質審核與 conversion／discovery 多維人工標註。
+- [x] 稽核並修正歷史 active human annotation 的 source-document 重複：保留最早已核准項目、以可稽核 review 撤銷較晚重複，並重算 manifest readiness。
