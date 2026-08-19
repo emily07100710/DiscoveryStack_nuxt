@@ -754,3 +754,17 @@ batch-27 對兩頁執行 approved-source policy-gated ingestion。JavaScript laz
 | 1410002 | Tell Google about localized versions | understanding | hreflang 的 HTML／HTTP header／sitemap 等效實作、fully-qualified／self／mutual alternates、x-default、語言偵測與 annotation boundary。 |
 
 兩筆皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL、source span lineage。active eligible source-document duplicate query 回傳 0 列。immutable manifest readiness 為 **51／100**；primary journey 分布為 discovery 10、understanding 12、response 10、progression 10、conversion 9。尚缺 49 筆總量，conversion 差 1 才符合每個 journey stage 最少 10 筆的分布門檻。未建立或核准 manifest，未提交 Hugging Face job。
+
+### Batch-28 candidate research: Dynamic rendering as a workaround
+
+active human annotation 查核未發現 **Dynamic rendering as a workaround**（`https://developers.google.com/search/docs/crawling-indexing/javascript/dynamic-rendering?hl=en`）。人工閱讀完整官方文件確認其為可用的 technical conversion 候選，頁尾明列 Google Developers CC BY 4.0。文件將 dynamic rendering 明確定義為 JavaScript-generated public content 的 workaround，而非 long-term recommendation；優先替代方案是 server-side rendering、static rendering 或 hydration。它界定 crawler capability、rendered HTML visibility、bot detection、per-page rollout 與 rendering server complexity／resource trade-off，並要求 crawler and user content 相似以避免 cloaking。內容中的 cats/dogs 僅為差異內容的政策範例，未見電話或 email；不構成 PII 例外，仍要經正式 source、robots、HTTPS redirect、PII、fingerprint、source-document 去重及人工品質 gate。
+
+### Batch-28 ingestion ledger: Dynamic Rendering
+
+batch-28 對 Dynamic Rendering 文件執行一次 approved-source policy-gated ingestion。job **990001** 為 `completed`，建立 structural artifact **1440001**；`piiOutcome=not_detected`，finding counts 為 emails 0、phones 0、national IDs 0。artifact 1440001 的 `piiStatus=none_detected`、`qualityStatus=pending`、`useSnapshot=training_candidate`，保留 source URL、source span 和 approved Google Search Central CC BY 4.0 lineage。它尚非訓練樣本；仍必須完成逐頁人工品質審核、taxonomy schema 驗證、來源 URL 去重與獨立 annotation quality approval 才可計入 immutable manifest readiness。
+
+### Batch-28 human quality review and annotation
+
+structural artifact 1440001 經逐頁人工品質審閱後設為 `qualityStatus=passed`。完整 labels 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **1470001**。去識別摘要將 dynamic rendering 僅表述為 public JavaScript content 對 crawler 不可用時的 workaround，優先保留 SSR／static rendering／hydration 的長期替代方案；並包含 crawler capability、renderer routing、per-page scope、resource trade-off、rendered HTML 和 user／crawler similarity 以防止 cloaking。它不將 technical compliance 表述為 indexing 或 displayed result guarantee。
+
+annotation 1470001 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，primary journey 為 `conversion`，並保留 approved CC BY 4.0 source、source URL、source-span lineage。active eligible source-document duplicate query 回傳 0 列。immutable manifest readiness 為 **52／100**；primary journey 分布為 discovery 10、understanding 12、response 10、progression 10、conversion 10。至此所有 journey stage 均已達每階段至少 10 筆的分布門檻，但仍缺 **48** 筆唯一且 eligible 的公開訓練樣本；未建立或核准 manifest，未提交 Hugging Face job。
