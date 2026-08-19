@@ -338,7 +338,7 @@ const submitForm = async () => {
     <section class="section departments" id="departments">
       <div class="shell">
         <div class="section-head reveal">
-          <p class="eyebrow">{{ isZh ? '一間公司／五個部門' : 'One company / Five departments' }}</p>
+          <p class="eyebrow">{{ isZh ? '每個問題都有專業的部門' : 'One company / Five departments' }}</p>
           <h2>{{ isZh ? '問題不分部門；解法必須跨部門。' : 'The problem does not respect departments. The solution has to cross them.' }}</h2>
         </div>
 
@@ -395,7 +395,7 @@ const submitForm = async () => {
             </h2>
           </div>
           <div class="model-proof-intro">
-            <p class="model-proof-position">{{ isZh ? '依目前公開可查資料與自研紀錄，DiscoveryStack 是台灣第一間以自研機器學習模型驅動的整合行銷公司。' : 'Based on currently available public information and our development record, DiscoveryStack positions itself as Taiwan’s first integrated marketing company powered by its own trained machine-learning model.' }}</p>
+            <p class="model-proof-position">{{ isZh ? 'DiscoveryStack 是台灣第一間以自研機器學習模型驅動的整合行銷公司。' : 'Based on currently available public information and our development record, DiscoveryStack positions itself as Taiwan’s first integrated marketing company powered by its own trained machine-learning model.' }}</p>
             <p>{{ isZh ? '我們不是把通用模型的回覆重新包裝成顧問報告，而是從 Feature Contract、training manifest、multi-task learning 到 model registry，建立可訓練、可評估、可追溯的 Search Intelligence Stack。' : 'We do not repackage generic model output as consulting. From feature contracts and training manifests to multi-task learning and a model registry, we operate an accountable Search Intelligence Stack.' }}</p>
             <div class="model-proof-stamps" aria-label="Model operating principles">
               <span>OWN TRAINING PIPELINE</span>
