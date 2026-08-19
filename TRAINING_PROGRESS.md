@@ -862,3 +862,24 @@ batch-32 對 Course、Dataset 與 Image license metadata 三頁執行 approved-s
 兩筆 PII clean structural artifacts 均經逐頁人工品質審閱，完整多維 labels 皆先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotations **1710001**（Course，primary `conversion`）及 **1710002**（Image license metadata，primary `discovery`）。annotation 1710001 保留 Course／CourseInstance、visible-page alignment、validation／monitoring 與 rich-result eligibility 非保證邊界；annotation 1710002 保留 image creator／credit、license、acquireLicensePage、IPTC rights statement、Licensable badge eligibility 與 image discovery 非保證邊界。兩筆皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 source URL、source span 與 approved CC BY 4.0 source lineage。
 
 active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 現為 **66／101**；primary journey 分布為 discovery 14、understanding 13、response 15、progression 12、conversion 12。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **35** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。`tests/public-intelligence-ingestion.test.ts` 的 9 項 PII／fingerprint／source-document dedupe／policy-gated ingestion 回歸測試全數通過。
+
+### Batch-33 candidate preflight: structured-data result eligibility
+
+來源去重查核顯示 general structured-data guidelines 已有 active eligible artifacts，故不重收。`/appearance/structured-data/recipe?hl=en` 與 `/appearance/structured-data/software-app?hl=en` 在既有 PII clean、quality-passed、training-candidate artifact 查核中沒有結果，可進入人工閱讀與受控 ingestion 的後續閘門。
+
+Recipe 文件說明 `Recipe`／`HowTo`／`ItemList` markup 可支援 recipe discovery、host carousel、visible-content alignment、image crawlability、validation、URL Inspection、recrawl 與 sitemap 維護；頁面反覆保留 rich-result appearance 可能不同的非保證界線。範例含 fictional person name 與 example.com URLs，但未見 email、電話或身分證樣式。SoftwareApplication 文件說明 app details、price／currency、rating or review、application category、operating system、validation、manual-action remediation 與 non-guaranteed rich-result visibility；範例僅含 product-style placeholder，不含 email、電話或身分證樣式。兩頁皆於頁尾明示 Google Search Central Documentation 為 CC BY 4.0（code samples 為 Apache 2.0）；兩者最終仍須以 `public-ingestion-v4` 的 fail-closed PII 結果決定是否可收集與人工標註。
+
+`/appearance/structured-data/carousel?hl=en` 在 preflight 中沒有既有 active eligible artifact。它說明 mobile host carousel、同網站內容、`ItemList` 與 Course／Movie／Recipe／Restaurant 的支援範圍、summary/detail vs all-in-one page、validation、URL Inspection、recrawl 與 sitemap 維護。範例有 fictional person name 與 example.com URLs，但未見 email、電話或身分證樣式；最終仍由 ingestion PII gate 判定。`/crawling-indexing/canonicalization-troubleshooting?hl=en` 亦無既有 active eligible artifact，說明 canonical re-evaluation 可能長達兩週、content difference、request indexing quotas、localized variants 的 `hreflang`、canonical／redirect／server misconfiguration、soft 404、hacked-site／malicious canonical、syndication 與 copycat copyright removal 等診斷脈絡。人工閱讀未見 email、電話或身分證樣式。兩頁均明示 Google Search Central Documentation CC BY 4.0（code samples Apache 2.0），並保留 result／canonical selection 非保證性。
+
+### Batch-33 ingestion ledger and human annotations
+
+jobs **1140001–1140004** 對 Recipe、SoftwareApplication、Carousel 與 canonicalization troubleshooting 執行 approved-source policy-gated ingestion；四頁均為 HTTP 200、`completed`、`piiOutcome=not_detected`、finding counts emails 0／phones 0／national IDs 0，分別建立 structural artifacts **1740001–1740004**。每筆 structural artifact 均經逐頁人工品質審閱，完整 labels 均先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotations **1770001–1770004**。
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 1770001 | Recipe structured data | conversion | Recipe／ItemList、visible-page alignment、image crawlability、validation、URL Inspection、sitemap 與 eligibility 非保證。 |
+| 1770002 | SoftwareApplication structured data | conversion | app details、offers、price／currency、rating／review、validation、manual-action remediation 與 non-guarantee。 |
+| 1770003 | Carousel structured data | discovery | same-site collection routing、supported type、summary/detail architecture、mobile search appearance 與 non-guarantee。 |
+| 1770004 | Canonicalization troubleshooting | response | canonical diagnosis、URL Inspection、hreflang、server／redirect／soft-404／compromise／syndication remediation 與 preference 非決定性。 |
+
+四筆 annotations 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 source URL、source span 與 approved CC BY 4.0 source lineage。active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 現為 **70／101**；primary journey 分布為 discovery 15、understanding 13、response 16、progression 12、conversion 14。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **31** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。
