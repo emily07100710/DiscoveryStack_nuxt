@@ -812,3 +812,19 @@ batch-29 對五頁已完成人工閱讀與 preflight source-document 查核的 G
 依 owner 指示，immutable dataset manifest 與 Hugging Face **development** training submission 的最小總量由 **100** 提高為 **101** 筆。此為更嚴格的數量 gate；每個 primary journey stage 至少 10 筆、approved-source CC BY 4.0 lineage、active source-document deduplication、PII fail-closed、artifact／annotation quality pass、schema-validated multi-label annotation、immutable manifest 與 owner approval 均維持不變。production mode 仍為至少 150 筆、每 stage 至少 20 筆。
 
 伺服端 `MINIMUM_TRAINING_EXAMPLES` 已集中為 101，並由 manifest admission、owner approval 與遠端 training eligibility 共用；Audit Lab 與 ML Workbench 的 owner-visible文案、資料集選擇提示也同步使用 101。`audit-governance.test.ts`（含 101／10 readiness assertion）與 `training-manifest-admission.integration.test.ts`（驗證 101 筆 structural crawl artifacts 仍不可取代 human annotations）共 **8** 項定向 Vitest 測試通過。Nuxt preview health check 回報 TypeScript 無錯誤，Audit Lab 與 ML Workbench 路由可正常渲染；獨立 `nuxt typecheck` 在常駐 Nuxt／TypeScript watcher 佔用資源時未在等待窗口內輸出診斷，因此已停止該重複程序，未將其視為通過證據。
+
+### Batch-30 ingestion ledger and human annotations
+
+batch-30 對六頁已完成人工閱讀與 source-document preflight 的 Google Search Central 文件執行 approved-source policy-gated ingestion。jobs **1050001–1050006** 都取得 HTTP 200；其中 Structured data overview、Preferred Sources、Article、DiscussionForumPosting 與 QAPage 五頁為 `completed`、`piiOutcome=not_detected`，每筆 finding counts 均為 emails 0、phones 0、national IDs 0，並建立 structural artifacts **1560001–1560005**。ProfilePage job **1050004** 雖取得 HTTP 200，但偵測 4 個 phone patterns，結果為 `piiOutcome=redacted`、`status=needs_human_review`、`errorCode=pii_detected_requires_review`，未建立 artifact、未人工標註且絕不納入訓練；PII gate 未放寬。
+
+五筆 PII clean structural artifacts 均經逐頁人工品質審閱並設為 `qualityStatus=passed`。完整 labels 均先通過 `seoGeoMultilabelSchema.parse()`，才建立且獨立核准 human annotations **1590001–1590005**：
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 1590001 | Structured data overview | discovery | standardized markup、testing／monitoring 與 rich-result eligibility 的不保證邊界。 |
+| 1590002 | Preferred Sources | discovery | reader preference、publication identity、source branding 與非保證 visibility。 |
+| 1590003 | Article structured data | response | visible article alignment、headline／image／date metadata 與 rich-result 不保證。 |
+| 1590004 | DiscussionForumPosting | understanding | forum／Q&A／article／review 頁型區分、full text、thread structure、accessible URL。 |
+| 1590005 | QAPage | response | single question + user-submitted answers、FAQ 等錯誤 use case 排除與 non-guaranteed eligibility。 |
+
+五筆 annotations 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 source URL、source span 與 approved CC BY 4.0 source lineage。active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 現為 **62／101**；primary journey 分布為 discovery 13、understanding 13、response 14、progression 11、conversion 11。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **39** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。
