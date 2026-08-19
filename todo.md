@@ -151,3 +151,4 @@
 - [x] 執行 Google Search Central batch-29 的 outbound links、valid metadata、temporary site pause、content removal 與 featured snippets 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維人工標註。
 - [x] 執行 Google Search Central batch-30 的 structured-data testing、preferred sources、Article、ProfilePage、DiscussionForumPosting 與 QAPage 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維人工標註。
 - [x] 將 immutable dataset manifest 與 Hugging Face 訓練的總量門檻由 100 筆升為 101 筆，並同步更新 Audit Lab、伺服端 gate、測試與治理文件；每個 journey stage 至少 10 筆、PII fail-closed、來源文件去重與 owner 核准要求維持不變。
+- [x] 執行 Google Search Central batch-31 的 sitemap index、sitemap extensions 與 canonicalization 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維人工標註。

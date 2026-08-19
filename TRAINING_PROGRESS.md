@@ -828,3 +828,19 @@ batch-30 對六頁已完成人工閱讀與 source-document preflight 的 Google 
 | 1590005 | QAPage | response | single question + user-submitted answers、FAQ 等錯誤 use case 排除與 non-guaranteed eligibility。 |
 
 五筆 annotations 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 source URL、source span 與 approved CC BY 4.0 source lineage。active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 現為 **62／101**；primary journey 分布為 discovery 13、understanding 13、response 14、progression 11、conversion 11。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **39** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。
+
+### Batch-31 candidate preflight: sitemap architecture
+
+以 active eligible human annotation 查核六個 sitemap／canonicalization URL 後，`build-sitemap`、`overview` 與 `consolidate-duplicate-urls` 各已有一筆 active eligible human annotation，故明確排除。其餘候選尚無 active eligible human annotation，仍須完成逐頁人工閱讀與 ingestion PII gate 後才可使用。
+
+`/crawling-indexing/sitemaps/large-sitemaps?hl=en`（Manage Your Sitemaps With Sitemap Index Files）經人工閱讀為有效、技術相關的 sitemap index 文件：超過 size limits 時須拆分、index file 可一次提交多個 sitemap、referenced sitemaps 具 same-site／directory constraints，並有 500 index files 與 50,000 `loc` tags 的邊界。`/crawling-indexing/sitemaps/combine-sitemap-extensions?hl=en`（How to Combine Sitemap Extensions）說明 image/news/video/xhtml(hreflang) namespaces、各 extension metadata、同一 `<url>` 的組合順序及 file size trade-off。兩頁均在頁尾明示 CC BY 4.0（code samples 為 Apache 2.0），人工閱讀未見 email、電話或身分證樣式；最終 eligibility 仍以 `public-ingestion-v4` 的 fail-closed PII outcome 為準。
+
+`/crawling-indexing/canonicalization?hl=en`（What is URL Canonicalization）經人工閱讀為有效 Google Search Central 文件，頁尾明示 CC BY 4.0（code samples Apache 2.0）。它說明 representative URL、duplicate content 的 region/device/protocol/filtering/sorting 等成因，以及 HTTPS、redirect、sitemap inclusion 與 `rel=canonical` 是 preference signals；Google 可能選擇不同 canonical，因為此偏好是 hint 而非 rule。人工閱讀未見 email、電話或身分證樣式；最終 eligibility 仍以 ingestion PII gate 為準。
+
+### Batch-31 ingestion ledger and human annotations
+
+batch-31 對三頁執行 approved-source policy-gated ingestion。jobs **1080001**（Large Sitemaps）與 **1080003**（Canonicalization）皆為 HTTP 200、`completed`、`piiOutcome=not_detected`、finding counts emails 0／phones 0／national IDs 0，建立 structural artifacts **1620001**、**1620002**。Combine Sitemap Extensions job **1080002** 雖為 HTTP 200，但偵測到 1 個 phone pattern，結果為 `piiOutcome=redacted`、`status=needs_human_review`、`errorCode=pii_detected_requires_review`，未建立 artifact、未人工標註且絕不納入訓練；PII gate 未放寬。
+
+兩筆 PII clean structural artifacts 均經逐頁人工品質審閱，完整多維 labels 皆先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotations **1650001**（Large Sitemaps，primary `progression`）及 **1650002**（Canonicalization，primary `response`）。annotation 1650001 保留 sitemap 不保證 crawling／indexing／ranking／display 的界線；annotation 1650002 保留 canonical preference 非決定性及 user experience／crawl efficiency 的脈絡。兩筆皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 source URL、source span 與 approved CC BY 4.0 source lineage。
+
+active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 現為 **64／101**；primary journey 分布為 discovery 13、understanding 13、response 15、progression 12、conversion 11。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **37** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。
