@@ -600,3 +600,26 @@ batch-19 以 source id 1 的唯一 approved Google Search Central CC BY 4.0 Sour
 已透過既有 `reviewOwnerPublicArtifact` 稽核流程，而非直接刪除資料，將 1050001（title-link）與 1050002（snippets）設為 `qualityStatus=rejected`；quality note 明示保留較早已核准 artifact 90004／90002，拒絕後續同來源 URL 的重複訓練候選。查核確認兩個 URL 各僅有 **1** 筆 `passed`／`training_candidate`／`piiStatus=none_detected` human annotation。
 
 repository 現新增 source-document 層級的 `humanAnnotationSourceIdentity()`，並在建立 active `human_annotation` 前拒絕相同 source ID 與 source URL 的第二筆 annotation，即使 recrawl source-span hash 不同。batch-19 審核腳本已重跑，兩頁均回傳 `retained_existing` 並引用既有 artifacts，未再新增 candidate。公開 ingestion regression 共 **9/9** 通過。由於三個 batch-19 URL 分別已有既有有效 human annotation 或是既有 structural artifact，**本批不新增 manifest admission**；immutable readiness 如實維持 **47／100**，分布為 discovery 8、understanding 12、response 10、progression 11、conversion 6。未建立或核准 manifest，未提交 Hugging Face job。
+
+### Batch-20 candidate research — ecommerce launch and pagination
+
+人工閱讀 Google Search Central「How to launch a new ecommerce website」確認正文為 CC BY 4.0，且該 exact URL 尚未有 active artifact。內容提供 conversion 相關的可判別證據：ownership verification、依 URL 規模選擇 inspection request 或 sitemap、Page Indexing report 追蹤、Merchant Center／Shopping eligibility，以及 grand reveal、home-page launch、launch without product availability、soft launch 的利弊與 action 邊界。頁面未直接顯示 email、電話或個人身分例項，但仍須通過正式受控收集時的 PII gate 才能進入人工審核。
+
+同一官方電商指南索引確認各主題仍受 CC BY 4.0 覆蓋，並列出「Pagination, incremental page loading, and their impact on Google Search」為未在 batch-04 至 batch-19 明示處理的文件。它聚焦電商 UX pattern 對 crawling／indexing 的影響，暫列為第二個 conversion 候選；收集前仍須先確認 canonical URL、檢查是否已有 human annotation，並執行既有 PII、robots、redirect 與去重 gate。 
+
+已確認其 canonical URL 為 `https://developers.google.com/search/docs/specialty/ecommerce/pagination-and-incremental-page-loading?hl=en`，而資料庫尚無 active artifact。人工閱讀正文確認它受 CC BY 4.0，並提供有界 conversion 證據：pagination、load more、infinite scroll 的 UX 取捨；crawler 僅一般擷取 `<a href>` URL 而不點擊按鈕或觸發需使用者操作的 JavaScript；pagination sequential links、各頁 unique URL/canonical、不要使用 fragments 作頁碼，以及 filter／sort variations 的 `noindex`／robots 管理。頁面僅含一般產品與 URL 範例，未見 direct email／phone 值；仍須由正式 PII extractor fail-closed 驗證。
+
+### Batch-20 ingestion ledger
+
+batch-20 以唯一已核准的 Google Search Central CC BY 4.0 source 執行兩次 `owner_triggered_approved_fetch`，皆由既有同網域 HTTPS redirect、robots、terms、source、PII 與 fingerprint gate 處理。job **750001**（電商網站發布）建立 structural artifact **1080001**；job **750002**（pagination／incremental loading）建立 structural artifact **1080002**。兩筆 job 均為 `completed`、`piiOutcome=not_detected`，finding counts 為 emails 0／phones 0／national IDs 0；兩筆 artifact 為 `piiStatus=none_detected`、`qualityStatus=pending`、`useSnapshot=training_candidate`。這些 structural artifacts 不是訓練樣本，也尚未計入 readiness；每筆仍須逐頁人工品質審核、schema-validated conversion multilabel annotation 及獨立 annotation quality approval。
+
+### Batch-20 human quality review and annotations
+
+structural artifacts 1080001 與 1080002 都經逐頁人工品質審核而設為 `qualityStatus=passed`。每一筆標籤均先由 `seoGeoMultilabelSchema.parse()` 驗證，才建立和獨立核准下列 `human_annotation`；每個摘要僅保留官方文件的有界 SEO／GEO 洞察，沒有個人資料、review note、標籤理由或信心值。
+
+| Human annotation | 來源頁 | primary journey | 審核與標註重點 |
+|---:|---|---|---|
+| 1110001 | How to launch a new ecommerce website | conversion | launch timing 選擇、ownership、inspection／sitemap 規模分流、indexing monitoring、Merchant Center／Shopping eligibility、stock 與 checkout expectation 的 trade-off。 |
+| 1110002 | Pagination, incremental page loading, and their impact on Google Search | conversion | pagination／load-more／infinite-scroll 的 UX 取捨、可爬取 `href` navigation、unique URL 與 canonical、fragment 限制、filter／sort URL index control、product discovery。 |
+
+兩筆均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL 與 source span lineage。查核後 immutable manifest readiness 為 **49／100**；primary journey 分布為 discovery 8、understanding 12、response 10、progression 11、conversion 8。未建立或核准 manifest，未提交 Hugging Face job；尚缺 51 筆總量，並且 discovery 差 2、conversion 差 2 才符合每階段 10 筆的最低分布門檻。
