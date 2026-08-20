@@ -135,7 +135,75 @@ function useForIntendedDataset(intendedUse: 'research' | 'evaluation' | 'trainin
 
 export async function listOwnerPublicDatasetBuilds(ownerUserId: number) {
   const database = requireAuditDatabase()
-  return database.select({ id: publicIntelligenceDatasetBuilds.id, datasetName: publicIntelligenceDatasetBuilds.datasetName, datasetVersion: publicIntelligenceDatasetBuilds.datasetVersion, intendedUse: publicIntelligenceDatasetBuilds.intendedUse, status: publicIntelligenceDatasetBuilds.status, featureContractVersion: publicIntelligenceDatasetBuilds.featureContractVersion, labelTaxonomyVersion: publicIntelligenceDatasetBuilds.labelTaxonomyVersion, splitVersion: publicIntelligenceDatasetBuilds.splitVersion, manifestHash: publicIntelligenceDatasetBuilds.manifestHash, createdAt: publicIntelligenceDatasetBuilds.createdAt, approvedAt: publicIntelligenceDatasetBuilds.approvedAt, artifactCount: sql<number>`count(${publicIntelligenceDatasetMembers.id})` }).from(publicIntelligenceDatasetBuilds).leftJoin(publicIntelligenceDatasetMembers, eq(publicIntelligenceDatasetMembers.datasetBuildId, publicIntelligenceDatasetBuilds.id)).where(eq(publicIntelligenceDatasetBuilds.ownerUserId, ownerUserId)).groupBy(publicIntelligenceDatasetBuilds.id).orderBy(desc(publicIntelligenceDatasetBuilds.createdAt))
+  const builds = await database.select({ id: publicIntelligenceDatasetBuilds.id, datasetName: publicIntelligenceDatasetBuilds.datasetName, datasetVersion: publicIntelligenceDatasetBuilds.datasetVersion, intendedUse: publicIntelligenceDatasetBuilds.intendedUse, status: publicIntelligenceDatasetBuilds.status, featureContractVersion: publicIntelligenceDatasetBuilds.featureContractVersion, labelTaxonomyVersion: publicIntelligenceDatasetBuilds.labelTaxonomyVersion, splitVersion: publicIntelligenceDatasetBuilds.splitVersion, manifestHash: publicIntelligenceDatasetBuilds.manifestHash, createdAt: publicIntelligenceDatasetBuilds.createdAt, approvedAt: publicIntelligenceDatasetBuilds.approvedAt, artifactCount: sql<number>`count(${publicIntelligenceDatasetMembers.id})` }).from(publicIntelligenceDatasetBuilds).leftJoin(publicIntelligenceDatasetMembers, eq(publicIntelligenceDatasetMembers.datasetBuildId, publicIntelligenceDatasetBuilds.id)).where(eq(publicIntelligenceDatasetBuilds.ownerUserId, ownerUserId)).groupBy(publicIntelligenceDatasetBuilds.id).orderBy(desc(publicIntelligenceDatasetBuilds.createdAt))
+  if (!builds.length) return builds
+
+  const rows = await database.select({
+    datasetBuildId: publicIntelligenceDatasetMembers.datasetBuildId,
+    artifactId: publicIntelligenceDatasetMembers.artifactId,
+    memberStatus: publicIntelligenceDatasetMembers.memberStatus,
+    dataSplit: publicIntelligenceDatasetMembers.dataSplit,
+    artifactSourceUrl: publicIntelligenceArtifacts.sourceUrl,
+    artifactFieldData: publicIntelligenceArtifacts.fieldData,
+    artifactQualityStatus: publicIntelligenceArtifacts.qualityStatus,
+    artifactPiiStatus: publicIntelligenceArtifacts.piiStatus,
+    artifactRemovedAt: publicIntelligenceArtifacts.removedAt,
+    sourceId: publicIntelligenceSources.id,
+    sourceName: publicIntelligenceSources.sourceName,
+    sourceDomain: publicIntelligenceSources.domain,
+    sourceLicenceReference: publicIntelligenceSources.licenceReference,
+    sourceTermsStatus: publicIntelligenceSources.termsStatus,
+    sourceAllowedUse: publicIntelligenceSources.allowedUse,
+    sourceReviewStatus: publicIntelligenceSources.reviewStatus,
+    sourceRemovedAt: publicIntelligenceSources.removedAt,
+  }).from(publicIntelligenceDatasetMembers)
+    .innerJoin(publicIntelligenceArtifacts, eq(publicIntelligenceDatasetMembers.artifactId, publicIntelligenceArtifacts.id))
+    .innerJoin(publicIntelligenceSources, eq(publicIntelligenceArtifacts.sourceId, publicIntelligenceSources.id))
+    .where(and(inArray(publicIntelligenceDatasetMembers.datasetBuildId, builds.map(build => build.id)), eq(publicIntelligenceDatasetMembers.memberStatus, 'included')))
+
+  const splitFor = (artifactId: number, declaredSplit: string, splitVersion: string | null) => {
+    if (declaredSplit === 'train' || declaredSplit === 'validation' || declaredSplit === 'test') return declaredSplit
+    let hash = 2166136261
+    for (const character of `${splitVersion || 'deterministic-id-v1'}:${artifactId}`) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619)
+    const bucket = (hash >>> 0) / 4294967296
+    return bucket < 0.7 ? 'train' : bucket < 0.85 ? 'validation' : 'test'
+  }
+
+  return builds.map(build => {
+    const members = rows.filter(row => row.datasetBuildId === build.id)
+    const stageCounts: Record<string, number> = { discovery: 0, understanding: 0, response: 0, progression: 0, conversion: 0 }
+    const splitCounts = { train: 0, validation: 0, test: 0 }
+    const canonicalDocuments = new Set<string>()
+    const sources = new Map<number, { name: string | null, domain: string | null, licenceReference: string | null, termsStatus: string, allowedUse: string, reviewStatus: string }>()
+    let qualityPassedCount = 0
+    let piiClearCount = 0
+    let activeMemberCount = 0
+    for (const member of members) {
+      const parsed = seoGeoMultilabelSchema.safeParse(member.artifactFieldData)
+      if (parsed.success) {
+        const stage = parsed.data.primaryJourneyStage
+        stageCounts[stage] = (stageCounts[stage] || 0) + 1
+      }
+      splitCounts[splitFor(member.artifactId, member.dataSplit, build.splitVersion)] += 1
+      canonicalDocuments.add(canonicalHumanAnnotationSourceUrl(member.artifactSourceUrl))
+      if (member.artifactQualityStatus === 'passed') qualityPassedCount += 1
+      if (member.artifactPiiStatus === 'none_detected') piiClearCount += 1
+      if (!member.artifactRemovedAt && !member.sourceRemovedAt) activeMemberCount += 1
+      sources.set(member.sourceId, { name: member.sourceName, domain: member.sourceDomain, licenceReference: member.sourceLicenceReference, termsStatus: member.sourceTermsStatus, allowedUse: member.sourceAllowedUse, reviewStatus: member.sourceReviewStatus })
+    }
+    const sourceSummary = [...sources.values()].map(source => ({ ...source, licenceReference: source.licenceReference || 'not_recorded' }))
+    return {
+      ...build,
+      manifestSummary: {
+        sourceCount: sourceSummary.length,
+        sources: sourceSummary,
+        splitCounts,
+        primaryJourneyStageCounts: stageCounts,
+        deduplication: { frozenMemberCount: members.length, canonicalDocumentCount: canonicalDocuments.size, canonicalDuplicateCount: members.length - canonicalDocuments.size },
+        qualityAndPii: { activeMemberCount, qualityPassedCount, piiClearCount, allMembersQualityPassed: qualityPassedCount === members.length, allMembersPiiClean: piiClearCount === members.length },
+      },
+    }
+  })
 }
 
 /** Counts only active public human annotations that satisfy the immutable training-manifest admission policy. */
