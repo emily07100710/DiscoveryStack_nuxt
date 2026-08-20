@@ -163,3 +163,4 @@
 - [x] 執行 Google Search Central batch-36：完成唯一來源 preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入可稽核且 PII clean 的真實官方文件。
 - [x] 修正 Google Search Central `hl` 語言參數造成的 human annotation source-document 去重缺口，補足回歸測試並依治理流程拒絕既有重覆 annotations。
 - [x] 執行 Google Search Central batch-37：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。
+- [x] 執行 Google Search Central batch-38：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。

@@ -973,3 +973,24 @@ batch-37 對五頁執行 approved-source policy-gated ingestion。jobs **1260001
 | 1980005 | Flexible Sampling general guidance | conversion | metering／lead-in、paywall UX、subscription conversion、publisher-specific testing 與 paywalled structured-data anti-cloaking。 |
 
 五筆 annotations 均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate query 回傳 **0**。101 筆 immutable manifest readiness 更新為真實 **82／101**；primary journey 分布為 discovery 18、understanding 15、response 19、progression 13、conversion 17。每個 journey stage 都至少 10 筆，尚缺 **19** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。batch-37 checkpoint 前，ingestion、source policy、redirect policy、audit governance 與 immutable manifest admission 回歸測試共 **25 項**通過。
+
+### Batch-38 candidate preflight: local appearance, speech, delivery and commerce metadata
+
+本批先針對 Google Search Central 官方候選執行 canonical-path active annotation preflight，再人工閱讀正文與授權。faceted navigation、business details 與 Web Stories 候選皆經文字或可視確認為 **404**，已保留排除證據，沒有觸發 ingestion、artifact 或 annotation。最終政策受控收集範圍為 Top Places List、Speakable structured data、Package tracking、Merchant shipping policy structured data 與 Vacation rental structured data；五頁皆為 `developers.google.com/search/docs/**`，並由頁尾確認 Google Developers **CC BY 4.0** 文件授權。
+
+Top Places List 提供 local-intent search appearance 與自動呈現邊界；Speakable 提供 TTS-compatible content、structured data 與市場／語言限制；Package tracking 提供服務可靠性、delivery status 與 sender／recipient personal-data 禁令；ShippingService 提供 shipping cost、destination、delivery time 與 validation rollout；VacationRental 含多個人姓名與地址形態範例，故特別保留由 PII gate fail-closed 決定是否排除。
+
+### Batch-38 ingestion ledger and human annotations
+
+batch-38 對五頁執行 approved-source policy-gated ingestion。jobs **1290001–1290004** 均為 HTTP 200、`completed`、`piiOutcome=not_detected`，finding counts 均為 emails 0／phones 0／national IDs 0，建立 structural artifacts **2010001–2010004**。job **1290005**（VacationRental）也是 HTTP 200，但 extractor v4 偵測 **phones 2**，因此結果為 `piiOutcome=redacted`、`status=needs_human_review`，沒有建立 structural artifact 或 human annotation，且未納入任何 readiness 計數。此項排除不以官方來源或資料集數量目標為理由覆寫。
+
+四筆 PII clean structural artifacts 均經逐頁人工品質審閱為 `passed`，完整 SEO/GEO labels 皆先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotations **2040001–2040004**。
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 2040001 | Top Places List | progression | local-intent appearance、位置與商家資訊、可應用訊號與 automated／non-guaranteed feature boundary。 |
+| 2040002 | Speakable structured data | understanding | TTS-compatible sections、valid markup、crawl/index requirements、visible-content parity、market/language constraints 與 feature non-guarantee。 |
+| 2040003 | Package tracking | conversion | shipment-status API、availability／latency、existing-customer journey、allowed operational fields 與 sender／recipient data prohibition。 |
+| 2040004 | Merchant shipping policy (`ShippingService`) | conversion | cost／destination／handling／transit conditions、accessible policy page、Rich Results Test、URL Inspection 與 commerce decision support。 |
+
+四筆 annotations 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate groups 為 **0**。101 筆 immutable manifest readiness 為真實 **86／101**；primary journey 分布為 discovery 18、understanding 16、response 19、progression 14、conversion 19。所有五個 journey stage 均至少 10 筆，尚缺 **15** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。
