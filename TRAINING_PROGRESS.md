@@ -1015,3 +1015,21 @@ batch-39 執行 approved-source policy-gated ingestion。jobs **1320001、132000
 | 2100004 | Spam updates | response | automated detection、policy review、reassessment time、link-spam benefit non-restoration 與預期管理。 |
 
 四筆 annotations 均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate groups 為 **0**。101 筆 immutable manifest readiness 為真實 **90／101**；primary journey 分布為 discovery 18、understanding 17、response 21、progression 15、conversion 19。所有五個 journey stage 均至少 10 筆，尚缺 **11** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。
+
+### Batch-40 candidate preflight: commerce and video structured-data implementation
+
+本批以 Google Search Central product, local and video search appearance 文件建立候選池，先執行 Google canonical source identity preflight，再逐頁人工閱讀與確認頁尾 Google Developers **CC BY 4.0** 授權。Change Address、faceted navigation、business details 與 Web Stories 候選經文字或可視檢查為 **404**，已排除且沒有送入 ingestion。最終收集候選為 Merchant listing、Product variants、Merchant return policy、Event 與 Video structured data。
+
+人工閱讀確認商品及商家頁涉及價格、庫存、退款／配送與商家資訊，活動頁涉及時間與 location 等範例，故即使頁面為官方 CC BY 4.0 文件，也必須維持 PII gate 的 fail-closed 決策；Video 頁涵蓋 VideoObject、watch page、key moments、LIVE badge、驗證與 crawlability，適合作為 SEO/GEO content-discovery 的候選。
+
+### Batch-40 ingestion ledger, PII exclusion and human annotation
+
+batch-40 執行 approved-source policy-gated ingestion。五筆均取得 HTTP 200。Merchant listing（job **1350001**）偵測 phones **19**、Product variants（**1350002**）phones **12**、Merchant return policy（**1350003**）emails **1**／phones **2**、Event（**1350004**）phones **7**；四筆均為 `piiOutcome=redacted`、`status=needs_human_review`，沒有建立 structural artifact 或 human annotation，完全不計入 readiness。
+
+只有 Video structured data（job **1350005**）為 `completed`、`piiOutcome=not_detected`，finding counts 為 emails 0／phones 0／national IDs 0，建立 structural artifact **2130001**。該 artifact 經逐頁人工品質審閱為 `passed`；完整 SEO/GEO labels 先通過 `seoGeoMultilabelSchema.parse()`，再建立並獨立核准唯一 human annotation **2160001**。
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 2160001 | Video structured data | discovery | VideoObject、watch page、key moments、LIVE badge、language availability、Rich Results Test、URL Inspection、crawlability 與 eligibility 非 guarantee。 |
+
+annotation **2160001** 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate groups 為 **0**。101 筆 immutable manifest readiness 為真實 **91／101**；primary journey 分布為 discovery 19、understanding 17、response 21、progression 15、conversion 19。所有五個 journey stage 均至少 10 筆，尚缺 **10** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。

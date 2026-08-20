@@ -165,3 +165,4 @@
 - [x] 執行 Google Search Central batch-37：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。
 - [x] 執行 Google Search Central batch-38：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。
 - [x] 執行 Google Search Central batch-39：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。
+- [x] 執行 Google Search Central batch-40：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。
