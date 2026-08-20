@@ -951,3 +951,25 @@ batch-36 canonical-path 稽核發現四筆較晚的 batch-35 annotations 只是�
 repository 現在對 `developers.google.com/search/docs/**` 的 human annotation source identity 移除僅用於語言選擇的 `hl` 參數與 fragment；寫入前去重、manifest readiness 及 immutable manifest approval 均使用同一 canonical identity。其他網域的 query parameters 維持原樣，不做過度正規化。新增回歸測試證明同頁的 `hl=en` 與 `hl=zh-tw` 即使 source-span 不同，也不能同時通過 immutable manifest admission。
 
 remediation 後，active eligible Google Search Central canonical-path duplicate groups 為 **0**。101 筆 immutable manifest readiness 為真實 **77／101**；primary journey 分布為 discovery 16、understanding 14、response 19、progression 12、conversion 16。每個 journey stage 仍至少 10 筆，尚缺 **24** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，亦未提交 Hugging Face job。`public-intelligence-ingestion`、`audit-governance` 與 `training-manifest-admission` 核心回歸測試共 **18 項**通過。
+
+### Batch-37 candidate preflight: visibility controls and search appearance
+
+本批由 Google Search Central crawling/indexing 與 appearance 官方文件挑選候選，先以 Google 文件 canonical source identity（忽略僅用於語言選擇的 `hl` 參數）做 active eligible human-annotation preflight，再逐頁人工閱讀。初選中的 Web Stories URL 經官方頁面確認為 **404**，已寫入研究紀錄並排除，沒有送往 ingestion。最終納入的五個候選為：Control what you share with Google、Influence your byline dates、Sitelinks、Translated results in Google Search 與 Flexible Sampling general guidance。
+
+五頁均為 `developers.google.com/search/docs/**` 官方文件，頁尾內容授權為 **CC BY 4.0**；人工閱讀確認分別涵蓋內容可見性治理、日期／更新訊號、資訊架構與 sitelinks、跨語結果與 opt-out、付費牆／取樣與訂閱轉換。候選未使用第三方摘要或未確認來源；PII 可否入集仍完全由後續 `public-ingestion-v4` 判定。
+
+### Batch-37 ingestion ledger and human annotations
+
+batch-37 對五頁執行 approved-source policy-gated ingestion。jobs **1260001–1260005** 均為 HTTP 200、`completed`、`piiOutcome=not_detected`；finding counts 皆為 emails 0／phones 0／national IDs 0，建立 structural artifacts **1950001–1950005**。全部 artifacts 的 `piiStatus=none_detected`、`useSnapshot=training_candidate`，並保留 final source URL 與 source-span hash。Flexible Sampling 的實際 final source URL 帶有 `?hl=th`；它仍透過已修正的 Google canonical identity 與其他語言 rendering 去重，而不是被錯當成另一份文件。
+
+五筆 structural artifacts 都經逐頁人工品質審閱為 `passed`。完整 SEO/GEO labels 均先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotations **1980001–1980005**。
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 1980001 | Control what you share with Google | progression | removal、password protection、noindex、robots.txt、feature opt-out 與 duplicate／低價值內容的不同治理路徑。 |
+| 1980002 | Influence your byline dates | discovery | visible dates、datePublished／dateModified、multi-signal estimate、timezone／future-date 邊界與非保證呈現。 |
+| 1980003 | Sitelinks | discovery | automated same-domain links、titles／headings、logical navigation、internal anchor text 與非手動保證的呈現界線。 |
+| 1980004 | Translated results | understanding | multilingual result rendering、original result access、Search Console measurement 與 `notranslate` meta/header opt-out。 |
+| 1980005 | Flexible Sampling general guidance | conversion | metering／lead-in、paywall UX、subscription conversion、publisher-specific testing 與 paywalled structured-data anti-cloaking。 |
+
+五筆 annotations 均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate query 回傳 **0**。101 筆 immutable manifest readiness 更新為真實 **82／101**；primary journey 分布為 discovery 18、understanding 15、response 19、progression 13、conversion 17。每個 journey stage 都至少 10 筆，尚缺 **19** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。batch-37 checkpoint 前，ingestion、source policy、redirect policy、audit governance 與 immutable manifest admission 回歸測試共 **25 項**通過。
