@@ -899,3 +899,29 @@ batch-34 對 Googlebot 與 supported meta tags 兩頁執行 approved-source poli
 Googlebot structural artifact 經逐頁人工品質審閱後設為 `qualityStatus=passed`。完整多維 labels 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **1800002**，primary journey 為 `understanding`。去識別摘要保留 Smartphone／Desktop crawler、shared robots token、mobile-first indexing、crawl rate、crawler identity verification、file-size limits、crawling／indexing／access control boundary，以及非保證性；不將任一技術設定陳述為搜尋排名或結果顯示保證。annotation 1800002 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 source URL、source span 與 approved CC BY 4.0 source lineage。
 
 active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 現為 **71／101**；primary journey 分布為 discovery 15、understanding 14、response 16、progression 12、conversion 14。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **30** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。
+
+### Batch-35 candidate preflight: Search lifecycle, appearance, essentials and Search Console diagnostics
+
+在受控 ingestion 前，針對下列五個 Google Search Central URL 執行 active eligible human-annotation source-document preflight；皆未命中既有 `human_annotation`、`qualityStatus=passed`、`piiStatus=none_detected`、`useSnapshot=training_candidate` 且未移除的 annotation。人工閱讀官方文件與頁尾授權聲明，確認內容採 Google Developers **CC BY 4.0**；沒有以搜尋結果摘要、第三方內容或低風險推定替代正式檢查。
+
+- `fundamentals/how-search-works`：URL discovery、crawl、rendering、indexing、canonical selection 與 serving 的搜尋生命週期。
+- `appearance`：titles、snippets、media、site names、translations、business details 與 structured-data-supported search appearance eligibility。
+- `essentials`：technical requirements、spam policies、people-first content、crawlable links、metadata、media 與 JavaScript guidance。
+- `monitor-debug/search-console-start`：ownership、indexing、sitemap、performance、URL Inspection、security、manual actions 與 migration reporting。
+- `monitor-debug/debugging-search-traffic-drops`：algorithmic／technical／security／spam／seasonality／migration 分流與 Search Console 比對診斷。
+
+### Batch-35 ingestion ledger and human annotations
+
+batch-35 對上述五頁執行 approved-source policy-gated ingestion。jobs **1200001–1200005** 均為 HTTP 200、`completed`，且 `public-ingestion-v4` PII outcome 全為 `not_detected`；finding counts 均為 emails 0／phones 0／national IDs 0。各 job 分別建立 structural artifacts **1830001–1830005**；它們皆保留 final source URL、source-span hash、approved Google Search Central CC BY 4.0 lineage 與 `useSnapshot=training_candidate`。
+
+五筆 structural artifacts 均經逐頁人工品質審閱後設為 `qualityStatus=passed`。每筆完整 SEO/GEO multilabel 都先通過 `seoGeoMultilabelSchema.parse()`，再建立與獨立核准 human annotations **1860001–1860005**。標註採用實際 final source URL，以 human annotation 的 source-document identity 防止同一來源重覆入集。
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 1860001 | How Search Works | understanding | URL discovery、crawl、index、canonical／serving 切分、語言／在地訊號與不保證結果的界線。 |
+| 1860002 | Search appearance overview | discovery | appearance feature map、structured data、rich-result eligibility、title／snippet 與 feature-fit 判斷。 |
+| 1860003 | Google Search Essentials | progression | technical requirements、spam policies、people-first content、crawlable links 與落地改善脈絡。 |
+| 1860004 | Get started with Search Console | response | ownership、indexing、sitemap、query／page／country performance 與 report-based diagnostics。 |
+| 1860005 | Debugging Search traffic drops | response | traffic-drop cause categories、comparison dimensions、index／URL inspection、seasonality 與證據式 remediation。 |
+
+五筆 annotations 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 approved CC BY 4.0 source、source URL 與 source-span lineage。active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 已如實更新為 **76／101**；primary journey 分布為 discovery 16、understanding 15、response 18、progression 13、conversion 14。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **25** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。

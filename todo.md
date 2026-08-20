@@ -1,5 +1,6 @@
 # Project TODO
 
+- [x] 釐清最新版資料模型移除舊 publicIntelligenceHumanAnnotations 表後，既有公開資料訓練樣本的保留或遷移路徑；在相容性確認前暫停舊收集與訓練提交。
 - [x] 以 GitHub `main` 的 commit `065c559e8765c01b14aab4a10ef9daac2390d14d` 為基準，盤點 Nuxt/Nitro 專案、Dockerfile、runtime config 與部署相容性。
 - [x] 維持目前 Autoscale hosting，不啟用 24 小時常駐 Reserved Hosting；所有服務均由 Nitro request handler 直接執行，不啟動常駐 background worker。
 - [x] 將 Nuxt 4 SSR 與 Nitro server production build 移入 Manus hosting 專案，不使用 `pnpm generate` 作為正式 runtime。
@@ -158,3 +159,4 @@
 - [x] 暫停新增公開資料收集，盤點目前最新的程式、資料庫、部署、GitHub 與資料治理狀態，並以實際狀態回報差異與後續選項。
 - [ ] 分析目前最新環境變化，區分網站排版、應用程式、部署、GitHub 與資料庫治理層面的實際差異。
 - [x] 先同步至使用者指定的最新版本，安全比對並保護 Nuxt/Nitro、OAuth、資料庫、資料治理與訓練管線，再執行核心健康驗證；確認後才恢復受控收集。
+- [x] 依最新版 artifact-based human annotation 模型執行 Google Search Central batch-35，完成唯一來源 preflight、PII gate、人工品質審核與 SEO/GEO 多維標註。
