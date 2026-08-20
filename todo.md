@@ -175,3 +175,9 @@
 - [x] 實作並驗證 immutable dataset manifest 的完整摘要輸出與 owner 可檢視證據：來源摘要、授權狀態、資料分割、標籤分布、去重結果及品質／PII 審核結果；確保摘要與已核准 101 成員 manifest hash 一致。
 - [ ] 修復 Hugging Face Jobs API 回傳 403 的帳號／token Jobs 權限或計費阻塞；在成功取得 remote job ID 前不得宣稱模型已訓練。
 - [ ] 將最新程式、101 筆資料集治理程式與 TRAINING_PROGRESS 稽核紀錄推送至 `emily07100710/DiscoveryStack_nuxt` 的 `main`；不推送原始訓練資料、token 或資料庫 secrets。
+- [ ] 改用 Google Colab 本地訓練：以已 owner-approved 的 101 筆 immutable manifest 執行共享編碼器 SEO/GEO 多任務學習；不得使用假資料、不得重新隨機切分、不得放寬 PII gate。
+- [ ] 建立安全 Colab 訓練包與可重現稽核輸出：保留 manifest ID/hash、固定 74/14/13 split、label mappings、training config、metrics、predictions 與 checkpoint；不包含 secrets，且不將原始訓練內容公開推送 GitHub。
+- [ ] 將 Hugging Face Jobs 403 記錄為本次路線不採用；Colab 完成後不得將本地訓練誤稱為 Hugging Face remote job。
+- [x] 建立安全 Colab 訓練包與可重現稽核輸出：`COLAB_TRAINING_GUIDE.md` 與 `colab/DiscoveryStack_SEO_GEO_101.ipynb` 已建立，notebook JSON 結構驗證通過；不包含 secrets 或原始訓練內容。
+- [x] 將 Hugging Face Jobs 403 記錄為本次路線不採用；Colab 結果不得誤稱為 Hugging Face remote job。
+- [ ] 在 Google Colab 實際執行 101 筆多任務訓練，回寫 metrics、checkpoint hash 與 `provider=google_colab_local` 稽核紀錄；未完成前不得宣稱模型訓練完成。
