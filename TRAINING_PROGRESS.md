@@ -994,3 +994,24 @@ batch-38 對五頁執行 approved-source policy-gated ingestion。jobs **1290001
 | 2040004 | Merchant shipping policy (`ShippingService`) | conversion | cost／destination／handling／transit conditions、accessible policy page、Rich Results Test、URL Inspection 與 commerce decision support。 |
 
 四筆 annotations 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate groups 為 **0**。101 筆 immutable manifest readiness 為真實 **86／101**；primary journey 分布為 discovery 18、understanding 16、response 19、progression 14、conversion 19。所有五個 journey stage 均至少 10 筆，尚缺 **15** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。
+
+### Batch-39 candidate preflight: image visibility, compliance and spam recovery
+
+本批先對 Google Search Central 官方候選執行 Google canonical source identity preflight，排除已存在 source document 與不同 `hl` rendering。Remove information、crawlable links、robots meta tags、robots.txt introduction、structured-data policy、Search appearance／structured-data overview 與 helpful-content 文件均命中既有可用 annotation，故沒有重覆收集。最終候選為 Remove images hosted on your site、meta tags and attributes that Google supports、Spam policies、technical requirements 與 spam updates；五頁均為 `developers.google.com/search/docs/**`，由官方頁尾確認 Google Developers **CC BY 4.0** 授權。
+
+人工閱讀確認五頁分別涵蓋 temporary vs durable image removal、metadata／HTML attributes、spam enforcement 與 security、technical indexing eligibility、spam update 後的政策式 remediation。special-tags 頁的範例含 verification token 與價格／電話型式內容；這項風險沒有由人工摘要自行豁免，仍完全由 PII extractor v4 fail-closed gate 判定。
+
+### Batch-39 ingestion ledger and human annotations
+
+batch-39 執行 approved-source policy-gated ingestion。jobs **1320001、1320003–1320005** 均為 HTTP 200、`completed`、`piiOutcome=not_detected`，finding counts 皆為 emails 0／phones 0／national IDs 0，建立 structural artifacts **2070001–2070004**。job **1320002**（special-tags）也是 HTTP 200，但 extractor v4 偵測 **phones 1**，因此為 `piiOutcome=redacted`、`status=needs_human_review`，未建立 structural artifact 或 human annotation，亦未進入 training candidate 或 readiness。此項排除維持 PII fail-closed，未因文件授權、重要性或數量目標放寬。
+
+四筆 PII clean structural artifacts 均經逐頁人工品質審閱為 `passed`；完整 SEO/GEO multilabel 均先通過 `seoGeoMultilabelSchema.parse()`，再建立並獨立核准 human annotations **2100001–2100004**。
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 2100001 | Remove images hosted on your site | progression | emergency 與 durable removal、Googlebot-Image、robots.txt、X-Robots-Tag crawl requirement、shared-image scope 與 removal expiry。 |
+| 2100002 | Spam policies | understanding | cloaking、doorway／expired-domain abuse、hacked content、link qualification、policy enforcement 與信任／可見性風險。 |
+| 2100003 | Technical requirements | response | Googlebot access、HTTP 200、indexable content、eligibility 非 guarantee、Page Indexing／Crawl Stats／URL Inspection 與 robots/noindex 邊界。 |
+| 2100004 | Spam updates | response | automated detection、policy review、reassessment time、link-spam benefit non-restoration 與預期管理。 |
+
+四筆 annotations 均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate groups 為 **0**。101 筆 immutable manifest readiness 為真實 **90／101**；primary journey 分布為 discovery 18、understanding 17、response 21、progression 15、conversion 19。所有五個 journey stage 均至少 10 筆，尚缺 **11** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。
