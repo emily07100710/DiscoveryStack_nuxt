@@ -1033,3 +1033,41 @@ batch-40 執行 approved-source policy-gated ingestion。五筆均取得 HTTP 20
 | 2160001 | Video structured data | discovery | VideoObject、watch page、key moments、LIVE badge、language availability、Rich Results Test、URL Inspection、crawlability 與 eligibility 非 guarantee。 |
 
 annotation **2160001** 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate groups 為 **0**。101 筆 immutable manifest readiness 為真實 **91／101**；primary journey 分布為 discovery 19、understanding 17、response 21、progression 15、conversion 19。所有五個 journey stage 均至少 10 筆，尚缺 **10** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。
+
+### Batch-41 candidate preflight: JavaScript, redaction, crawler trust and educational structured data
+
+本批候選先以 Google canonical source identity 預檢，人工閱讀 Fix Search-related JavaScript problems、Keep redacted information out of Google Search、Overview of Google crawlers and fetchers、Verify requests from Google crawlers and fetchers 與 Math Solver structured data。所有候選均為 `developers.google.com/search/docs/**` 官方頁，並由頁尾確認 Google Developers **CC BY 4.0** 授權。原先的 crawl-budget 路徑無法取得可人工確認的內容，未被納入；Math Solver 在 preflight 後由人工閱讀確認其 rich-result、canonical、multilingual、login/paywall、validation 與 crawler-access 主題適配性。
+
+### Batch-41 ingestion ledger, failure and PII exclusion
+
+batch-41 對五頁執行 approved-source policy-gated ingestion。Fix Search-related JavaScript problems（job **1380001**）、Keep redacted information out of Google Search（**1380002**）與 Overview of Google crawlers and fetchers（**1380003**）均為 `status=failed`、無 HTTP status、無 primary artifact。這三筆保留 failure ledger，但未被視為可用資料、未送交人工標註，也未計入 readiness。
+
+Verify requests from Google crawlers and fetchers（job **1380004**）取得 HTTP 200，但 PII extractor v4 偵測 **phones 15**，故為 `piiOutcome=redacted`、`status=needs_human_review`，沒有 structural artifact 或 human annotation。雖然主要內容是 IP／DNS verification 技術範例，仍嚴格遵守 extractor 的 fail-closed 結果，未以人工理由覆寫。
+
+只有 Math Solver structured data（job **1380005**）為 HTTP 200、`completed`、`piiOutcome=not_detected`，finding counts 為 emails 0／phones 0／national IDs 0，建立 structural artifact **2190001**。該 artifact 經逐頁人工品質審閱為 `passed`；完整 SEO/GEO multilabel 先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准 human annotation **2190002**。
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 2190002 | Math Solver structured data | discovery | MathSolver／LearningResource、SolveMathAction、rich-result eligibility、canonical URL、multilingual access、公開解題體驗、Rich Results Test、URL Inspection、crawl/index requirements 與 content-quality policies。 |
+
+annotation **2190002** 為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate groups 為 **0**。101 筆 immutable manifest readiness 為真實 **92／101**；primary journey 分布為 discovery 20、understanding 17、response 21、progression 15、conversion 19。所有五個 journey stage 均至少 10 筆，尚缺 **9** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。
+
+### Batch-42 candidate preflight: structured data, measurement, education, site identity and Discover
+
+本批候選來自 Google Search Central structured-data、monitor/debug、sitemaps 與 appearance 官方文件。每一候選先經 active human annotation preflight，再由人工閱讀正文、CC BY 4.0 頁尾授權與主題適配性；最終由 Introduction to structured data markup、Using Search Console and Google Analytics data for SEO、Education Q&A structured data、Build and submit a sitemap、Define a favicon to show in search results、Discover and your website 組成受控收集範圍。Practice Problems URL 的實際內容與題意不相符，已記錄並排除。
+
+### Batch-42 ingestion ledger, canonical-source recovery and human annotations
+
+batch-42 六頁均透過 approved-source policy-gated ingestion 取得 HTTP 200、`completed` 與 `piiOutcome=not_detected`；jobs **1410001–1410006** 的 finding counts 皆為 emails 0／phones 0／national IDs 0，建立 structural artifacts **2220001–2220006**。六個 artifacts 均保留 final source URL、source-span hash、approved CC BY 4.0 lineage 與 `useSnapshot=training_candidate`。
+
+初次人工標註在 canonical-source duplicate 防護分支揭露 repository 漏失 `createError` direct import，導致應被拒絕的跨語言同源文件發生 `ReferenceError`，而非受控的 422。修正方式為將 `h3` 宣告為 Nuxt server 的直接依賴、匯入 `createError`，並新增 `public-intelligence-canonical-duplicate.test.ts`。回歸測試證明 `hl=en` 與 `hl=zh-tw` 的同一 Google 文件會得到受控 422，不再被未定義 helper 遮蔽。`public-intelligence-ingestion`、`audit-governance`、`training-manifest-admission` 與新的 canonical duplicate test 共 **19 項**通過。
+
+恢復標註程序後，Introduction to structured data markup、Search Console and Google Analytics data for SEO 與 Education Q&A 成為唯一 training-candidate human annotations **2250001–2250003**；其 labels 皆先通過 `seoGeoMultilabelSchema.parse()`，再經獨立 `qualityStatus=passed` review。Build and submit a sitemap、favicon 與 Discover 雖皆 PII clean，卻分別命中既有 active canonical documents **180004、630004、930001** 的語言版本；程序以受控 422 記錄 `skipped_canonical_duplicate`，未建立新 annotation、未重覆計數，亦未刪除或改寫既有資料。
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 2250001 | Introduction to structured data markup | conversion | visible-content parity、JSON-LD／Microdata／RDFa、required/recommended properties、Rich Results Test、部署後報表與 rich-result non-guarantee。 |
+| 2250002 | Search Console and Google Analytics data for SEO | response | pre-click／on-site 指標分流、clicks 與 sessions、matched date/country/device filters、Looker Studio、query/page/country/device diagnosis。 |
+| 2250003 | Education Q&A structured data | discovery | Quiz／Question／Answer、flashcard 與 QAPage 分流、visible content、region/language availability、crawl/index access、sitemap、validation 與 non-guarantee。 |
+
+三筆 annotations 均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate query 回傳 **0**。101 筆 immutable manifest readiness 為真實 **95／101**；primary journey 分布為 discovery 21、understanding 17、response 22、progression 15、conversion 20。所有五個 journey stage 均至少 10 筆，尚缺 **6** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。

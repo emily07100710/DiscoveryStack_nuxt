@@ -166,3 +166,7 @@
 - [x] 執行 Google Search Central batch-38：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。
 - [x] 執行 Google Search Central batch-39：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。
 - [x] 執行 Google Search Central batch-40：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。
+- [x] 執行 Google Search Central batch-41：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。
+- [x] 執行 Google Search Central batch-42：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件。
+- [x] 修正 public-intelligence repository 在 canonical source 重覆保護分支遺漏 `createError` import 的例外，補足 Nuxt runtime direct dependency 並加入回歸測試後恢復 batch-42 標註。
+- [ ] 執行 Google Search Central batch-43：完成 canonical source preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入唯一、可稽核且 PII clean 的真實官方文件，補足 101 筆門檻。

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { createError } from 'h3'
 import { and, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm'
 import { PUBLIC_MANIFEST_MINIMUM_CANDIDATES, PUBLIC_MANIFEST_MINIMUM_PER_STAGE } from '../audit/baselines'
 import { requireAuditDatabase } from '../audit/repository'
