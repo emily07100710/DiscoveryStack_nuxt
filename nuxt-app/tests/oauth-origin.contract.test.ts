@@ -89,7 +89,7 @@ describe('OAuth frontend-origin contract', () => {
     expect(mlLab).toContain('機器學習工作台')
     expect(mlLab).toContain('啟動受限抓取')
     expect(mlLab).toContain('執行 Hugging Face 訓練')
-    expect(mlLab).toContain('開發模式 · 至少 100 筆樣本、每個階段至少 10 筆')
+    expect(mlLab).toContain('開發模式 · 至少 101 筆樣本、每個階段至少 10 筆')
     expect(mlLab).toContain('已核准公開資料集')
     expect(mlLab).toContain('尚未有訓練執行')
     expect(mlLab).toContain("TRAINING_GATE_NOT_MET: '未達訓練門檻'")
