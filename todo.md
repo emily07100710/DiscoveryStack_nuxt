@@ -156,3 +156,5 @@
 - [x] 執行 Google Search Central batch-33 的 Recipe、SoftwareApplication、Carousel 與 canonicalization troubleshooting 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維人工標註。
 - [x] 執行 Google Search Central batch-34 的 Googlebot 與 supported meta tags 文件受控收集，逐筆依 PII 結果完成或保留品質審核與多維人工標註。
 - [x] 暫停新增公開資料收集，盤點目前最新的程式、資料庫、部署、GitHub 與資料治理狀態，並以實際狀態回報差異與後續選項。
+- [ ] 分析目前最新環境變化，區分網站排版、應用程式、部署、GitHub 與資料庫治理層面的實際差異。
+- [x] 先同步至使用者指定的最新版本，安全比對並保護 Nuxt/Nitro、OAuth、資料庫、資料治理與訓練管線，再執行核心健康驗證；確認後才恢復受控收集。
