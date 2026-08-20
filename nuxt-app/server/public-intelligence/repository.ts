@@ -20,15 +20,32 @@ export function artifactFingerprint(input: { sourceId: number, sourceUrl: string
   })).digest('hex')
 }
 
+/** Google Search Central's `hl` only selects page language; it does not identify a different document. */
+export function canonicalHumanAnnotationSourceUrl(sourceUrl: string) {
+  const trimmed = sourceUrl.trim()
+  try {
+    const url = new URL(trimmed)
+    if (url.hostname === 'developers.google.com' && url.pathname.startsWith('/search/docs/')) {
+      url.searchParams.delete('hl')
+      url.hash = ''
+      return url.toString()
+    }
+  } catch {
+    // Preserve the submitted URL for non-URL values; source policy validation handles those separately.
+  }
+  return trimmed
+}
+
 /**
  * Human annotations have a stricter identity than derived artifacts: an active
  * training candidate may represent each canonical source document only once,
- * even when a recrawl yields a different source-span fingerprint.
+ * even when a recrawl yields a different source-span fingerprint or Google
+ * Search Central selects a different `hl` language rendering.
  */
 export function humanAnnotationSourceIdentity(input: { sourceId: number, sourceUrl: string }) {
   return createHash('sha256').update(JSON.stringify({
     sourceId: input.sourceId,
-    sourceUrl: input.sourceUrl.trim(),
+    sourceUrl: canonicalHumanAnnotationSourceUrl(input.sourceUrl),
     artifactType: 'human_annotation',
   })).digest('hex')
 }
@@ -123,7 +140,7 @@ export async function listOwnerPublicDatasetBuilds(ownerUserId: number) {
 /** Counts only active public human annotations that satisfy the immutable training-manifest admission policy. */
 export async function getOwnerPublicManifestCandidateReadiness(ownerUserId: number) {
   const database = requireAuditDatabase()
-  const rows = await database.select({ sourceUrl: publicIntelligenceArtifacts.sourceUrl, sourceSpanHash: publicIntelligenceArtifacts.sourceSpanHash, fieldData: publicIntelligenceArtifacts.fieldData })
+  const rows = await database.select({ sourceId: publicIntelligenceArtifacts.sourceId, sourceUrl: publicIntelligenceArtifacts.sourceUrl, sourceSpanHash: publicIntelligenceArtifacts.sourceSpanHash, fieldData: publicIntelligenceArtifacts.fieldData })
     .from(publicIntelligenceArtifacts)
     .innerJoin(publicIntelligenceSources, eq(publicIntelligenceArtifacts.sourceId, publicIntelligenceSources.id))
     .where(and(
@@ -139,17 +156,18 @@ export async function getOwnerPublicManifestCandidateReadiness(ownerUserId: numb
       eq(publicIntelligenceArtifacts.piiStatus, 'none_detected'),
       isNull(publicIntelligenceArtifacts.removedAt),
     ))
-  const uniqueUrls = new Set<string>()
+  const uniqueSourceDocuments = new Set<string>()
   const uniqueSpans = new Set<string>()
   const stageCounts: Record<string, number> = {}
   for (const row of rows) {
     const labels = seoGeoMultilabelSchema.safeParse(row.fieldData)
-    if (!labels.success || !row.sourceSpanHash || uniqueUrls.has(row.sourceUrl) || uniqueSpans.has(row.sourceSpanHash)) continue
-    uniqueUrls.add(row.sourceUrl)
+    const sourceDocumentIdentity = humanAnnotationSourceIdentity({ sourceId: row.sourceId, sourceUrl: row.sourceUrl })
+    if (!labels.success || !row.sourceSpanHash || uniqueSourceDocuments.has(sourceDocumentIdentity) || uniqueSpans.has(row.sourceSpanHash)) continue
+    uniqueSourceDocuments.add(sourceDocumentIdentity)
     uniqueSpans.add(row.sourceSpanHash)
     stageCounts[labels.data.primaryJourneyStage] = (stageCounts[labels.data.primaryJourneyStage] || 0) + 1
   }
-  return { approvedHumanAnnotations: uniqueUrls.size, stageCounts }
+  return { approvedHumanAnnotations: uniqueSourceDocuments.size, stageCounts }
 }
 
 export async function approveOwnerPublicDatasetBuild(input: { ownerUserId: number, datasetBuildId: number, reviewNote: string | null }) {
@@ -159,10 +177,10 @@ export async function approveOwnerPublicDatasetBuild(input: { ownerUserId: numbe
   if (build.intendedUse !== 'training') throw createError({ statusCode: 422, statusMessage: 'Only a training-intended manifest can be approved for a training run.' })
   if (build.status !== 'ready_for_review') throw createError({ statusCode: 422, statusMessage: 'Only a ready-for-review manifest can be approved.' })
   if (build.labelTaxonomyVersion !== SEO_GEO_LABEL_TAXONOMY_VERSION) throw createError({ statusCode: 422, statusMessage: 'The manifest must use the active SEO/GEO label taxonomy version.' })
-  const members = await database.select({ artifactId: publicIntelligenceArtifacts.id, sourceUrl: publicIntelligenceArtifacts.sourceUrl, sourceSpanHash: publicIntelligenceArtifacts.sourceSpanHash, fieldData: publicIntelligenceArtifacts.fieldData, artifactType: publicIntelligenceArtifacts.artifactType, qualityStatus: publicIntelligenceArtifacts.qualityStatus, piiStatus: publicIntelligenceArtifacts.piiStatus, memberStatus: publicIntelligenceDatasetMembers.memberStatus, sourceUse: publicIntelligenceSources.allowedUse, sourceReviewStatus: publicIntelligenceSources.reviewStatus, sourceRemovedAt: publicIntelligenceSources.removedAt, artifactRemovedAt: publicIntelligenceArtifacts.removedAt }).from(publicIntelligenceDatasetMembers).innerJoin(publicIntelligenceArtifacts, eq(publicIntelligenceDatasetMembers.artifactId, publicIntelligenceArtifacts.id)).innerJoin(publicIntelligenceSources, eq(publicIntelligenceArtifacts.sourceId, publicIntelligenceSources.id)).where(eq(publicIntelligenceDatasetMembers.datasetBuildId, build.id))
+  const members = await database.select({ artifactId: publicIntelligenceArtifacts.id, sourceId: publicIntelligenceArtifacts.sourceId, sourceUrl: publicIntelligenceArtifacts.sourceUrl, sourceSpanHash: publicIntelligenceArtifacts.sourceSpanHash, fieldData: publicIntelligenceArtifacts.fieldData, artifactType: publicIntelligenceArtifacts.artifactType, qualityStatus: publicIntelligenceArtifacts.qualityStatus, piiStatus: publicIntelligenceArtifacts.piiStatus, memberStatus: publicIntelligenceDatasetMembers.memberStatus, sourceUse: publicIntelligenceSources.allowedUse, sourceReviewStatus: publicIntelligenceSources.reviewStatus, sourceRemovedAt: publicIntelligenceSources.removedAt, artifactRemovedAt: publicIntelligenceArtifacts.removedAt }).from(publicIntelligenceDatasetMembers).innerJoin(publicIntelligenceArtifacts, eq(publicIntelligenceDatasetMembers.artifactId, publicIntelligenceArtifacts.id)).innerJoin(publicIntelligenceSources, eq(publicIntelligenceArtifacts.sourceId, publicIntelligenceSources.id)).where(eq(publicIntelligenceDatasetMembers.datasetBuildId, build.id))
   const active = members.filter(member => member.memberStatus === 'included')
   if (active.length < PUBLIC_MANIFEST_MINIMUM_CANDIDATES) throw createError({ statusCode: 422, statusMessage: `A real public training manifest needs at least ${PUBLIC_MANIFEST_MINIMUM_CANDIDATES} included examples; found ${active.length}.` })
-  if (new Set(active.map(member => member.sourceUrl)).size !== active.length || new Set(active.map(member => member.sourceSpanHash)).size !== active.length) throw createError({ statusCode: 422, statusMessage: 'The manifest contains duplicate source URLs or source-span fingerprints and cannot be approved.' })
+  if (new Set(active.map(member => humanAnnotationSourceIdentity({ sourceId: member.sourceId, sourceUrl: member.sourceUrl }))).size !== active.length || new Set(active.map(member => member.sourceSpanHash)).size !== active.length) throw createError({ statusCode: 422, statusMessage: 'The manifest contains duplicate canonical source documents or source-span fingerprints and cannot be approved.' })
   const labels: string[] = []
   for (const member of active) {
     if (trainingMemberAdmissionError(member)) throw createError({ statusCode: 422, statusMessage: 'Every training member must be an active, quality-passed, PII-cleared human annotation from an approved training source.' })
@@ -216,14 +234,14 @@ export async function createOwnerPublicArtifact(input: { ownerUserId: number, so
   if (source.reviewStatus !== 'approved') throw createError({ statusCode: 422, statusMessage: 'Approve the Source Card before adding artifacts.' })
   try { assertPermittedPublicUse({ requestedUse: input.requestedUse, maximumUse: source.allowedUse }) } catch (error) { if (error instanceof PublicUseViolation) throw createError({ statusCode: 422, statusMessage: error.message }); throw error }
   if (input.artifactType === 'human_annotation') {
-    const [existing] = await database.select({ id: publicIntelligenceArtifacts.id }).from(publicIntelligenceArtifacts).where(and(
+    const identity = humanAnnotationSourceIdentity({ sourceId: source.id, sourceUrl: input.sourceUrl })
+    const existingCandidates = await database.select({ id: publicIntelligenceArtifacts.id, sourceUrl: publicIntelligenceArtifacts.sourceUrl }).from(publicIntelligenceArtifacts).where(and(
       eq(publicIntelligenceArtifacts.sourceId, source.id),
       eq(publicIntelligenceArtifacts.artifactType, 'human_annotation'),
-      eq(publicIntelligenceArtifacts.sourceUrl, input.sourceUrl.trim()),
       isNull(publicIntelligenceArtifacts.removedAt),
-    )).limit(1)
+    ))
+    const existing = existingCandidates.find(candidate => humanAnnotationSourceIdentity({ sourceId: source.id, sourceUrl: candidate.sourceUrl }) === identity)
     if (existing) {
-      const identity = humanAnnotationSourceIdentity({ sourceId: source.id, sourceUrl: input.sourceUrl })
       throw createError({ statusCode: 422, statusMessage: `An active human annotation already exists for this source document (${identity.slice(0, 12)}). Review the existing annotation instead of creating a second training candidate.` })
     }
   }

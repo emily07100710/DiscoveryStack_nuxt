@@ -925,3 +925,29 @@ batch-35 對上述五頁執行 approved-source policy-gated ingestion。jobs **1
 | 1860005 | Debugging Search traffic drops | response | traffic-drop cause categories、comparison dimensions、index／URL inspection、seasonality 與證據式 remediation。 |
 
 五筆 annotations 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 approved CC BY 4.0 source、source URL 與 source-span lineage。active eligible source-document duplicate query 回傳 **0**。101 筆 immutable manifest readiness 已如實更新為 **76／101**；primary journey 分布為 discovery 16、understanding 15、response 18、progression 13、conversion 14。五個 stage 均維持每階段至少 10 筆門檻，仍缺 **25** 筆唯一且 eligible 的樣本；未建立或核准 manifest，未提交 Hugging Face job。
+
+### Batch-36 candidate preflight: Search Console diagnostics and crawl/indexing implementation
+
+本批在 Google Search Central crawling/indexing 與 monitor/debug 官方資訊架構中，先以 canonical path 進行 active eligible human-annotation preflight，再逐頁人工閱讀。最終候選為 Search Console bubble chart analysis、Search operators、About AMP on Google Search、Validate AMP content 與 Minimize A/B testing impact in Google Search。每頁均以官方內容頁尾確認 Google Developers 文件採 **CC BY 4.0**；候選範圍只限 approved source、同一官方網域與已人工閱讀的文件，未使用第三方摘要或推定授權。
+
+### Batch-36 ingestion ledger and human annotations
+
+batch-36 對五個候選執行 approved-source policy-gated ingestion。五筆均取得 HTTP 200、`completed`，`public-ingestion-v4` 的 PII outcome 皆為 `not_detected`，finding counts 為 emails 0／phones 0／national IDs 0；建立 structural artifacts **1890001–1890005**，並保存 final source URL、source-span hash、approved CC BY 4.0 lineage 與 `useSnapshot=training_candidate`。五筆 structural artifacts 均逐頁人工品質審閱為 `passed`，完整 SEO/GEO labels 全數先通過 `seoGeoMultilabelSchema.parse()`，才建立並獨立核准下列 human annotations。
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 1920001 | Search Console bubble chart analysis | response | query、CTR、position、clicks、country／device segmentation 與 evidence-based content follow-up。 |
+| 1920002 | Search operators | response | `site:`／`filetype:`／`imagesize:`／`src:` 的探索範圍、retrieval limits 與 URL Inspection 的較強診斷證據。 |
+| 1920003 | About AMP on Google Search | conversion | AMP indexing parity、rich-result eligibility 非保證、canonical action/content parity、URL clarity 與 responsive access。 |
+| 1920004 | Validate AMP content | response | AMP Test、Rich Results Test、AMP status report、Googlebot access、robots/X-Robots-Tag、structured data 與 country availability。 |
+| 1920005 | Minimize A/B testing impact | conversion | A/B／multivariate testing、anti-cloaking、canonical grouping、temporary 302 與有限實驗期間。 |
+
+annotations **1920001–1920005** 皆為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 source URL、source span 與 approved CC BY 4.0 source lineage。
+
+### Google Search Central locale canonicalization and remediation
+
+batch-36 canonical-path 稽核發現四筆較晚的 batch-35 annotations 只是同一 Google Search Central 文件的不同 `hl` 語言 rendering，而非新的 source document。為避免資料數量目標掩蓋此治理缺口，沒有直接刪除資料或下修 PII／品質 gate；改以既有 `reviewOwnerPublicArtifact` 人工審核流程，保留最早已核准的 270001、270005、390002、510001，並將較晚的 **1860001、1860003、1860004、1860005** 設為 `qualityStatus=rejected`。這四筆仍保留在 audit trail 中，但不再是 training candidate。
+
+repository 現在對 `developers.google.com/search/docs/**` 的 human annotation source identity 移除僅用於語言選擇的 `hl` 參數與 fragment；寫入前去重、manifest readiness 及 immutable manifest approval 均使用同一 canonical identity。其他網域的 query parameters 維持原樣，不做過度正規化。新增回歸測試證明同頁的 `hl=en` 與 `hl=zh-tw` 即使 source-span 不同，也不能同時通過 immutable manifest admission。
+
+remediation 後，active eligible Google Search Central canonical-path duplicate groups 為 **0**。101 筆 immutable manifest readiness 為真實 **77／101**；primary journey 分布為 discovery 16、understanding 14、response 19、progression 12、conversion 16。每個 journey stage 仍至少 10 筆，尚缺 **24** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，亦未提交 Hugging Face job。`public-intelligence-ingestion`、`audit-governance` 與 `training-manifest-admission` 核心回歸測試共 **18 項**通過。

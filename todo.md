@@ -160,3 +160,5 @@
 - [ ] 分析目前最新環境變化，區分網站排版、應用程式、部署、GitHub 與資料庫治理層面的實際差異。
 - [x] 先同步至使用者指定的最新版本，安全比對並保護 Nuxt/Nitro、OAuth、資料庫、資料治理與訓練管線，再執行核心健康驗證；確認後才恢復受控收集。
 - [x] 依最新版 artifact-based human annotation 模型執行 Google Search Central batch-35，完成唯一來源 preflight、PII gate、人工品質審核與 SEO/GEO 多維標註。
+- [x] 執行 Google Search Central batch-36：完成唯一來源 preflight、PII gate、人工品質審核與 SEO/GEO 多維標註，僅納入可稽核且 PII clean 的真實官方文件。
+- [x] 修正 Google Search Central `hl` 語言參數造成的 human annotation source-document 去重缺口，補足回歸測試並依治理流程拒絕既有重覆 annotations。
