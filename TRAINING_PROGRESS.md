@@ -1071,3 +1071,22 @@ batch-42 六頁均透過 approved-source policy-gated ingestion 取得 HTTP 200�
 | 2250003 | Education Q&A structured data | discovery | Quiz／Question／Answer、flashcard 與 QAPage 分流、visible content、region/language availability、crawl/index access、sitemap、validation 與 non-guarantee。 |
 
 三筆 annotations 均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，且保留 approved CC BY 4.0 source、source URL 與 source-span lineage。Google canonical source URL duplicate query 回傳 **0**。101 筆 immutable manifest readiness 為真實 **95／101**；primary journey 分布為 discovery 21、understanding 17、response 22、progression 15、conversion 20。所有五個 journey stage 均至少 10 筆，尚缺 **6** 筆唯一、PII clean、人工品質通過且 schema-validated 的樣本；未建立或核准 immutable manifest，未提交 Hugging Face job。
+
+### Batch-43 candidate research, fail-closed admission and 101-sample readiness
+
+batch-43 只考慮 Google Search Central 已核准 CC BY 4.0 source 範圍內、通過 active canonical-source preflight 且已人工閱讀的官方文件。研究階段保留 URL structure、付費牆內容、Core Web Vitals、Web Stories、ClaimReview、影片 sitemap 與 crawling errors 等候選；每個候選均仍須獨立通過既有 approved-source policy、同網域 redirect、robots、HTTP、PII extractor v4、artifact lineage、品質審閱與 canonical duplicate gate，外部可讀性或授權頁尾本身不構成 admission。
+
+初批與補充收集結果維持 PII fail-closed：僅付費牆內容、Core Web Vitals、啟用 Web Stories、Web Stories content policy、ClaimReview structured data 與 Troubleshoot crawling errors 產生 PII `not_detected` 的 structural artifacts **2280001–2280004、2310001、2340001**。其餘嘗試候選若命中 PII、無可用 artifact 或不符 canonical admission，均未建立 human annotation，未計入 101 筆；未為達成數量而放寬任何 PII、授權或重覆來源規則。
+
+六個 PII clean artifacts 均完成逐頁人工品質審閱，且完整 SEO/GEO multilabel 皆先通過 `seoGeoMultilabelSchema.parse()`，再建立並獨立核准 human annotations **2370001–2370006**：
+
+| Human annotation | 來源頁 | Primary journey | 人工審核重點 |
+|---:|---|---|---|
+| 2370001 | Subscription and paywalled content | conversion | `isAccessibleForFree`、paywall CSS selector、可見內容與 structured-data policy、Search appearance eligibility 與非保證界線。 |
+| 2370002 | Core Web Vitals | progression | LCP、INP、CLS、field data、Search Console／PageSpeed Insights、修復優先順序與持續觀測。 |
+| 2370003 | Enable Web Stories | discovery | story format、crawlable page、metadata、canonical、sitemap、Search appearance 與 discovery surface。 |
+| 2370004 | Web Stories content policy | response | content quality、trust、accessibility、廣告與政策風險、問題診斷與修復路徑。 |
+| 2370005 | ClaimReview structured data | response | visible claim／assessment、claimant 與 fact-check organization、透明度、驗證、editorial evidence 與 rich-result non-guarantee。 |
+| 2370006 | Troubleshoot crawling errors | response | Crawl Stats、URL Inspection、availability、host overload、crawl capacity、URL inventory 與觀測式修復。 |
+
+所有六筆 annotations 均為 `piiStatus=none_detected`、`qualityStatus=passed`、`useSnapshot=training_candidate`，並保留 approved CC BY 4.0 source、final source URL 及 source-span lineage。batch-43 完成後，Google canonical source URL duplicate groups 為 **0**；immutable manifest readiness 如實達到 **101／101**，primary journey 分布為 **discovery 22、understanding 17、response 25、progression 16、conversion 21**。五個 journey stage 均超過每階段 10 筆門檻；此時仍**尚未**建立或核准 immutable dataset manifest，亦尚未提交 Hugging Face job。
