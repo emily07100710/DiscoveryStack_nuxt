@@ -181,3 +181,6 @@
 - [x] 建立安全 Colab 訓練包與可重現稽核輸出：`COLAB_TRAINING_GUIDE.md` 與 `colab/DiscoveryStack_SEO_GEO_101.ipynb` 已建立，notebook JSON 結構驗證通過；不包含 secrets 或原始訓練內容。
 - [x] 將 Hugging Face Jobs 403 記錄為本次路線不採用；Colab 結果不得誤稱為 Hugging Face remote job。
 - [ ] 在 Google Colab 實際執行 101 筆多任務訓練，回寫 metrics、checkpoint hash 與 `provider=google_colab_local` 稽核紀錄；未完成前不得宣稱模型訓練完成。
+- [ ] 修正 Colab notebook 的多標籤 collator／Trainer 相容性：使用可索引 Dataset、保留每個 task 的完整 multi-label targets，並在訓練前執行 smoke validation。
+- [x] 修正 Colab notebook 的多標籤 collator／Trainer 相容性：改用 `Dataset.from_list`、完整 multi-hot targets、`remove_unused_columns=False`、smoke validation 與 multilabel macro/micro-F1；靜態 notebook JSON 驗證通過。
+- [ ] 在 Google Colab 實際執行修正後 notebook，保存 `metrics.json`、checkpoint hash 與 `provider=google_colab_local` 執行紀錄。
