@@ -173,3 +173,5 @@
 - [x] 修復 `h3` 直接依賴引入 v2 與 Nuxt/Nitro v1 型別並存，導致正式 Docker production build 失敗的相容性問題；不得削弱 canonical duplicate 保護或 OAuth server-side 型別安全。
 - [x] 將 owner-only ML Workbench 的中文契約測試由舊 100 筆文案同步為既有 101 筆 immutable manifest 訓練門檻。
 - [x] 實作並驗證 immutable dataset manifest 的完整摘要輸出與 owner 可檢視證據：來源摘要、授權狀態、資料分割、標籤分布、去重結果及品質／PII 審核結果；確保摘要與已核准 101 成員 manifest hash 一致。
+- [ ] 修復 Hugging Face Jobs API 回傳 403 的帳號／token Jobs 權限或計費阻塞；在成功取得 remote job ID 前不得宣稱模型已訓練。
+- [ ] 將最新程式、101 筆資料集治理程式與 TRAINING_PROGRESS 稽核紀錄推送至 `emily07100710/DiscoveryStack_nuxt` 的 `main`；不推送原始訓練資料、token 或資料庫 secrets。
