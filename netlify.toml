@@ -1,0 +1,10 @@
+[build]
+base = "nuxt-app"
+command = "pnpm build"
+publish = ".output/public"
+
+[build.environment]
+NODE_VERSION = "22"
+PNPM_VERSION = "10.24.0"
+NITRO_PRESET = "netlify"
+NUXT_TELEMETRY_DISABLED = "1"

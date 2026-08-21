@@ -1,0 +1,415 @@
+/* Hybrid homepage refresh
+   The original hero, departments, model, journey and FAQ deliberately remain untouched. */
+
+.hybrid-home {
+  --hybrid-ink: #171a18;
+  --hybrid-blue: #2946c7;
+  --hybrid-signal: #d3e567;
+  --hybrid-paper: #f3f0e8;
+}
+
+/* Denser editorial rhythm: more information per viewport, fewer billboard-sized lines. */
+.hybrid-home > .section { padding-block: clamp(4rem, 7vw, 6.5rem); }
+.hybrid-home > .hero { padding-block: clamp(4rem, 10vh, 7rem) clamp(3.5rem, 6vw, 5.5rem); }
+.hybrid-home .hero-meta { margin-bottom: clamp(2rem, 4vw, 3rem); }
+.hybrid-home .hero h1 { max-width: 20ch; font-size: clamp(2.1rem, 4.1vw, 3.7rem); line-height: 1.08; }
+.hybrid-home .hero-foot { margin-top: clamp(2rem, 4vw, 3rem); }
+.hybrid-home .section-head { margin-bottom: clamp(2.25rem, 4vw, 3.5rem); }
+.hybrid-home .section-head h2 { max-width: 24ch; font-size: clamp(1.8rem, 3.5vw, 3.15rem); line-height: 1.17; }
+.hybrid-home .department-tabs button { min-height: 4.2rem; padding-block: .9rem; }
+.hybrid-home .department-panel { min-height: 19rem; padding: clamp(1.5rem, 3vw, 2.6rem); }
+.hybrid-home .department-panel h3 { max-width: 21ch; margin-block: 1.5rem; font-size: clamp(1.55rem, 2.65vw, 2.45rem); }
+.hybrid-home .model-proof-head { gap: clamp(2rem, 5vw, 5rem); padding-bottom: clamp(2.5rem, 4vw, 3.75rem); }
+.hybrid-home .model-proof h2 { max-width: 17ch; font-size: clamp(2rem, 3.6vw, 3.6rem); line-height: 1.08; }
+.hybrid-home .model-proof-board { box-shadow: .75rem .75rem 0 rgba(17,25,66,.14); }
+.hybrid-home .journey-steps { gap: clamp(3rem, 6vw, 5rem); }
+.hybrid-home .step h3 { font-size: clamp(1.5rem, 2.8vw, 2.4rem); }
+.hybrid-home .rail-numbers b { font-size: clamp(5.5rem, 12vw, 9rem); }
+.hybrid-home .faq-intro h2 { max-width: 12ch; font-size: clamp(2rem, 3.8vw, 3.5rem); }
+.hybrid-home .pricing-head h2 { max-width: 16ch; font-size: clamp(2rem, 3.8vw, 3.5rem); }
+
+/* Continuous demand route between the retained hero and department system. */
+.hybrid-wave {
+  overflow: clip;
+  padding-block: clamp(4rem, 7vw, 6.5rem);
+  color: #f7f3ea;
+  background:
+    radial-gradient(circle at 78% 16%, rgba(211, 229, 103, .11), transparent 24rem),
+    var(--hybrid-ink);
+}
+
+.hybrid-wave-shell {
+  display: grid;
+  gap: clamp(3rem, 5vw, 4.5rem);
+}
+
+.hybrid-wave-head {
+  display: grid;
+  grid-template-columns: minmax(9rem, .45fr) minmax(0, 1fr);
+  gap: 1rem clamp(2rem, 7vw, 7rem);
+  align-items: start;
+}
+
+.hybrid-wave .eyebrow { color: var(--hybrid-signal); }
+
+.hybrid-wave-head h2 {
+  max-width: 15ch;
+  font-size: clamp(2.35rem, 4.7vw, 4.8rem);
+  line-height: 1.04;
+  letter-spacing: -.035em;
+}
+
+.hybrid-wave-head > p:last-child {
+  grid-column: 2;
+  max-width: 35rem;
+  color: rgba(247, 243, 234, .6);
+  line-height: 1.7;
+}
+
+.hybrid-wave-route {
+  position: relative;
+  min-height: clamp(19rem, 34vw, 28rem);
+}
+
+.hybrid-wave-route svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.hybrid-wave-route path {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.hybrid-wave-base {
+  stroke: rgba(247, 243, 234, .12);
+  stroke-width: 1;
+}
+
+.hybrid-wave-glow {
+  stroke: rgba(41, 70, 199, .28);
+  stroke-width: 13;
+  filter: blur(10px);
+}
+
+.hybrid-wave-progress {
+  stroke: var(--hybrid-signal);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: hybrid-wave-draw linear both;
+  animation-timeline: view();
+  animation-range: entry 15% cover 68%;
+}
+
+@keyframes hybrid-wave-draw { to { stroke-dashoffset: 0; } }
+
+.hybrid-wave-route ol {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hybrid-wave-route li {
+  position: absolute;
+  width: min(17rem, 24vw);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: .45rem .8rem;
+  opacity: .48;
+  transform: translateY(1.25rem);
+  animation: hybrid-wave-point .7s cubic-bezier(.22, 1, .36, 1) both;
+  animation-timeline: view();
+  animation-range: entry 10% cover 52%;
+}
+
+.hybrid-wave-route li:nth-child(1) { left: 2%; top: 31%; }
+.hybrid-wave-route li:nth-child(2) { left: 28%; top: 57%; }
+.hybrid-wave-route li:nth-child(3) { left: 57%; top: 32%; }
+.hybrid-wave-route li:nth-child(4) { right: 0; top: 57%; }
+
+.hybrid-wave-route li i {
+  position: absolute;
+  width: .7rem;
+  height: .7rem;
+  border: 2px solid var(--hybrid-signal);
+  border-radius: 50%;
+  background: var(--hybrid-ink);
+  box-shadow: 0 0 0 .5rem rgba(211, 229, 103, .1);
+  transform: translate(-1.3rem, -.1rem);
+}
+
+.hybrid-wave-route li span {
+  color: var(--hybrid-signal);
+  font: 500 .65rem/1.4 var(--font-mono);
+  letter-spacing: .1em;
+}
+
+.hybrid-wave-route li strong {
+  font: 600 clamp(1.15rem, 2vw, 1.65rem)/1.15 var(--font-display);
+}
+
+.hybrid-wave-route li p {
+  grid-column: 2;
+  color: rgba(247, 243, 234, .58);
+  font-size: .85rem;
+  line-height: 1.55;
+}
+
+@keyframes hybrid-wave-point { to { opacity: 1; transform: translateY(0); } }
+
+/* Website analysis: one decisive editorial action, then the existing analysis flow. */
+.hybrid-home .automatic-analysis {
+  background: var(--hybrid-paper);
+  color: var(--hybrid-ink);
+}
+
+.hybrid-home .analysis-shell { gap: clamp(3rem, 5vw, 4.5rem); }
+
+.hybrid-home .analysis-intro {
+  grid-template-columns: minmax(9rem, .32fr) minmax(0, 1fr);
+  border-top: 1px solid rgba(23, 26, 24, .18);
+  padding-top: 1.4rem;
+}
+
+.hybrid-home .analysis-intro h2 {
+  max-width: 17ch;
+  font-size: clamp(2.25rem, 4.5vw, 4.6rem);
+  line-height: 1.04;
+  letter-spacing: -.035em;
+}
+
+.hybrid-home .analysis-workspace {
+  border: 0;
+  border-top: 1px solid var(--hybrid-ink);
+  border-bottom: 1px solid rgba(23, 26, 24, .2);
+  background: transparent;
+}
+
+.hybrid-home .analysis-url-form { padding: clamp(2rem, 5vw, 4rem) 0; }
+
+.hybrid-home .analysis-url-form > div { gap: clamp(1rem, 3vw, 2.5rem); }
+
+.hybrid-home .analysis-url-form input {
+  font-family: var(--font-display);
+  font-size: clamp(1.35rem, 2.6vw, 2.4rem);
+  letter-spacing: -.02em;
+}
+
+.hybrid-home .analysis-url-form button,
+.hybrid-home .analysis-unlock-action button {
+  min-width: 11rem;
+  border-radius: 100vw;
+  background: var(--hybrid-blue);
+  transition: background .3s ease, color .3s ease, transform .3s ease;
+}
+
+.hybrid-home .analysis-url-form button:hover,
+.hybrid-home .analysis-unlock-action button:hover {
+  color: var(--hybrid-ink);
+  background: var(--hybrid-signal);
+  transform: translateY(-.18rem);
+}
+
+.hybrid-home .analysis-scanning {
+  background: var(--hybrid-blue);
+  border-radius: 0;
+}
+
+.hybrid-home .analysis-score-head,
+.hybrid-home .analysis-scores,
+.hybrid-home .analysis-unlock,
+.hybrid-home .analysis-report { padding-inline: 0; }
+
+/* Visibility: a cinematic dark sequence with a quieter, continuous surface. */
+.hybrid-home .visibility-system {
+  position: relative;
+  background:
+    radial-gradient(circle at 18% 35%, rgba(41, 70, 199, .34), transparent 32rem),
+    #121512;
+}
+
+.hybrid-home .visibility-system::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(120deg, transparent 0 48%, rgba(211, 229, 103, .035) 48% 49%, transparent 49% 100%);
+}
+
+.hybrid-home .visibility-grid { gap: clamp(2rem, 6vw, 7rem); }
+
+.hybrid-home .visibility-stage {
+  border: 0;
+  border-top: 1px solid rgba(211, 229, 103, .72);
+  border-bottom: 1px solid rgba(247, 243, 234, .18);
+  background: transparent;
+  box-shadow: none;
+  padding-inline: 0;
+  min-height: 54vh;
+}
+
+.hybrid-home .visibility-query strong {
+  max-width: 13ch;
+  font-size: clamp(2.35rem, 4vw, 4.3rem);
+  line-height: 1.04;
+}
+
+.hybrid-home .visibility-progress i { background: var(--hybrid-signal); }
+.hybrid-home .visibility-step { min-height: 54vh; transform: translateY(1.5rem); }
+.hybrid-home .visibility-step h3 { max-width: 18ch; font-size: clamp(1.9rem, 3.25vw, 3.3rem); }
+.hybrid-home .visibility-step.is-active { transform: translateY(0); }
+.hybrid-home .visibility-step > p:first-child,
+.hybrid-home .visibility-step small { color: var(--hybrid-signal); }
+
+/* Pricing: calm editorial columns; no floating deck-of-cards effect. */
+.hybrid-home .pricing-system { background: var(--hybrid-paper); }
+
+.hybrid-home .pricing-list {
+  gap: 0;
+  padding-inline: 0;
+  perspective: none;
+  border-top: 1px solid var(--hybrid-ink);
+}
+
+.hybrid-home .pricing-list details,
+.hybrid-home .pricing-list details:nth-child(1),
+.hybrid-home .pricing-list details:nth-child(2),
+.hybrid-home .pricing-list details:nth-child(3) {
+  border: 0;
+  border-right: 1px solid rgba(23, 26, 24, .2);
+  border-bottom: 1px solid rgba(23, 26, 24, .2);
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.hybrid-home .pricing-list details:first-child { border-left: 1px solid rgba(23, 26, 24, .2); }
+
+.hybrid-home .pricing-list details:hover,
+.hybrid-home .pricing-list details:focus-within,
+.hybrid-home .pricing-list details[open],
+.hybrid-home .pricing-list details.pricing-card-free:hover,
+.hybrid-home .pricing-list details.pricing-card-free:focus-within,
+.hybrid-home .pricing-list details.pricing-card-free[open] {
+  color: #f7f3ea;
+  background: var(--hybrid-blue);
+  box-shadow: none;
+  transform: translateY(-.5rem);
+}
+
+.hybrid-home .pricing-list details.pricing-card-free {
+  color: var(--hybrid-ink);
+  background: var(--hybrid-signal);
+  box-shadow: none;
+}
+
+.hybrid-home .pricing-list summary { min-height: clamp(17rem, 24vw, 21rem); }
+
+/* Fit review: one confident closing scene while preserving the form and API contract. */
+.hybrid-home .fit {
+  color: #f7f3ea;
+  background: var(--hybrid-ink);
+}
+
+.hybrid-home .fit-grid {
+  grid-template-columns: minmax(0, .72fr) minmax(0, 1.28fr);
+  gap: clamp(3rem, 7vw, 7rem);
+}
+
+.hybrid-home .fit-intro {
+  position: sticky;
+  top: 20vh;
+}
+
+.hybrid-home .fit-intro .eyebrow { color: var(--hybrid-signal); }
+
+.hybrid-home .fit-intro h2 {
+  font-size: clamp(2.25rem, 4.2vw, 4.15rem);
+  line-height: 1.06;
+  letter-spacing: -.035em;
+}
+
+.hybrid-home .fit-intro p { color: rgba(247, 243, 234, .58); }
+
+.hybrid-home .fit .field label,
+.hybrid-home .fit .consent,
+.hybrid-home .fit .form-status { color: rgba(247, 243, 234, .58); }
+
+.hybrid-home .fit .field input,
+.hybrid-home .fit .field select,
+.hybrid-home .fit .field textarea {
+  color: #f7f3ea;
+  border: 0;
+  border-bottom: 1px solid rgba(247, 243, 234, .28);
+  border-radius: 0;
+  background: transparent;
+  padding-inline: 0;
+}
+
+.hybrid-home .fit .field input:focus,
+.hybrid-home .fit .field select:focus,
+.hybrid-home .fit .field textarea:focus { border-color: var(--hybrid-signal); }
+
+.hybrid-home .fit .cta {
+  color: var(--hybrid-ink);
+  background: var(--hybrid-signal);
+  border-radius: 100vw;
+}
+
+@media (max-width: 58rem) {
+  .hybrid-wave-head,
+  .hybrid-home .analysis-intro,
+  .hybrid-home .fit-grid { grid-template-columns: 1fr; }
+  .hybrid-wave-head > p:last-child,
+  .hybrid-home .analysis-intro > p:last-child { grid-column: auto; }
+  .hybrid-wave-route {
+    min-height: auto;
+    padding-left: 1.5rem;
+  }
+  .hybrid-wave-route svg {
+    left: -49%;
+    width: 100%;
+    transform: rotate(90deg);
+  }
+  .hybrid-wave-route ol {
+    position: relative;
+    display: grid;
+    gap: 2.25rem;
+  }
+  .hybrid-wave-route li,
+  .hybrid-wave-route li:nth-child(n) {
+    position: relative;
+    inset: auto;
+    width: 100%;
+  }
+  .hybrid-home .fit-intro { position: relative; top: auto; }
+}
+
+@media (max-width: 40rem) {
+  .hybrid-home .analysis-url-form > div { grid-template-columns: 1fr; }
+  .hybrid-home .pricing-list { grid-template-columns: 1fr; }
+  .hybrid-home .pricing-list details { border-left: 1px solid rgba(23, 26, 24, .2); }
+  .hybrid-home .pricing-list summary { min-height: 18rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hybrid-wave-progress {
+    stroke-dashoffset: 0;
+    animation: none;
+  }
+  .hybrid-wave-route li {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+  .hybrid-home .analysis-url-form button,
+  .hybrid-home .analysis-unlock-action button,
+  .hybrid-home .pricing-list details { transition: none; }
+}

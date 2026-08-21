@@ -1,5 +1,7 @@
 <!-- Quiet Intelligence: restrained editorial frame, clear navigation and no inaccessible visual-only content. -->
 <script setup lang="ts">
+import CookieConsent from '~/components/site/CookieConsent.vue'
+
 const route = useRoute()
 const isPrivateOwnerRoute = computed(() => route.path === '/audit-lab' || route.path === '/ml-lab-preview')
 const isZh = computed(() => isPrivateOwnerRoute.value || route.path.startsWith('/zh-hant'))
@@ -12,6 +14,8 @@ useHead({
 // 導覽選單狀態
 const navOpen = ref(false)
 const toggleNav = () => { navOpen.value = !navOpen.value }
+const cookieConsent = ref<{ open: () => void } | null>(null)
+const openCookieSettings = () => cookieConsent.value?.open()
 
 // 頁首 sticky 狀態
 const headerStuck = ref(false)
@@ -95,8 +99,29 @@ onMounted(() => {
 
       <div class="footer-base">
         <span>© {{ new Date().getFullYear() }} DiscoveryStack</span>
-        <span>{{ isZh ? '繁體中文' : 'English' }} · {{ isZh ? 'English' : '繁體中文' }}</span>
+        <span class="footer-preferences">
+          {{ isZh ? '繁體中文' : 'English' }} · {{ isZh ? 'English' : '繁體中文' }}
+          <button type="button" @click="openCookieSettings">{{ isZh ? 'Cookie 設定' : 'Cookie settings' }}</button>
+        </span>
       </div>
     </div>
   </footer>
+
+  <CookieConsent ref="cookieConsent" :locale="isZh ? 'zh-hant' : 'en'" />
 </template>
+
+<style scoped>
+.footer-preferences { display: flex; flex-wrap: wrap; gap: .6rem 1rem; align-items: center; }
+.footer-preferences button {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.footer-preferences button:hover,
+.footer-preferences button:focus-visible { color: var(--cobalt); }
+</style>
