@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import AiQaDock from '~/components/landing/AiQaDock.vue'
 import AutomaticSiteAnalysis from '~/components/landing/AutomaticSiteAnalysis.vue'
+import HybridDemandWave from '~/components/landing/HybridDemandWave.vue'
 
 const route = useRoute()
 const isZh = computed(() => route.path.startsWith('/zh-hant'))
@@ -10,8 +11,8 @@ const locale = computed<'en' | 'zh-hant'>(() => isZh.value ? 'zh-hant' : 'en')
 const copy = computed(() => isZh.value
   ? {
       title: '客戶正在搜尋。',
-      accent: '別再讓答案指向別人。',
-      description: 'DiscoveryStack 是由自研機器學習模型驅動的一站式行銷公司。五個專業部門，從品牌官網、系統與資料庫、AI 導入到 SEO／GEO 與轉換，全部負責到底。',
+      accent: '讓答案先指向你。',
+      description: '當客戶問 Google 或 AI「哪家公司值得選？」，我們讓你的品牌被找到、被理解，也更容易被選擇。網站、行銷、系統、AI 與 SEO／GEO，由同一團隊負責到底。',
       kicker: 'DiscoveryStack',
       subkicker: '一間公司 · 五個部門 · 一條獲客路徑',
       action: '免費分析你的網站',
@@ -19,8 +20,8 @@ const copy = computed(() => isZh.value
     }
   : {
       title: 'Customers are searching.',
-      accent: 'Stop letting the answer point elsewhere.',
-      description: 'DiscoveryStack is an end-to-end marketing company powered by our own trained machine-learning model. Five specialist departments take responsibility from brand and web to systems, data, AI, SEO/GEO and conversion.',
+      accent: 'Make the answer point to you.',
+      description: 'When customers ask Google or AI who to choose, we make your brand easier to find, understand and trust. One team owns web, marketing, systems, AI and SEO/GEO from first signal to enquiry.',
       kicker: 'DiscoveryStack',
       subkicker: 'One company · Five departments · One acquisition route',
       action: 'Analyse your website for free',
@@ -86,9 +87,9 @@ onMounted(() => {
 
 const journeySteps = computed(() => isZh.value
   ? [
-      { num: '01', tag: '診斷', label: '看清問題', title: '先找出真正阻礙訂單的地方。', desc: '從網站、搜尋、AI 能見度、內容、資料與轉換訊號建立共同基準，不急著先賣你某一項服務。' },
+      { num: '01', tag: '診斷', label: '看清問題', title: '先找出訂單卡在哪裡。', desc: '從網站、搜尋、AI 能見度、內容、資料與轉換訊號建立共同基準，不急著先賣你某一項服務。' },
       { num: '02', tag: '組隊', label: '組成解法', title: '只讓需要的部門進場。', desc: '依問題組成行銷、網站、系統、AI 與 SEO／GEO 的執行路徑，定義優先序、責任與可驗證成果。' },
-      { num: '03', tag: '落地', label: '整合執行', title: '策略、介面與系統一起落地。', desc: '同一份需求脈絡貫穿內容、設計、開發、資料與自動化，避免五間廠商各自完成卻彼此接不起來。' },
+      { num: '03', tag: '落地', label: '整合執行', title: '策略、介面與系統一起上線。', desc: '同一份需求脈絡貫穿內容、設計、開發、資料與自動化，避免五間廠商各自完成卻彼此接不起來。' },
       { num: '04', tag: '成長', label: '持續改善', title: '用真實訊號決定下一輪。', desc: '追蹤搜尋、AI 引用、有效詢問、成交來源與營運效率，把結果重新帶回模型、內容與流程改善。' },
     ]
   : [
@@ -100,11 +101,11 @@ const journeySteps = computed(() => isZh.value
 
 const departments = computed(() => isZh.value
   ? [
-      { number: '01', name: '行銷部', english: 'Growth Strategy', promise: '不是多做幾則貼文，而是先決定每一分預算要把誰推向哪一步。', services: ['品牌定位與市場研究', '整體行銷策略與轉換漏斗', '廣告、社群與內容行銷', '數據追蹤與轉換優化'] },
-      { number: '02', name: '網站設計部', english: 'Brand Experience', promise: '做的不只是好看的網站，而是一個能被找到、理解並採取行動的品牌入口。', services: ['企業官網與品牌網站', '電商、預約與會員網站', 'Landing Page 與銷售頁', 'UX／UI、改版與維護'] },
-      { number: '03', name: '系統規劃部', english: 'Digital Systems', promise: '把散落的資料、流程與工具接起來，讓成長不再靠人工搬運。', services: ['CRM、CMS 與管理後台', '資料庫、API 與第三方串接', '自動化工作流程', '企業客製系統'] },
-      { number: '04', name: 'AI 導入部', english: 'AI Applications', promise: '不只是接上通用聊天工具，而是把 AI 放進真正需要加速的工作流程。', services: ['官網 Chatbot 與知識庫', 'AI 助理與流程自動化', 'RAG、LLM 與系統整合', '機器學習與客製模型'] },
-      { number: '05', name: 'SEO／GEO 部', english: 'Search Growth', promise: '讓搜尋引擎找得到，也讓答案引擎知道為什麼應該引用你。', services: ['技術 SEO 與網站結構', '內容、實體與 Schema', 'GEO／AEO 與 AI 搜尋', '排名、引用與流量監測'] },
+      { number: '01', name: '行銷部', english: 'Growth Strategy', promise: '讓每一分預算，都把對的人推向下一步。', services: ['品牌定位與市場研究', '整體行銷策略與轉換漏斗', '廣告、社群與內容行銷', '數據追蹤與轉換優化'] },
+      { number: '02', name: '網站設計部', english: 'Brand Experience', promise: '讓網站不只好看，也能讓人理解並行動。', services: ['企業官網與品牌網站', '電商、預約與會員網站', 'Landing Page 與銷售頁', 'UX／UI、改版與維護'] },
+      { number: '03', name: '系統規劃部', english: 'Digital Systems', promise: '把資料與流程接起來，讓訂單不再卡在人工交接。', services: ['CRM、CMS 與管理後台', '資料庫、API 與第三方串接', '自動化工作流程', '企業客製系統'] },
+      { number: '04', name: 'AI 導入部', english: 'AI Applications', promise: '把 AI 放進真正能省時間、提高品質的工作。', services: ['官網 Chatbot 與知識庫', 'AI 助理與流程自動化', 'RAG、LLM 與系統整合', '機器學習與客製模型'] },
+      { number: '05', name: 'SEO／GEO 部', english: 'Search Growth', promise: '讓搜尋找得到你，也讓 AI 有理由引用你。', services: ['技術 SEO 與網站結構', '內容、實體與 Schema', 'GEO／AEO 與 AI 搜尋', '排名、引用與流量監測'] },
     ]
   : [
       { number: '01', name: 'Marketing', english: 'Growth Strategy', promise: 'Not more activity for its own sake—a decision about who each dollar should move, and where.', services: ['Positioning and market research', 'Marketing strategy and funnels', 'Paid, social and content', 'Tracking and conversion optimisation'] },
@@ -334,7 +335,7 @@ const submitForm = async () => {
 </script>
 
 <template>
-  <article>
+  <article class="hybrid-home">
     <!-- ============ HERO ============ -->
     <section class="hero shell">
       <div class="hero-meta">
@@ -366,12 +367,15 @@ const submitForm = async () => {
       </div>
     </section>
 
+    <!-- 新版敘事橋段：保留原首頁後，以一條連續路徑銜接五個部門 -->
+    <HybridDemandWave :locale="locale" />
+
     <!-- ============ 五個專業部門 ============ -->
     <section class="section departments" id="departments">
       <div class="shell">
         <div class="section-head reveal">
           <p class="eyebrow">{{ isZh ? '每個問題都有專業的部門' : 'One company / Five departments' }}</p>
-          <h2>{{ isZh ? '問題不分部門；解法必須跨部門。' : 'The problem does not respect departments. The solution has to cross them.' }}</h2>
+          <h2>{{ isZh ? '別讓五間供應商，做出五個接不起來的答案。' : 'Do not let five vendors deliver five disconnected answers.' }}</h2>
         </div>
 
         <div class="department-system">
@@ -422,8 +426,8 @@ const submitForm = async () => {
           <div>
             <p class="eyebrow">{{ isZh ? '台灣第一間 · OWNED SEARCH INTELLIGENCE MODEL' : 'TAIWAN’S FIRST · OWNED SEARCH INTELLIGENCE MODEL' }}</p>
             <h2>
-              <span>{{ isZh ? 'DiscoveryStack 是台灣第一間' : 'Not an AI wrapper;' }}</span>
-              <span>{{ isZh ? '以自研機器學習模型驅動的整合行銷公司。' : 'a market-signal decision system.' }}</span>
+              <span>{{ isZh ? '少一點猜測，多一點證據' : 'Less guesswork. More evidence.' }}</span>
+              <span>{{ isZh ? '先看見訊號，再決定下一筆預算。' : 'See the signal before spending the next dollar.' }}</span>
             </h2>
           </div>
           <div class="model-proof-intro">
@@ -552,7 +556,7 @@ const submitForm = async () => {
       <div class="shell">
         <div class="section-head reveal">
           <p class="eyebrow">{{ isZh ? 'SEO／GEO／AEO · 從問題到訂單' : 'SEO / GEO / AEO · Question to revenue' }}</p>
-          <h2>{{ isZh ? '不是把 GEO 三個字加進服務表。' : 'GEO is not three letters added to a service list.' }}</h2>
+          <h2>{{ isZh ? '當客戶問 AI，你要成為答案，不是遺漏。' : 'When customers ask AI, become the answer—not the omission.' }}</h2>
         </div>
 
         <div class="visibility-grid">
@@ -595,7 +599,7 @@ const submitForm = async () => {
       <div class="shell">
         <div class="section-head reveal">
           <p class="eyebrow">{{ isZh ? '合作不是轉包，是同一條交付路徑' : 'One delivery route, not a chain of subcontractors' }}</p>
-          <h2>{{ isZh ? '從診斷到成長，始終只有一份共同目標。' : 'One shared objective from diagnosis through growth.' }}</h2>
+          <h2>{{ isZh ? '一個團隊，對同一個成長結果負責。' : 'One team accountable for one growth outcome.' }}</h2>
         </div>
 
         <div class="journey-grid">
@@ -629,8 +633,8 @@ const submitForm = async () => {
       <div class="shell faq-grid">
         <div class="faq-intro">
           <p class="eyebrow">FAQ / {{ isZh ? '先把重要的說清楚' : 'Clarity before the call' }}</p>
-          <h2>{{ isZh ? '你可能正在問。' : 'You may be asking.' }}</h2>
-          <p>{{ isZh ? '不需要先學會所有術語，才有資格開始。' : 'You do not need to master the terminology before you start.' }}</p>
+          <h2>{{ isZh ? '決定合作前，你應該先知道。' : 'What you should know before hiring us.' }}</h2>
+          <p>{{ isZh ? '不說術語堆成的漂亮話，只回答會影響決定的問題。' : 'No jargon theatre—only answers that affect the decision.' }}</p>
         </div>
         <div class="faq-list">
           <details v-for="(faq, index) in faqs" :key="faq.q" :open="index === 0">
@@ -647,7 +651,7 @@ const submitForm = async () => {
         <header class="pricing-head reveal">
           <div>
             <p class="eyebrow">{{ isZh ? '合作預算／先知道大概，不必先承諾' : 'Working budget / Know the range before committing' }}</p>
-            <h2>{{ isZh ? '先從負擔得起的下一步開始。' : 'Start with the next step you can justify.' }}</h2>
+            <h2>{{ isZh ? '先知道預算，也知道你會買到什麼。' : 'Know the budget—and what it actually buys.' }}</h2>
           </div>
           <div class="pricing-intro">
             <p>{{ isZh ? '這些是常見合作起價，不是把所有公司塞進同一個套餐。真正報價會依目標、現況與需要進場的部門確認；如果不需要某一項，就不會硬包進去。' : 'These are common starting points, not rigid packages. The final scope follows the objective, current state and departments actually needed.' }}</p>
@@ -693,8 +697,8 @@ const submitForm = async () => {
       <div class="shell fit-grid">
         <div class="fit-intro reveal">
           <p class="eyebrow">{{ isZh ? '合作諮詢' : 'Fit Review' }}</p>
-          <h2 style="margin-top:1.25rem;">{{ isZh ? '把現在卡住的地方交給我們看。' : 'Show us where you are stuck right now.' }}</h2>
-          <p>{{ isZh ? '留下最少但足夠的背景。我們會以人類判斷回覆，不以自動化承諾取代策略。' : 'Share the minimum but sufficient background. We respond with human judgment, not automated promises that replace strategy.' }}</p>
+          <h2 style="margin-top:1.25rem;">{{ isZh ? '先說問題。我們再說該不該合作。' : 'Tell us the problem. Then we will say if we should work together.' }}</h2>
+          <p>{{ isZh ? '留下最少但足夠的背景。我們會直接告訴你問題在哪、誰該進場，以及現在是否值得花錢。' : 'Share the essential context. We will tell you what is wrong, who should own it and whether it is worth spending now.' }}</p>
         </div>
 
         <form id="fitForm" novalidate @submit.prevent="submitForm">

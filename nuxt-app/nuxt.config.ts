@@ -23,7 +23,7 @@ export default defineNuxtConfig({
   buildDir: process.env.NUXT_BUILD_DIR || '.nuxt',
   devtools: { enabled: true },
   modules: ['@nuxt/content', '@nuxtjs/i18n', '@nuxt/image'],
-  css: ['~/assets/css/redesign.css', '~/assets/css/immersive.css'],
+  css: ['~/assets/css/redesign.css', '~/assets/css/immersive.css', '~/assets/css/hybrid-refresh.css'],
   app: {
     head: {
       htmlAttrs: { lang: 'en-US', dir: 'ltr' },

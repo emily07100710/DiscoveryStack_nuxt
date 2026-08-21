@@ -12,8 +12,8 @@ const timers: ReturnType<typeof setTimeout>[] = []
 const lead = reactive({ name: '', email: '', company: '', industry: '', role: '', phone: '', budget: '', timeline: '', privacyConsent: false, recontactConsent: true, companyFax: '' })
 
 const copy = computed(() => isZh.value ? {
-  eyebrow: '免費 AI 網站分析', title: '先看分數，再決定錢該花在哪裡。',
-  intro: '輸入網址，先快速檢查 SEO／GEO、品牌、內容與使用體驗。公開網站無法證明內部系統或真實成交，因此我們不會亂給分。',
+  eyebrow: '免費 AI 網站分析', title: '花下一筆預算前，先找出網站漏掉的訂單。',
+  intro: '輸入網址，先檢查 SEO／GEO、品牌、內容與使用體驗。公開網站看不出的事，我們不假裝知道。',
   label: '你的網站網址', placeholder: 'https://example.com', submit: '開始免費分析', scanning: '五個部門正在整理公開訊號', invalid: '請輸入完整的 http:// 或 https:// 公開網址。',
   demo: 'UI 示範', demoNote: '公開模型 API 尚未接線；以下數字只用來確認介面與轉換流程，不是這個網址的真實分析。',
   total: '網站獲客基礎分數', maturity: '成長基礎', unlockTitle: '分數只是起點。免費解鎖完整問題與部門建議。',
@@ -26,8 +26,8 @@ const copy = computed(() => isZh.value ? {
   scores: [{ label: 'SEO', value: 68, note: '索引、結構與頁面訊號' }, { label: 'GEO', value: 54, note: '實體、證據與答案可引用性' }, { label: '品牌／內容', value: 72, note: '定位、層級與可信度' }, { label: 'UX', value: 61, note: '行動入口與閱讀摩擦' }],
   recommendations: [{ dept: 'SEO／GEO 部', title: '先修復能否被找到與引用的基礎' }, { dept: '網站設計部', title: '重新整理第一屏承諾與主要行動' }, { dept: '行銷部', title: '把搜尋意圖接到清楚的轉換路徑' }],
 } : {
-  eyebrow: 'Free AI website analysis', title: 'See the score before deciding where the money should go.',
-  intro: 'Enter a URL to review SEO/GEO, brand, content and user experience. A public site cannot prove internal systems or real conversion, so we do not invent those scores.',
+  eyebrow: 'Free AI website analysis', title: 'Before spending again, find the orders your site is losing.',
+  intro: 'Enter a URL to review SEO/GEO, brand, content and user experience. If a public site cannot prove it, we do not pretend to know it.',
   label: 'Your website URL', placeholder: 'https://example.com', submit: 'Start free analysis', scanning: 'Five departments are structuring public signals', invalid: 'Enter a complete public http:// or https:// URL.',
   demo: 'UI demo', demoNote: 'The public model API is not connected yet. These numbers test the interface and conversion flow; they are not a real assessment of this URL.',
   total: 'Acquisition foundation score', maturity: 'Growth foundation', unlockTitle: 'A score is only the start. Unlock the full issues and department plan for free.',
