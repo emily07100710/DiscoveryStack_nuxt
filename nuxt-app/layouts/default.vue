@@ -3,7 +3,7 @@
 import CookieConsent from '~/components/site/CookieConsent.vue'
 
 const route = useRoute()
-const isPrivateOwnerRoute = computed(() => route.path === '/audit-lab' || route.path === '/ml-lab-preview' || route.path === '/leads')
+const isPrivateOwnerRoute = computed(() => route.path === '/audit-lab' || route.path === '/ml-lab-preview' || route.path === '/leads' || route.path === '/training-pipeline')
 const isZh = computed(() => isPrivateOwnerRoute.value || route.path.startsWith('/zh-hant'))
 const htmlLang = computed(() => isZh.value ? 'zh-Hant' : 'en-US')
 

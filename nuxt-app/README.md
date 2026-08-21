@@ -40,6 +40,7 @@ pnpm dev
 | AI research guide | `/llms.txt` | 品牌、公開內容與研究邊界摘要。 |
 | Sitemap | `/sitemap.xml` | 公開雙語 URL 與 alternate 關係。 |
 | Private operations | `/audit-lab` | Owner sign-in required，不是公開內容頁。 |
+| Consented training pipeline | `/training-pipeline` | Owner sign-in required；審核去識別候選、資料門檻與 collection ledger。 |
 
 在尚未配置 `NUXT_PUBLIC_SITE_URL` 前，網站以 `https://discoverystack.example` 作為安全 placeholder，並以 staging 防誤索引策略運作。**不要在未有正式網域、正確 canonical 與 Search Console 驗證前要求搜尋引擎收錄。**
 
@@ -57,6 +58,8 @@ pnpm dev
 | `VITE_APP_ID` | Private sign-in 必須 | OAuth application identifier。 |
 | `OWNER_OPEN_ID` | Private operations 必須 | 唯一可開啟 owner-only routes 的 Open ID；server-only。 |
 | `HUGGINGFACE_API_TOKEN` | BGE-M3 pilot 可選 | 僅由 server 呼叫 Hugging Face；不寫入資料庫、HTML、frontend bundle 或 Git。 |
+| `MODEL_IMPROVEMENT_CRON` | 可選 | Nitro cron，預設 `0 18 * * *`（UTC 部署環境為台北隔日 02:00）。 |
+| `NUXT_MODEL_IMPROVEMENT_AUTO_TRAIN` | 可選，預設關閉 | 設為 `true` 後，只會對最新且 owner 已核准、通過 150/各階段 20 筆門檻的 manifest 建立 training job；不自動部署模型。 |
 
 ## 資料庫與 migration
 

@@ -5,6 +5,7 @@ const isFastPreviewGenerate = process.env.DISCOVERYSTACK_FAST_PREVIEW_GENERATE =
 // This keeps SEO metadata while avoiding build-time crawling in the container.
 const isServerOnlyProductionBuild = process.env.DISCOVERYSTACK_SKIP_PRERENDER === '1'
 const shouldPrerenderPublicRoutes = !(isManagedPreviewSsr || isServerOnlyProductionBuild)
+const modelImprovementCron = process.env.MODEL_IMPROVEMENT_CRON || '0 18 * * *'
 const publicPrerenderRoutes = [
   '/robots.txt', '/llms.txt', '/sitemap.xml',
   '/ml-lab-preview',
@@ -43,6 +44,8 @@ export default defineNuxtConfig({
     },
   },
   nitro: {
+    experimental: { tasks: true },
+    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'] },
     prerender: {
       // Nuxt always invokes the Nitro prerender runner after a production build.
       // With an empty route set and crawlLinks disabled it returns immediately,
@@ -58,6 +61,7 @@ export default defineNuxtConfig({
     '/audit-lab/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
     '/ml-lab-preview': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/leads': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
+    '/training-pipeline': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
     '/en/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/zh-hant/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/api/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
@@ -89,6 +93,7 @@ export default defineNuxtConfig({
     huggingFaceNamespace: process.env.HUGGINGFACE_NAMESPACE || '',
     huggingFaceBaseModelId: process.env.HUGGINGFACE_BASE_MODEL_ID || 'distilbert/distilbert-base-multilingual-cased',
     huggingFaceJobFlavor: process.env.HUGGINGFACE_JOB_FLAVOR || 'a10g-small',
+    modelImprovementAutoTrain: process.env.NUXT_MODEL_IMPROVEMENT_AUTO_TRAIN || 'false',
     public: {
       discoveryStackSiteUrl: process.env.NUXT_PUBLIC_DISCOVERY_STACK_SITE_URL || process.env.NUXT_PUBLIC_SITE_URL || 'https://discoverystack.example',
     },

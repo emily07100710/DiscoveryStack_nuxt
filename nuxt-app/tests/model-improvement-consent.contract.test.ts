@@ -15,8 +15,8 @@ describe('optional model-improvement consent boundary', () => {
   })
 
   it('states that direct contact and sales data are excluded', () => {
-    expect(analysis).toContain('不包含姓名、Email、電話或預算')
-    expect(analysis).toContain('This excludes your name, email, phone number and budget')
+    expect(analysis).toContain('不包含姓名、Email、電話、預算或自由填寫內容')
+    expect(analysis).toContain('excludes your name, email, phone, budget and free-form enquiry text')
   })
 
   it('submits the explicit choice without making it a required report field', () => {

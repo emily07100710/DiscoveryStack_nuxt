@@ -198,7 +198,7 @@ export const publicIntelligenceSources = mysqlTable('publicIntelligenceSources',
   domain: varchar('domain', { length: 253 }),
   language: varchar('language', { length: 24 }),
   region: varchar('region', { length: 80 }),
-  discoveryMethod: mysqlEnum('discoveryMethod', ['owner_research', 'public_search', 'api_catalogue', 'licensed_import']).notNull(),
+  discoveryMethod: mysqlEnum('discoveryMethod', ['owner_research', 'public_search', 'api_catalogue', 'licensed_import', 'customer_consent']).notNull(),
   robotsStatus: mysqlEnum('robotsStatus', ['unreviewed', 'reviewed_allow', 'reviewed_restrict', 'unavailable', 'not_applicable']).default('unreviewed').notNull(),
   robotsUrl: varchar('robotsUrl', { length: 2048 }),
   robotsEvidenceHash: varchar('robotsEvidenceHash', { length: 128 }),
@@ -268,6 +268,62 @@ export const publicIntelligenceArtifacts = mysqlTable('publicIntelligenceArtifac
   uniqueIndex('public_intelligence_artifact_hash_unique').on(table.artifactHash),
   index('public_intelligence_artifacts_source_idx').on(table.sourceId, table.artifactType),
   index('public_intelligence_artifacts_use_idx').on(table.useSnapshot, table.qualityStatus),
+])
+
+/** Append-only execution ledger for the daily, consent-gated model-improvement collector. */
+export const modelImprovementCollectionRuns = mysqlTable('modelImprovementCollectionRuns', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  trigger: mysqlEnum('trigger', ['scheduled', 'owner_manual']).notNull(),
+  status: mysqlEnum('status', ['running', 'completed', 'failed']).default('running').notNull(),
+  leadsExamined: int('leadsExamined').default(0).notNull(),
+  eligibleLeads: int('eligibleLeads').default(0).notNull(),
+  collectedCandidates: int('collectedCandidates').default(0).notNull(),
+  duplicateCandidates: int('duplicateCandidates').default(0).notNull(),
+  skippedCandidates: int('skippedCandidates').default(0).notNull(),
+  revokedCandidates: int('revokedCandidates').default(0).notNull(),
+  failedCandidates: int('failedCandidates').default(0).notNull(),
+  errorSummary: json('errorSummary').notNull(),
+  startedAt: timestamp('startedAt').defaultNow().notNull(),
+  completedAt: timestamp('completedAt'),
+}, table => [
+  index('model_improvement_collection_owner_idx').on(table.ownerUserId, table.startedAt),
+  index('model_improvement_collection_status_idx').on(table.status, table.startedAt),
+])
+
+/** One de-identified structural snapshot per consented lead, held outside every training manifest until owner review. */
+export const modelImprovementCandidates = mysqlTable('modelImprovementCandidates', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  leadId: int('leadId').notNull().references(() => leads.id),
+  collectionRunId: int('collectionRunId').notNull().references(() => modelImprovementCollectionRuns.id),
+  sourceUrl: varchar('sourceUrl', { length: 2048 }).notNull(),
+  finalUrl: varchar('finalUrl', { length: 2048 }),
+  hostname: varchar('hostname', { length: 253 }).notNull(),
+  consentVersion: varchar('consentVersion', { length: 80 }).notNull(),
+  consentedAt: timestamp('consentedAt').notNull(),
+  consentRevokedAt: timestamp('consentRevokedAt'),
+  status: mysqlEnum('status', ['collection_failed', 'ready_for_review', 'approved', 'rejected', 'revoked']).default('ready_for_review').notNull(),
+  robotsStatus: mysqlEnum('robotsStatus', ['allowed', 'disallowed', 'unavailable', 'error']).notNull(),
+  robotsCheckedAt: timestamp('robotsCheckedAt').notNull(),
+  snapshotFingerprint: varchar('snapshotFingerprint', { length: 64 }),
+  analysisVersion: varchar('analysisVersion', { length: 80 }).notNull(),
+  featureData: json('featureData').notNull(),
+  suggestedLabelData: json('suggestedLabelData').notNull(),
+  approvedLabelData: json('approvedLabelData'),
+  collectionErrorCode: varchar('collectionErrorCode', { length: 120 }),
+  reviewerUserId: int('reviewerUserId').references(() => users.id),
+  reviewNote: text('reviewNote'),
+  publicSourceId: int('publicSourceId').references(() => publicIntelligenceSources.id),
+  publicArtifactId: int('publicArtifactId').references(() => publicIntelligenceArtifacts.id),
+  collectedAt: timestamp('collectedAt'),
+  reviewedAt: timestamp('reviewedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('model_improvement_candidate_lead_unique').on(table.ownerUserId, table.leadId),
+  index('model_improvement_candidate_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+  index('model_improvement_candidate_snapshot_idx').on(table.snapshotFingerprint),
 ])
 
 /** Dataset manifests freeze exactly which policy-approved public representations entered a given evaluation or training build. */
@@ -412,6 +468,8 @@ export type AuditTrainingExample = typeof auditTrainingExamples.$inferSelect
 export type PublicIntelligenceSource = typeof publicIntelligenceSources.$inferSelect
 export type PublicIntelligenceSourceReview = typeof publicIntelligenceSourceReviews.$inferSelect
 export type PublicIntelligenceArtifact = typeof publicIntelligenceArtifacts.$inferSelect
+export type ModelImprovementCollectionRun = typeof modelImprovementCollectionRuns.$inferSelect
+export type ModelImprovementCandidate = typeof modelImprovementCandidates.$inferSelect
 export type PublicIntelligenceDatasetBuild = typeof publicIntelligenceDatasetBuilds.$inferSelect
 export type PublicIntelligenceIngestionJob = typeof publicIntelligenceIngestionJobs.$inferSelect
 export type PublicIntelligenceInference = typeof publicIntelligenceInferences.$inferSelect

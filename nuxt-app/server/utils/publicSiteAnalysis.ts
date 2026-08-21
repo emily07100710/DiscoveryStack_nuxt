@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { cleanAndExtractPublicDocument, readBoundedPublicHtml } from '../public-intelligence/ingestion'
@@ -8,11 +9,16 @@ export type PublicSiteAnalysisResult = {
   finalUrl: string
   hostname: string
   analysedAt: string
+  analysisVersion: typeof PUBLIC_SITE_ANALYSIS_VERSION
+  snapshotFingerprint: string
   scope: 'public_homepage_only'
   scores: { overall: number, seo: number, geo: number, brandContent: number, ux: number }
   checks: Record<string, boolean | number | string>
   recommendationKeys: string[]
 }
+
+export const PUBLIC_SITE_ANALYSIS_VERSION = 'public-homepage-structural-v2'
+export type RobotsReview = { status: 'allowed' | 'disallowed' | 'unavailable' | 'error', allowed: boolean, robotsUrl: string, responseStatus: number | null, checkedAt: string }
 
 const blockedIpv4Ranges: Array<[number, number]> = [
   [0x00000000, 0x00ffffff],
@@ -55,6 +61,67 @@ async function assertPublicDns(hostname: string) {
   }
   const addresses = await lookup(hostname, { all: true, verbatim: true })
   if (!addresses.length || addresses.some(item => !isPublicIpAddress(item.address))) throw new Error('private_network_target')
+}
+
+export function robotsAllowsPath(content: string, pathname = '/', userAgent = 'discoverystack-trainingcollector') {
+  const groups: Array<{ agents: string[], rules: Array<{ allow: boolean, path: string }> }> = []
+  let group: { agents: string[], rules: Array<{ allow: boolean, path: string }> } | null = null
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.replace(/#.*$/, '').trim()
+    if (!line) continue
+    const separator = line.indexOf(':')
+    if (separator < 0) continue
+    const field = line.slice(0, separator).trim().toLowerCase()
+    const value = line.slice(separator + 1).trim()
+    if (field === 'user-agent') {
+      if (!group || group.rules.length) {
+        group = { agents: [], rules: [] }
+        groups.push(group)
+      }
+      group.agents.push(value.toLowerCase())
+    } else if ((field === 'allow' || field === 'disallow') && group?.agents.length) {
+      if (value || field === 'allow') group.rules.push({ allow: field === 'allow', path: value })
+    }
+  }
+  const normalizedAgent = userAgent.toLowerCase()
+  const applicable = groups.filter(candidate => candidate.agents.some(agent => agent === '*' || normalizedAgent.includes(agent)))
+  const matches = applicable.flatMap(candidate => candidate.rules).filter(rule => rule.path && pathname.startsWith(rule.path))
+  if (!matches.length) return true
+  matches.sort((left, right) => right.path.length - left.path.length || Number(right.allow) - Number(left.allow))
+  return matches[0]!.allow
+}
+
+/** Fail-closed robots review for the scheduled collector. Missing robots.txt is recorded, never invented as an explicit allow. */
+export async function reviewRobotsForHomepage(rawUrl: string): Promise<RobotsReview> {
+  const target = assertSafeAuditTarget(rawUrl)
+  const origin = new URL(target.normalizedUrl).origin
+  let current = new URL('/robots.txt', origin).toString()
+  try {
+    for (let redirects = 0; redirects <= 2; redirects += 1) {
+      const safe = assertSafeAuditTarget(current)
+      if (safe.hostname !== target.hostname) return { status: 'error', allowed: false, robotsUrl: current, responseStatus: null, checkedAt: new Date().toISOString() }
+      await assertPublicDns(safe.hostname)
+      const response = await fetch(safe.normalizedUrl, {
+        redirect: 'manual',
+        headers: { accept: 'text/plain', 'user-agent': 'DiscoveryStack-TrainingCollector/1.0' },
+        signal: AbortSignal.timeout(8_000),
+      })
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location')
+        if (!location || redirects === 2) return { status: 'error', allowed: false, robotsUrl: safe.normalizedUrl, responseStatus: response.status, checkedAt: new Date().toISOString() }
+        current = new URL(location, safe.normalizedUrl).toString()
+        continue
+      }
+      if (response.status === 404 || response.status === 410) return { status: 'unavailable', allowed: true, robotsUrl: safe.normalizedUrl, responseStatus: response.status, checkedAt: new Date().toISOString() }
+      if (!response.ok) return { status: 'disallowed', allowed: false, robotsUrl: safe.normalizedUrl, responseStatus: response.status, checkedAt: new Date().toISOString() }
+      const body = (await response.text()).slice(0, 250_000)
+      const allowed = robotsAllowsPath(body, new URL(target.normalizedUrl).pathname || '/')
+      return { status: allowed ? 'allowed' : 'disallowed', allowed, robotsUrl: safe.normalizedUrl, responseStatus: response.status, checkedAt: new Date().toISOString() }
+    }
+  } catch {
+    return { status: 'error', allowed: false, robotsUrl: current, responseStatus: null, checkedAt: new Date().toISOString() }
+  }
+  return { status: 'error', allowed: false, robotsUrl: current, responseStatus: null, checkedAt: new Date().toISOString() }
 }
 
 async function fetchHomepage(rawUrl: string) {
@@ -151,15 +218,15 @@ export function analysePublicHomepageHtml(input: { html: string, requestedUrl: s
   ]
   const recommendationKeys = candidates.filter(([missing]) => missing).map(([, key]) => key).slice(0, 3)
   if (!recommendationKeys.length) recommendationKeys.push('review_deeper_pages')
+  const snapshot = { scope: 'public_homepage_only' as const, scores: { overall: bounded((seo + geo + brandContent + ux) / 4), seo, geo, brandContent, ux }, checks, recommendationKeys }
   return {
     requestedUrl: input.requestedUrl,
     finalUrl: input.finalUrl || input.requestedUrl,
     hostname: input.hostname || new URL(input.finalUrl || input.requestedUrl).hostname,
     analysedAt: (input.analysedAt || new Date()).toISOString(),
-    scope: 'public_homepage_only',
-    scores: { overall: bounded((seo + geo + brandContent + ux) / 4), seo, geo, brandContent, ux },
-    checks,
-    recommendationKeys,
+    analysisVersion: PUBLIC_SITE_ANALYSIS_VERSION,
+    snapshotFingerprint: createHash('sha256').update(JSON.stringify(snapshot)).digest('hex'),
+    ...snapshot,
   }
 }
 

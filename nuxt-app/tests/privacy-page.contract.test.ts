@@ -11,8 +11,10 @@ describe('public privacy explanation', () => {
   it('explains the real public-check and consent boundaries in both languages', () => {
     expect(privacy).toContain('不保存原始 HTML')
     expect(privacy).toContain('does not retain raw HTML')
-    expect(privacy).toContain('網站也不會自行持續抓取或自動重訓')
-    expect(privacy).toContain('does not continuously crawl or retrain itself')
+    expect(privacy).toContain('後台可能定期重新檢查所填網站的公開首頁')
+    expect(privacy).toContain('模型也不會自動部署到網站')
+    expect(privacy).toContain('may periodically recheck the submitted site’s public homepage')
+    expect(privacy).toContain('models are never deployed to the site automatically')
   })
 
   it('is reachable from the footer and prerendered for both languages', () => {
