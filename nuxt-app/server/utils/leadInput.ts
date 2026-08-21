@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 
 const MAX_MESSAGE_LENGTH = 2_000
+export const MODEL_IMPROVEMENT_CONSENT_VERSION = 'deidentified-site-analysis-v1'
 
 export const leadInputSchema = z.object({
   name: z.string().trim().min(2).max(120),
@@ -13,10 +14,27 @@ export const leadInputSchema = z.object({
   message: z.string().trim().max(MAX_MESSAGE_LENGTH).optional().or(z.literal('')),
   privacyConsent: z.literal(true),
   recontactConsent: z.boolean().default(false),
+  modelImprovementConsent: z.boolean().default(false),
   companyFax: z.string().max(200).optional().default(''),
 })
 
 export type LeadInput = z.infer<typeof leadInputSchema>
+
+export function modelImprovementConsentReceipt(granted: boolean, recordedAt = new Date()) {
+  return granted
+    ? {
+        modelImprovementConsent: true,
+        modelImprovementConsentVersion: MODEL_IMPROVEMENT_CONSENT_VERSION,
+        modelImprovementConsentAt: recordedAt,
+        modelImprovementConsentRevokedAt: null,
+      }
+    : {
+        modelImprovementConsent: false,
+        modelImprovementConsentVersion: null,
+        modelImprovementConsentAt: null,
+        modelImprovementConsentRevokedAt: null,
+      }
+}
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
 

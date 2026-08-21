@@ -37,6 +37,11 @@ export const leads = mysqlTable('leads', {
   message: text('message'),
   privacyConsent: boolean('privacyConsent').notNull(),
   recontactConsent: boolean('recontactConsent').default(false).notNull(),
+  /** Optional, purpose-specific permission for de-identified site signals and review corrections only. */
+  modelImprovementConsent: boolean('modelImprovementConsent').default(false).notNull(),
+  modelImprovementConsentVersion: varchar('modelImprovementConsentVersion', { length: 80 }),
+  modelImprovementConsentAt: timestamp('modelImprovementConsentAt'),
+  modelImprovementConsentRevokedAt: timestamp('modelImprovementConsentRevokedAt'),
   status: mysqlEnum('status', ['new', 'contacted', 'qualified', 'closed']).default('new').notNull(),
   dedupeKey: varchar('dedupeKey', { length: 64 }).notNull(),
   requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(),

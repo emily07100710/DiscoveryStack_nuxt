@@ -3,7 +3,7 @@ import { and, eq, gt } from 'drizzle-orm'
 import { createError, getHeader, getRequestIP, type H3Event } from 'h3'
 import { getDatabase } from '../database'
 import { leads } from '../database/schema'
-import { leadDedupeKey, type LeadInput } from './leadInput'
+import { leadDedupeKey, modelImprovementConsentReceipt, type LeadInput } from './leadInput'
 
 const DEDUPE_WINDOW_MS = 15 * 60 * 1_000
 const RATE_WINDOW_MS = 60 * 60 * 1_000
@@ -34,9 +34,17 @@ export async function storeLead(event: H3Event, input: LeadInput) {
   const fingerprint = requestFingerprint(event)
   enforceLeadRateLimit(fingerprint)
   const since = new Date(Date.now() - DEDUPE_WINDOW_MS)
-  const existing = await database.select({ id: leads.id }).from(leads)
+  const existing = await database.select({ id: leads.id, modelImprovementConsent: leads.modelImprovementConsent }).from(leads)
     .where(and(eq(leads.dedupeKey, dedupeKey), gt(leads.createdAt, since))).limit(1)
-  if (existing.length) return { received: true, duplicate: true } as const
+  const duplicate = existing[0]
+  if (duplicate) {
+    if (input.modelImprovementConsent && !duplicate.modelImprovementConsent) {
+      await database.update(leads)
+        .set(modelImprovementConsentReceipt(true))
+        .where(eq(leads.id, duplicate.id))
+    }
+    return { received: true, duplicate: true } as const
+  }
 
   await database.insert(leads).values({
     name: input.name,
@@ -48,6 +56,7 @@ export async function storeLead(event: H3Event, input: LeadInput) {
     message: input.message || null,
     privacyConsent: input.privacyConsent,
     recontactConsent: input.recontactConsent,
+    ...modelImprovementConsentReceipt(input.modelImprovementConsent),
     dedupeKey,
     requestFingerprint: fingerprint,
   })
