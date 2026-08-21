@@ -132,7 +132,7 @@ onMounted(loadWorkbench)
     <header class="workbench-header">
       <NuxtLink to="/zh-hant" class="workbench-mark" aria-label="返回 DiscoveryStack 首頁">DISCOVERY<span>STACK</span></NuxtLink>
       <p class="workbench-route">私有系統／機器學習工作台</p>
-      <NuxtLink to="/audit-lab" class="workbench-link">開啟稽核實驗室 <span aria-hidden="true">↗</span></NuxtLink>
+      <span><NuxtLink to="/leads" class="workbench-link">客戶名單</NuxtLink> · <NuxtLink to="/audit-lab" class="workbench-link">開啟稽核實驗室 <span aria-hidden="true">↗</span></NuxtLink></span>
     </header>
 
     <div v-if="state === 'loading'" class="workbench-state" aria-live="polite">正在載入機器學習工作台…</div>

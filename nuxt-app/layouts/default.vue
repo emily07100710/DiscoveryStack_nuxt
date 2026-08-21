@@ -3,7 +3,7 @@
 import CookieConsent from '~/components/site/CookieConsent.vue'
 
 const route = useRoute()
-const isPrivateOwnerRoute = computed(() => route.path === '/audit-lab' || route.path === '/ml-lab-preview')
+const isPrivateOwnerRoute = computed(() => route.path === '/audit-lab' || route.path === '/ml-lab-preview' || route.path === '/leads')
 const isZh = computed(() => isPrivateOwnerRoute.value || route.path.startsWith('/zh-hant'))
 const htmlLang = computed(() => isZh.value ? 'zh-Hant' : 'en-US')
 
@@ -101,6 +101,7 @@ onMounted(() => {
         <span>© {{ new Date().getFullYear() }} DiscoveryStack</span>
         <span class="footer-preferences">
           {{ isZh ? '繁體中文' : 'English' }} · {{ isZh ? 'English' : '繁體中文' }}
+          <NuxtLink :to="isZh ? '/zh-hant/privacy' : '/en/privacy'">{{ isZh ? '隱私說明' : 'Privacy' }}</NuxtLink>
           <button type="button" @click="openCookieSettings">{{ isZh ? 'Cookie 設定' : 'Cookie settings' }}</button>
         </span>
       </div>
@@ -122,6 +123,9 @@ onMounted(() => {
   letter-spacing: inherit;
   cursor: pointer;
 }
+.footer-preferences a { color: inherit; text-decoration: none; border-bottom: 1px solid currentColor; }
+.footer-preferences a:hover,
+.footer-preferences a:focus-visible,
 .footer-preferences button:hover,
 .footer-preferences button:focus-visible { color: var(--cobalt); }
 </style>

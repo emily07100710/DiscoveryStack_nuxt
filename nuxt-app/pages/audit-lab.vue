@@ -386,6 +386,7 @@ onMounted(loadOverview)
       <p class="eyebrow">私有／旅程洞察</p>
       <h1 id="audit-title">稽核路徑。<br><em>治理證據。</em></h1>
       <p>此私有作業空間僅用於已授權公開頁面的結構、策略師審核與去識別模型就緒度；不會推論私有轉換成果。</p>
+      <p><NuxtLink to="/leads" class="audit-button">查看客戶名單 <span aria-hidden="true">↗</span></NuxtLink></p>
     </div>
 
     <div v-if="state === 'loading'" class="audit-state" aria-live="polite">正在載入私有稽核實驗室…</div>

@@ -29,7 +29,7 @@ const copy = computed(() => isZh.value
     })
 
 const homeTitle = () => isZh.value ? '一站式行銷、網站、系統、AI 與 SEO／GEO 公司' : 'End-to-end marketing, web, systems, AI and SEO/GEO'
-const homeDescription = () => isZh.value ? 'DiscoveryStack 以自研機器學習模型與五個專業部門，整合行銷、網站設計、系統規劃、AI 導入與 SEO／GEO。' : 'DiscoveryStack combines marketing, web design, systems, AI adoption and SEO/GEO through five specialist departments and our own trained ML model.'
+const homeDescription = () => isZh.value ? 'DiscoveryStack 以五個專業部門與受治理的搜尋情報研發，整合行銷、網站設計、系統規劃、AI 導入與 SEO／GEO。' : 'DiscoveryStack combines marketing, web design, systems, AI adoption and SEO/GEO through five specialist departments and governed search-intelligence research.'
 const { baseUrl } = usePageSeo({
   title: homeTitle,
   description: homeDescription,
@@ -204,10 +204,10 @@ const faqs = computed(() => isZh.value
 const pricingOptions = computed(() => isZh.value
   ? [
       {
-        code: '00', kicker: '先自己看看', title: 'AI 網站快篩', price: '免費', unit: '不用先承諾合作',
+        code: '00', kicker: '先自己看看', title: '網站獲客快檢', price: '免費', unit: '不用先承諾合作',
         summary: '輸入公開網址，先看 SEO／GEO、品牌、內容與使用體驗的基礎分數。',
         details: ['公開網址即可開始', '先看快篩分數，再決定是否解鎖報告', '完整報告會清楚標示哪些是公開訊號、哪些仍需真人確認'],
-        note: '目前為介面與流程示範；正式模型 API 接線後才會提供真實分數。', cta: '先免費看看', href: '#analysis',
+        note: '真實讀取公開首頁的結構訊號；不會假裝知道流量、訂單或後台資料。', cta: '先免費看看', href: '#analysis',
       },
       {
         code: '01', kicker: '讓客戶找到你', title: 'SEO／GEO 成長', price: 'NT$28,800', unit: '／月起',
@@ -224,10 +224,10 @@ const pricingOptions = computed(() => isZh.value
     ]
   : [
       {
-        code: '00', kicker: 'Look first', title: 'AI website scan', price: 'Free', unit: 'No commitment required',
+        code: '00', kicker: 'Look first', title: 'Acquisition website check', price: 'Free', unit: 'No commitment required',
         summary: 'Enter a public URL to see a foundation score across SEO/GEO, brand, content and user experience.',
         details: ['Start with a public URL', 'See the quick score before choosing whether to unlock the report', 'The full report separates public signals from questions that still need human confirmation'],
-        note: 'This is currently an interface and journey demo. Real scores begin only after the production model API is connected.', cta: 'Scan for free', href: '#analysis',
+        note: 'Uses real structural signals from the public homepage without inventing traffic, orders or private analytics.', cta: 'Scan for free', href: '#analysis',
       },
       {
         code: '01', kicker: 'Be found', title: 'SEO / GEO Growth', price: 'NT$28,800', unit: '/ month from',
@@ -419,23 +419,23 @@ const submitForm = async () => {
     <!-- 第四區：先理解服務能力，再用低門檻分析進入轉換 -->
     <AutomaticSiteAnalysis :locale="locale" @selected="formData.website = $event" />
 
-    <!-- ============ 自研模型 ============ -->
+    <!-- ============ 受治理的搜尋情報研發 ============ -->
     <section id="model" class="section model-proof">
       <div class="shell">
         <header class="model-proof-head reveal">
           <div>
-            <p class="eyebrow">{{ isZh ? '台灣第一間 · OWNED SEARCH INTELLIGENCE MODEL' : 'TAIWAN’S FIRST · OWNED SEARCH INTELLIGENCE MODEL' }}</p>
+            <p class="eyebrow">{{ isZh ? '受治理的搜尋情報研發 · DEVELOPMENT POC' : 'GOVERNED SEARCH INTELLIGENCE · DEVELOPMENT POC' }}</p>
             <h2>
               <span>{{ isZh ? '少一點猜測，多一點證據' : 'Less guesswork. More evidence.' }}</span>
               <span>{{ isZh ? '先看見訊號，再決定下一筆預算。' : 'See the signal before spending the next dollar.' }}</span>
             </h2>
           </div>
           <div class="model-proof-intro">
-              <p class="model-proof-position">{{ isZh ? '不是把 AI 接上網站；是把市場訊號訓練成決策系統。' : 'Based on currently available public information and our development record, DiscoveryStack positions itself as Taiwan’s first integrated marketing company powered by its own trained machine-learning model.' }}</p>
-            <p>{{ isZh ? '我們不是把通用模型的回覆重新包裝成顧問報告，而是從 Feature Contract、training manifest、multi-task learning 到 model registry，建立可訓練、可評估、可追溯的 Search Intelligence Stack。' : 'We do not repackage generic model output as consulting. From feature contracts and training manifests to multi-task learning and a model registry, we operate an accountable Search Intelligence Stack.' }}</p>
+              <p class="model-proof-position">{{ isZh ? '不是把 AI 接上網站就算完成；我們先把資料、標籤與評估流程做成可追溯的研發系統。' : 'Connecting AI to a website is not the finish line. We first make data, labels and evaluation traceable as a governed research system.' }}</p>
+            <p>{{ isZh ? '目前已完成 101 筆資料的開發概念驗證，但尚未達正式模型門檻，也未用於客戶網站推論。這裡公開的是 Feature Contract、training manifest、multi-task learning 與 model registry 的研發方法。' : 'A 101-example development proof of concept is complete, but it has not met the production-model gate and is not used for customer-site inference. This section shows the research method across feature contracts, training manifests, multi-task learning and a model registry.' }}</p>
             <div class="model-proof-stamps" aria-label="Model operating principles">
-              <span>OWN TRAINING PIPELINE</span>
-              <span>PRIVATE MODEL REGISTRY</span>
+              <span>101-EXAMPLE DEVELOPMENT POC</span>
+              <span>PRODUCTION GATE NOT MET</span>
               <span>HUMAN-IN-THE-LOOP</span>
             </div>
           </div>

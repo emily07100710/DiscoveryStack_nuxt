@@ -10,56 +10,98 @@ const activeStage = ref(0)
 const leadError = ref('')
 const timers: ReturnType<typeof setTimeout>[] = []
 const lead = reactive({ name: '', email: '', company: '', industry: '', role: '', phone: '', budget: '', timeline: '', privacyConsent: false, recontactConsent: true, modelImprovementConsent: false, companyFax: '' })
+type ScoreKey = 'seo' | 'geo' | 'brandContent' | 'ux'
+type RecommendationKey = 'remove_noindex' | 'clarify_page_topic' | 'add_primary_action' | 'improve_service_routing' | 'add_canonical' | 'add_structured_data' | 'add_trust_evidence' | 'add_answer_content' | 'add_human_contact' | 'review_deeper_pages'
+type SiteAnalysis = {
+  finalUrl: string
+  hostname: string
+  analysedAt: string
+  scope: 'public_homepage_only'
+  scores: { overall: number } & Record<ScoreKey, number>
+  checks: Record<string, boolean | number | string>
+  recommendationKeys: RecommendationKey[]
+}
+const analysis = ref<SiteAnalysis | null>(null)
 
 const copy = computed(() => isZh.value ? {
-  eyebrow: '免費 AI 網站分析', title: '花下一筆預算前，先找出網站漏掉的訂單。',
-  intro: '輸入網址，先檢查 SEO／GEO、品牌、內容與使用體驗。公開網站看不出的事，我們不假裝知道。',
+  eyebrow: '免費網站獲客快檢', title: '花下一筆預算前，先看網站哪裡接不住客戶。',
+  intro: '輸入網址，我們會讀取公開首頁，檢查 SEO／GEO、品牌內容與使用體驗。看不到流量、訂單或後台資料時，我們不猜。',
   label: '你的網站網址', placeholder: 'https://example.com', submit: '開始免費分析', scanning: '五個部門正在整理公開訊號', invalid: '請輸入完整的 http:// 或 https:// 公開網址。',
-  demo: 'UI 示範', demoNote: '公開模型 API 尚未接線；以下數字只用來確認介面與轉換流程，不是這個網址的真實分析。',
+  scanFailed: '目前無法安全讀取這個公開首頁。請確認網址可公開開啟，稍後再試。',
+  evidence: '公開首頁快檢', evidenceNote: '以下結果來自你提供網址的公開首頁結構，不包含流量、訂單、後台資料，也不是機器學習預測。',
   total: '網站獲客基礎分數', maturity: '成長基礎', unlockTitle: '分數只是起點。免費解鎖完整問題與部門建議。',
-  unlockDeck: '留下基本資料時，系統會在背景準備完整報告。正式版本會把實際模型結果交給適合的部門。',
+  unlockDeck: '留下基本資料後，我們會保留這次公開首頁快檢的分數，讓真人接著判斷哪些問題值得先處理。',
   name: '姓名', email: '工作 Email', company: '公司／品牌', industry: '產業', role: '職位', phone: '電話', budget: '預算範圍', timeline: '希望完成時間',
   privacy: '我同意 DiscoveryStack 為提供分析報告與合作建議而處理這些資料。', followup: '可以寄送完整報告與相關後續資訊給我。',
   modelImprovement: '我同意將去識別化的網站分析結果，用於改善 DiscoveryStack 的模型。（選填）',
   modelImprovementNote: '不包含姓名、Email、電話或預算；僅使用網站特徵及你對分析結果的確認或修正。',
   unlock: '免費解鎖完整報告', submitting: '正在建立你的報告…', required: '請完成必填資料與資料處理同意。', failed: '目前無法儲存資料，請稍後再試。',
-  reportTitle: '你的跨部門行動路徑', reportDeck: '正式模型接線後，這裡會依真實證據排序。現在呈現的是報告結構示範。', next: '帶著分析結果預約顧問',
+  reportTitle: '你的第一版行動路徑', reportDeck: '這些建議只根據公開首頁能確認的結構訊號排序；正式合作前仍會由真人檢查內頁與商業背景。', next: '帶著分析結果預約顧問',
   stages: ['技術與索引', '答案可引用性', '品牌與內容', '使用體驗'],
-  scores: [{ label: 'SEO', value: 68, note: '索引、結構與頁面訊號' }, { label: 'GEO', value: 54, note: '實體、證據與答案可引用性' }, { label: '品牌／內容', value: 72, note: '定位、層級與可信度' }, { label: 'UX', value: 61, note: '行動入口與閱讀摩擦' }],
-  recommendations: [{ dept: 'SEO／GEO 部', title: '先修復能否被找到與引用的基礎' }, { dept: '網站設計部', title: '重新整理第一屏承諾與主要行動' }, { dept: '行銷部', title: '把搜尋意圖接到清楚的轉換路徑' }],
+  scores: [{ key: 'seo' as const, label: 'SEO', note: '索引、結構與頁面訊號' }, { key: 'geo' as const, label: 'GEO', note: '實體、證據與答案可引用性' }, { key: 'brandContent' as const, label: '品牌／內容', note: '定位、層級與可信度' }, { key: 'ux' as const, label: 'UX', note: '行動入口與閱讀摩擦' }],
+  recommendations: {
+    remove_noindex: { dept: 'SEO／GEO 部', title: '先移除首頁阻擋搜尋引擎收錄的設定' }, clarify_page_topic: { dept: '品牌與網站設計部', title: '補齊清楚的頁面標題與唯一主標題' },
+    add_primary_action: { dept: '網站設計部', title: '建立一個訪客不用猜的主要行動入口' }, improve_service_routing: { dept: '網站設計部', title: '讓訪客能從首頁走到正確服務' },
+    add_canonical: { dept: 'SEO／GEO 部', title: '補上首頁 canonical，統一搜尋引擎版本' }, add_structured_data: { dept: 'SEO／GEO 部', title: '用結構化資料說清楚品牌與服務實體' },
+    add_trust_evidence: { dept: '品牌與內容部', title: '加入案例、客戶、認證或可查證成果' }, add_answer_content: { dept: '內容與 SEO／GEO 部', title: '補上能直接回答客戶問題的內容' },
+    add_human_contact: { dept: '網站設計部', title: '讓訪客清楚知道如何找到真人' }, review_deeper_pages: { dept: '策略部', title: '首頁基礎完整，下一步檢查服務內頁與真實轉換路徑' },
+  } satisfies Record<RecommendationKey, { dept: string, title: string }>,
 } : {
-  eyebrow: 'Free AI website analysis', title: 'Before spending again, find the orders your site is losing.',
-  intro: 'Enter a URL to review SEO/GEO, brand, content and user experience. If a public site cannot prove it, we do not pretend to know it.',
+  eyebrow: 'Free acquisition website check', title: 'Before spending again, see where the site fails to carry customers forward.',
+  intro: 'Enter a URL and we will read the public homepage for SEO/GEO, brand content and user-experience signals. We do not invent traffic, order or back-office data.',
   label: 'Your website URL', placeholder: 'https://example.com', submit: 'Start free analysis', scanning: 'Five departments are structuring public signals', invalid: 'Enter a complete public http:// or https:// URL.',
-  demo: 'UI demo', demoNote: 'The public model API is not connected yet. These numbers test the interface and conversion flow; they are not a real assessment of this URL.',
+  scanFailed: 'We could not safely read that public homepage. Check that the URL opens publicly and try again shortly.',
+  evidence: 'Public homepage check', evidenceNote: 'These results come from visible structure on the supplied homepage. They do not include traffic, orders, private analytics or machine-learning predictions.',
   total: 'Acquisition foundation score', maturity: 'Growth foundation', unlockTitle: 'A score is only the start. Unlock the full issues and department plan for free.',
-  unlockDeck: 'While you leave the essentials, the system prepares the full report in the background. The production flow will pass real model evidence to the right departments.',
+  unlockDeck: 'Leave the essentials and we will retain this public-homepage score so a human can judge which issues are worth addressing first.',
   name: 'Name', email: 'Work email', company: 'Company / brand', industry: 'Industry', role: 'Role', phone: 'Phone', budget: 'Budget range', timeline: 'Target timeline',
   privacy: 'I agree that DiscoveryStack may process these details to provide the analysis report and service recommendations.', followup: 'You may email the full report and relevant follow-up information to me.',
   modelImprovement: 'I agree that de-identified website analysis results may be used to improve DiscoveryStack’s model. (Optional)',
   modelImprovementNote: 'This excludes your name, email, phone number and budget; only website features and your confirmation or correction of the analysis may be used.',
   unlock: 'Unlock the full report for free', submitting: 'Preparing your report…', required: 'Complete the required details and data-processing consent.', failed: 'We could not save this right now. Please try again shortly.',
-  reportTitle: 'Your cross-department action route', reportDeck: 'Once the production model is connected, this will be ordered by real evidence. This is the report structure preview.', next: 'Book a strategist with this analysis',
+  reportTitle: 'Your first action route', reportDeck: 'These priorities use only structural evidence visible on the public homepage. A human still reviews deeper pages and commercial context before an engagement.', next: 'Book a strategist with this analysis',
   stages: ['Technical and index', 'Answer readiness', 'Brand and content', 'User experience'],
-  scores: [{ label: 'SEO', value: 68, note: 'Index, architecture and page signals' }, { label: 'GEO', value: 54, note: 'Entities, evidence and answer readiness' }, { label: 'Brand / content', value: 72, note: 'Positioning, hierarchy and trust' }, { label: 'UX', value: 61, note: 'Action routes and reading friction' }],
-  recommendations: [{ dept: 'SEO / GEO', title: 'Fix the foundations of discovery and citation first' }, { dept: 'Web Design', title: 'Clarify the opening promise and primary action' }, { dept: 'Marketing', title: 'Connect search intent to a conversion route' }],
+  scores: [{ key: 'seo' as const, label: 'SEO', note: 'Index, architecture and page signals' }, { key: 'geo' as const, label: 'GEO', note: 'Entities, evidence and answer readiness' }, { key: 'brandContent' as const, label: 'Brand / content', note: 'Positioning, hierarchy and trust' }, { key: 'ux' as const, label: 'UX', note: 'Action routes and reading friction' }],
+  recommendations: {
+    remove_noindex: { dept: 'SEO / GEO', title: 'Remove the homepage setting that blocks search indexing' }, clarify_page_topic: { dept: 'Brand & Web Design', title: 'Add a clear page title and one primary heading' },
+    add_primary_action: { dept: 'Web Design', title: 'Create one primary action visitors do not have to guess' }, improve_service_routing: { dept: 'Web Design', title: 'Give visitors a clear route from home to the right service' },
+    add_canonical: { dept: 'SEO / GEO', title: 'Add a homepage canonical and unify the indexed version' }, add_structured_data: { dept: 'SEO / GEO', title: 'Describe the brand and services with structured data' },
+    add_trust_evidence: { dept: 'Brand & Content', title: 'Add cases, clients, credentials or verifiable outcomes' }, add_answer_content: { dept: 'Content & SEO / GEO', title: 'Publish content that answers customer questions directly' },
+    add_human_contact: { dept: 'Web Design', title: 'Make the route to a real person unmistakable' }, review_deeper_pages: { dept: 'Strategy', title: 'The homepage foundation is sound; review service pages and the real conversion path next' },
+  } satisfies Record<RecommendationKey, { dept: string, title: string }>,
 })
 
+const displayedScores = computed(() => copy.value.scores.map(score => ({ ...score, value: analysis.value?.scores[score.key] ?? 0 })))
+const displayedRecommendations = computed(() => (analysis.value?.recommendationKeys || []).map(key => copy.value.recommendations[key]))
+
 function clearTimers() { timers.splice(0).forEach(clearTimeout) }
-function startAnalysis() {
+async function startAnalysis() {
   error.value = ''; leadError.value = ''; clearTimers()
   let parsed: URL
   try { parsed = new URL(website.value.trim()); if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('unsupported') } catch { status.value = 'idle'; error.value = copy.value.invalid; return }
-  website.value = parsed.toString(); preparedHost.value = parsed.hostname.replace(/^www\./, ''); emit('selected', website.value); activeStage.value = 0; status.value = 'scanning'
+  website.value = parsed.toString(); preparedHost.value = parsed.hostname.replace(/^www\./, ''); emit('selected', website.value); activeStage.value = 0; analysis.value = null; status.value = 'scanning'
   copy.value.stages.slice(1).forEach((_, index) => timers.push(setTimeout(() => { activeStage.value = index + 1 }, (index + 1) * 650)))
-  timers.push(setTimeout(() => { status.value = 'score' }, 2900))
+  try {
+    const [result] = await Promise.all([
+      $fetch<SiteAnalysis>('/api/site-analysis', { method: 'POST', body: { url: website.value } }),
+      new Promise(resolve => timers.push(setTimeout(resolve, 2900))),
+    ])
+    analysis.value = result
+    website.value = result.finalUrl
+    preparedHost.value = result.hostname.replace(/^www\./, '')
+    status.value = 'score'
+  } catch {
+    status.value = 'idle'
+    error.value = copy.value.scanFailed
+  }
 }
 async function unlockReport() {
   leadError.value = ''
   if (!lead.name.trim() || !lead.email.trim() || !lead.company.trim() || !lead.industry.trim() || !lead.role.trim() || !lead.phone.trim() || !lead.budget || !lead.timeline || !lead.privacyConsent) { leadError.value = copy.value.required; return }
   status.value = 'submitting'
   try {
-    await $fetch('/api/leads', { method: 'POST', body: { name: lead.name, email: lead.email, company: lead.company, website: website.value, packageInterest: 'discover', language: props.locale, message: `Industry: ${lead.industry}\nRole: ${lead.role}\nPhone: ${lead.phone}\nBudget: ${lead.budget}\nTimeline: ${lead.timeline}\nSource: free-analysis`, privacyConsent: lead.privacyConsent, recontactConsent: lead.recontactConsent, modelImprovementConsent: lead.modelImprovementConsent, companyFax: lead.companyFax } })
+    const scoreSummary = analysis.value ? `Homepage check: overall ${analysis.value.scores.overall}; SEO ${analysis.value.scores.seo}; GEO ${analysis.value.scores.geo}; Brand/Content ${analysis.value.scores.brandContent}; UX ${analysis.value.scores.ux}; Priorities: ${analysis.value.recommendationKeys.join(', ')}` : 'Homepage check unavailable'
+    await $fetch('/api/leads', { method: 'POST', body: { name: lead.name, email: lead.email, company: lead.company, website: website.value, packageInterest: 'discover', language: props.locale, message: `Industry: ${lead.industry}\nRole: ${lead.role}\nPhone: ${lead.phone}\nBudget: ${lead.budget}\nTimeline: ${lead.timeline}\n${scoreSummary}\nSource: free-analysis`, privacyConsent: lead.privacyConsent, recontactConsent: lead.recontactConsent, modelImprovementConsent: lead.modelImprovementConsent, companyFax: lead.companyFax } })
     status.value = 'report'
   } catch { status.value = 'score'; leadError.value = copy.value.failed }
 }
@@ -79,9 +121,9 @@ onBeforeUnmount(clearTimers)
           <ol><li v-for="(stage, index) in copy.stages" :key="stage" :class="{ 'is-active': activeStage === index, 'is-done': activeStage > index }"><span>{{ String(index + 1).padStart(2, '0') }}</span>{{ stage }}</li></ol>
         </div>
         <template v-else>
-          <div class="analysis-demo-notice"><strong>{{ copy.demo }}</strong><p>{{ copy.demoNote }}</p></div>
-          <div class="analysis-score-head"><div><p>{{ preparedHost }}</p><strong>64</strong><span>/ 100 · {{ copy.maturity }}</span></div><p>{{ copy.total }}</p></div>
-          <div class="analysis-scores"><article v-for="score in copy.scores" :key="score.label"><div><h3>{{ score.label }}</h3><strong>{{ score.value }}</strong></div><div class="score-track" aria-hidden="true"><i :style="{ width: `${score.value}%` }"></i></div><p>{{ score.note }}</p></article></div>
+          <div class="analysis-demo-notice"><strong>{{ copy.evidence }}</strong><p>{{ copy.evidenceNote }}</p></div>
+          <div class="analysis-score-head"><div><p>{{ preparedHost }}</p><strong>{{ analysis?.scores.overall }}</strong><span>/ 100 · {{ copy.maturity }}</span></div><p>{{ copy.total }}</p></div>
+          <div class="analysis-scores"><article v-for="score in displayedScores" :key="score.label"><div><h3>{{ score.label }}</h3><strong>{{ score.value }}</strong></div><div class="score-track" aria-hidden="true"><i :style="{ width: `${score.value}%` }"></i></div><p>{{ score.note }}</p></article></div>
           <form v-if="status === 'score' || status === 'submitting'" class="analysis-unlock" @submit.prevent="unlockReport">
             <div class="analysis-unlock-intro"><h3>{{ copy.unlockTitle }}</h3><p>{{ copy.unlockDeck }}</p></div>
             <div class="analysis-field-grid">
@@ -96,7 +138,7 @@ onBeforeUnmount(clearTimers)
             <label class="analysis-honeypot" aria-hidden="true"><span>Company fax</span><input v-model="lead.companyFax" tabindex="-1" autocomplete="off"></label>
             <div class="analysis-unlock-action"><button type="submit" :disabled="status === 'submitting'">{{ status === 'submitting' ? copy.submitting : copy.unlock }} <span aria-hidden="true">↗</span></button><p role="status" aria-live="polite">{{ leadError }}</p></div>
           </form>
-          <div v-else class="analysis-report"><div><p class="eyebrow">{{ copy.demo }}</p><h3>{{ copy.reportTitle }}</h3><p>{{ copy.reportDeck }}</p></div><ol><li v-for="(item, index) in copy.recommendations" :key="item.dept"><span>{{ String(index + 1).padStart(2, '0') }}</span><div><small>{{ item.dept }}</small><strong>{{ item.title }}</strong></div></li></ol><a href="#fit">{{ copy.next }} <span aria-hidden="true">↗</span></a></div>
+          <div v-else class="analysis-report"><div><p class="eyebrow">{{ copy.evidence }}</p><h3>{{ copy.reportTitle }}</h3><p>{{ copy.reportDeck }}</p></div><ol><li v-for="(item, index) in displayedRecommendations" :key="item.title"><span>{{ String(index + 1).padStart(2, '0') }}</span><div><small>{{ item.dept }}</small><strong>{{ item.title }}</strong></div></li></ol><a href="#fit">{{ copy.next }} <span aria-hidden="true">↗</span></a></div>
         </template>
       </div>
     </div>
