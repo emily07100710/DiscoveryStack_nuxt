@@ -1,0 +1,1 @@
+ALTER TABLE `publicIntelligenceTrainingRuns` MODIFY COLUMN `provider` enum('huggingface_jobs','google_colab_local') NOT NULL DEFAULT 'huggingface_jobs';

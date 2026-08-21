@@ -140,7 +140,7 @@ export async function listOwnerTrainingRuns(ownerUserId: number) {
   return pending.length ? selectTrainingRuns(ownerUserId) : rows
 }
 
-async function selectApprovedPublicTrainingDataset(input: { ownerUserId: number, datasetBuildId: number }) {
+export async function selectApprovedPublicTrainingDataset(input: { ownerUserId: number, datasetBuildId: number }) {
   const database = requireAuditDatabase()
   const [dataset] = await database.select({ id: publicIntelligenceDatasetBuilds.id, datasetName: publicIntelligenceDatasetBuilds.datasetName, datasetVersion: publicIntelligenceDatasetBuilds.datasetVersion, featureContractVersion: publicIntelligenceDatasetBuilds.featureContractVersion, labelTaxonomyVersion: publicIntelligenceDatasetBuilds.labelTaxonomyVersion, splitVersion: publicIntelligenceDatasetBuilds.splitVersion, manifestHash: publicIntelligenceDatasetBuilds.manifestHash, status: publicIntelligenceDatasetBuilds.status, intendedUse: publicIntelligenceDatasetBuilds.intendedUse }).from(publicIntelligenceDatasetBuilds).where(and(eq(publicIntelligenceDatasetBuilds.id, input.datasetBuildId), eq(publicIntelligenceDatasetBuilds.ownerUserId, input.ownerUserId))).limit(1)
   if (!dataset || dataset.status !== 'approved' || dataset.intendedUse !== 'training') throw createError({ statusCode: 422, statusMessage: 'Choose an owner-approved public training manifest before submitting Hugging Face training.' })

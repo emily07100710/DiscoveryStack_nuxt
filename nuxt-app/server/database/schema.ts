@@ -346,7 +346,7 @@ export const publicIntelligenceTrainingRuns = mysqlTable('publicIntelligenceTrai
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   datasetBuildId: int('datasetBuildId').references(() => publicIntelligenceDatasetBuilds.id),
   mode: mysqlEnum('mode', ['development', 'production']).notNull(),
-  provider: mysqlEnum('provider', ['huggingface_jobs']).default('huggingface_jobs').notNull(),
+  provider: mysqlEnum('provider', ['huggingface_jobs', 'google_colab_local']).default('huggingface_jobs').notNull(),
   modelFamily: mysqlEnum('modelFamily', ['huggingface_transformers']).notNull(),
   modelVersion: varchar('modelVersion', { length: 120 }).notNull(),
   featureContractVersion: varchar('featureContractVersion', { length: 80 }).notNull(),

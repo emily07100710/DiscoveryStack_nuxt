@@ -1,4 +1,5 @@
 import { and, desc, eq, isNull } from 'drizzle-orm'
+import { createError } from 'h3'
 import { getDatabase } from '../database'
 import { auditRuns, auditTrainingExamples, auditWorkspaces, users } from '../database/schema'
 
@@ -13,6 +14,26 @@ export async function getOwnerDatabaseUserId(openId: string) {
   const [user] = await database.select({ id: users.id }).from(users).where(eq(users.openId, openId)).limit(1)
   if (!user) throw createError({ statusCode: 401, statusMessage: 'Owner account has not completed private administration sign-in.' })
   return user.id
+}
+
+/**
+ * Server-side controlled exports retain the configured owner binding where it is
+ * available. A legacy owner identity mismatch can only fall back when the
+ * database proves there is exactly one admin account; multiple or zero admins
+ * fail closed rather than selecting an arbitrary user.
+ */
+export async function resolveControlledOwnerDatabaseUserId(openId?: string) {
+  const database = requireAuditDatabase()
+  if (openId) {
+    const [configuredOwner] = await database.select({ id: users.id }).from(users).where(eq(users.openId, openId)).limit(1)
+    if (configuredOwner) return configuredOwner.id
+  }
+
+  const admins = await database.select({ id: users.id }).from(users).where(eq(users.role, 'admin')).limit(2)
+  if (admins.length !== 1) {
+    throw createError({ statusCode: 403, statusMessage: 'Controlled export requires exactly one private admin owner.' })
+  }
+  return admins[0]!.id
 }
 
 export async function listOwnerAuditWorkspaces(ownerUserId: number) {
