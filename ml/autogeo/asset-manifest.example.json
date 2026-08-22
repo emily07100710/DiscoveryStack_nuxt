@@ -1,0 +1,22 @@
+{
+  "schema_version": "autogeo-asset-manifest-v1",
+  "generated_from": "public metadata only; re-run sync_assets.py for current file manifests",
+  "upstream": {
+    "repository": "https://github.com/cxcscmu/AutoGEO.git",
+    "revision": "49456df236774ea24087c44f45e9e52005b8e6a4",
+    "license": "MIT",
+    "submodules": []
+  },
+  "datasets": [
+    {"id": "cx-cmu/E-commerce", "revision": "89e460876fcf5a45f999224a6e709ffb66cf1a5b", "license": "mit", "purpose": "AutoGEO rule, inference and GRPO artefacts; not approved DiscoveryStack training data"},
+    {"id": "cx-cmu/GEO-Bench", "revision": "585e75104cad55e4a99460cff8e48300b99fe96b", "license": "mit", "purpose": "AutoGEO rule, inference and GRPO artefacts; not approved DiscoveryStack training data"},
+    {"id": "cx-cmu/Researchy-GEO", "revision": "6d3a76e91f6a0b52e4390484ed1b9291ee681bba", "license": "mit", "purpose": "AutoGEO rule, inference and GRPO artefacts; not approved DiscoveryStack training data"}
+  ],
+  "models": [
+    {"id": "cx-cmu/AutoGEO_mini_Qwen1.7B_Ecommerce", "revision": "34e822fefbd2f99584018206f70bc4b51a155053", "license": "mit", "engine": "gemini-2.5-flash-lite", "dataset": "cx-cmu/E-commerce"},
+    {"id": "cx-cmu/AutoGEO_mini_Qwen1.7B_GEOBench", "revision": "704b3fe28028b92ddeb99bb0c2ffc48b2759a74b", "license": "mit", "engine": "gemini-2.5-flash-lite", "dataset": "cx-cmu/GEO-Bench"},
+    {"id": "cx-cmu/AutoGEO_mini_Qwen1.7B_ResearchyGEO", "revision": "1b3dee23665ae23552a16d35956cc7709002debc", "license": "mit", "engine": "gemini-2.5-flash-lite", "dataset": "cx-cmu/Researchy-GEO"},
+    {"id": "Qwen/Qwen3-1.7B-Base", "revision": "ea980cb0a6c2ae4b936e82123acc929f1cec04c1", "license": "apache-2.0", "role": "pretraining base"},
+    {"id": "Qwen/Qwen3-1.7B", "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", "license": "apache-2.0", "role": "AutoGEO Mini post-training parent"}
+  ]
+}

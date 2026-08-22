@@ -89,3 +89,15 @@
 - [ ] Audit GitHub main for remaining LERN files, CI workflows, package references, and documentation.
 - [ ] Remove only confirmed LERN-specific content while preserving DiscoveryStack OAuth, database, Firecrawl, and Hugging Face integrations.
 - [ ] Verify the cleaned repository and push the result to GitHub main.
+- [x] 從執行當下 `tendertech2018/DiscoveryStack_nuxt` 的 `origin/main` 固定唯一 `ml/autogeo-foundation` worktree，且不修改既有工作樹。
+- [x] 以 recursive checkout 取得官方 AutoGEO，記錄 upstream／submodule 精確 SHA、LICENSE、依賴與官方授權來源。
+- [x] 對官方三套 dataset、三個 AutoGEO-Mini 模型與兩個 Qwen base model 建立可重現資產清單，僅將允許的 metadata、manifest 與雜湊存入 Git。
+- [x] 建立 `THIRD_PARTY_NOTICES.md`、AutoGEO 資產盤點、重現說明與 DiscoveryStack 整合差距文件，且逐一核對資料集與依賴實際授權。
+- [x] 建立不含大型 upstream 程式碼或客戶資料的 `ml/autogeo` Python research adapter，支援 vanilla、`autogeo_api`、`autogeo_mini` 與可追溯輸出 metadata。
+- [x] 為 adapter 建立 synthetic fixtures、asset verification、文件改寫與 baseline evaluation 的單元測試，預設禁止自動發布與客戶資料輸入。
+- [x] 執行 AutoGEO import、資產 manifest、tokenizer/config、vanilla pipeline、adapter tests、secret／大型檔案／授權掃描與必要 Nuxt regression 驗證。
+- [x] 執行 `git diff --check` 與最終 staged-content 稽核，排除資料集、模型權重、checkpoint、token、dump、建置產物與外部 cache。
+- [ ] 建立單一 `feat: establish AutoGEO research foundation` commit 並普通 push 至 `ml/autogeo-foundation`，不 merge、deploy、修改 production DB 或啟動付費訓練（commit 已建立；普通 push 因目標 GitHub repository 權限被拒絕，待權限修正後重試）。
+- [x] 在 research-only Python 環境固定 `nltk==3.9.2`，以完整靜態 import 掃描、`pip check` 與依賴樹一次列出並處理 AutoGEO import/config/tokenizer/evaluation 的必要套件。
+- [x] 如 AutoGEO evaluation smoke 實際需要 NLTK corpus，僅下載必要 corpus 到被 Git ignore 的 external research cache，並記錄名稱與 SHA-256，不提交 corpus。
+- [x] 完成 AutoGEO full import、固定 checkpoint config/tokenizer、synthetic vanilla evaluation、Python tests、license/secret/large-file 掃描，確認未呼叫 API、未下載權重且沒有更動 Nuxt runtime。
