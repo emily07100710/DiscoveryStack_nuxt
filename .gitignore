@@ -112,3 +112,28 @@ temp/
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json
 .project-config.json
+
+# AutoGEO research assets: always cache outside this repository.
+__pycache__/
+*.py[cod]
+datasets/
+checkpoints/
+outputs/
+ml/autogeo/.cache/
+ml/autogeo/.hf-cache/
+ml/autogeo/.runs/
+hf-cache/
+huggingface-cache/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+keys.env
+keys.env.*
+*.token
+*.pem
+*.key
+*.parquet
+*.jsonl
+*.arrow

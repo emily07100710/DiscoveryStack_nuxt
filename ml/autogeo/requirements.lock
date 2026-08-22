@@ -1,0 +1,26 @@
+# Adapter verification is deliberately Python-standard-library only.
+# These versions form the separate, CPU-only AutoGEO import/config smoke environment.
+datasets==2.21.0
+huggingface-hub==0.35.3
+transformers==4.57.1
+torch==2.5.1+cpu  # install from https://download.pytorch.org/whl/cpu in the research environment
+python-dotenv==1.1.1
+google-generativeai==0.8.5
+openai==1.107.3
+anthropic==0.66.0
+pandas==2.2.3
+jsonlines==4.0.0
+nltk==3.9.2
+numpy==2.5.1
+pydantic==2.13.4
+PyYAML==6.0.3
+requests==2.34.2
+tqdm==4.70.0
+
+# The live provider clients are installed only to prove import compatibility. The adapter
+# never invokes them unless an operator passes --allow-live-api and supplies a key via env.
+# All direct third-party imports in the non-training upstream module tree appear above.
+# `vllm` is intentionally excluded: it appears only in upstream's SFT/GRPO training path,
+# which is outside this foundation's import/config/tokenizer/evaluation scope.
+# AutoGEO-Mini training (not installed or run here): vllm==0.8.5.post1, trl==0.22.0,
+# CUDA 11.8+, FlashAttention 2.5.8 compatible wheel, open-r1 and LLaMA-Factory.

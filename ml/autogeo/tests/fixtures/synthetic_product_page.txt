@@ -1,0 +1,3 @@
+Synthetic Example Product
+
+This fictitious page exists only for offline adapter tests. It makes no customer, medical, financial, legal, pricing, availability, or performance claim.

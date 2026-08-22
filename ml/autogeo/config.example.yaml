@@ -1,0 +1,8 @@
+# Fixture-only baseline configuration. Do not place keys in this file.
+upstream_path: /home/ubuntu/.cache/autogeo-upstream
+asset_cache_dir: /home/ubuntu/.cache/discoverystack-autogeo
+engine: vanilla
+fixture_only: true
+auto_publish: false
+customer_data_allowed: false
+model_load_requires_explicit_opt_in: true
