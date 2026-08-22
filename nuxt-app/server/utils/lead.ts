@@ -3,6 +3,7 @@ import { and, eq, gt } from 'drizzle-orm'
 import { createError, getHeader, getRequestIP, type H3Event } from 'h3'
 import { getDatabase } from '../database'
 import { leads } from '../database/schema'
+import { appendGrantedGrowthConsent } from '../growth/ledger'
 import { leadDedupeKey, type LeadInput } from './leadInput'
 
 const DEDUPE_WINDOW_MS = 15 * 60 * 1_000
@@ -38,7 +39,7 @@ export async function storeLead(event: H3Event, input: LeadInput) {
     .where(and(eq(leads.dedupeKey, dedupeKey), gt(leads.createdAt, since))).limit(1)
   if (existing.length) return { received: true, duplicate: true } as const
 
-  await database.insert(leads).values({
+  const created = await database.insert(leads).values({
     name: input.name,
     email: input.email,
     company: input.company,
@@ -48,8 +49,10 @@ export async function storeLead(event: H3Event, input: LeadInput) {
     message: input.message || null,
     privacyConsent: input.privacyConsent,
     recontactConsent: input.recontactConsent,
+    growthResearchConsent: input.growthResearchConsent,
     dedupeKey,
     requestFingerprint: fingerprint,
   })
+  if (input.growthResearchConsent) await appendGrantedGrowthConsent({ leadId: Number(created[0].insertId), website: input.website || undefined, locale: input.language, requestFingerprintHash: fingerprint })
   return { received: true, duplicate: false } as const
 }

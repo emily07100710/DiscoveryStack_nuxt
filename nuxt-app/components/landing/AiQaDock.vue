@@ -20,7 +20,7 @@ const nudgeVisible = ref(false)
 const gatePassed = ref(false)
 const gateStatus = ref<'idle' | 'submitting' | 'error'>('idle')
 const gateFeedback = ref('')
-const contact = reactive({ name: '', email: '', company: '', privacyConsent: false, recontactConsent: true, companyFax: '' })
+const contact = reactive({ name: '', email: '', company: '', privacyConsent: false, recontactConsent: true, growthResearchConsent: false, companyFax: '' })
 const panelId = computed(() => `ai-qa-panel-${props.locale}-${props.mode}`)
 const titleId = computed(() => `ai-qa-title-${props.locale}-${props.mode}`)
 const questionId = computed(() => `qa-question-${props.locale}-${props.mode}`)
@@ -33,7 +33,7 @@ const copy = computed(() => isZh.value
       close: '收合 AI QA 助手',
       gateTitle: '先留下基本資料，再讓 AI 直接看你的問題。',
       gateDeck: '我們會把對話與需求交給適合的部門；不會用一個通用答案敷衍你。',
-      name: '姓名', email: '工作 Email', company: '公司／品牌', privacy: '我同意 DiscoveryStack 為回答問題與後續交接而處理這些資料。', followup: '可以寄送對話摘要與相關後續資訊給我。', start: '開始對話', starting: '正在建立對話…', gateError: '目前無法建立對話，請稍後再試。',
+      name: '姓名', email: '工作 Email', company: '公司／品牌', privacy: '我同意 DiscoveryStack 為回答問題與後續交接而處理這些資料。', followup: '可以寄送對話摘要與相關後續資訊給我。', growthResearch: '選填：我同意日後提供公開網站時，可依獨立同意進行人工審查的 SEO／GEO 成長研究。', start: '開始對話', starting: '正在建立對話…', gateError: '目前無法建立對話，請稍後再試。',
       welcome: '告訴我現在最卡的地方。我會先判斷該由哪個部門接手。',
       placeholder: '想先釐清什麼？',
       ask: '送出問題',
@@ -47,7 +47,7 @@ const copy = computed(() => isZh.value
       close: 'Close AI QA assistant',
       gateTitle: 'Leave the essentials, then let AI look directly at the problem.',
       gateDeck: 'We pass the conversation to the right department instead of giving you a generic answer.',
-      name: 'Name', email: 'Work email', company: 'Company / brand', privacy: 'I agree that DiscoveryStack may process these details to answer and hand off this conversation.', followup: 'You may email the conversation summary and relevant follow-up information to me.', start: 'Start conversation', starting: 'Starting…', gateError: 'We could not start this conversation right now. Please try again shortly.',
+      name: 'Name', email: 'Work email', company: 'Company / brand', privacy: 'I agree that DiscoveryStack may process these details to answer and hand off this conversation.', followup: 'You may email the conversation summary and relevant follow-up information to me.', growthResearch: 'Optional: I agree that, if I later provide a public website, it may be considered for human-reviewed SEO/GEO growth research under separate governance.', start: 'Start conversation', starting: 'Starting…', gateError: 'We could not start this conversation right now. Please try again shortly.',
       welcome: 'Tell me where things are stuck. I will first work out which department should take it forward.',
       placeholder: 'What would you like to clarify?',
       ask: 'Send question',
@@ -88,7 +88,7 @@ async function submitContact() {
   gateStatus.value = 'submitting'
   gateFeedback.value = ''
   try {
-    await $fetch('/api/leads', { method: 'POST', body: { name: contact.name, email: contact.email, company: contact.company, website: '', packageInterest: 'unsure', language: props.locale, message: 'Source: AI QA conversation entry', privacyConsent: contact.privacyConsent, recontactConsent: contact.recontactConsent, companyFax: contact.companyFax } })
+    await $fetch('/api/leads', { method: 'POST', body: { name: contact.name, email: contact.email, company: contact.company, website: '', packageInterest: 'unsure', language: props.locale, message: 'Source: AI QA conversation entry', privacyConsent: contact.privacyConsent, recontactConsent: contact.recontactConsent, growthResearchConsent: contact.growthResearchConsent, companyFax: contact.companyFax } })
     gatePassed.value = true
     gateStatus.value = 'idle'
   } catch {
@@ -149,6 +149,7 @@ defineExpose({ openDock })
         <label><span>{{ copy.company }}</span><input v-model="contact.company" autocomplete="organization" required minlength="2"></label>
         <label class="qa-gate-consent"><input v-model="contact.privacyConsent" type="checkbox" required><span>{{ copy.privacy }}</span></label>
         <label class="qa-gate-consent"><input v-model="contact.recontactConsent" type="checkbox"><span>{{ copy.followup }}</span></label>
+        <label class="qa-gate-consent"><input v-model="contact.growthResearchConsent" type="checkbox"><span>{{ copy.growthResearch }}</span></label>
         <label class="qa-gate-honeypot" aria-hidden="true"><span>Company fax</span><input v-model="contact.companyFax" tabindex="-1" autocomplete="off"></label>
         <button type="submit" :disabled="gateStatus === 'submitting'">{{ gateStatus === 'submitting' ? copy.starting : copy.start }} <span aria-hidden="true">↗</span></button>
         <p class="qa-gate-feedback" role="status" aria-live="polite">{{ gateFeedback }}</p>

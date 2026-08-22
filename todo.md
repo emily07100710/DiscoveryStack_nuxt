@@ -89,3 +89,12 @@
 - [ ] Audit GitHub main for remaining LERN files, CI workflows, package references, and documentation.
 - [ ] Remove only confirmed LERN-specific content while preserving DiscoveryStack OAuth, database, Firecrawl, and Hugging Face integrations.
 - [ ] Verify the cleaned repository and push the result to GitHub main.
+- [x] 盤點三個實際 lead forms、Lead schema／repository、Drizzle migration、owner guard、Audit Lab 與既有 AutoGEO foundation 邊界。
+- [x] 在所有 lead form 加入預設 false、選填且與 cookie／privacy／marketing 分離的 `growthResearchConsent`，並確保無 consent 仍可送出 lead。
+- [x] 建立 append-only 版本化 research consent 與去識別 growth intake schema、migration、repository 與公開 lead intake 建立規則。
+- [x] 建立 Growth Experiment、variant、measurement 與 human review ledger schema、migration、repository 與 fail-closed paired-training eligibility reason codes。
+- [x] 建立 owner-only、noindex 的 `/growth-lab` 與 owner-only API，支援 intake 審核、撤回 consent、手動實驗／雜湊／真實 measurement／人審與資格呈現。
+- [x] 為 AutoGEO 建立阻擋型 provider interface，顯示 foundation 可用但未設定 provider、未載入模型、未核准 live API 且禁用自動發布。
+- [x] 撰寫 consent、個資不複製、撤回、資格判定、owner boundary、noindex、blocked provider 與 autoPublish default 的完整契約測試。
+- [x] 執行 migration/schema 一致性、typecheck、相關 Vitest、production build、secret／客戶資料／模型權重／dataset artifact 掃描及 `git diff --check`（typecheck、Vitest 與掃描通過；production build 已啟動但受 sandbox 資源 SIGTERM 終止，未宣稱 build 成功）。
+- [ ] 建立單一 `feat: add governed SEO GEO growth experiment ledger` commit 並普通 push 至 `feature/growth-experiment-ledger`，不 merge、deploy、修改 production DB 或啟動訓練（本機唯一 commit 已建立；待普通 push）。

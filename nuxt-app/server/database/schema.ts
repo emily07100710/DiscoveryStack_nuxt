@@ -37,6 +37,7 @@ export const leads = mysqlTable('leads', {
   message: text('message'),
   privacyConsent: boolean('privacyConsent').notNull(),
   recontactConsent: boolean('recontactConsent').default(false).notNull(),
+  growthResearchConsent: boolean('growthResearchConsent').default(false).notNull(),
   status: mysqlEnum('status', ['new', 'contacted', 'qualified', 'closed']).default('new').notNull(),
   dedupeKey: varchar('dedupeKey', { length: 64 }).notNull(),
   requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(),
@@ -395,6 +396,91 @@ export const publicIntelligenceInferences = mysqlTable('publicIntelligenceInfere
   index('public_intelligence_inference_job_idx').on(table.ingestionJobId),
 ])
 
+/** Append-only consent lifecycle events; this table never duplicates lead contact data. */
+export const growthResearchConsents = mysqlTable('growthResearchConsents', {
+  id: int('id').autoincrement().primaryKey(),
+  leadId: int('leadId').notNull().references(() => leads.id),
+  action: mysqlEnum('action', ['granted', 'revoked']).notNull(),
+  scope: varchar('scope', { length: 160 }).notNull(),
+  copyVersion: varchar('copyVersion', { length: 80 }).notNull(),
+  locale: mysqlEnum('locale', ['en', 'zh-hant']).notNull(),
+  requestFingerprintHash: varchar('requestFingerprintHash', { length: 64 }).notNull(),
+  occurredAt: timestamp('occurredAt').defaultNow().notNull(),
+}, table => [index('growth_consent_lead_idx').on(table.leadId, table.occurredAt)])
+
+/** De-identified intake reference; consent revocation always removes it from future use. */
+export const growthResearchIntakes = mysqlTable('growthResearchIntakes', {
+  id: int('id').autoincrement().primaryKey(),
+  leadId: int('leadId').notNull().references(() => leads.id),
+  canonicalWebsiteUrl: varchar('canonicalWebsiteUrl', { length: 2048 }).notNull(),
+  domain: varchar('domain', { length: 253 }).notNull(),
+  locale: mysqlEnum('locale', ['en', 'zh-hant']).notNull(),
+  consentId: int('consentId').notNull().references(() => growthResearchConsents.id),
+  status: mysqlEnum('status', ['pending_review', 'approved', 'rejected', 'revoked']).default('pending_review').notNull(),
+  ownerReviewNote: text('ownerReviewNote'),
+  reviewedAt: timestamp('reviewedAt'),
+  consentRevokedAt: timestamp('consentRevokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [index('growth_intake_status_idx').on(table.status), index('growth_intake_lead_idx').on(table.leadId)])
+
+/** A reproducible experiment ledger. Generated variants can never be automatically published. */
+export const growthExperiments = mysqlTable('growthExperiments', {
+  id: int('id').autoincrement().primaryKey(),
+  intakeId: int('intakeId').notNull().references(() => growthResearchIntakes.id),
+  workspaceId: int('workspaceId').references(() => auditWorkspaces.id),
+  sourceUrl: varchar('sourceUrl', { length: 2048 }).notNull(),
+  sourceContentHash: varchar('sourceContentHash', { length: 128 }).notNull(),
+  locale: mysqlEnum('locale', ['en', 'zh-hant']).notNull(),
+  targetEngine: varchar('targetEngine', { length: 80 }).notNull(),
+  queryFingerprint: varchar('queryFingerprint', { length: 128 }).notNull(),
+  rewriteMode: mysqlEnum('rewriteMode', ['manual', 'autogeo_api', 'autogeo_mini']).notNull(),
+  modelId: varchar('modelId', { length: 240 }),
+  modelRevision: varchar('modelRevision', { length: 128 }),
+  ruleRevision: varchar('ruleRevision', { length: 128 }),
+  datasetRevision: varchar('datasetRevision', { length: 128 }),
+  status: mysqlEnum('status', ['draft', 'ready_for_review', 'approved', 'rejected', 'revoked']).default('draft').notNull(),
+  autoPublish: boolean('autoPublish').default(false).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  completedAt: timestamp('completedAt'),
+}, table => [index('growth_experiment_intake_idx').on(table.intakeId), index('growth_experiment_status_idx').on(table.status)])
+
+export const growthExperimentVariants = mysqlTable('growthExperimentVariants', {
+  id: int('id').autoincrement().primaryKey(),
+  experimentId: int('experimentId').notNull().references(() => growthExperiments.id),
+  variantType: mysqlEnum('variantType', ['control', 'candidate']).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  artifactStorageKey: varchar('artifactStorageKey', { length: 512 }),
+  factualityStatus: mysqlEnum('factualityStatus', ['pending', 'passed', 'failed']).default('pending').notNull(),
+  qualityStatus: mysqlEnum('qualityStatus', ['pending', 'passed', 'failed']).default('pending').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('growth_variant_unique').on(table.experimentId, table.variantType)])
+
+export const growthMeasurements = mysqlTable('growthMeasurements', {
+  id: int('id').autoincrement().primaryKey(),
+  experimentId: int('experimentId').notNull().references(() => growthExperiments.id),
+  variantId: int('variantId').notNull().references(() => growthExperimentVariants.id),
+  channel: mysqlEnum('channel', ['google_search', 'google_ai_overview', 'chatgpt', 'gemini', 'perplexity', 'manual']).notNull(),
+  metric: mysqlEnum('metric', ['retrieval', 'rank', 'citation', 'visibility', 'geo_score', 'geu_score', 'conversion']).notNull(),
+  value: decimal('value', { precision: 12, scale: 4 }).notNull(),
+  provenance: mysqlEnum('provenance', ['observed', 'imported', 'human_confirmed']).notNull(),
+  observedAt: timestamp('observedAt').notNull(),
+  windowStart: timestamp('windowStart'),
+  windowEnd: timestamp('windowEnd'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [index('growth_measurement_experiment_idx').on(table.experimentId)])
+
+export const growthExperimentReviews = mysqlTable('growthExperimentReviews', {
+  id: int('id').autoincrement().primaryKey(),
+  experimentId: int('experimentId').notNull().references(() => growthExperiments.id),
+  reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
+  decision: mysqlEnum('decision', ['approved', 'needs_revision', 'rejected']).notNull(),
+  factualityDecision: mysqlEnum('factualityDecision', ['passed', 'failed']).notNull(),
+  brandQualityDecision: mysqlEnum('brandQualityDecision', ['passed', 'failed']).notNull(),
+  reviewNote: text('reviewNote'),
+  approvedForDataset: boolean('approvedForDataset').default(false).notNull(),
+  reviewedAt: timestamp('reviewedAt').defaultNow().notNull(),
+}, table => [index('growth_review_experiment_idx').on(table.experimentId)])
+
 export type User = typeof users.$inferSelect
 export type ProviderCredentials = typeof providerCredentials.$inferSelect
 export type Lead = typeof leads.$inferSelect
@@ -410,3 +496,6 @@ export type PublicIntelligenceArtifact = typeof publicIntelligenceArtifacts.$inf
 export type PublicIntelligenceDatasetBuild = typeof publicIntelligenceDatasetBuilds.$inferSelect
 export type PublicIntelligenceIngestionJob = typeof publicIntelligenceIngestionJobs.$inferSelect
 export type PublicIntelligenceInference = typeof publicIntelligenceInferences.$inferSelect
+export type GrowthResearchConsent = typeof growthResearchConsents.$inferSelect
+export type GrowthResearchIntake = typeof growthResearchIntakes.$inferSelect
+export type GrowthExperiment = typeof growthExperiments.$inferSelect

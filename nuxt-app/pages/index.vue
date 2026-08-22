@@ -302,6 +302,7 @@ const formData = reactive({
   companyFax: '',
   privacy: false,
   followup: false,
+  growthResearch: false,
 })
 const formStatus = ref('')
 const submitForm = async () => {
@@ -324,6 +325,7 @@ const submitForm = async () => {
         message: formData.context,
         privacyConsent: formData.privacy,
         recontactConsent: formData.followup,
+        growthResearchConsent: formData.growthResearch,
         companyFax: formData.companyFax,
       },
     })
@@ -752,6 +754,10 @@ const submitForm = async () => {
             <label class="consent">
               <input v-model="formData.followup" type="checkbox" name="followup">
               <span>{{ isZh ? '可以在這次諮詢以外，寄送後續相關資訊給我。' : 'You may send me relevant follow-up information beyond this inquiry.' }}</span>
+            </label>
+            <label class="consent">
+              <input v-model="formData.growthResearch" type="checkbox" name="growthResearchConsent">
+              <span>{{ isZh ? '選填：我同意 DiscoveryStack 只使用我提供的公開網站網址及去識別化研究資料，進行人工審查的 SEO／GEO 成長研究；這不影響本次諮詢。' : 'Optional: I agree that DiscoveryStack may use only my public website URL and de-identified research data for human-reviewed SEO/GEO growth research. This does not affect this inquiry.' }}</span>
             </label>
           </div>
 

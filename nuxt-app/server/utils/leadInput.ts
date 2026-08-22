@@ -13,6 +13,7 @@ export const leadInputSchema = z.object({
   message: z.string().trim().max(MAX_MESSAGE_LENGTH).optional().or(z.literal('')),
   privacyConsent: z.literal(true),
   recontactConsent: z.boolean().default(false),
+  growthResearchConsent: z.boolean().default(false),
   companyFax: z.string().max(200).optional().default(''),
 })
 

@@ -9,7 +9,7 @@ const status = ref<'idle' | 'scanning' | 'score' | 'submitting' | 'report'>('idl
 const activeStage = ref(0)
 const leadError = ref('')
 const timers: ReturnType<typeof setTimeout>[] = []
-const lead = reactive({ name: '', email: '', company: '', industry: '', role: '', phone: '', budget: '', timeline: '', privacyConsent: false, recontactConsent: true, companyFax: '' })
+const lead = reactive({ name: '', email: '', company: '', industry: '', role: '', phone: '', budget: '', timeline: '', privacyConsent: false, recontactConsent: true, growthResearchConsent: false, companyFax: '' })
 
 const copy = computed(() => isZh.value ? {
   eyebrow: '免費 AI 網站分析', title: '花下一筆預算前，先找出網站漏掉的訂單。',
@@ -19,7 +19,7 @@ const copy = computed(() => isZh.value ? {
   total: '網站獲客基礎分數', maturity: '成長基礎', unlockTitle: '分數只是起點。免費解鎖完整問題與部門建議。',
   unlockDeck: '留下基本資料時，系統會在背景準備完整報告。正式版本會把實際模型結果交給適合的部門。',
   name: '姓名', email: '工作 Email', company: '公司／品牌', industry: '產業', role: '職位', phone: '電話', budget: '預算範圍', timeline: '希望完成時間',
-  privacy: '我同意 DiscoveryStack 為提供分析報告與合作建議而處理這些資料。', followup: '可以寄送完整報告與相關後續資訊給我。',
+  privacy: '我同意 DiscoveryStack 為提供分析報告與合作建議而處理這些資料。', followup: '可以寄送完整報告與相關後續資訊給我。', growthResearch: '選填：我同意僅以此公開網站網址及去識別化研究資料，進行人工審查的 SEO／GEO 成長研究；這不影響本次免費分析。',
   unlock: '免費解鎖完整報告', submitting: '正在建立你的報告…', required: '請完成必填資料與資料處理同意。', failed: '目前無法儲存資料，請稍後再試。',
   reportTitle: '你的跨部門行動路徑', reportDeck: '正式模型接線後，這裡會依真實證據排序。現在呈現的是報告結構示範。', next: '帶著分析結果預約顧問',
   stages: ['技術與索引', '答案可引用性', '品牌與內容', '使用體驗'],
@@ -33,7 +33,7 @@ const copy = computed(() => isZh.value ? {
   total: 'Acquisition foundation score', maturity: 'Growth foundation', unlockTitle: 'A score is only the start. Unlock the full issues and department plan for free.',
   unlockDeck: 'While you leave the essentials, the system prepares the full report in the background. The production flow will pass real model evidence to the right departments.',
   name: 'Name', email: 'Work email', company: 'Company / brand', industry: 'Industry', role: 'Role', phone: 'Phone', budget: 'Budget range', timeline: 'Target timeline',
-  privacy: 'I agree that DiscoveryStack may process these details to provide the analysis report and service recommendations.', followup: 'You may email the full report and relevant follow-up information to me.',
+  privacy: 'I agree that DiscoveryStack may process these details to provide the analysis report and service recommendations.', followup: 'You may email the full report and relevant follow-up information to me.', growthResearch: 'Optional: I agree that only this public website URL and de-identified research data may be used for human-reviewed SEO/GEO growth research. This does not affect the free analysis.',
   unlock: 'Unlock the full report for free', submitting: 'Preparing your report…', required: 'Complete the required details and data-processing consent.', failed: 'We could not save this right now. Please try again shortly.',
   reportTitle: 'Your cross-department action route', reportDeck: 'Once the production model is connected, this will be ordered by real evidence. This is the report structure preview.', next: 'Book a strategist with this analysis',
   stages: ['Technical and index', 'Answer readiness', 'Brand and content', 'User experience'],
@@ -55,7 +55,7 @@ async function unlockReport() {
   if (!lead.name.trim() || !lead.email.trim() || !lead.company.trim() || !lead.industry.trim() || !lead.role.trim() || !lead.phone.trim() || !lead.budget || !lead.timeline || !lead.privacyConsent) { leadError.value = copy.value.required; return }
   status.value = 'submitting'
   try {
-    await $fetch('/api/leads', { method: 'POST', body: { name: lead.name, email: lead.email, company: lead.company, website: website.value, packageInterest: 'discover', language: props.locale, message: `Industry: ${lead.industry}\nRole: ${lead.role}\nPhone: ${lead.phone}\nBudget: ${lead.budget}\nTimeline: ${lead.timeline}\nSource: free-analysis`, privacyConsent: lead.privacyConsent, recontactConsent: lead.recontactConsent, companyFax: lead.companyFax } })
+    await $fetch('/api/leads', { method: 'POST', body: { name: lead.name, email: lead.email, company: lead.company, website: website.value, packageInterest: 'discover', language: props.locale, message: `Industry: ${lead.industry}\nRole: ${lead.role}\nPhone: ${lead.phone}\nBudget: ${lead.budget}\nTimeline: ${lead.timeline}\nSource: free-analysis`, privacyConsent: lead.privacyConsent, recontactConsent: lead.recontactConsent, growthResearchConsent: lead.growthResearchConsent, companyFax: lead.companyFax } })
     status.value = 'report'
   } catch { status.value = 'score'; leadError.value = copy.value.failed }
 }
@@ -87,7 +87,7 @@ onBeforeUnmount(clearTimers)
               <label><span>{{ copy.budget }}</span><select v-model="lead.budget" required><option value="" disabled>—</option><option value="under-100k">NT$100k ↓</option><option value="100k-300k">NT$100k–300k</option><option value="300k-plus">NT$300k ↑</option></select></label>
               <label><span>{{ copy.timeline }}</span><select v-model="lead.timeline" required><option value="" disabled>—</option><option value="1-2-months">1–2 months</option><option value="3-6-months">3–6 months</option><option value="planning">Planning</option></select></label>
             </div>
-            <label class="analysis-consent"><input v-model="lead.privacyConsent" type="checkbox" required><span>{{ copy.privacy }}</span></label><label class="analysis-consent"><input v-model="lead.recontactConsent" type="checkbox"><span>{{ copy.followup }}</span></label>
+            <label class="analysis-consent"><input v-model="lead.privacyConsent" type="checkbox" required><span>{{ copy.privacy }}</span></label><label class="analysis-consent"><input v-model="lead.recontactConsent" type="checkbox"><span>{{ copy.followup }}</span></label><label class="analysis-consent"><input v-model="lead.growthResearchConsent" type="checkbox"><span>{{ copy.growthResearch }}</span></label>
             <label class="analysis-honeypot" aria-hidden="true"><span>Company fax</span><input v-model="lead.companyFax" tabindex="-1" autocomplete="off"></label>
             <div class="analysis-unlock-action"><button type="submit" :disabled="status === 'submitting'">{{ status === 'submitting' ? copy.submitting : copy.unlock }} <span aria-hidden="true">↗</span></button><p role="status" aria-live="polite">{{ leadError }}</p></div>
           </form>
