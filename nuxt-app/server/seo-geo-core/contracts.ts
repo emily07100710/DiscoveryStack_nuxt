@@ -1,6 +1,7 @@
 export const SEO_GEO_CORE_VERSION = 'seo-geo-core-v1'
 export const DIAGNOSIS_BASELINE_VERSION = 'deterministic-diagnosis-v1'
 export const CONTENT_RISK_GATE_VERSION = 'content-risk-gate-v1'
+export const AUTOGEO_STRATEGY_VERSION = 'autogeo-strategy-v1'
 
 export type EvidenceRef = {
   sourceId?: number
@@ -11,15 +12,21 @@ export type EvidenceRef = {
 }
 
 export type DiagnosisPriority = 'high' | 'medium' | 'low'
+export type DiagnosisSeverity = 'critical' | 'high' | 'medium' | 'low'
 export type DiagnosisArea = 'technical_seo' | 'answer_content' | 'trust_evidence' | 'journey' | 'geo_structure'
 export type DiagnosisFinding = {
   id: string
+  issueCode: string
   area: DiagnosisArea
+  severity: DiagnosisSeverity
   priority: DiagnosisPriority
   title: string
   explanation: string
+  affectedUrls: string[]
   evidence: EvidenceRef[]
   recommendationKey: string
+  engine: typeof DIAGNOSIS_BASELINE_VERSION
+  limitations: string[]
 }
 
 export type DiagnosisResult = {
@@ -32,6 +39,48 @@ export type DiagnosisResult = {
   measurementNotice: string
 }
 
+export type StrategyDeliverableType = 'article' | 'faq' | 'service_page'
+export type AutoGeoStrategyRule = {
+  id: string
+  title: string
+  instruction: string
+  rationale: string
+  priority: 'high' | 'medium' | 'low'
+}
+
+export type StrategyContentOpportunity = {
+  key: string
+  deliverableType: StrategyDeliverableType
+  title: string
+  audience: string
+  goals: string[]
+  constraints: string[]
+}
+
+export type AutoGeoStrategyRecommendation = {
+  id?: number
+  diagnosisId: number
+  issueCode: string
+  recommendationKey: string
+  ruleSetVersion: string
+  ruleIds: string[]
+  rules: AutoGeoStrategyRule[]
+  priority: DiagnosisPriority
+  rationale: string
+  recommendedActions: string[]
+  deliverableTypes: StrategyDeliverableType[]
+  contentOpportunities: StrategyContentOpportunity[]
+  evidenceRefs: EvidenceRef[]
+  evidenceSnapshotHash: string
+  status: 'proposed' | 'selected' | 'rejected' | 'superseded'
+  limitations: string[]
+  version: number
+  provenance: Record<string, unknown>
+}
+
+export type ProductionPlanStatus = 'draft' | 'ready' | 'generating' | 'in_progress' | 'completed' | 'blocked' | 'archived'
+export type ProductionDeliverableStatus = 'planned' | 'brief_ready' | 'job_queued' | 'candidate_ready' | 'needs_human_review' | 'approved' | 'blocked' | 'exported'
+
 export type ContentBriefInput = {
   title: string
   audience: string
@@ -40,6 +89,12 @@ export type ContentBriefInput = {
   goals: string[]
   constraints: string[]
   evidenceRefs: EvidenceRef[]
+  diagnosisId?: number
+  strategyRecommendationId?: number
+  productionPlanId?: number
+  productionDeliverableId?: number
+  ruleIds?: string[]
+  provenance?: Record<string, unknown>
 }
 
 export type RiskFinding = {

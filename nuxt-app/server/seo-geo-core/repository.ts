@@ -6,6 +6,10 @@ import {
   publicIntelligenceArtifacts,
   publicIntelligenceSources,
   seoGeoContentBriefs,
+  seoGeoProductionDeliverables,
+  seoGeoProductionPlanSelections,
+  seoGeoProductionPlans,
+  seoGeoStrategyRecommendations,
   seoGeoContentDrafts,
   seoGeoContentJobs,
   seoGeoContentReviews,
@@ -15,8 +19,9 @@ import {
   seoGeoDiagnoses,
   seoGeoEvidenceApprovals,
 } from '../database/schema'
-import type { ContentBriefInput, ContentJobStatus, ContentRiskGateResult, DiagnosisResult, EvidenceRef } from './contracts'
+import type { AutoGeoStrategyRecommendation, ContentBriefInput, ContentJobStatus, ContentRiskGateResult, DiagnosisResult, EvidenceRef, ProductionDeliverableStatus, ProductionPlanStatus } from './contracts'
 import { canTransitionContentJob } from './contracts'
+import { buildAutoGeoStrategyRecommendations } from './strategy'
 
 export function stableFingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -37,6 +42,14 @@ function evidenceKey(sourceId?: number, artifactId?: number) {
 function renderEvidenceValue(value: unknown): string {
   if (typeof value === 'string') return value.trim()
   try { return JSON.stringify(value) } catch { return '' }
+}
+
+function jsonArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value as T[] : []
+}
+
+function sameEvidenceIdentity(left: EvidenceRef, right: EvidenceRef): boolean {
+  return left.sourceId === right.sourceId && left.artifactId === right.artifactId
 }
 
 async function getOwnerSource(ownerUserId: number, sourceId: number) {
@@ -226,16 +239,219 @@ export async function saveDiagnosis(input: { ownerUserId: number, sourceId?: num
   return stored
 }
 
+export async function getOwnerDiagnosis(ownerUserId: number, diagnosisId: number) {
+  const database = requireAuditDatabase()
+  const [diagnosis] = await database.select().from(seoGeoDiagnoses).where(and(eq(seoGeoDiagnoses.id, diagnosisId), eq(seoGeoDiagnoses.ownerUserId, ownerUserId))).limit(1)
+  if (!diagnosis) throw createError({ statusCode: 404, statusMessage: 'Diagnosis was not found.' })
+  return diagnosis
+}
+
+export async function createStrategyRecommendations(input: { ownerUserId: number, diagnosisId: number }) {
+  const database = requireAuditDatabase()
+  const diagnosis = await getOwnerDiagnosis(input.ownerUserId, input.diagnosisId)
+  const result = diagnosis.result as DiagnosisResult
+  if (result.engine !== 'deterministic-diagnosis-v1' || !result.findings.length) throw createError({ statusCode: 422, statusMessage: '只有包含 deterministic findings 的 Diagnosis 才能建立 Strategy recommendation。' })
+  const [recommendationRefs, contentDraftRefs] = await Promise.all([
+    listApprovedEvidence(input.ownerUserId, 'recommendation'),
+    listApprovedEvidence(input.ownerUserId, 'content_draft'),
+  ])
+  const eligibleRefs = contentDraftRefs.filter(contentRef => recommendationRefs.some(recommendationRef => sameEvidenceIdentity(recommendationRef, contentRef))).filter(ref => Boolean(diagnosis.sourceId) && ref.sourceId === diagnosis.sourceId)
+  const enrichedFindings = result.findings.map(finding => ({ ...finding, evidence: [...finding.evidence, ...eligibleRefs.filter(ref => !finding.evidence.some(existing => sameEvidenceIdentity(existing, ref)))] }))
+  const recommendations = buildAutoGeoStrategyRecommendations(diagnosis.id, enrichedFindings)
+  const saved: typeof seoGeoStrategyRecommendations.$inferSelect[] = []
+  for (const recommendation of recommendations) {
+    const idempotencyKey = `strategy:${diagnosis.id}:${recommendation.issueCode}:v${recommendation.version}`.slice(0, 128)
+    const row = {
+      ownerUserId: input.ownerUserId,
+      diagnosisId: diagnosis.id,
+      issueCode: recommendation.issueCode,
+      recommendationKey: recommendation.recommendationKey,
+      ruleSetVersion: recommendation.ruleSetVersion,
+      ruleIds: recommendation.ruleIds,
+      rules: recommendation.rules,
+      priority: recommendation.priority,
+      rationale: recommendation.rationale,
+      recommendedActions: recommendation.recommendedActions,
+      deliverableTypes: recommendation.deliverableTypes,
+      contentOpportunities: recommendation.contentOpportunities,
+      evidenceRefs: recommendation.evidenceRefs,
+      evidenceSnapshotHash: recommendation.evidenceSnapshotHash,
+      status: 'proposed' as const,
+      limitations: recommendation.limitations,
+      version: recommendation.version,
+      idempotencyKey,
+      provenance: { ...recommendation.provenance, eligibleEvidenceCount: eligibleRefs.length },
+    }
+    const [existing] = await database.select().from(seoGeoStrategyRecommendations).where(and(eq(seoGeoStrategyRecommendations.ownerUserId, input.ownerUserId), eq(seoGeoStrategyRecommendations.idempotencyKey, idempotencyKey))).limit(1)
+    if (existing) {
+      if (existing.status !== 'proposed' && (existing.evidenceSnapshotHash !== recommendation.evidenceSnapshotHash || existing.recommendationKey !== recommendation.recommendationKey)) throw createError({ statusCode: 409, statusMessage: 'Strategy recommendation snapshot conflicts with the selected plan.' })
+      await database.update(seoGeoStrategyRecommendations).set(row).where(eq(seoGeoStrategyRecommendations.id, existing.id))
+    } else {
+      await database.insert(seoGeoStrategyRecommendations).values(row)
+    }
+    const [stored] = await database.select().from(seoGeoStrategyRecommendations).where(and(eq(seoGeoStrategyRecommendations.ownerUserId, input.ownerUserId), eq(seoGeoStrategyRecommendations.idempotencyKey, idempotencyKey))).limit(1)
+    if (!stored) throw createError({ statusCode: 500, statusMessage: 'Strategy recommendation could not be recorded.' })
+    saved.push(stored)
+  }
+  return { diagnosis, recommendations: saved }
+}
+
+export async function listOwnerStrategyRecommendations(ownerUserId: number, diagnosisId?: number) {
+  const database = requireAuditDatabase()
+  return database.select().from(seoGeoStrategyRecommendations).where(and(eq(seoGeoStrategyRecommendations.ownerUserId, ownerUserId), diagnosisId ? eq(seoGeoStrategyRecommendations.diagnosisId, diagnosisId) : undefined)).orderBy(desc(seoGeoStrategyRecommendations.createdAt)).limit(100)
+}
+
+export async function getProductionPlanBundle(ownerUserId: number, planId: number) {
+  const database = requireAuditDatabase()
+  const [plan] = await database.select().from(seoGeoProductionPlans).where(and(eq(seoGeoProductionPlans.id, planId), eq(seoGeoProductionPlans.ownerUserId, ownerUserId))).limit(1)
+  if (!plan) throw createError({ statusCode: 404, statusMessage: 'Production Plan was not found.' })
+  const [selections, deliverables] = await Promise.all([
+    database.select().from(seoGeoProductionPlanSelections).where(and(eq(seoGeoProductionPlanSelections.planId, plan.id), eq(seoGeoProductionPlanSelections.ownerUserId, ownerUserId))).orderBy(seoGeoProductionPlanSelections.createdAt),
+    database.select().from(seoGeoProductionDeliverables).where(and(eq(seoGeoProductionDeliverables.planId, plan.id), eq(seoGeoProductionDeliverables.ownerUserId, ownerUserId))).orderBy(seoGeoProductionDeliverables.createdAt),
+  ])
+  const strategyIds = selections.map(selection => selection.strategyRecommendationId)
+  const strategies = strategyIds.length
+    ? await database.select().from(seoGeoStrategyRecommendations).where(and(eq(seoGeoStrategyRecommendations.ownerUserId, ownerUserId), inArray(seoGeoStrategyRecommendations.id, strategyIds))).orderBy(seoGeoStrategyRecommendations.createdAt)
+    : []
+  return { plan, selections, strategies, deliverables }
+}
+
+export async function createProductionPlan(input: { ownerUserId: number, diagnosisId?: number, strategyRecommendationIds: number[], title: string, language: 'en' | 'zh-hant', idempotencyKey: string }) {
+  const database = requireAuditDatabase()
+  const ids = [...new Set(input.strategyRecommendationIds)]
+  if (!ids.length || ids.length > 10) throw createError({ statusCode: 422, statusMessage: 'Production Plan 必須選擇 1 至 10 個 Strategy recommendations。' })
+  const strategies = await database.select().from(seoGeoStrategyRecommendations).where(and(eq(seoGeoStrategyRecommendations.ownerUserId, input.ownerUserId), inArray(seoGeoStrategyRecommendations.id, ids))).orderBy(seoGeoStrategyRecommendations.id)
+  if (strategies.length !== ids.length) throw createError({ statusCode: 422, statusMessage: '所有 Strategy recommendation 都必須屬於目前 owner。' })
+  if (input.diagnosisId && strategies.some(strategy => strategy.diagnosisId !== input.diagnosisId)) throw createError({ statusCode: 422, statusMessage: '選取的 Strategy recommendations 必須屬於同一個 Diagnosis。' })
+  if (strategies.some(strategy => ['rejected', 'superseded'].includes(strategy.status))) throw createError({ statusCode: 422, statusMessage: 'Rejected 或 superseded strategy 不能加入 Production Plan。' })
+  if (strategies.some(strategy => !jsonArray<EvidenceRef>(strategy.evidenceRefs).some(ref => Boolean(ref.artifactId)))) throw createError({ statusCode: 422, statusMessage: 'Production Plan 需要至少一項同一來源且同時通過 recommendation／content_draft approval 的 artifact。' })
+  const diagnosisId = input.diagnosisId ?? strategies[0]?.diagnosisId
+  const snapshotHashes = [...new Set(strategies.map(strategy => strategy.evidenceSnapshotHash))]
+  if (snapshotHashes.length !== 1) throw createError({ statusCode: 409, statusMessage: '同一 Production Plan 的 Strategy evidence snapshot 必須一致。' })
+  const inputFingerprint = stableFingerprint({ diagnosisId: diagnosisId ?? null, strategyRecommendationIds: ids, title: input.title.trim(), language: input.language })
+  const [existing] = await database.select().from(seoGeoProductionPlans).where(and(eq(seoGeoProductionPlans.ownerUserId, input.ownerUserId), eq(seoGeoProductionPlans.idempotencyKey, input.idempotencyKey))).limit(1)
+  if (existing) {
+    if (existing.inputFingerprint !== inputFingerprint) throw createError({ statusCode: 409, statusMessage: 'Production Plan idempotency key is already associated with a different selection.' })
+    return getProductionPlanBundle(input.ownerUserId, existing.id)
+  }
+  const planId = await database.transaction(async tx => {
+    const [created] = await tx.insert(seoGeoProductionPlans).values({ ownerUserId: input.ownerUserId, diagnosisId: diagnosisId ?? null, title: input.title.trim(), language: input.language, inputFingerprint, evidenceSnapshotHash: snapshotHashes[0]!, status: 'ready', idempotencyKey: input.idempotencyKey, provenance: { strategyRecommendationIds: ids, ruleSetVersions: strategies.map(strategy => strategy.ruleSetVersion), createdBy: 'owner-selection' } }).$returningId()
+    if (!created?.id) throw createError({ statusCode: 500, statusMessage: 'Production Plan could not be recorded.' })
+    for (const strategy of strategies) {
+      await tx.insert(seoGeoProductionPlanSelections).values({ ownerUserId: input.ownerUserId, planId: created.id, strategyRecommendationId: strategy.id, status: 'selected', evidenceSnapshotHash: strategy.evidenceSnapshotHash, idempotencyKey: `plan:${created.id}:strategy:${strategy.id}`, provenance: { selection: 'owner-approved', strategyVersion: strategy.version } })
+    }
+    const usedKeys = new Set<string>()
+    let deliverableCount = 0
+    for (const strategy of strategies) {
+      const [selection] = await tx.select({ id: seoGeoProductionPlanSelections.id }).from(seoGeoProductionPlanSelections).where(and(eq(seoGeoProductionPlanSelections.planId, created.id), eq(seoGeoProductionPlanSelections.strategyRecommendationId, strategy.id))).limit(1)
+      if (!selection) throw createError({ statusCode: 500, statusMessage: 'Production Plan selection could not be recorded.' })
+      for (const opportunity of jsonArray<{ key: string, deliverableType: 'article' | 'faq' | 'service_page', title: string, audience: string, goals: string[], constraints: string[] }>(strategy.contentOpportunities)) {
+        if (deliverableCount >= 10) break
+        const opportunityKey = `${strategy.id}:${opportunity.key}`.slice(0, 180)
+        if (usedKeys.has(opportunityKey)) continue
+        usedKeys.add(opportunityKey)
+        await tx.insert(seoGeoProductionDeliverables).values({ ownerUserId: input.ownerUserId, planId: created.id, selectionId: selection.id, opportunityKey, contentType: opportunity.deliverableType, title: opportunity.title.slice(0, 300), audience: opportunity.audience.slice(0, 300), goals: opportunity.goals.slice(0, 20), constraints: opportunity.constraints.slice(0, 20), language: input.language, status: 'planned', evidenceSnapshotHash: strategy.evidenceSnapshotHash, idempotencyKey: `plan:${created.id}:deliverable:${opportunityKey}`.slice(0, 128), provenance: { strategyRecommendationId: strategy.id, issueCode: strategy.issueCode, recommendationKey: strategy.recommendationKey, ruleIds: jsonArray<string>(strategy.ruleIds), rules: jsonArray(strategy.rules) } })
+        deliverableCount += 1
+      }
+    }
+    await tx.update(seoGeoStrategyRecommendations).set({ status: 'selected' }).where(and(eq(seoGeoStrategyRecommendations.ownerUserId, input.ownerUserId), inArray(seoGeoStrategyRecommendations.id, ids)))
+    return created.id
+  })
+  return getProductionPlanBundle(input.ownerUserId, planId)
+}
+
+export async function listOwnerProductionPlans(ownerUserId: number) {
+  const database = requireAuditDatabase()
+  return database.select().from(seoGeoProductionPlans).where(eq(seoGeoProductionPlans.ownerUserId, ownerUserId)).orderBy(desc(seoGeoProductionPlans.createdAt)).limit(50)
+}
+
+export async function findOwnerBriefForDeliverable(ownerUserId: number, deliverableId: number) {
+  const database = requireAuditDatabase()
+  const [brief] = await database.select().from(seoGeoContentBriefs).where(and(eq(seoGeoContentBriefs.ownerUserId, ownerUserId), eq(seoGeoContentBriefs.productionDeliverableId, deliverableId))).orderBy(desc(seoGeoContentBriefs.id)).limit(1)
+  return brief
+}
+
+export async function updateProductionDeliverable(ownerUserId: number, deliverableId: number, patch: { status?: ProductionDeliverableStatus, briefId?: number, jobId?: number }) {
+  const database = requireAuditDatabase()
+  const [deliverable] = await database.select().from(seoGeoProductionDeliverables).where(and(eq(seoGeoProductionDeliverables.id, deliverableId), eq(seoGeoProductionDeliverables.ownerUserId, ownerUserId))).limit(1)
+  if (!deliverable) throw createError({ statusCode: 404, statusMessage: 'Production deliverable was not found.' })
+  await database.update(seoGeoProductionDeliverables).set({ status: patch.status ?? deliverable.status, briefId: patch.briefId ?? deliverable.briefId, jobId: patch.jobId ?? deliverable.jobId }).where(eq(seoGeoProductionDeliverables.id, deliverable.id))
+  return { ...deliverable, ...patch }
+}
+
+export async function prepareProductionPlanGeneration(ownerUserId: number, planId: number) {
+  const bundle = await getProductionPlanBundle(ownerUserId, planId)
+  if (!['ready', 'generating', 'in_progress'].includes(bundle.plan.status)) throw createError({ statusCode: 422, statusMessage: `Production Plan cannot generate from status ${bundle.plan.status}.` })
+  const strategyById = new Map(bundle.strategies.map(strategy => [strategy.id, strategy]))
+  const prepared: Array<{ deliverableId: number, briefId: number, jobId: number, idempotencyKey: string }> = []
+  await databaseForPlan(ownerUserId).update(seoGeoProductionPlans).set({ status: 'generating' }).where(and(eq(seoGeoProductionPlans.id, planId), eq(seoGeoProductionPlans.ownerUserId, ownerUserId)))
+  try {
+    for (const deliverable of bundle.deliverables) {
+      const selection = bundle.selections.find(item => item.id === deliverable.selectionId)
+      const strategy = selection ? strategyById.get(selection.strategyRecommendationId) : undefined
+      if (!strategy) throw createError({ statusCode: 422, statusMessage: 'Production deliverable strategy selection is missing.' })
+      const requestedRefs = jsonArray<EvidenceRef>(strategy.evidenceRefs)
+      const evidenceSnapshot = await resolveApprovedEvidenceSnapshot(ownerUserId, requestedRefs, ['recommendation', 'content_draft'], { requireArtifact: true })
+      if (evidenceSnapshot.hash !== strategy.evidenceSnapshotHash || evidenceSnapshot.hash !== deliverable.evidenceSnapshotHash) throw createError({ statusCode: 409, statusMessage: 'Strategy or deliverable evidence snapshot is stale; rebuild the plan.' })
+      const opportunityKey = deliverable.opportunityKey.split(':').slice(1).join(':')
+      const opportunity = jsonArray<{ key: string, deliverableType: 'article' | 'faq' | 'service_page', title: string, audience: string, goals: string[], constraints: string[] }>(strategy.contentOpportunities).find(item => item.key === opportunityKey)
+      if (!opportunity) throw createError({ statusCode: 422, statusMessage: 'Production deliverable opportunity template is missing.' })
+      let brief = deliverable.briefId ? await getOwnerContentBrief(ownerUserId, deliverable.briefId) : await findOwnerBriefForDeliverable(ownerUserId, deliverable.id)
+      if (!brief) {
+        brief = await createContentBrief({ ownerUserId, diagnosisId: bundle.plan.diagnosisId ?? strategy.diagnosisId, brief: { title: deliverable.title, audience: deliverable.audience, contentType: deliverable.contentType, language: deliverable.language, goals: jsonArray<string>(deliverable.goals), constraints: jsonArray<string>(deliverable.constraints), evidenceRefs: requestedRefs, diagnosisId: bundle.plan.diagnosisId ?? strategy.diagnosisId, strategyRecommendationId: strategy.id, productionPlanId: bundle.plan.id, productionDeliverableId: deliverable.id, ruleIds: jsonArray<string>(strategy.ruleIds), provenance: { diagnosisFindings: [{ issueCode: strategy.issueCode, recommendationKey: strategy.recommendationKey, rationale: strategy.rationale, limitations: jsonArray<string>(strategy.limitations) }], strategyRules: jsonArray(strategy.rules), strategyRecommendationId: strategy.id, planId: bundle.plan.id } } })
+        await updateProductionDeliverable(ownerUserId, deliverable.id, { status: 'brief_ready', briefId: brief.id })
+      }
+      let job = deliverable.jobId ? await getOwnerContentJob(ownerUserId, deliverable.jobId) : undefined
+      if (!job) {
+        job = await createContentJob({ ownerUserId, briefId: brief.id, operation: 'autogeo_recommendation', providerMode: 'reference_rules', idempotencyKey: `plan:${bundle.plan.id}:job:${deliverable.id}`.slice(0, 128), productionPlanId: bundle.plan.id, strategyRecommendationId: strategy.id, productionDeliverableId: deliverable.id })
+        await updateProductionDeliverable(ownerUserId, deliverable.id, { status: 'job_queued', jobId: job.id, briefId: brief.id })
+      }
+      prepared.push({ deliverableId: deliverable.id, briefId: brief.id, jobId: job.id, idempotencyKey: job.idempotencyKey })
+    }
+    await databaseForPlan(ownerUserId).update(seoGeoProductionPlans).set({ status: 'in_progress' }).where(and(eq(seoGeoProductionPlans.id, planId), eq(seoGeoProductionPlans.ownerUserId, ownerUserId)))
+  } catch (error) {
+    await databaseForPlan(ownerUserId).update(seoGeoProductionPlans).set({ status: 'blocked' }).where(and(eq(seoGeoProductionPlans.id, planId), eq(seoGeoProductionPlans.ownerUserId, ownerUserId)))
+    throw error
+  }
+  return { ...await getProductionPlanBundle(ownerUserId, planId), prepared }
+}
+
+function databaseForPlan(_ownerUserId: number) {
+  return requireAuditDatabase()
+}
+
 export async function createContentBrief(input: { ownerUserId: number, diagnosisId?: number, brief: ContentBriefInput }) {
   const database = requireAuditDatabase()
   const evidenceSnapshot = await resolveApprovedEvidenceSnapshot(input.ownerUserId, input.brief.evidenceRefs, 'content_draft', { requireArtifact: true })
-  if (input.diagnosisId) {
-    const [diagnosis] = await database.select({ id: seoGeoDiagnoses.id }).from(seoGeoDiagnoses).where(and(eq(seoGeoDiagnoses.id, input.diagnosisId), eq(seoGeoDiagnoses.ownerUserId, input.ownerUserId))).limit(1)
+  const diagnosisId = input.diagnosisId ?? input.brief.diagnosisId
+  if (diagnosisId) {
+    const [diagnosis] = await database.select({ id: seoGeoDiagnoses.id }).from(seoGeoDiagnoses).where(and(eq(seoGeoDiagnoses.id, diagnosisId), eq(seoGeoDiagnoses.ownerUserId, input.ownerUserId))).limit(1)
     if (!diagnosis) throw createError({ statusCode: 422, statusMessage: 'Diagnosis ID 必須屬於目前 owner。' })
+  }
+  if (input.brief.strategyRecommendationId) {
+    const [strategy] = await database.select({ id: seoGeoStrategyRecommendations.id, evidenceSnapshotHash: seoGeoStrategyRecommendations.evidenceSnapshotHash }).from(seoGeoStrategyRecommendations).where(and(eq(seoGeoStrategyRecommendations.id, input.brief.strategyRecommendationId), eq(seoGeoStrategyRecommendations.ownerUserId, input.ownerUserId))).limit(1)
+    if (!strategy) throw createError({ statusCode: 422, statusMessage: 'Strategy recommendation 必須屬於目前 owner。' })
+    if (strategy.evidenceSnapshotHash !== evidenceSnapshot.hash) throw createError({ statusCode: 409, statusMessage: 'Brief evidence snapshot must match the selected strategy recommendation.' })
+  }
+  if (input.brief.productionPlanId) {
+    const [plan] = await database.select({ id: seoGeoProductionPlans.id, ownerUserId: seoGeoProductionPlans.ownerUserId, evidenceSnapshotHash: seoGeoProductionPlans.evidenceSnapshotHash }).from(seoGeoProductionPlans).where(and(eq(seoGeoProductionPlans.id, input.brief.productionPlanId), eq(seoGeoProductionPlans.ownerUserId, input.ownerUserId))).limit(1)
+    if (!plan) throw createError({ statusCode: 422, statusMessage: 'Production Plan 必須屬於目前 owner。' })
+    if (plan.evidenceSnapshotHash !== evidenceSnapshot.hash) throw createError({ statusCode: 409, statusMessage: 'Brief evidence snapshot must match the Production Plan snapshot.' })
+  }
+  if (input.brief.productionDeliverableId) {
+    const [deliverable] = await database.select({ id: seoGeoProductionDeliverables.id, planId: seoGeoProductionDeliverables.planId, evidenceSnapshotHash: seoGeoProductionDeliverables.evidenceSnapshotHash }).from(seoGeoProductionDeliverables).where(and(eq(seoGeoProductionDeliverables.id, input.brief.productionDeliverableId), eq(seoGeoProductionDeliverables.ownerUserId, input.ownerUserId))).limit(1)
+    if (!deliverable) throw createError({ statusCode: 422, statusMessage: 'Production deliverable 必須屬於目前 owner。' })
+    if (input.brief.productionPlanId && deliverable.planId !== input.brief.productionPlanId) throw createError({ statusCode: 422, statusMessage: 'Production deliverable 必須屬於指定的 Production Plan。' })
+    if (deliverable.evidenceSnapshotHash !== evidenceSnapshot.hash) throw createError({ statusCode: 409, statusMessage: 'Brief evidence snapshot must match the deliverable snapshot.' })
   }
   await database.insert(seoGeoContentBriefs).values({
     ownerUserId: input.ownerUserId,
-    diagnosisId: input.diagnosisId ?? null,
+    diagnosisId: diagnosisId ?? null,
+    strategyRecommendationId: input.brief.strategyRecommendationId ?? null,
+    productionPlanId: input.brief.productionPlanId ?? null,
+    productionDeliverableId: input.brief.productionDeliverableId ?? null,
+    ruleIds: input.brief.ruleIds ?? null,
+    provenance: input.brief.provenance ?? null,
     title: input.brief.title.trim(),
     audience: input.brief.audience.trim(),
     contentType: input.brief.contentType,
@@ -265,17 +481,20 @@ export async function getOwnerContentJob(ownerUserId: number, jobId: number) {
   return job
 }
 
-export async function createContentJob(input: { ownerUserId: number, briefId: number, operation: 'autogeo_recommendation' | 'content_draft' | 'risk_scan' | 'delivery_preview' | 'delivery_publish', providerMode: 'reference_rules' | 'autogeo_bailian_qwen' | 'autogeo_api' | 'manual', idempotencyKey: string }) {
+export async function createContentJob(input: { ownerUserId: number, briefId: number, operation: 'autogeo_recommendation' | 'content_draft' | 'risk_scan' | 'delivery_preview' | 'delivery_publish', providerMode: 'reference_rules' | 'autogeo_bailian_qwen' | 'autogeo_api' | 'manual', idempotencyKey: string, productionPlanId?: number, strategyRecommendationId?: number, productionDeliverableId?: number }) {
   const database = requireAuditDatabase()
   const [brief] = await database.select().from(seoGeoContentBriefs).where(and(eq(seoGeoContentBriefs.id, input.briefId), eq(seoGeoContentBriefs.ownerUserId, input.ownerUserId), eq(seoGeoContentBriefs.status, 'ready_for_generation'))).limit(1)
   if (!brief) throw createError({ statusCode: 422, statusMessage: 'Content Brief 必須為 owner-owned 且 ready_for_generation 才可建立工作。' })
-  const requestFingerprint = stableFingerprint({ briefId: input.briefId, operation: input.operation, providerMode: input.providerMode, idempotencyKey: input.idempotencyKey })
+  if (input.productionPlanId && brief.productionPlanId !== input.productionPlanId) throw createError({ statusCode: 422, statusMessage: 'Job 的 Production Plan 必須與 Brief 一致。' })
+  if (input.strategyRecommendationId && brief.strategyRecommendationId !== input.strategyRecommendationId) throw createError({ statusCode: 422, statusMessage: 'Job 的 Strategy recommendation 必須與 Brief 一致。' })
+  if (input.productionDeliverableId && brief.productionDeliverableId !== input.productionDeliverableId) throw createError({ statusCode: 422, statusMessage: 'Job 的 deliverable 必須與 Brief 一致。' })
+  const requestFingerprint = stableFingerprint({ briefId: input.briefId, operation: input.operation, providerMode: input.providerMode, productionPlanId: input.productionPlanId ?? null, strategyRecommendationId: input.strategyRecommendationId ?? null, productionDeliverableId: input.productionDeliverableId ?? null, idempotencyKey: input.idempotencyKey })
   const [existing] = await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.ownerUserId, input.ownerUserId), eq(seoGeoContentJobs.idempotencyKey, input.idempotencyKey))).limit(1)
   if (existing) {
-    if (existing.requestFingerprint !== requestFingerprint || existing.briefId !== brief.id) throw createError({ statusCode: 409, statusMessage: 'Idempotency key is already associated with a different content job request.' })
+    if (existing.requestFingerprint !== requestFingerprint || existing.briefId !== brief.id || existing.productionPlanId !== (input.productionPlanId ?? null) || existing.strategyRecommendationId !== (input.strategyRecommendationId ?? null) || existing.productionDeliverableId !== (input.productionDeliverableId ?? null)) throw createError({ statusCode: 409, statusMessage: 'Idempotency key is already associated with a different content job request.' })
     return existing
   }
-  await database.insert(seoGeoContentJobs).values({ ownerUserId: input.ownerUserId, briefId: brief.id, requestFingerprint, operation: input.operation, providerMode: input.providerMode, status: 'queued', idempotencyKey: input.idempotencyKey, evidenceSnapshotHash: brief.evidenceSnapshotHash })
+  await database.insert(seoGeoContentJobs).values({ ownerUserId: input.ownerUserId, briefId: brief.id, productionPlanId: input.productionPlanId ?? null, strategyRecommendationId: input.strategyRecommendationId ?? null, productionDeliverableId: input.productionDeliverableId ?? null, requestFingerprint, operation: input.operation, providerMode: input.providerMode, status: 'queued', idempotencyKey: input.idempotencyKey, evidenceSnapshotHash: brief.evidenceSnapshotHash })
   const [job] = await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.ownerUserId, input.ownerUserId), eq(seoGeoContentJobs.idempotencyKey, input.idempotencyKey))).limit(1)
   if (!job) throw createError({ statusCode: 500, statusMessage: 'Content job could not be recorded.' })
   return job
@@ -307,7 +526,7 @@ export async function saveRiskGate(input: { draftId: number, result: ContentRisk
 
 export async function createContentReview(input: { ownerUserId: number, jobId: number, draftId: number, decision: 'approved_for_preview' | 'approved_for_delivery' | 'changes_requested' | 'rejected', reviewNote?: string }) {
   const database = requireAuditDatabase()
-  const [job] = await database.select({ id: seoGeoContentJobs.id, evidenceSnapshotHash: seoGeoContentJobs.evidenceSnapshotHash, status: seoGeoContentJobs.status }).from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.id, input.jobId), eq(seoGeoContentJobs.ownerUserId, input.ownerUserId))).limit(1)
+  const [job] = await database.select({ id: seoGeoContentJobs.id, evidenceSnapshotHash: seoGeoContentJobs.evidenceSnapshotHash, status: seoGeoContentJobs.status, productionDeliverableId: seoGeoContentJobs.productionDeliverableId }).from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.id, input.jobId), eq(seoGeoContentJobs.ownerUserId, input.ownerUserId))).limit(1)
   if (!job) throw createError({ statusCode: 404, statusMessage: 'Content job was not found.' })
   const [draft] = await database.select({ id: seoGeoContentDrafts.id, safetyStatus: seoGeoContentDrafts.safetyStatus }).from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, input.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1)
   if (!draft) throw createError({ statusCode: 404, statusMessage: 'Draft was not found for this job.' })
@@ -318,6 +537,10 @@ export async function createContentReview(input: { ownerUserId: number, jobId: n
   const review = await database.transaction(async tx => {
     const [reviewId] = await tx.insert(seoGeoContentReviews).values({ jobId: job.id, draftId: draft.id, reviewerUserId: input.ownerUserId, decision: input.decision, reviewNote: input.reviewNote?.trim() || null, evidenceSnapshotHash: job.evidenceSnapshotHash }).$returningId()
     await tx.update(seoGeoContentJobs).set({ status: next, completedAt: ['candidate_ready', 'needs_human_review', 'approved', 'blocked', 'failed', 'delivered'].includes(next) ? new Date() : null }).where(eq(seoGeoContentJobs.id, job.id))
+    if (job.productionDeliverableId) {
+      const deliverableStatus = input.decision.startsWith('approved') ? 'approved' : input.decision === 'changes_requested' ? 'needs_human_review' : 'blocked'
+      await tx.update(seoGeoProductionDeliverables).set({ status: deliverableStatus }).where(and(eq(seoGeoProductionDeliverables.id, job.productionDeliverableId), eq(seoGeoProductionDeliverables.ownerUserId, input.ownerUserId)))
+    }
     return reviewId
   })
   return { jobId: job.id, reviewId: review?.id, nextStatus: next }
@@ -360,12 +583,15 @@ export async function createDeliveryTarget(input: { ownerUserId: number, display
 
 export async function listOwnerSeoGeoWorkspace(ownerUserId: number) {
   const database = requireAuditDatabase()
-  const [diagnoses, evidenceApprovals, briefs, jobs, targets] = await Promise.all([
+  const [diagnoses, evidenceApprovals, strategies, plans, deliverables, briefs, jobs, targets] = await Promise.all([
     database.select({ id: seoGeoDiagnoses.id, status: seoGeoDiagnoses.status, diagnosisKind: seoGeoDiagnoses.diagnosisKind, createdAt: seoGeoDiagnoses.createdAt, inputFingerprint: seoGeoDiagnoses.inputFingerprint }).from(seoGeoDiagnoses).where(eq(seoGeoDiagnoses.ownerUserId, ownerUserId)).orderBy(desc(seoGeoDiagnoses.createdAt)).limit(20),
     database.select({ id: seoGeoEvidenceApprovals.id, sourceId: seoGeoEvidenceApprovals.sourceId, artifactId: seoGeoEvidenceApprovals.artifactId, allowedFor: seoGeoEvidenceApprovals.allowedFor, status: seoGeoEvidenceApprovals.status, approvedAt: seoGeoEvidenceApprovals.approvedAt }).from(seoGeoEvidenceApprovals).where(eq(seoGeoEvidenceApprovals.ownerUserId, ownerUserId)).orderBy(desc(seoGeoEvidenceApprovals.updatedAt)).limit(50),
-    database.select({ id: seoGeoContentBriefs.id, title: seoGeoContentBriefs.title, contentType: seoGeoContentBriefs.contentType, language: seoGeoContentBriefs.language, status: seoGeoContentBriefs.status, createdAt: seoGeoContentBriefs.createdAt }).from(seoGeoContentBriefs).where(eq(seoGeoContentBriefs.ownerUserId, ownerUserId)).orderBy(desc(seoGeoContentBriefs.createdAt)).limit(20),
-    database.select({ id: seoGeoContentJobs.id, briefId: seoGeoContentJobs.briefId, operation: seoGeoContentJobs.operation, status: seoGeoContentJobs.status, requestedAt: seoGeoContentJobs.requestedAt, completedAt: seoGeoContentJobs.completedAt }).from(seoGeoContentJobs).where(eq(seoGeoContentJobs.ownerUserId, ownerUserId)).orderBy(desc(seoGeoContentJobs.requestedAt)).limit(30),
+    database.select({ id: seoGeoStrategyRecommendations.id, diagnosisId: seoGeoStrategyRecommendations.diagnosisId, issueCode: seoGeoStrategyRecommendations.issueCode, recommendationKey: seoGeoStrategyRecommendations.recommendationKey, priority: seoGeoStrategyRecommendations.priority, status: seoGeoStrategyRecommendations.status, ruleIds: seoGeoStrategyRecommendations.ruleIds, contentOpportunities: seoGeoStrategyRecommendations.contentOpportunities, createdAt: seoGeoStrategyRecommendations.createdAt }).from(seoGeoStrategyRecommendations).where(eq(seoGeoStrategyRecommendations.ownerUserId, ownerUserId)).orderBy(desc(seoGeoStrategyRecommendations.createdAt)).limit(50),
+    database.select({ id: seoGeoProductionPlans.id, diagnosisId: seoGeoProductionPlans.diagnosisId, title: seoGeoProductionPlans.title, language: seoGeoProductionPlans.language, status: seoGeoProductionPlans.status, evidenceSnapshotHash: seoGeoProductionPlans.evidenceSnapshotHash, createdAt: seoGeoProductionPlans.createdAt }).from(seoGeoProductionPlans).where(eq(seoGeoProductionPlans.ownerUserId, ownerUserId)).orderBy(desc(seoGeoProductionPlans.createdAt)).limit(20),
+    database.select({ id: seoGeoProductionDeliverables.id, planId: seoGeoProductionDeliverables.planId, title: seoGeoProductionDeliverables.title, contentType: seoGeoProductionDeliverables.contentType, status: seoGeoProductionDeliverables.status, briefId: seoGeoProductionDeliverables.briefId, jobId: seoGeoProductionDeliverables.jobId, createdAt: seoGeoProductionDeliverables.createdAt }).from(seoGeoProductionDeliverables).where(eq(seoGeoProductionDeliverables.ownerUserId, ownerUserId)).orderBy(desc(seoGeoProductionDeliverables.createdAt)).limit(50),
+    database.select({ id: seoGeoContentBriefs.id, title: seoGeoContentBriefs.title, contentType: seoGeoContentBriefs.contentType, language: seoGeoContentBriefs.language, status: seoGeoContentBriefs.status, productionPlanId: seoGeoContentBriefs.productionPlanId, productionDeliverableId: seoGeoContentBriefs.productionDeliverableId, createdAt: seoGeoContentBriefs.createdAt }).from(seoGeoContentBriefs).where(eq(seoGeoContentBriefs.ownerUserId, ownerUserId)).orderBy(desc(seoGeoContentBriefs.createdAt)).limit(20),
+    database.select({ id: seoGeoContentJobs.id, briefId: seoGeoContentJobs.briefId, productionPlanId: seoGeoContentJobs.productionPlanId, productionDeliverableId: seoGeoContentJobs.productionDeliverableId, operation: seoGeoContentJobs.operation, status: seoGeoContentJobs.status, requestedAt: seoGeoContentJobs.requestedAt, completedAt: seoGeoContentJobs.completedAt }).from(seoGeoContentJobs).where(eq(seoGeoContentJobs.ownerUserId, ownerUserId)).orderBy(desc(seoGeoContentJobs.requestedAt)).limit(30),
     database.select({ id: seoGeoDeliveryTargets.id, displayName: seoGeoDeliveryTargets.displayName, adapter: seoGeoDeliveryTargets.adapter, targetOrigin: seoGeoDeliveryTargets.targetOrigin, status: seoGeoDeliveryTargets.status, allowPublish: seoGeoDeliveryTargets.allowPublish, createdAt: seoGeoDeliveryTargets.createdAt }).from(seoGeoDeliveryTargets).where(eq(seoGeoDeliveryTargets.ownerUserId, ownerUserId)).orderBy(desc(seoGeoDeliveryTargets.createdAt)).limit(20),
   ])
-  return { diagnoses, evidenceApprovals, briefs, jobs, targets, deliveryNotice: 'No delivery is performed by this API. Preview requires an approved review and a configured server-side adapter in a future explicitly approved release.' }
+  return { diagnoses, evidenceApprovals, strategies, plans, deliverables, briefs, jobs, targets, deliveryNotice: 'No delivery is performed by this API. Preview requires an approved review and a configured server-side adapter in a future explicitly approved release.' }
 }

@@ -9,6 +9,8 @@ import { GEO_RULESET_VERSION, geoRules } from './rules'
 const MAX_TITLE_LENGTH = 180
 const MAX_CONTENT_LENGTH = 12000
 const MAX_APPROVED_EVIDENCE_CONTEXT_LENGTH = 16000
+const MAX_APPROVED_DIAGNOSIS_CONTEXT_LENGTH = 12000
+const MAX_APPROVED_STRATEGY_CONTEXT_LENGTH = 16000
 const MAX_BRIEF_ITEM_LENGTH = 500
 const MAX_BRIEF_ITEMS = 20
 
@@ -30,9 +32,13 @@ function cleanInput(input: GeoDocumentInput): GeoDocumentInput {
   if (input.language !== 'en' && input.language !== 'zh-hant') throw createError({ statusCode: 400, message: '不支援的語言。' })
   const approvedEvidenceContext = input.approvedEvidenceContext?.trim()
   if (approvedEvidenceContext && approvedEvidenceContext.length > MAX_APPROVED_EVIDENCE_CONTEXT_LENGTH) throw createError({ statusCode: 400, message: '已核准 evidence context 超過單次處理上限。' })
+  const approvedDiagnosisContext = input.approvedDiagnosisContext?.trim()
+  if (approvedDiagnosisContext && approvedDiagnosisContext.length > MAX_APPROVED_DIAGNOSIS_CONTEXT_LENGTH) throw createError({ statusCode: 400, message: '已核准 diagnosis context 超過單次處理上限。' })
+  const approvedStrategyContext = input.approvedStrategyContext?.trim()
+  if (approvedStrategyContext && approvedStrategyContext.length > MAX_APPROVED_STRATEGY_CONTEXT_LENGTH) throw createError({ statusCode: 400, message: '已核准 strategy context 超過單次處理上限。' })
   const approvedBriefGoals = cleanBriefItems(input.approvedBriefGoals)
   const approvedBriefConstraints = cleanBriefItems(input.approvedBriefConstraints)
-  return { title, content, language: input.language, ...(approvedEvidenceContext ? { approvedEvidenceContext } : {}), ...(approvedBriefGoals.length ? { approvedBriefGoals } : {}), ...(approvedBriefConstraints.length ? { approvedBriefConstraints } : {}) }
+  return { title, content, language: input.language, ...(approvedEvidenceContext ? { approvedEvidenceContext } : {}), ...(approvedDiagnosisContext ? { approvedDiagnosisContext } : {}), ...(approvedStrategyContext ? { approvedStrategyContext } : {}), ...(approvedBriefGoals.length ? { approvedBriefGoals } : {}), ...(approvedBriefConstraints.length ? { approvedBriefConstraints } : {}) }
 }
 
 function summaryOf(content: string) { return (content.split(/[。！？.!?]/u).map(part => part.trim()).find(Boolean) || content).slice(0, 280).trim() }

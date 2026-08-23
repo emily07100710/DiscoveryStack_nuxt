@@ -7,6 +7,9 @@ const inputSchema = z.object({
   briefId: z.number().int().positive(),
   operation: z.enum(['autogeo_recommendation', 'content_draft', 'risk_scan', 'delivery_preview', 'delivery_publish']),
   providerMode: z.enum(['reference_rules', 'autogeo_bailian_qwen', 'autogeo_api', 'manual']),
+  productionPlanId: z.number().int().positive().optional(),
+  strategyRecommendationId: z.number().int().positive().optional(),
+  productionDeliverableId: z.number().int().positive().optional(),
   idempotencyKey: z.string().trim().min(12).max(128),
 })
 

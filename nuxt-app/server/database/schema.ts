@@ -496,11 +496,83 @@ export const seoGeoEvidenceApprovals = mysqlTable('seoGeoEvidenceApprovals', {
   index('seo_geo_evidence_approval_owner_idx').on(table.ownerUserId, table.status, table.allowedFor),
 ])
 
+/** Versioned deterministic strategy recommendation derived from one owner diagnosis finding. */
+export const seoGeoStrategyRecommendations = mysqlTable('seoGeoStrategyRecommendations', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  diagnosisId: int('diagnosisId').notNull().references(() => seoGeoDiagnoses.id),
+  issueCode: varchar('issueCode', { length: 160 }).notNull(),
+  recommendationKey: varchar('recommendationKey', { length: 160 }).notNull(),
+  ruleSetVersion: varchar('ruleSetVersion', { length: 80 }).notNull(),
+  ruleIds: json('ruleIds').notNull(),
+  rules: json('rules').notNull(),
+  priority: mysqlEnum('priority', ['high', 'medium', 'low']).notNull(),
+  rationale: text('rationale').notNull(),
+  recommendedActions: json('recommendedActions').notNull(),
+  deliverableTypes: json('deliverableTypes').notNull(),
+  contentOpportunities: json('contentOpportunities').notNull(),
+  evidenceRefs: json('evidenceRefs').notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['proposed', 'selected', 'rejected', 'superseded']).default('proposed').notNull(),
+  limitations: json('limitations').notNull(),
+  version: int('version').default(1).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  provenance: json('provenance').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('seo_geo_strategy_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('seo_geo_strategy_version_unique').on(table.ownerUserId, table.diagnosisId, table.issueCode, table.version),
+  index('seo_geo_strategy_owner_idx').on(table.ownerUserId, table.status, table.createdAt),
+])
+
+/** Owner selection of one strategy recommendation for a production plan. */
+export const seoGeoProductionPlans = mysqlTable('seoGeoProductionPlans', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  diagnosisId: int('diagnosisId').references(() => seoGeoDiagnoses.id),
+  title: varchar('title', { length: 300 }).notNull(),
+  language: mysqlEnum('language', ['en', 'zh-hant']).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['draft', 'ready', 'generating', 'in_progress', 'completed', 'blocked', 'archived']).default('draft').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  provenance: json('provenance').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('seo_geo_plan_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('seo_geo_plan_owner_idx').on(table.ownerUserId, table.status, table.createdAt),
+])
+
+/** Append-only selection ledger connecting an owner plan to deterministic strategy recommendations. */
+export const seoGeoProductionPlanSelections = mysqlTable('seoGeoProductionPlanSelections', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  planId: int('planId').notNull().references(() => seoGeoProductionPlans.id),
+  strategyRecommendationId: int('strategyRecommendationId').notNull().references(() => seoGeoStrategyRecommendations.id),
+  status: mysqlEnum('status', ['selected', 'deselected']).default('selected').notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  provenance: json('provenance').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('seo_geo_plan_selection_unique').on(table.ownerUserId, table.planId, table.strategyRecommendationId),
+  uniqueIndex('seo_geo_plan_selection_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('seo_geo_plan_selection_plan_idx').on(table.planId, table.status),
+])
+
 /** A reviewable creative brief whose claims may only draw on its immutable evidence snapshot. */
 export const seoGeoContentBriefs = mysqlTable('seoGeoContentBriefs', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   diagnosisId: int('diagnosisId').references(() => seoGeoDiagnoses.id),
+  strategyRecommendationId: int('strategyRecommendationId').references(() => seoGeoStrategyRecommendations.id),
+  productionPlanId: int('productionPlanId').references(() => seoGeoProductionPlans.id),
+  productionDeliverableId: int('productionDeliverableId'),
+  ruleIds: json('ruleIds'),
+  provenance: json('provenance'),
   title: varchar('title', { length: 300 }).notNull(),
   audience: varchar('audience', { length: 300 }).notNull(),
   contentType: mysqlEnum('contentType', ['article', 'service_page', 'faq', 'landing_page', 'brief']).notNull(),
@@ -519,11 +591,41 @@ export const seoGeoContentBriefs = mysqlTable('seoGeoContentBriefs', {
   index('seo_geo_content_briefs_diagnosis_idx').on(table.diagnosisId),
 ])
 
+/** A bounded plan deliverable that can create exactly one evidence-bound Brief and Job. */
+export const seoGeoProductionDeliverables = mysqlTable('seoGeoProductionDeliverables', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  planId: int('planId').notNull().references(() => seoGeoProductionPlans.id),
+  selectionId: int('selectionId').notNull().references(() => seoGeoProductionPlanSelections.id),
+  opportunityKey: varchar('opportunityKey', { length: 180 }).notNull(),
+  contentType: mysqlEnum('contentType', ['article', 'service_page', 'faq']).notNull(),
+  title: varchar('title', { length: 300 }).notNull(),
+  audience: varchar('audience', { length: 300 }).notNull(),
+  goals: json('goals').notNull(),
+  constraints: json('constraints').notNull(),
+  language: mysqlEnum('language', ['en', 'zh-hant']).notNull(),
+  status: mysqlEnum('status', ['planned', 'brief_ready', 'job_queued', 'candidate_ready', 'needs_human_review', 'approved', 'blocked', 'exported']).default('planned').notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  briefId: int('briefId').references(() => seoGeoContentBriefs.id),
+  jobId: int('jobId'),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  provenance: json('provenance').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('seo_geo_deliverable_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('seo_geo_deliverable_opportunity_unique').on(table.planId, table.opportunityKey),
+  index('seo_geo_deliverable_plan_idx').on(table.planId, table.status),
+])
+
 /** Persisted, owner-triggered content operation. Autoscale runtime may process one request, but it never claims a durable worker exists. */
 export const seoGeoContentJobs = mysqlTable('seoGeoContentJobs', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   briefId: int('briefId').notNull().references(() => seoGeoContentBriefs.id),
+  productionPlanId: int('productionPlanId').references(() => seoGeoProductionPlans.id),
+  strategyRecommendationId: int('strategyRecommendationId').references(() => seoGeoStrategyRecommendations.id),
+  productionDeliverableId: int('productionDeliverableId').references(() => seoGeoProductionDeliverables.id),
   requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
   operation: mysqlEnum('operation', ['autogeo_recommendation', 'content_draft', 'risk_scan', 'delivery_preview', 'delivery_publish']).notNull(),
   providerMode: mysqlEnum('providerMode', ['reference_rules', 'autogeo_bailian_qwen', 'autogeo_api', 'manual']).notNull(),

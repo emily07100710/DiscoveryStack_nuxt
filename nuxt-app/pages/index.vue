@@ -161,13 +161,13 @@ const modelTerms = ['ENTITY MAP', 'CITATION READINESS', 'MULTI-TASK LEARNING', '
 const seoGeoCoreLayers = computed(() => isZh.value
   ? [
       { number: '01', label: 'DIAGNOSIS', title: '先找出可驗證的問題。', body: '以公開網站結構訊號、已核准 evidence 與可用的受治理模型訊號建立診斷。模型尚未達 production gate 時，系統會明確標示 not ready，而不是假裝成模型預測。', output: '可追溯診斷與限制說明' },
-      { number: '02', label: 'AUTOGEO', title: '再提出來源受限的內容改法。', body: '原文、已核准證據與內容限制一起進入改寫流程。候選稿若加入來源未支持的案例、排名、流量、轉換、營收或 ROI 主張，會被阻擋或退回安全 fallback。', output: '候選改寫、結構比較與證據快照' },
-      { number: '03', label: 'GEOFLOW CORE', title: '把核准的改法變成可審核的工作。', body: 'Content Brief、草稿、風險 gate、人工 review、preview 與 delivery ledger 都有版本與狀態。V1 不會自行發布到 CMS、WordPress 或 HTTP target。', output: '可審核工作流與零外部寫入 preview' },
+      { number: '02', label: 'AUTOGEO STRATEGY', title: '把診斷轉成有規則的改善選項。', body: '原文、已核准 evidence 與 versioned rules 一起進入策略映射。每個 recommendation 都保留 issue code、rule IDs、rationale、bounded opportunities 與 evidence snapshot；不代表排名、流量、轉換或 ROI。', output: '可追溯 Strategy recommendations 與規則快照' },
+      { number: '03', label: 'GEOFLOW CORE', title: '用 Production Plan 管理 bounded deliverables。', body: 'Owner 選擇 Strategy 後，系統建立 Production Plan、selection、Brief、Job、candidate、risk gate、人工 review 與 preview ledger。V1 不會自行發布到 CMS、WordPress 或 HTTP target。', output: '可審核的 Plan／Brief／Job 鏈與零外部寫入 preview' },
     ]
   : [
       { number: '01', label: 'DIAGNOSIS', title: 'Start with an inspectable problem.', body: 'Public-site structure signals, approved evidence and only production-eligible governed model signals create the diagnosis. If the model has not passed its gate, the system says not ready rather than presenting a model prediction.', output: 'Traceable diagnosis with stated limits' },
-      { number: '02', label: 'AUTOGEO', title: 'Recommend a change bounded by evidence.', body: 'Source text, approved evidence and content constraints enter the rewrite flow together. A candidate that adds unsupported case studies, rankings, traffic, conversion, revenue or ROI claims is blocked or returned as a safe fallback.', output: 'Candidate rewrite, structural comparison and evidence snapshot' },
-      { number: '03', label: 'GEOFLOW CORE', title: 'Turn approved changes into reviewable work.', body: 'Content briefs, drafts, risk gates, human reviews, previews and delivery ledgers retain state and version history. V1 does not autonomously publish to a CMS, WordPress or HTTP target.', output: 'Reviewable workflow and zero-write preview' },
+      { number: '02', label: 'AUTOGEO STRATEGY', title: 'Turn diagnosis into rules-based options.', body: 'Source text, approved evidence and versioned rules enter the strategy mapping together. Each recommendation keeps an issue code, rule IDs, rationale, bounded opportunities and an evidence snapshot; it is not a ranking, traffic, conversion or ROI forecast.', output: 'Traceable Strategy recommendations and rule snapshots' },
+      { number: '03', label: 'GEOFLOW CORE', title: 'Manage bounded deliverables through a Production Plan.', body: 'After owner selection, the system creates a Production Plan, selections, briefs, jobs, candidates, risk gates, human reviews and preview ledgers. V1 does not autonomously publish to a CMS, WordPress or HTTP target.', output: 'Auditable Plan / Brief / Job chain and zero-write preview' },
     ])
 
 const seoGeoCoreFaqs = computed(() => isZh.value

@@ -1,7 +1,7 @@
 export const GEO_WORKBENCH_VERSION = 'geo-workbench-v1'
 
 export type GeoLanguage = 'en' | 'zh-hant'
-export type GeoRuleCategory = 'answerability' | 'structure' | 'context' | 'evidence' | 'utility'
+export type GeoRuleCategory = 'answerability' | 'structure' | 'context' | 'evidence' | 'utility' | 'planning'
 export type GeoProviderId = 'reference-rules-v1' | 'autogeo-api' | 'autogeo-bailian-qwen' | 'custom'
 export type GeoRequestedProvider = 'autogeo-api' | 'autogeo-bailian-qwen'
 export type GeoProviderExecution = 'official-autogeo-api' | 'autogeo-framework-bailian-qwen' | 'reference-fallback'
@@ -19,6 +19,10 @@ export type GeoDocumentInput = {
   language: GeoLanguage
   /** Server-resolved evidence only; never accept this field directly from a client request. */
   approvedEvidenceContext?: string
+  /** Server-resolved Diagnosis context only; never accept this field directly from a client request. */
+  approvedDiagnosisContext?: string
+  /** Server-resolved Strategy rule context only; never accept this field directly from a client request. */
+  approvedStrategyContext?: string
   /** Server-resolved Brief instructions only; never accept these fields directly from a client request. */
   approvedBriefGoals?: readonly string[]
   approvedBriefConstraints?: readonly string[]
@@ -30,7 +34,7 @@ export type GeoRule = {
   title: string
   instruction: string
   rationale: string
-  priority: 'high' | 'medium'
+  priority: 'high' | 'medium' | 'low'
 }
 
 export type GeoRewriteProvenance = {
