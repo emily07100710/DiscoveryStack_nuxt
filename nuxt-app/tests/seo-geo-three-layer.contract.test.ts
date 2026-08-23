@@ -86,6 +86,9 @@ describe('SEO/GEO three-layer V1 contract', () => {
     expect(pageSource).toContain('guidedRevision')
     expect(pageSource).toContain('canApprovePreview')
     expect(pageSource).toContain('canApproveDelivery')
+    expect(pageSource).toContain("entry.allowedFor === 'diagnosis' && !entry.artifactId")
+    expect(pageSource).toContain("guidedReview(deliverable, 'rejected')")
+    expect(pageSource).toContain('拒絕')
     expect(pageSource).toContain("guided.selectedStrategyIds = []")
     expect(pageSource).toContain('Base draft')
     expect(pageSource).toContain('Optimized draft')
@@ -95,6 +98,15 @@ describe('SEO/GEO three-layer V1 contract', () => {
     expect(homeSource).toContain('AUTOGEO STRATEGY')
     expect(homeSource).toContain('Production Plan')
     expect(homeSource).toContain('不代表排名、流量、轉換或 ROI')
+  })
+
+  it('limits the guided Diagnosis picker to submit-compatible source approvals', () => {
+    const pickerStart = pageSource.indexOf('const guidedEvidenceOptions')
+    const pickerEnd = pageSource.indexOf('const revisionForms', pickerStart)
+    const picker = pageSource.slice(pickerStart, pickerEnd)
+    expect(picker).toContain("entry.allowedFor === 'diagnosis'")
+    expect(picker).toContain('!entry.artifactId')
+    expect(picker).not.toContain("['diagnosis', 'recommendation', 'content_draft']")
   })
 
   it('keeps new strategy and plan routes owner-gated', () => {
@@ -113,6 +125,7 @@ describe('SEO/GEO three-layer V1 contract', () => {
     expect(exportRoute).toContain('requireOwner(event)')
     expect(exportRoute).toContain('readBody(event)')
     expect(exportRoute).toContain('exportProductionDraft')
+    expect(exportRoute).not.toContain('exportLedger: {')
     expect(exportRoute).toContain('content-disposition')
     expect(exportRoute).toContain("setHeader(event, 'cache-control', 'no-store')")
     expect(revisionRoute).toContain('submitProductionDraftRevision')

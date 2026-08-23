@@ -92,7 +92,7 @@ function referenceCandidate(document: GeoDocumentInput, rules: readonly GeoRule[
   const transformed = applyReferenceRuleTransforms(document, rules)
   const optimizedTitle = document.language === 'zh-hant' ? `${transformed.title}｜重點與可驗證說明` : `${transformed.title} | Key points and verification notes`
   const optimizedContent = document.language === 'zh-hant'
-    ? `# ${optimizedTitle}\n\n${transformed.body}\n\n## 驗證與補強\n本文未因格式優化而新增外部事實。上線前請由內容擁有者人工核對主張。`
+    ? `# ${optimizedTitle}\n\n${transformed.body}\n\n## 驗證與補強\n本文未因格式調整而新增外部事實。上線前請由內容擁有者人工核對主張。`
     : `# ${optimizedTitle}\n\n${transformed.body}\n\n## Verification and reinforcement\nThis formatting pass does not add external facts. The content owner must review every claim before publication.`
   return {
     provider: 'reference-rules-v1', providerVersion: '1.0.0', optimizedTitle, optimizedContent, appliedRuleIds: rules.map(rule => rule.id),

@@ -42,7 +42,7 @@ const evidenceRow = { approvalId: 1, approvalPurpose: 'recommendation', sourceId
 
 function queueContext(changeRequest = { id: 200, decision: 'changes_requested' }) {
   state.queue = [
-    [basePlan], [baseSelection], [baseDeliverable], [baseStrategy], [diagnosis], [evidenceRow, { ...evidenceRow, approvalPurpose: 'content_draft' }], [baseBrief], [baseJob], [parentDraft], [changeRequest], [parentDraft], [{ id: 102, jobId: 10, version: 2, title: '更新後 Evidence article', body: '可核對的內容來源與方法說明。這是 owner 重新整理後的完整正文，保留 evidence 邊界並等待再次人工 review。', contentHash: 'revision-hash', provenance: { stage: 'optimized', generationMode: 'owner_revision', parentDraftId: 101, changeRequestReviewId: 200, evidenceSnapshotHash: evidenceHash }, safetyStatus: 'passed' }], [baseJob], [baseDeliverable], [basePlan], [{ status: 'needs_human_review' }],
+    [basePlan], [baseSelection], [baseDeliverable], [baseStrategy], [diagnosis], [evidenceRow, { ...evidenceRow, approvalPurpose: 'content_draft' }], [baseBrief], [baseJob], [parentDraft], [changeRequest], [parentDraft], [{ id: 102, jobId: 10, version: 2, title: '更新後 Evidence article', body: '可核對的內容來源與方法說明。這是 owner 重新整理後的完整正文，保留 evidence 邊界並等待再次人工 review。', contentHash: 'revision-input-hash', provenance: { stage: 'owner_revision_input', generationMode: 'owner_revision_input', parentDraftId: 101, changeRequestReviewId: 200, evidenceSnapshotHash: evidenceHash }, safetyStatus: 'needs_review' }], [{ version: 2 }], [{ id: 103, jobId: 10, version: 3, title: '更新後 Evidence article｜重點與可驗證說明', body: '## 直接摘要\n可核對的內容來源與方法說明\n\n可核對的內容來源與方法說明。這是 owner 重新整理後的完整正文，保留 evidence 邊界並等待再次人工 review。\n\n## 驗證與補強\n本文未因格式調整而新增外部事實。上線前請由內容擁有者人工核對主張。', contentHash: 'optimized-revision-hash', provenance: { stage: 'optimized', generationMode: 'revision_selected_rule_optimization', ownerRevisionInputDraftId: 102, parentDraftId: 102, originalParentDraftId: 101, changeRequestReviewId: 200, selectedRuleIds: ['direct-answer-first'], appliedRuleIds: ['direct-answer-first'], evidenceSnapshotHash: evidenceHash }, safetyStatus: 'passed' }], [baseJob], [baseDeliverable], [basePlan], [{ status: 'needs_human_review' }],
   ]
 }
 
@@ -52,8 +52,13 @@ describe('real revision service with mocked database', () => {
   it('creates a new optimized version after changes_requested and re-gates it', async () => {
     queueContext()
     const result = await submitProductionDraftRevision({ ownerUserId: 11, planId: 7, deliverableId: 8, title: '更新後 Evidence article', body: '可核對的內容來源與方法說明。這是 owner 重新整理後的完整正文，保留 evidence 邊界並等待再次人工 review。' })
-    expect(result.draft.version).toBe(2)
-    expect(result.draft.provenance).toMatchObject({ stage: 'optimized', generationMode: 'owner_revision', parentDraftId: 101, changeRequestReviewId: 200, evidenceSnapshotHash: evidenceHash })
+    expect(result.ownerRevisionInput.version).toBe(2)
+    expect(result.ownerRevisionInput.provenance).toMatchObject({ stage: 'owner_revision_input', generationMode: 'owner_revision_input', parentDraftId: 101, changeRequestReviewId: 200, evidenceSnapshotHash: evidenceHash })
+    expect(result.draft.version).toBe(3)
+    expect(result.draft.provenance).toMatchObject({ stage: 'optimized', generationMode: 'revision_selected_rule_optimization', ownerRevisionInputDraftId: 102, parentDraftId: 102, originalParentDraftId: 101, changeRequestReviewId: 200, selectedRuleIds: ['direct-answer-first'], appliedRuleIds: ['direct-answer-first'], evidenceSnapshotHash: evidenceHash })
+    expect((result.draft.provenance as { appliedRuleIds?: string[] }).appliedRuleIds).toEqual(['direct-answer-first'])
+    expect(result.draft.body).toContain('直接摘要')
+    expect(result.draft.body).not.toBe('可核對的內容來源與方法說明。這是 owner 重新整理後的完整正文，保留 evidence 邊界並等待再次人工 review。')
     expect(result.draft.contentHash).not.toBe('parent-hash')
     expect(result.riskGate.status).not.toBe('blocked')
     expect(result.job.status).toBe('needs_human_review')

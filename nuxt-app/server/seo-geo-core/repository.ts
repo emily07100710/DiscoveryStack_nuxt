@@ -26,6 +26,7 @@ import type { GeoRule } from '../geo/contracts'
 import { buildAutoGeoStrategyRecommendations } from './strategy'
 import { evaluateContentRisk, contentFingerprint } from './riskGate'
 import { resolveProductionRuntimeProviders } from './productionProviders'
+import { optimiseGeoDocument } from '../geo/optimise'
 
 export function stableFingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -439,17 +440,28 @@ function jsonRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
-export function deriveDraftReviewEligibility(input: { stage?: unknown, safetyStatus?: string, jobStatus?: string, gateStatus?: string, approvedForPreview: boolean, approvedForDelivery: boolean }) {
-  const optimized = input.stage === 'optimized'
-  const safe = input.safetyStatus !== 'blocked' && input.gateStatus !== 'blocked'
-  const awaitingReview = input.jobStatus === 'candidate_ready' || input.jobStatus === 'needs_human_review'
-  const canApprovePreview = optimized && safe && awaitingReview
-  const canApproveDelivery = optimized && safe && (awaitingReview || (input.jobStatus === 'approved' && input.approvedForPreview))
-  return { canReview: canApprovePreview || canApproveDelivery, canApprovePreview, canApproveDelivery, canPreview: optimized && safe && input.jobStatus === 'approved' && (input.approvedForPreview || input.approvedForDelivery), canExport: optimized && safe && input.jobStatus === 'approved' && input.approvedForDelivery }
+export function appendExportLedger(previous: unknown, entry: Record<string, unknown>): Record<string, unknown>[] {
+  if (Array.isArray(previous)) return [...previous.filter(item => item && typeof item === 'object' && !Array.isArray(item)) as Record<string, unknown>[], entry]
+  if (previous && typeof previous === 'object') return [previous as Record<string, unknown>, entry]
+  return [entry]
 }
 
-export function buildRevisionProvenance(input: { parentDraftId: number, parentDraftContentHash: string, changeRequestReviewId: number, selectedRuleIds: string[], evidenceSnapshotHash: string, revisionAuthor: number }) {
-  return { stage: 'optimized' as const, generationMode: 'owner_revision' as const, provider: 'owner-submitted-revision', parentDraftId: input.parentDraftId, parentDraftContentHash: input.parentDraftContentHash, changeRequestReviewId: input.changeRequestReviewId, selectedRuleIds: input.selectedRuleIds, appliedRuleIds: [], evidenceSnapshotHash: input.evidenceSnapshotHash, revisionAuthor: input.revisionAuthor }
+export function deriveDraftReviewEligibility(input: { stage?: unknown, safetyStatus?: string, jobStatus?: string, gateStatus?: string, approvedForPreview: boolean, approvedForDelivery: boolean, pendingChangesRequested?: boolean }) {
+  const optimized = input.stage === 'optimized'
+  const safe = input.safetyStatus !== 'blocked' && input.gateStatus !== 'blocked'
+  const pendingChanges = Boolean(input.pendingChangesRequested)
+  const awaitingReview = input.jobStatus === 'candidate_ready' || input.jobStatus === 'needs_human_review'
+  const canApprovePreview = optimized && safe && !pendingChanges && awaitingReview
+  const canApproveDelivery = optimized && safe && !pendingChanges && !input.approvedForDelivery && (awaitingReview || (input.jobStatus === 'approved' && input.approvedForPreview))
+  return { canReview: canApprovePreview || canApproveDelivery, canApprovePreview, canApproveDelivery, canPreview: optimized && safe && !pendingChanges && input.jobStatus === 'approved' && (input.approvedForPreview || input.approvedForDelivery), canExport: optimized && safe && !pendingChanges && input.jobStatus === 'approved' && input.approvedForDelivery }
+}
+
+export function buildOwnerRevisionInputProvenance(input: { parentDraftId: number, parentDraftContentHash: string, changeRequestReviewId: number, selectedRuleIds: string[], evidenceSnapshotHash: string, revisionAuthor: number }) {
+  return { stage: 'owner_revision_input' as const, generationMode: 'owner_revision_input' as const, provider: 'owner-submitted-revision', parentDraftId: input.parentDraftId, parentDraftContentHash: input.parentDraftContentHash, changeRequestReviewId: input.changeRequestReviewId, selectedRuleIds: input.selectedRuleIds, appliedRuleIds: [], evidenceSnapshotHash: input.evidenceSnapshotHash, revisionAuthor: input.revisionAuthor }
+}
+
+export function buildRevisionOptimizationProvenance(input: { ownerRevisionInputDraftId: number, originalParentDraftId: number, changeRequestReviewId: number, selectedRuleIds: string[], appliedRuleIds: string[], evidenceSnapshotHash: string, provider: string, providerVersion: string, runtimeProvider: object, actualProviderMode: string, fallbackReason?: string | null }) {
+  return { stage: 'optimized' as const, generationMode: 'revision_selected_rule_optimization' as const, provider: input.provider, providerVersion: input.providerVersion, ownerRevisionInputDraftId: input.ownerRevisionInputDraftId, parentDraftId: input.ownerRevisionInputDraftId, originalParentDraftId: input.originalParentDraftId, changeRequestReviewId: input.changeRequestReviewId, selectedRuleIds: input.selectedRuleIds, appliedRuleIds: input.appliedRuleIds, evidenceSnapshotHash: input.evidenceSnapshotHash, runtimeProvider: input.runtimeProvider, actualProviderMode: input.actualProviderMode, fallbackReason: input.fallbackReason ?? null }
 }
 
 export async function getProductionPlanDetail(ownerUserId: number, planId: number) {
@@ -491,7 +503,8 @@ export async function getProductionPlanDetail(ownerUserId: number, planId: numbe
     const latestGate = optimizedDraft ? (gatesByDraft.get(optimizedDraft.id) || [])[0] : undefined
     const approvedForPreview = draftReviews.some(review => review.decision === 'approved_for_preview' && review.evidenceSnapshotHash === bundle.plan.evidenceSnapshotHash)
     const approvedForDelivery = draftReviews.some(review => review.decision === 'approved_for_delivery' && review.evidenceSnapshotHash === bundle.plan.evidenceSnapshotHash)
-    const eligibility = deriveDraftReviewEligibility({ stage: jsonRecord(optimizedDraft?.provenance).stage, safetyStatus: optimizedDraft?.safetyStatus, jobStatus: job?.status, gateStatus: latestGate?.status, approvedForPreview, approvedForDelivery })
+    const pendingChangesRequested = draftReviews.some(review => review.decision === 'changes_requested' && review.evidenceSnapshotHash === bundle.plan.evidenceSnapshotHash)
+    const eligibility = deriveDraftReviewEligibility({ stage: jsonRecord(optimizedDraft?.provenance).stage, safetyStatus: optimizedDraft?.safetyStatus, jobStatus: job?.status, gateStatus: latestGate?.status, approvedForPreview, approvedForDelivery, pendingChangesRequested })
     return { ...deliverable, brief: briefsByDeliverable.get(deliverable.id) || null, job: job || null, baseDraft: baseDraft || null, optimizedDraft, riskGate: latestGate || null, reviews: draftReviews, previews: previews.filter(preview => preview.jobId === job?.id && preview.draftId === optimizedDraft?.id), eligibility }
   })
   return {
@@ -717,6 +730,8 @@ export async function createContentReview(input: { ownerUserId: number, jobId: n
   }
   if (draft.safetyStatus === 'blocked' && input.decision.startsWith('approved')) throw createError({ statusCode: 422, statusMessage: 'Blocked draft cannot be approved for preview or delivery.' })
   const [priorPreview] = input.decision === 'approved_for_delivery' ? await database.select({ id: seoGeoContentReviews.id }).from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.jobId, job.id), eq(seoGeoContentReviews.draftId, draft.id), eq(seoGeoContentReviews.reviewerUserId, input.ownerUserId), eq(seoGeoContentReviews.evidenceSnapshotHash, job.evidenceSnapshotHash), eq(seoGeoContentReviews.decision, 'approved_for_preview'))).orderBy(desc(seoGeoContentReviews.id)).limit(1) : []
+  const [priorDelivery] = input.decision === 'approved_for_delivery' ? await database.select({ id: seoGeoContentReviews.id }).from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.jobId, job.id), eq(seoGeoContentReviews.draftId, draft.id), eq(seoGeoContentReviews.reviewerUserId, input.ownerUserId), eq(seoGeoContentReviews.evidenceSnapshotHash, job.evidenceSnapshotHash), eq(seoGeoContentReviews.decision, 'approved_for_delivery'))).orderBy(desc(seoGeoContentReviews.id)).limit(1) : []
+  if (priorDelivery) throw createError({ statusCode: 409, statusMessage: 'This optimized draft already has approved_for_delivery; create a new revision before delivery approval.' })
   const approvalUpgrade = input.decision === 'approved_for_delivery' && job.status === 'approved' && Boolean(priorPreview)
   if (input.decision === 'approved_for_delivery' && !approvalUpgrade && !['candidate_ready', 'needs_human_review'].includes(job.status)) throw createError({ statusCode: 409, statusMessage: 'Delivery approval must follow preview approval for an already approved draft, or start from a candidate awaiting review.' })
   if (input.decision === 'approved_for_preview' && !['candidate_ready', 'needs_human_review'].includes(job.status)) throw createError({ statusCode: 409, statusMessage: 'Only a candidate awaiting human review can receive preview approval.' })
@@ -750,25 +765,49 @@ export async function submitProductionDraftRevision(input: { ownerUserId: number
   const body = input.body.trim()
   const revisionHash = contentFingerprint(title, body)
   if (revisionHash === parentDraft.contentHash) throw createError({ statusCode: 409, statusMessage: 'Revision must change the title or body and produce a new content hash.' })
-  const source = { title: context.opportunity.title, content: context.evidenceSnapshot.context, language: context.plan.language, approvedEvidenceContext: context.evidenceSnapshot.context, approvedDiagnosisContext: JSON.stringify(context.diagnosisResult), approvedStrategyContext: JSON.stringify(context.rules), approvedBriefGoals: context.opportunity.goals, approvedBriefConstraints: context.opportunity.constraints }
-  const riskGate = evaluateContentRisk({ source, candidateTitle: title, candidateBody: body, evidenceCount: context.evidenceSnapshot.refs.length })
-  const draft = await saveContentCandidate({
+  const selectedRules = resolveCanonicalGeoRules(context.rules.map(rule => rule.id))
+  const ownerRevisionInput = await saveContentCandidate({
     jobId: job.id,
     title,
     body,
     contentHash: revisionHash,
     sourceMode: 'manual',
-    provenance: buildRevisionProvenance({ parentDraftId: parentDraft.id, parentDraftContentHash: parentDraft.contentHash, changeRequestReviewId: changeRequest.id, selectedRuleIds: context.rules.map(rule => rule.id), evidenceSnapshotHash: context.evidenceSnapshot.hash, revisionAuthor: input.ownerUserId }),
+    provenance: buildOwnerRevisionInputProvenance({ parentDraftId: parentDraft.id, parentDraftContentHash: parentDraft.contentHash, changeRequestReviewId: changeRequest.id, selectedRuleIds: selectedRules.map(rule => rule.id), evidenceSnapshotHash: context.evidenceSnapshot.hash, revisionAuthor: input.ownerUserId }),
+    evidenceRefs: context.evidenceSnapshot.refs,
+    safetyStatus: 'needs_review',
+    safetyNotes: ['Owner submission is stored as input only.', 'This record is not eligible for owner review, preview, or export until a new optimized child passes the risk gate.'],
+  })
+  const runtimeProviders = resolveProductionRuntimeProviders(job.providerMode)
+  const optimizationSource = {
+    title,
+    content: body,
+    language: context.plan.language,
+    approvedEvidenceContext: context.evidenceSnapshot.context,
+    approvedDiagnosisContext: JSON.stringify(context.diagnosisResult),
+    approvedStrategyContext: JSON.stringify(selectedRules),
+    approvedBriefGoals: context.opportunity.goals,
+    approvedBriefConstraints: context.opportunity.constraints,
+  }
+  const optimizationResult = await optimiseGeoDocument(optimizationSource, runtimeProviders.optimizationAdapter, selectedRules)
+  const candidate = optimizationResult.candidate
+  const riskGate = evaluateContentRisk({ source: optimizationSource, candidateTitle: candidate.optimizedTitle, candidateBody: candidate.optimizedContent, evidenceCount: context.evidenceSnapshot.refs.length })
+  const optimizedDraft = await saveContentCandidate({
+    jobId: job.id,
+    title: candidate.optimizedTitle,
+    body: candidate.optimizedContent,
+    contentHash: contentFingerprint(candidate.optimizedTitle, candidate.optimizedContent),
+    sourceMode: candidate.provider === 'reference-rules-v1' ? 'reference_fallback' : 'provider_candidate',
+    provenance: buildRevisionOptimizationProvenance({ ownerRevisionInputDraftId: ownerRevisionInput.id, originalParentDraftId: parentDraft.id, changeRequestReviewId: changeRequest.id, selectedRuleIds: selectedRules.map(rule => rule.id), appliedRuleIds: candidate.appliedRuleIds, evidenceSnapshotHash: context.evidenceSnapshot.hash, provider: candidate.provider, providerVersion: candidate.providerVersion, runtimeProvider: runtimeProviders.provenance, actualProviderMode: runtimeProviders.mode, fallbackReason: runtimeProviders.fallbackReason ?? candidate.provenance.fallbackReason ?? null }),
     evidenceRefs: context.evidenceSnapshot.refs,
     safetyStatus: riskGate.status === 'blocked' ? 'blocked' : riskGate.status === 'needs_human_review' ? 'needs_review' : 'passed',
-    safetyNotes: ['Owner revision was re-evaluated by the content risk gate.', 'A new revision must receive a new explicit owner review before preview or export.'],
+    safetyNotes: [...candidate.safetyNotes, optimizationResult.interpretationLimit, 'A new optimized child must receive explicit owner review before preview or export.'],
   })
-  await saveRiskGate({ draftId: draft.id, result: riskGate, evidenceSnapshotHash: context.evidenceSnapshot.hash })
+  await saveRiskGate({ draftId: optimizedDraft.id, result: riskGate, evidenceSnapshotHash: context.evidenceSnapshot.hash })
   const nextStatus: ContentJobStatus = riskGate.status === 'blocked' ? 'blocked' : 'needs_human_review'
-  await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: nextStatus, providerProvenance: { stage: 'owner_revision', parentDraftId: parentDraft.id, changeRequestReviewId: changeRequest.id, revisionDraftId: draft.id, contentHash: draft.contentHash } })
+  await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: nextStatus, providerProvenance: { stage: 'revision_optimized', ownerRevisionInputDraftId: ownerRevisionInput.id, parentDraftId: parentDraft.id, changeRequestReviewId: changeRequest.id, optimizedDraftId: optimizedDraft.id, selectedRuleIds: selectedRules.map(rule => rule.id), appliedRuleIds: candidate.appliedRuleIds, runtimeProvider: runtimeProviders.provenance, actualProviderMode: runtimeProviders.mode, fallbackReason: runtimeProviders.fallbackReason ?? candidate.provenance.fallbackReason ?? null } })
   await updateProductionDeliverable(input.ownerUserId, context.deliverable.id, { status: nextStatus === 'blocked' ? 'blocked' : 'needs_human_review', briefId: context.brief?.id, jobId: job.id })
   if (context.plan.id) await recalculateProductionPlanStatus(input.ownerUserId, context.plan.id)
-  return { draft, riskGate, job: { ...job, status: nextStatus }, parentDraftId: parentDraft.id, changeRequestReviewId: changeRequest.id }
+  return { draft: optimizedDraft, ownerRevisionInput, riskGate, optimizationResult, job: { ...job, status: nextStatus }, parentDraftId: parentDraft.id, changeRequestReviewId: changeRequest.id }
 }
 
 export async function exportProductionDraft(input: { ownerUserId: number, planId: number, deliverableId: number, format: 'markdown' | 'json' }) {
@@ -784,7 +823,9 @@ export async function exportProductionDraft(input: { ownerUserId: number, planId
   const [gate] = await database.select().from(seoGeoContentRiskGates).where(and(eq(seoGeoContentRiskGates.draftId, draft.id), eq(seoGeoContentRiskGates.evidenceSnapshotHash, context.evidenceSnapshot.hash))).orderBy(desc(seoGeoContentRiskGates.id)).limit(1)
   if (!gate || gate.status === 'blocked') throw createError({ statusCode: 422, statusMessage: 'Export requires a non-blocked risk gate for the selected draft.' })
   const safeStem = context.opportunity.title.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/giu, '-').replace(/^-+|-+$/gu, '').slice(0, 80) || `production-${input.deliverableId}`
-  const exportLedger = { exportId: stableFingerprint({ planId: input.planId, deliverableId: input.deliverableId, draftId: draft.id, format: input.format, contentHash: draft.contentHash }), format: input.format, draftId: draft.id, reviewId: review.id, contentHash: draft.contentHash, evidenceSnapshotHash: context.evidenceSnapshot.hash, exportedAt: new Date().toISOString(), mode: 'owner_local_export' as const }
+  const exportedAt = new Date().toISOString()
+  const exportLedgerEntry = { exportId: stableFingerprint({ planId: input.planId, deliverableId: input.deliverableId, draftId: draft.id, format: input.format, contentHash: draft.contentHash, exportedAt }), format: input.format, draftId: draft.id, reviewId: review.id, contentHash: draft.contentHash, evidenceSnapshotHash: context.evidenceSnapshot.hash, exportedAt, mode: 'owner_local_export' as const }
+  const exportLedger = appendExportLedger(jsonRecord(context.deliverable.provenance).exportLedger, exportLedgerEntry)
   const markdown = `# ${draft.title}\n\n${draft.body}\n\n---\n\nEvidence snapshot: ${context.evidenceSnapshot.hash}\nDraft content hash: ${draft.contentHash}\nGeneration provenance: ${JSON.stringify(jsonRecord(draft.provenance))}`
   const body = input.format === 'markdown' ? markdown : JSON.stringify({ title: draft.title, body: draft.body, contentHash: draft.contentHash, evidenceSnapshotHash: context.evidenceSnapshot.hash, provenance: jsonRecord(draft.provenance), riskGate: gate, review: { id: review.id, decision: review.decision, evidenceSnapshotHash: review.evidenceSnapshotHash }, exportLedger }, null, 2)
   await database.update(seoGeoProductionDeliverables).set({ status: 'exported', provenance: { ...jsonRecord(context.deliverable.provenance), exportLedger } }).where(and(eq(seoGeoProductionDeliverables.id, context.deliverable.id), eq(seoGeoProductionDeliverables.ownerUserId, input.ownerUserId), eq(seoGeoProductionDeliverables.planId, input.planId)))
