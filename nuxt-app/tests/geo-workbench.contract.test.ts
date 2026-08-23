@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AUTOGEO_UPSTREAM, createAutoGeoApiAdapter } from '../server/geo/autogeo-api'
+import { AUTOGEO_UPSTREAM, buildOfficialAutoGeoPrompt, createAutoGeoApiAdapter } from '../server/geo/autogeo-api'
+import { assertSafeHttpsOrigin } from '../server/audit/targetGuard'
 import { createAutoGeoBailianQwenAdapter, isAllowedBailianEndpoint } from '../server/geo/autogeo-bailian-qwen'
 import type { GeoRewriteAdapter } from '../server/geo/contracts'
 import { optimiseGeoDocument } from '../server/geo/optimise'
-import { AutoGeoUnsafeOutputError } from '../server/geo/output-safety'
+import { assertSourceBoundRewrite, AutoGeoUnsafeOutputError } from '../server/geo/output-safety'
 
 const input = { title: '網站可讀性改善', content: '這份說明介紹如何整理服務頁資訊，讓讀者理解服務內容與下一步。', language: 'zh-hant' as const }
 
@@ -19,6 +20,16 @@ describe('GEO Workbench V1 contract', () => {
     expect(result.candidate.optimizedContent).toContain(input.content)
     expect(result.candidate.appliedRuleIds).toContain('claim-safety')
     expect(result.interpretationLimit).toContain('不代表')
+  })
+
+  it('includes server-resolved approved evidence context in the provider prompt and safety source', () => {
+    const document = { ...input, approvedEvidenceContext: 'Approved evidence: 我們協助客戶提升流量。', approvedBriefGoals: ['回答受眾的核心問題'], approvedBriefConstraints: ['不得捏造成效'] }
+    expect(buildOfficialAutoGeoPrompt(document)).toContain('Approved evidence context')
+    expect(buildOfficialAutoGeoPrompt(document)).toContain(document.approvedEvidenceContext)
+    expect(buildOfficialAutoGeoPrompt(document)).toContain('回答受眾的核心問題')
+    expect(buildOfficialAutoGeoPrompt(document)).toContain('不得捏造成效')
+    expect(() => assertSourceBoundRewrite(document, document.title, '我們協助客戶提升流量。')).not.toThrow()
+    expect(() => assertSourceBoundRewrite(input, input.title, '我們協助客戶提升流量。')).toThrow(AutoGeoUnsafeOutputError)
   })
 
   it('only accepts documented HTTPS Model Studio compatible endpoint shapes', () => {
@@ -98,5 +109,11 @@ describe('GEO Workbench V1 contract', () => {
 
   it('rejects oversize input before an adapter runs', async () => {
     await expect(optimiseGeoDocument({ title: '標題', content: 'x'.repeat(12001), language: 'zh-hant' })).rejects.toMatchObject({ statusCode: 400 })
+    await expect(optimiseGeoDocument({ title: '標題', content: '足夠長的原文內容。'.repeat(30), language: 'zh-hant', approvedEvidenceContext: 'x'.repeat(16001) })).rejects.toMatchObject({ statusCode: 400 })
+  })
+
+  it('requires HTTPS for delivery target origins while retaining the general audit guard', () => {
+    expect(assertSafeHttpsOrigin('https://cms.example.com/path').normalizedUrl).toBe('https://cms.example.com/path')
+    expect(() => assertSafeHttpsOrigin('http://cms.example.com/path')).toThrow(/HTTPS/i)
   })
 })

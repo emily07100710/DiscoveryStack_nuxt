@@ -17,6 +17,11 @@ export type GeoDocumentInput = {
   title: string
   content: string
   language: GeoLanguage
+  /** Server-resolved evidence only; never accept this field directly from a client request. */
+  approvedEvidenceContext?: string
+  /** Server-resolved Brief instructions only; never accept these fields directly from a client request. */
+  approvedBriefGoals?: readonly string[]
+  approvedBriefConstraints?: readonly string[]
 }
 
 export type GeoRule = {

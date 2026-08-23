@@ -24,8 +24,8 @@ function buildEvidence(analysis: PublicSiteAnalysisResult, sourceId?: number): E
   }]
 }
 
-export function createDeterministicDiagnosis(analysis: PublicSiteAnalysisResult, sourceId?: number): DiagnosisResult {
-  const evidence = buildEvidence(analysis, sourceId)
+export function createDeterministicDiagnosis(analysis: PublicSiteAnalysisResult, sourceId?: number, approvedEvidence: EvidenceRef[] = []): DiagnosisResult {
+  const evidence = [...buildEvidence(analysis, sourceId), ...approvedEvidence]
   const findings: DiagnosisFinding[] = analysis.recommendationKeys.map(key => {
     const item = diagnosisCatalog[key] || {
       area: 'technical_seo' as const,

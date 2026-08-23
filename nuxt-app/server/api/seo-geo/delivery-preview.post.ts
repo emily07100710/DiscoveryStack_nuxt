@@ -3,7 +3,7 @@ import { getOwnerDatabaseUserId } from '../../audit/repository'
 import { prepareDeliveryPreview } from '../../seo-geo-core/repository'
 import { requireOwner } from '../../utils/auth'
 
-const inputSchema = z.object({ jobId: z.number().int().positive(), draftId: z.number().int().positive(), targetId: z.number().int().positive(), idempotencyKey: z.string().trim().min(12).max(180) })
+const inputSchema = z.object({ jobId: z.number().int().positive(), draftId: z.number().int().positive(), targetId: z.number().int().positive(), idempotencyKey: z.string().trim().min(12).max(128) })
 
 export default defineEventHandler(async event => {
   const owner = await requireOwner(event)

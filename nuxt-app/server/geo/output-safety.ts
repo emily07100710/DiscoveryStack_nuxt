@@ -31,7 +31,7 @@ function contains(pattern: RegExp, value: string): boolean { pattern.lastIndex =
 export function sourceBoundSafetyOverlay(): string { return SOURCE_BOUND_SAFETY_OVERLAY }
 
 export function assertSourceBoundRewrite(document: GeoDocumentInput, optimizedTitle: string, optimizedContent: string): void {
-  const source = `${document.title}\n${document.content}`
+  const source = `${document.title}\n${document.content}\n${document.approvedEvidenceContext || ''}`
   const rewrite = `${optimizedTitle}\n${optimizedContent}`
   const findings = UNSUPPORTED_COMMERCIAL_CLAIM_PATTERNS.filter(({ pattern }) => contains(pattern, rewrite) && !contains(pattern, source)).map(({ id }) => id)
   if (document.language === 'zh-hant' && contains(SIMPLIFIED_ONLY_CHARACTERS, rewrite) && !contains(SIMPLIFIED_ONLY_CHARACTERS, source)) findings.push('unsupported-service-credential')

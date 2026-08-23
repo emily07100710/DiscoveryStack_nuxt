@@ -46,14 +46,13 @@ export default defineNuxtConfig({
   nitro: {
     experimental: { tasks: true },
     scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'] },
-    prerender: {
-      // Nuxt always invokes the Nitro prerender runner after a production build.
-      // With an empty route set and crawlLinks disabled it returns immediately,
-      // so the deployed Node server is fully SSR rather than a static export.
-      crawlLinks: false,
-      ignore: [],
-      routes: shouldPrerenderPublicRoutes ? publicPrerenderRoutes : [],
-    },
+    ...(shouldPrerenderPublicRoutes ? {
+      prerender: {
+        crawlLinks: false,
+        ignore: [],
+        routes: publicPrerenderRoutes,
+      },
+    } : {}),
   },
   routeRules: {
     '/': { redirect: { to: '/en', statusCode: 302 } },

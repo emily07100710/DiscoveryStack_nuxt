@@ -18,3 +18,9 @@ export function assertSafeAuditTarget(rawTarget: string): SafeAuditTarget {
   parsed.hash = ''
   return { requestedUrl: rawTarget, normalizedUrl: parsed.toString(), hostname: parsed.hostname.toLowerCase() }
 }
+
+export function assertSafeHttpsOrigin(rawTarget: string): SafeAuditTarget {
+  const target = assertSafeAuditTarget(rawTarget)
+  if (!target.normalizedUrl.startsWith('https://')) throw new Error('Delivery targets must use a public HTTPS origin.')
+  return target
+}

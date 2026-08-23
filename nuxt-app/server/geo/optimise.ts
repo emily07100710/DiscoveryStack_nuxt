@@ -8,6 +8,13 @@ import { GEO_RULESET_VERSION, geoRules } from './rules'
 
 const MAX_TITLE_LENGTH = 180
 const MAX_CONTENT_LENGTH = 12000
+const MAX_APPROVED_EVIDENCE_CONTEXT_LENGTH = 16000
+const MAX_BRIEF_ITEM_LENGTH = 500
+const MAX_BRIEF_ITEMS = 20
+
+function cleanBriefItems(value: readonly string[] | undefined): string[] {
+  return Array.isArray(value) ? value.map(item => item.trim().slice(0, MAX_BRIEF_ITEM_LENGTH)).filter(Boolean).slice(0, MAX_BRIEF_ITEMS) : []
+}
 
 export function isUnsafeProviderRewrite(error: unknown): boolean {
   if (error instanceof AutoGeoUnsafeOutputError) return true
@@ -21,7 +28,11 @@ function cleanInput(input: GeoDocumentInput): GeoDocumentInput {
   if (!title || title.length > MAX_TITLE_LENGTH) throw createError({ statusCode: 400, message: '標題必須介於 1 至 180 個字元。' })
   if (!content || content.length > MAX_CONTENT_LENGTH) throw createError({ statusCode: 400, message: '原文必須介於 1 至 12,000 個字元。' })
   if (input.language !== 'en' && input.language !== 'zh-hant') throw createError({ statusCode: 400, message: '不支援的語言。' })
-  return { title, content, language: input.language }
+  const approvedEvidenceContext = input.approvedEvidenceContext?.trim()
+  if (approvedEvidenceContext && approvedEvidenceContext.length > MAX_APPROVED_EVIDENCE_CONTEXT_LENGTH) throw createError({ statusCode: 400, message: '已核准 evidence context 超過單次處理上限。' })
+  const approvedBriefGoals = cleanBriefItems(input.approvedBriefGoals)
+  const approvedBriefConstraints = cleanBriefItems(input.approvedBriefConstraints)
+  return { title, content, language: input.language, ...(approvedEvidenceContext ? { approvedEvidenceContext } : {}), ...(approvedBriefGoals.length ? { approvedBriefGoals } : {}), ...(approvedBriefConstraints.length ? { approvedBriefConstraints } : {}) }
 }
 
 function summaryOf(content: string) { return (content.split(/[。！？.!?]/u).map(part => part.trim()).find(Boolean) || content).slice(0, 280).trim() }

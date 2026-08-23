@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { createError } from 'h3'
-import { and, desc, eq, isNull, ne } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, ne, or } from 'drizzle-orm'
 import { requireAuditDatabase } from '../audit/repository'
 import {
   publicIntelligenceArtifacts,
@@ -22,6 +22,23 @@ export function stableFingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
+type EvidencePurpose = 'diagnosis' | 'recommendation' | 'content_draft'
+
+type EvidenceSnapshot = {
+  refs: EvidenceRef[]
+  context: string
+  hash: string
+}
+
+function evidenceKey(sourceId?: number, artifactId?: number) {
+  return `${sourceId || ''}:${artifactId || ''}`
+}
+
+function renderEvidenceValue(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  try { return JSON.stringify(value) } catch { return '' }
+}
+
 async function getOwnerSource(ownerUserId: number, sourceId: number) {
   const database = requireAuditDatabase()
   const [source] = await database.select().from(publicIntelligenceSources).where(and(
@@ -35,7 +52,86 @@ async function getOwnerSource(ownerUserId: number, sourceId: number) {
   return source
 }
 
-export async function createEvidenceApproval(input: { ownerUserId: number, sourceId: number, artifactId?: number, allowedFor: 'diagnosis' | 'recommendation' | 'content_draft', reviewNote: string }) {
+/** Resolve only active, owner-scoped approvals and return canonical immutable evidence metadata for downstream work. */
+export async function resolveApprovedEvidenceSnapshot(ownerUserId: number, requestedRefs: EvidenceRef[], allowedFor: EvidencePurpose | readonly EvidencePurpose[], options: { requireArtifact: boolean }): Promise<EvidenceSnapshot> {
+  const purposes = Array.isArray(allowedFor) ? allowedFor : [allowedFor]
+  if (!requestedRefs.length) throw createError({ statusCode: 422, statusMessage: '至少需要一項已核准 evidence reference。' })
+  const database = requireAuditDatabase()
+  const rows = await database.select({
+    approvalId: seoGeoEvidenceApprovals.id,
+    approvalPurpose: seoGeoEvidenceApprovals.allowedFor,
+    sourceId: seoGeoEvidenceApprovals.sourceId,
+    artifactId: seoGeoEvidenceApprovals.artifactId,
+    sourceName: publicIntelligenceSources.sourceName,
+    sourceUrl: publicIntelligenceSources.canonicalUrl,
+    fallbackSourceUrl: publicIntelligenceSources.sourceUrl,
+    artifactType: publicIntelligenceArtifacts.artifactType,
+    artifactText: publicIntelligenceArtifacts.artifactText,
+    artifactLocator: publicIntelligenceArtifacts.sourceLocator,
+    artifactHash: publicIntelligenceArtifacts.artifactHash,
+    fieldData: publicIntelligenceArtifacts.fieldData,
+  }).from(seoGeoEvidenceApprovals)
+    .innerJoin(publicIntelligenceSources, eq(seoGeoEvidenceApprovals.sourceId, publicIntelligenceSources.id))
+    .leftJoin(publicIntelligenceArtifacts, eq(seoGeoEvidenceApprovals.artifactId, publicIntelligenceArtifacts.id))
+    .where(and(
+      eq(seoGeoEvidenceApprovals.ownerUserId, ownerUserId),
+      eq(publicIntelligenceSources.ownerUserId, ownerUserId),
+      inArray(seoGeoEvidenceApprovals.allowedFor, purposes),
+      eq(seoGeoEvidenceApprovals.status, 'approved'),
+      isNull(seoGeoEvidenceApprovals.revokedAt),
+      eq(publicIntelligenceSources.reviewStatus, 'approved'),
+      ne(publicIntelligenceSources.allowedUse, 'blocked'),
+      isNull(publicIntelligenceSources.removedAt),
+      or(
+        isNull(seoGeoEvidenceApprovals.artifactId),
+        and(
+          eq(publicIntelligenceArtifacts.qualityStatus, 'passed'),
+          eq(publicIntelligenceArtifacts.piiStatus, 'none_detected'),
+          isNull(publicIntelligenceArtifacts.removedAt),
+        ),
+      ),
+    ))
+  const rowsByKey = new Map<string, typeof rows>()
+  for (const row of rows) {
+    const key = evidenceKey(row.sourceId, row.artifactId ?? undefined)
+    rowsByKey.set(key, [...(rowsByKey.get(key) || []), row])
+  }
+  const canonicalRefs: EvidenceRef[] = []
+  const contextBlocks: string[] = []
+  for (const requested of requestedRefs) {
+    if (!requested.sourceId) throw createError({ statusCode: 422, statusMessage: 'Evidence reference 必須指定 sourceId。' })
+    const matchingRows = rowsByKey.get(evidenceKey(requested.sourceId, requested.artifactId)) || []
+    const missingPurpose = purposes.find(purpose => !matchingRows.some(row => row.approvalPurpose === purpose))
+    const row = matchingRows[0]
+    if (!row || missingPurpose) throw createError({ statusCode: 422, statusMessage: `Evidence source/artifact 尚未取得 ${missingPurpose || purposes.join('/')} 用途的有效核准，或已撤銷。` })
+    if (options.requireArtifact && (!row.artifactId || !row.artifactHash || !row.artifactType)) throw createError({ statusCode: 422, statusMessage: 'Content generation 必須使用通過品質與 PII 檢查的 approved artifact snapshot。' })
+    if (requested.artifactHash && requested.artifactHash !== row.artifactHash) throw createError({ statusCode: 409, statusMessage: 'Evidence artifact hash 與目前核准 snapshot 不一致，請重新建立 Content Brief。' })
+    const locator = row.artifactLocator || row.sourceUrl || row.fallbackSourceUrl || undefined
+    const canonical: EvidenceRef = {
+      sourceId: row.sourceId,
+      artifactId: row.artifactId ?? undefined,
+      locator,
+      artifactHash: row.artifactHash ?? undefined,
+      reason: `Evidence approval #${row.approvalId} 已由 owner 明確核准用於 ${purposes.join('/')}`,
+    }
+    canonicalRefs.push(canonical)
+    const artifactPayload = row.artifactText?.trim() || renderEvidenceValue(row.fieldData)
+    contextBlocks.push([
+      `Evidence approval #${row.approvalId}`,
+      `Source: ${row.sourceName || row.sourceUrl || row.fallbackSourceUrl || `source-${row.sourceId}`}`,
+      `Locator: ${locator || 'not specified'}`,
+      `Artifact type: ${row.artifactType || 'source-level approval'}`,
+      `Artifact hash: ${row.artifactHash || 'source-level approval'}`,
+      artifactPayload ? `Reviewed representation:\n${artifactPayload.slice(0, 5000)}` : 'No artifact text is available; do not infer additional factual claims from this reference.',
+    ].join('\n'))
+  }
+  const refs = canonicalRefs.slice(0, 40)
+  const context = contextBlocks.join('\n\n').slice(0, 16000)
+  const snapshotIdentity = refs.map(({ sourceId, artifactId, locator, artifactHash }) => ({ sourceId, artifactId: artifactId ?? null, locator: locator || null, artifactHash: artifactHash || null }))
+  return { refs, context, hash: stableFingerprint(snapshotIdentity) }
+}
+
+export async function createEvidenceApproval(input: { ownerUserId: number, sourceId: number, artifactId?: number, allowedFor: EvidencePurpose, reviewNote: string }) {
   const database = requireAuditDatabase()
   const source = await getOwnerSource(input.ownerUserId, input.sourceId)
   let artifact: typeof publicIntelligenceArtifacts.$inferSelect | undefined
@@ -84,7 +180,7 @@ export async function createEvidenceApproval(input: { ownerUserId: number, sourc
   return approval
 }
 
-export async function listApprovedEvidence(ownerUserId: number, allowedFor: 'diagnosis' | 'recommendation' | 'content_draft'): Promise<EvidenceRef[]> {
+export async function listApprovedEvidence(ownerUserId: number, allowedFor: EvidencePurpose): Promise<EvidenceRef[]> {
   const database = requireAuditDatabase()
   const rows = await database.select({
     approvalId: seoGeoEvidenceApprovals.id,
@@ -99,8 +195,10 @@ export async function listApprovedEvidence(ownerUserId: number, allowedFor: 'dia
     .leftJoin(publicIntelligenceArtifacts, eq(seoGeoEvidenceApprovals.artifactId, publicIntelligenceArtifacts.id))
     .where(and(
       eq(seoGeoEvidenceApprovals.ownerUserId, ownerUserId),
+      eq(publicIntelligenceSources.ownerUserId, ownerUserId),
       eq(seoGeoEvidenceApprovals.allowedFor, allowedFor),
       eq(seoGeoEvidenceApprovals.status, 'approved'),
+      isNull(seoGeoEvidenceApprovals.revokedAt),
       eq(publicIntelligenceSources.reviewStatus, 'approved'),
       ne(publicIntelligenceSources.allowedUse, 'blocked'),
       isNull(publicIntelligenceSources.removedAt),
@@ -130,12 +228,11 @@ export async function saveDiagnosis(input: { ownerUserId: number, sourceId?: num
 
 export async function createContentBrief(input: { ownerUserId: number, diagnosisId?: number, brief: ContentBriefInput }) {
   const database = requireAuditDatabase()
-  if (!input.brief.evidenceRefs.length) throw createError({ statusCode: 422, statusMessage: 'Content Brief 至少需要一項已核准 evidence reference。' })
-  const approved = await listApprovedEvidence(input.ownerUserId, 'content_draft')
-  const approvedKeys = new Set(approved.map(evidence => `${evidence.sourceId || ''}:${evidence.artifactId || ''}`))
-  const missing = input.brief.evidenceRefs.some(evidence => !approvedKeys.has(`${evidence.sourceId || ''}:${evidence.artifactId || ''}`))
-  if (missing) throw createError({ statusCode: 422, statusMessage: 'Brief 的 evidence reference 尚未取得 content_draft 用途的明確核准。' })
-  const evidenceSnapshotHash = stableFingerprint(input.brief.evidenceRefs)
+  const evidenceSnapshot = await resolveApprovedEvidenceSnapshot(input.ownerUserId, input.brief.evidenceRefs, 'content_draft', { requireArtifact: true })
+  if (input.diagnosisId) {
+    const [diagnosis] = await database.select({ id: seoGeoDiagnoses.id }).from(seoGeoDiagnoses).where(and(eq(seoGeoDiagnoses.id, input.diagnosisId), eq(seoGeoDiagnoses.ownerUserId, input.ownerUserId))).limit(1)
+    if (!diagnosis) throw createError({ statusCode: 422, statusMessage: 'Diagnosis ID 必須屬於目前 owner。' })
+  }
   await database.insert(seoGeoContentBriefs).values({
     ownerUserId: input.ownerUserId,
     diagnosisId: input.diagnosisId ?? null,
@@ -145,11 +242,11 @@ export async function createContentBrief(input: { ownerUserId: number, diagnosis
     language: input.brief.language,
     goals: input.brief.goals,
     constraints: input.brief.constraints,
-    evidenceRefs: input.brief.evidenceRefs,
-    evidenceSnapshotHash,
+    evidenceRefs: evidenceSnapshot.refs,
+    evidenceSnapshotHash: evidenceSnapshot.hash,
     status: 'ready_for_generation',
   })
-  const [brief] = await database.select().from(seoGeoContentBriefs).where(and(eq(seoGeoContentBriefs.ownerUserId, input.ownerUserId), eq(seoGeoContentBriefs.evidenceSnapshotHash, evidenceSnapshotHash), eq(seoGeoContentBriefs.title, input.brief.title.trim()))).orderBy(desc(seoGeoContentBriefs.id)).limit(1)
+  const [brief] = await database.select().from(seoGeoContentBriefs).where(and(eq(seoGeoContentBriefs.ownerUserId, input.ownerUserId), eq(seoGeoContentBriefs.evidenceSnapshotHash, evidenceSnapshot.hash), eq(seoGeoContentBriefs.title, input.brief.title.trim()))).orderBy(desc(seoGeoContentBriefs.id)).limit(1)
   if (!brief) throw createError({ statusCode: 500, statusMessage: 'Content Brief could not be recorded.' })
   return brief
 }
@@ -161,12 +258,24 @@ export async function getOwnerContentBrief(ownerUserId: number, briefId: number)
   return brief
 }
 
+export async function getOwnerContentJob(ownerUserId: number, jobId: number) {
+  const database = requireAuditDatabase()
+  const [job] = await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.id, jobId), eq(seoGeoContentJobs.ownerUserId, ownerUserId))).limit(1)
+  if (!job) throw createError({ statusCode: 404, statusMessage: 'Content job was not found.' })
+  return job
+}
+
 export async function createContentJob(input: { ownerUserId: number, briefId: number, operation: 'autogeo_recommendation' | 'content_draft' | 'risk_scan' | 'delivery_preview' | 'delivery_publish', providerMode: 'reference_rules' | 'autogeo_bailian_qwen' | 'autogeo_api' | 'manual', idempotencyKey: string }) {
   const database = requireAuditDatabase()
   const [brief] = await database.select().from(seoGeoContentBriefs).where(and(eq(seoGeoContentBriefs.id, input.briefId), eq(seoGeoContentBriefs.ownerUserId, input.ownerUserId), eq(seoGeoContentBriefs.status, 'ready_for_generation'))).limit(1)
   if (!brief) throw createError({ statusCode: 422, statusMessage: 'Content Brief 必須為 owner-owned 且 ready_for_generation 才可建立工作。' })
   const requestFingerprint = stableFingerprint({ briefId: input.briefId, operation: input.operation, providerMode: input.providerMode, idempotencyKey: input.idempotencyKey })
-  await database.insert(seoGeoContentJobs).values({ ownerUserId: input.ownerUserId, briefId: brief.id, requestFingerprint, operation: input.operation, providerMode: input.providerMode, status: 'queued', idempotencyKey: input.idempotencyKey, evidenceSnapshotHash: brief.evidenceSnapshotHash }).onDuplicateKeyUpdate({ set: { requestFingerprint } })
+  const [existing] = await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.ownerUserId, input.ownerUserId), eq(seoGeoContentJobs.idempotencyKey, input.idempotencyKey))).limit(1)
+  if (existing) {
+    if (existing.requestFingerprint !== requestFingerprint || existing.briefId !== brief.id) throw createError({ statusCode: 409, statusMessage: 'Idempotency key is already associated with a different content job request.' })
+    return existing
+  }
+  await database.insert(seoGeoContentJobs).values({ ownerUserId: input.ownerUserId, briefId: brief.id, requestFingerprint, operation: input.operation, providerMode: input.providerMode, status: 'queued', idempotencyKey: input.idempotencyKey, evidenceSnapshotHash: brief.evidenceSnapshotHash })
   const [job] = await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.ownerUserId, input.ownerUserId), eq(seoGeoContentJobs.idempotencyKey, input.idempotencyKey))).limit(1)
   if (!job) throw createError({ statusCode: 500, statusMessage: 'Content job could not be recorded.' })
   return job
@@ -203,28 +312,41 @@ export async function createContentReview(input: { ownerUserId: number, jobId: n
   const [draft] = await database.select({ id: seoGeoContentDrafts.id, safetyStatus: seoGeoContentDrafts.safetyStatus }).from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, input.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1)
   if (!draft) throw createError({ statusCode: 404, statusMessage: 'Draft was not found for this job.' })
   if (draft.safetyStatus === 'blocked' && input.decision.startsWith('approved')) throw createError({ statusCode: 422, statusMessage: 'Blocked draft cannot be approved for preview or delivery.' })
-  await database.insert(seoGeoContentReviews).values({ jobId: job.id, draftId: draft.id, reviewerUserId: input.ownerUserId, decision: input.decision, reviewNote: input.reviewNote?.trim() || null, evidenceSnapshotHash: job.evidenceSnapshotHash })
+  if (input.decision.startsWith('approved') && !['candidate_ready', 'needs_human_review'].includes(job.status)) throw createError({ statusCode: 409, statusMessage: 'Only a candidate awaiting human review can be approved.' })
   const next: ContentJobStatus = input.decision.startsWith('approved') ? 'approved' : input.decision === 'changes_requested' ? 'needs_human_review' : 'blocked'
-  await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: next })
-  return { jobId: job.id, nextStatus: next }
+  if (!canTransitionContentJob(job.status, next) && job.status !== next) throw createError({ statusCode: 409, statusMessage: `Invalid content job transition: ${job.status} -> ${next}` })
+  const review = await database.transaction(async tx => {
+    const [reviewId] = await tx.insert(seoGeoContentReviews).values({ jobId: job.id, draftId: draft.id, reviewerUserId: input.ownerUserId, decision: input.decision, reviewNote: input.reviewNote?.trim() || null, evidenceSnapshotHash: job.evidenceSnapshotHash }).$returningId()
+    await tx.update(seoGeoContentJobs).set({ status: next, completedAt: ['candidate_ready', 'needs_human_review', 'approved', 'blocked', 'failed', 'delivered'].includes(next) ? new Date() : null }).where(eq(seoGeoContentJobs.id, job.id))
+    return reviewId
+  })
+  return { jobId: job.id, reviewId: review?.id, nextStatus: next }
 }
 
 export async function prepareDeliveryPreview(input: { ownerUserId: number, jobId: number, draftId: number, targetId: number, idempotencyKey: string }) {
   const database = requireAuditDatabase()
-  const [target] = await database.select().from(seoGeoDeliveryTargets).where(and(eq(seoGeoDeliveryTargets.id, input.targetId), eq(seoGeoDeliveryTargets.ownerUserId, input.ownerUserId))).limit(1)
-  if (!target) throw createError({ statusCode: 404, statusMessage: 'Delivery target was not found.' })
+  const [target] = await database.select().from(seoGeoDeliveryTargets).where(and(eq(seoGeoDeliveryTargets.id, input.targetId), eq(seoGeoDeliveryTargets.ownerUserId, input.ownerUserId), eq(seoGeoDeliveryTargets.status, 'disabled'), eq(seoGeoDeliveryTargets.allowPublish, false))).limit(1)
+  if (!target) throw createError({ statusCode: 404, statusMessage: 'Delivery target was not found or is not disabled.' })
   const [job] = await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.id, input.jobId), eq(seoGeoContentJobs.ownerUserId, input.ownerUserId), eq(seoGeoContentJobs.status, 'approved'))).limit(1)
   if (!job) throw createError({ statusCode: 422, statusMessage: 'Preview requires an owner-approved content job.' })
-  const [draft] = await database.select().from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, input.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1)
+  const [draft] = await database.select({ id: seoGeoContentDrafts.id, safetyStatus: seoGeoContentDrafts.safetyStatus, contentHash: seoGeoContentDrafts.contentHash }).from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, input.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1)
   if (!draft || draft.safetyStatus === 'blocked') throw createError({ statusCode: 422, statusMessage: 'A non-blocked draft is required for preview.' })
-  const [review] = await database.select({ id: seoGeoContentReviews.id }).from(seoGeoContentReviews).where(and(
+  const [review] = await database.select({ id: seoGeoContentReviews.id, decision: seoGeoContentReviews.decision, evidenceSnapshotHash: seoGeoContentReviews.evidenceSnapshotHash }).from(seoGeoContentReviews).where(and(
     eq(seoGeoContentReviews.jobId, job.id),
     eq(seoGeoContentReviews.draftId, draft.id),
     eq(seoGeoContentReviews.reviewerUserId, input.ownerUserId),
+    eq(seoGeoContentReviews.evidenceSnapshotHash, job.evidenceSnapshotHash),
+    or(eq(seoGeoContentReviews.decision, 'approved_for_preview'), eq(seoGeoContentReviews.decision, 'approved_for_delivery')),
   )).orderBy(desc(seoGeoContentReviews.id)).limit(1)
-  if (!review) throw createError({ statusCode: 422, statusMessage: 'Preview requires an explicit owner review for this draft.' })
+  if (!review) throw createError({ statusCode: 422, statusMessage: 'Preview requires an explicit approved owner review for this draft.' })
   const summary = { adapter: target.adapter, targetOrigin: target.targetOrigin, canPublish: false, requiredNextStep: 'explicit_owner_approval_and_server_side_adapter_configuration', contentHash: draft.contentHash }
-  await database.insert(seoGeoDeliveryAttempts).values({ jobId: input.jobId, draftId: draft.id, targetId: target.id, approvalReviewId: null, idempotencyKey: input.idempotencyKey, mode: 'preview', status: 'prepared', deliverySummary: summary }).onDuplicateKeyUpdate({ set: { deliverySummary: summary, status: 'prepared' } })
+  const [existingAttempt] = await database.select({ id: seoGeoDeliveryAttempts.id, jobId: seoGeoDeliveryAttempts.jobId, draftId: seoGeoDeliveryAttempts.draftId, mode: seoGeoDeliveryAttempts.mode }).from(seoGeoDeliveryAttempts).where(and(eq(seoGeoDeliveryAttempts.targetId, target.id), eq(seoGeoDeliveryAttempts.idempotencyKey, input.idempotencyKey))).limit(1)
+  if (existingAttempt && (existingAttempt.jobId !== input.jobId || existingAttempt.draftId !== draft.id || existingAttempt.mode !== 'preview')) throw createError({ statusCode: 409, statusMessage: 'Delivery preview idempotency key is already associated with a different preview.' })
+  if (existingAttempt) {
+    await database.update(seoGeoDeliveryAttempts).set({ approvalReviewId: review.id, deliverySummary: summary, status: 'prepared' }).where(eq(seoGeoDeliveryAttempts.id, existingAttempt.id))
+  } else {
+    await database.insert(seoGeoDeliveryAttempts).values({ jobId: input.jobId, draftId: draft.id, targetId: target.id, approvalReviewId: review.id, idempotencyKey: input.idempotencyKey, mode: 'preview', status: 'prepared', deliverySummary: summary })
+  }
   return summary
 }
 

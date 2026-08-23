@@ -19,11 +19,14 @@ const analysis: PublicSiteAnalysisResult = {
 
 describe('SEO/GEO Core V1 contract', () => {
   it('creates a homepage-scoped deterministic diagnosis with provenance and no ranking claim', () => {
-    const result = createDeterministicDiagnosis(analysis, 81)
+    const result = createDeterministicDiagnosis(analysis, 81, [{ sourceId: 81, artifactId: 901, locator: 'https://example.com/evidence', artifactHash: 'approved-artifact-hash', reason: 'approved for diagnosis' }])
     expect(result.engine).toBe('deterministic-diagnosis-v1')
     expect(result.status).toBe('needs_human_review')
     expect(result.findings).toHaveLength(2)
-    expect(result.findings[0]?.evidence[0]).toMatchObject({ sourceId: 81, locator: 'https://example.com/', artifactHash: 'fixture-snapshot-hash' })
+    expect(result.findings[0]?.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceId: 81, locator: 'https://example.com/', artifactHash: 'fixture-snapshot-hash' }),
+      expect.objectContaining({ sourceId: 81, artifactId: 901, artifactHash: 'approved-artifact-hash', reason: 'approved for diagnosis' }),
+    ]))
     expect(result.limitations.join(' ')).toContain('不代表完整網站診斷')
     expect(result.limitations.join(' ')).toContain('排名、曝光、流量、轉換、營收或 ROI')
   })
