@@ -78,6 +78,13 @@
       "when": 1787334898576,
       "tag": "0010_exotic_paper_doll",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1787511116725,
+      "tag": "0011_thankful_dark_phoenix",
+      "breakpoints": true
     }
   ]
 }

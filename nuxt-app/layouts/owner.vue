@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const route = useRoute()
-const activeSection = computed(() => route.path === '/audit-lab/geo' ? 'geo' : 'audit')
+const activeSection = computed(() => route.path === '/audit-lab/geo' ? 'geo' : route.path === '/audit-lab/seo-geo' ? 'core' : 'audit')
 useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
 </script>
 
@@ -11,6 +11,7 @@ useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
       <nav class="owner-layout__nav" aria-label="私有工作台導覽">
         <NuxtLink to="/audit-lab" :aria-current="activeSection === 'audit' ? 'page' : undefined">Audit Lab</NuxtLink>
         <NuxtLink to="/audit-lab/geo" :aria-current="activeSection === 'geo' ? 'page' : undefined">GEO Workbench</NuxtLink>
+        <NuxtLink to="/audit-lab/seo-geo" :aria-current="activeSection === 'core' ? 'page' : undefined">SEO / GEO Core</NuxtLink>
       </nav>
       <NuxtLink class="owner-layout__exit" to="/zh-hant">返回公開網站 <span aria-hidden="true">↗</span></NuxtLink>
     </header>

@@ -456,6 +456,169 @@ export const publicIntelligenceInferences = mysqlTable('publicIntelligenceInfere
   index('public_intelligence_inference_job_idx').on(table.ingestionJobId),
 ])
 
+/** Owner-scoped diagnosis ledger. Results are explainable baselines or explicitly not-ready model paths, never ranking or conversion measurements. */
+export const seoGeoDiagnoses = mysqlTable('seoGeoDiagnoses', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  sourceId: int('sourceId').references(() => publicIntelligenceSources.id),
+  auditRunId: int('auditRunId').references(() => auditRuns.id),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  diagnosisKind: mysqlEnum('diagnosisKind', ['deterministic_baseline', 'approved_model']).notNull(),
+  status: mysqlEnum('status', ['completed', 'not_ready', 'needs_human_review', 'blocked', 'failed']).notNull(),
+  modelReference: json('modelReference'),
+  evidenceRefs: json('evidenceRefs').notNull(),
+  result: json('result').notNull(),
+  limitations: json('limitations').notNull(),
+  requiresHumanReview: boolean('requiresHumanReview').default(true).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  index('seo_geo_diagnoses_owner_idx').on(table.ownerUserId, table.createdAt),
+  index('seo_geo_diagnoses_source_idx').on(table.sourceId, table.inputFingerprint),
+])
+
+/** Explicit content-use approval for a reviewed source/artifact. Existing research or training permission is never silently treated as publishing permission. */
+export const seoGeoEvidenceApprovals = mysqlTable('seoGeoEvidenceApprovals', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  sourceId: int('sourceId').notNull().references(() => publicIntelligenceSources.id),
+  artifactId: int('artifactId').references(() => publicIntelligenceArtifacts.id),
+  allowedFor: mysqlEnum('allowedFor', ['diagnosis', 'recommendation', 'content_draft']).notNull(),
+  status: mysqlEnum('status', ['approved', 'restricted', 'revoked']).default('restricted').notNull(),
+  policySnapshot: json('policySnapshot').notNull(),
+  reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
+  reviewNote: text('reviewNote'),
+  approvedAt: timestamp('approvedAt'),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('seo_geo_evidence_approval_unique').on(table.ownerUserId, table.sourceId, table.artifactId, table.allowedFor),
+  index('seo_geo_evidence_approval_owner_idx').on(table.ownerUserId, table.status, table.allowedFor),
+])
+
+/** A reviewable creative brief whose claims may only draw on its immutable evidence snapshot. */
+export const seoGeoContentBriefs = mysqlTable('seoGeoContentBriefs', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  diagnosisId: int('diagnosisId').references(() => seoGeoDiagnoses.id),
+  title: varchar('title', { length: 300 }).notNull(),
+  audience: varchar('audience', { length: 300 }).notNull(),
+  contentType: mysqlEnum('contentType', ['article', 'service_page', 'faq', 'landing_page', 'brief']).notNull(),
+  language: mysqlEnum('language', ['en', 'zh-hant']).notNull(),
+  goals: json('goals').notNull(),
+  constraints: json('constraints').notNull(),
+  evidenceRefs: json('evidenceRefs').notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['draft', 'ready_for_generation', 'approved', 'superseded', 'archived']).default('draft').notNull(),
+  reviewerUserId: int('reviewerUserId').references(() => users.id),
+  reviewNote: text('reviewNote'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  index('seo_geo_content_briefs_owner_idx').on(table.ownerUserId, table.status, table.createdAt),
+  index('seo_geo_content_briefs_diagnosis_idx').on(table.diagnosisId),
+])
+
+/** Persisted, owner-triggered content operation. Autoscale runtime may process one request, but it never claims a durable worker exists. */
+export const seoGeoContentJobs = mysqlTable('seoGeoContentJobs', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  briefId: int('briefId').notNull().references(() => seoGeoContentBriefs.id),
+  requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  operation: mysqlEnum('operation', ['autogeo_recommendation', 'content_draft', 'risk_scan', 'delivery_preview', 'delivery_publish']).notNull(),
+  providerMode: mysqlEnum('providerMode', ['reference_rules', 'autogeo_bailian_qwen', 'autogeo_api', 'manual']).notNull(),
+  status: mysqlEnum('status', ['queued', 'processing', 'candidate_ready', 'needs_human_review', 'approved', 'blocked', 'failed', 'delivered']).default('queued').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  providerProvenance: json('providerProvenance'),
+  errorCode: varchar('errorCode', { length: 120 }),
+  errorSummary: text('errorSummary'),
+  requestedAt: timestamp('requestedAt').defaultNow().notNull(),
+  startedAt: timestamp('startedAt'),
+  completedAt: timestamp('completedAt'),
+}, table => [
+  uniqueIndex('seo_geo_content_jobs_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('seo_geo_content_jobs_brief_idx').on(table.briefId, table.status, table.requestedAt),
+])
+
+/** Versioned candidate content. A draft is never automatically published and always retains the provider and evidence snapshot. */
+export const seoGeoContentDrafts = mysqlTable('seoGeoContentDrafts', {
+  id: int('id').autoincrement().primaryKey(),
+  jobId: int('jobId').notNull().references(() => seoGeoContentJobs.id),
+  version: int('version').notNull(),
+  title: varchar('title', { length: 500 }).notNull(),
+  body: text('body').notNull(),
+  contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  sourceMode: mysqlEnum('sourceMode', ['provider_candidate', 'reference_fallback', 'manual']).notNull(),
+  provenance: json('provenance').notNull(),
+  evidenceRefs: json('evidenceRefs').notNull(),
+  safetyStatus: mysqlEnum('safetyStatus', ['passed', 'needs_review', 'blocked']).notNull(),
+  safetyNotes: json('safetyNotes').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('seo_geo_content_drafts_version_unique').on(table.jobId, table.version),
+  index('seo_geo_content_drafts_job_idx').on(table.jobId, table.createdAt),
+])
+
+/** A discrete quality/safety gate. Blocking findings prohibit delivery regardless of a prior review. */
+export const seoGeoContentRiskGates = mysqlTable('seoGeoContentRiskGates', {
+  id: int('id').autoincrement().primaryKey(),
+  draftId: int('draftId').notNull().references(() => seoGeoContentDrafts.id),
+  gateVersion: varchar('gateVersion', { length: 80 }).notNull(),
+  status: mysqlEnum('status', ['passed', 'needs_human_review', 'blocked']).notNull(),
+  findings: json('findings').notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [index('seo_geo_content_risk_gates_draft_idx').on(table.draftId, table.createdAt)])
+
+/** Append-only human decisions. Only an explicit approved_for_delivery decision can unlock a delivery request. */
+export const seoGeoContentReviews = mysqlTable('seoGeoContentReviews', {
+  id: int('id').autoincrement().primaryKey(),
+  jobId: int('jobId').notNull().references(() => seoGeoContentJobs.id),
+  draftId: int('draftId').notNull().references(() => seoGeoContentDrafts.id),
+  reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
+  decision: mysqlEnum('decision', ['approved_for_preview', 'approved_for_delivery', 'changes_requested', 'rejected']).notNull(),
+  reviewNote: text('reviewNote'),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [index('seo_geo_content_reviews_job_idx').on(table.jobId, table.createdAt)])
+
+/** Allowed destination registry deliberately excludes credentials. A deployment adapter remains disabled unless separately configured server-side. */
+export const seoGeoDeliveryTargets = mysqlTable('seoGeoDeliveryTargets', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  displayName: varchar('displayName', { length: 160 }).notNull(),
+  adapter: mysqlEnum('adapter', ['manual_export', 'wordpress_rest', 'generic_http']).notNull(),
+  targetOrigin: varchar('targetOrigin', { length: 2048 }).notNull(),
+  status: mysqlEnum('status', ['disabled', 'review_required', 'enabled']).default('disabled').notNull(),
+  allowPublish: boolean('allowPublish').default(false).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('seo_geo_delivery_target_owner_origin_unique').on(table.ownerUserId, table.targetOrigin),
+  index('seo_geo_delivery_targets_owner_idx').on(table.ownerUserId, table.status),
+])
+
+/** Delivery ledger. V1 records previews and explicit delivery requests; adapters fail closed without separately configured server-only credentials. */
+export const seoGeoDeliveryAttempts = mysqlTable('seoGeoDeliveryAttempts', {
+  id: int('id').autoincrement().primaryKey(),
+  jobId: int('jobId').notNull().references(() => seoGeoContentJobs.id),
+  draftId: int('draftId').notNull().references(() => seoGeoContentDrafts.id),
+  targetId: int('targetId').notNull().references(() => seoGeoDeliveryTargets.id),
+  approvalReviewId: int('approvalReviewId').references(() => seoGeoContentReviews.id),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  mode: mysqlEnum('mode', ['preview', 'publish']).notNull(),
+  status: mysqlEnum('status', ['prepared', 'blocked', 'delivered', 'failed']).notNull(),
+  deliverySummary: json('deliverySummary').notNull(),
+  externalReference: varchar('externalReference', { length: 500 }),
+  errorCode: varchar('errorCode', { length: 120 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  completedAt: timestamp('completedAt'),
+}, table => [
+  uniqueIndex('seo_geo_delivery_attempt_idempotency_unique').on(table.targetId, table.idempotencyKey),
+  index('seo_geo_delivery_attempts_job_idx').on(table.jobId, table.createdAt),
+])
+
 export type User = typeof users.$inferSelect
 export type ProviderCredentials = typeof providerCredentials.$inferSelect
 export type Lead = typeof leads.$inferSelect
@@ -473,3 +636,12 @@ export type ModelImprovementCandidate = typeof modelImprovementCandidates.$infer
 export type PublicIntelligenceDatasetBuild = typeof publicIntelligenceDatasetBuilds.$inferSelect
 export type PublicIntelligenceIngestionJob = typeof publicIntelligenceIngestionJobs.$inferSelect
 export type PublicIntelligenceInference = typeof publicIntelligenceInferences.$inferSelect
+export type SeoGeoDiagnosis = typeof seoGeoDiagnoses.$inferSelect
+export type SeoGeoEvidenceApproval = typeof seoGeoEvidenceApprovals.$inferSelect
+export type SeoGeoContentBrief = typeof seoGeoContentBriefs.$inferSelect
+export type SeoGeoContentJob = typeof seoGeoContentJobs.$inferSelect
+export type SeoGeoContentDraft = typeof seoGeoContentDrafts.$inferSelect
+export type SeoGeoContentRiskGate = typeof seoGeoContentRiskGates.$inferSelect
+export type SeoGeoContentReview = typeof seoGeoContentReviews.$inferSelect
+export type SeoGeoDeliveryTarget = typeof seoGeoDeliveryTargets.$inferSelect
+export type SeoGeoDeliveryAttempt = typeof seoGeoDeliveryAttempts.$inferSelect

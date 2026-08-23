@@ -158,6 +158,30 @@ const modelTaskHeadsOpen = ref(false)
 
 const modelTerms = ['ENTITY MAP', 'CITATION READINESS', 'MULTI-TASK LEARNING', 'MACRO-F1', 'DATASET LINEAGE', 'HUMAN-IN-THE-LOOP']
 
+const seoGeoCoreLayers = computed(() => isZh.value
+  ? [
+      { number: '01', label: 'DIAGNOSIS', title: '先找出可驗證的問題。', body: '以公開網站結構訊號、已核准 evidence 與可用的受治理模型訊號建立診斷。模型尚未達 production gate 時，系統會明確標示 not ready，而不是假裝成模型預測。', output: '可追溯診斷與限制說明' },
+      { number: '02', label: 'AUTOGEO', title: '再提出來源受限的內容改法。', body: '原文、已核准證據與內容限制一起進入改寫流程。候選稿若加入來源未支持的案例、排名、流量、轉換、營收或 ROI 主張，會被阻擋或退回安全 fallback。', output: '候選改寫、結構比較與證據快照' },
+      { number: '03', label: 'GEOFLOW CORE', title: '把核准的改法變成可審核的工作。', body: 'Content Brief、草稿、風險 gate、人工 review、preview 與 delivery ledger 都有版本與狀態。V1 不會自行發布到 CMS、WordPress 或 HTTP target。', output: '可審核工作流與零外部寫入 preview' },
+    ]
+  : [
+      { number: '01', label: 'DIAGNOSIS', title: 'Start with an inspectable problem.', body: 'Public-site structure signals, approved evidence and only production-eligible governed model signals create the diagnosis. If the model has not passed its gate, the system says not ready rather than presenting a model prediction.', output: 'Traceable diagnosis with stated limits' },
+      { number: '02', label: 'AUTOGEO', title: 'Recommend a change bounded by evidence.', body: 'Source text, approved evidence and content constraints enter the rewrite flow together. A candidate that adds unsupported case studies, rankings, traffic, conversion, revenue or ROI claims is blocked or returned as a safe fallback.', output: 'Candidate rewrite, structural comparison and evidence snapshot' },
+      { number: '03', label: 'GEOFLOW CORE', title: 'Turn approved changes into reviewable work.', body: 'Content briefs, drafts, risk gates, human reviews, previews and delivery ledgers retain state and version history. V1 does not autonomously publish to a CMS, WordPress or HTTP target.', output: 'Reviewable workflow and zero-write preview' },
+    ])
+
+const seoGeoCoreFaqs = computed(() => isZh.value
+  ? [
+      { question: '這會保證 Google、ChatGPT 或其他 AI 平台的排名嗎？', answer: '不會。結構比較與診斷是可重現的內容與網站訊號，不是外部平台的排名、曝光、流量、轉換或營收保證。任何真實 measurement 都要在取得同意、建立基線與人工判讀後另外記錄。' },
+      { question: '系統會自動發布或覆寫我的網站內容嗎？', answer: '不會。候選稿必須通過 evidence 與 risk gate，再由人員明確 review。V1 僅提供 preview 與 delivery ledger，不會對 CMS、WordPress 或 HTTP target 發出寫入。' },
+      { question: '哪些資料可以用來支撐內容建議？', answer: '只有在獨立 evidence approval ledger 中明確核准的來源才可進入 brief 與候選稿。研究、訓練或抓取資格不等於內容生產與發布授權。' },
+    ]
+  : [
+      { question: 'Does this guarantee rankings in Google, ChatGPT or other AI platforms?', answer: 'No. Structural comparisons and diagnoses are repeatable content and site signals, not guarantees of third-party ranking, visibility, traffic, conversion or revenue. Real measurements must be recorded separately after consent, a baseline and human interpretation.' },
+      { question: 'Will the system automatically publish or overwrite website content?', answer: 'No. Candidates must pass evidence and risk gates, then receive explicit human review. V1 offers previews and a delivery ledger only; it makes no write request to a CMS, WordPress or HTTP target.' },
+      { question: 'What data may support a recommendation?', answer: 'Only sources explicitly approved in the separate evidence-approval ledger may enter a brief or candidate. Research, training or crawling eligibility is not permission for content production or publication.' },
+    ])
+
 const demandQuestions = computed(() => isZh.value
   ? ['台灣 SEO／GEO 公司怎麼選？', '誰能把網站、系統與行銷一起做好？', '我的品牌為什麼沒有出現在 AI 回答？', '有流量卻沒有詢問，問題在哪裡？', '如何把客服與公司知識接進 AI？']
   : ['How do I choose an SEO/GEO agency?', 'Who can connect web, systems and marketing?', 'Why is my brand absent from AI answers?', 'We have traffic but no enquiries—why?', 'How do we connect company knowledge to AI?'])
@@ -547,6 +571,42 @@ const submitForm = async () => {
           <div v-for="repeat in 2" :key="repeat">
             <span v-for="term in modelTerms" :key="`${repeat}-${term}`">{{ term }}</span>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 三層 SEO／GEO 核心 ============ -->
+    <section id="seo-geo-core" class="section visibility-system">
+      <div class="shell">
+        <div class="section-head reveal">
+          <p class="eyebrow">SEO / GEO CORE · EVIDENCE BEFORE OUTPUT</p>
+          <h2>{{ isZh ? '不是一鍵產文；是三層可追溯的內容決策流程。' : 'Not one-click content. A traceable three-layer decision flow.' }}</h2>
+          <p>{{ isZh ? 'Diagnosis 找出問題，AutoGEO 提出受證據約束的改法，GEOFlow Core 把已核准的內容變成可人工審核的工作。' : 'Diagnosis finds the problem, AutoGEO recommends an evidence-bound change, and GEOFlow Core turns approved content into human-reviewable work.' }}</p>
+        </div>
+
+        <div class="visibility-grid">
+          <article v-for="layer in seoGeoCoreLayers" :key="layer.number" class="visibility-step is-active">
+            <p><span>{{ layer.number }}</span>{{ layer.label }}</p>
+            <h3>{{ layer.title }}</h3>
+            <p>{{ layer.body }}</p>
+            <small>{{ layer.output }}</small>
+          </article>
+        </div>
+
+        <div class="pricing-safety-net">
+          <div>
+            <p class="eyebrow">OWNER-ONLY WORKBENCH</p>
+            <h3>{{ isZh ? '先驗證內容與流程，再決定是否發布。' : 'Validate the content and process before deciding whether to publish.' }}</h3>
+          </div>
+          <p>{{ isZh ? '目前工作台僅供 owner 使用，保留 evidence、版本、風險 gate、人工 review 與 preview 記錄。對外發布必須是未來另行配置、明確核准與可稽核的動作。' : 'The current workbench is owner-only and retains evidence, versions, risk-gate, human-review and preview records. External publication remains a separately configured, explicitly approved and auditable future action.' }}</p>
+          <NuxtLink to="/audit-lab/seo-geo">{{ isZh ? '查看 owner 工作台' : 'Open the owner workbench' }} <span aria-hidden="true">→</span></NuxtLink>
+        </div>
+
+        <div class="faq-grid" style="margin-top: 2.5rem;">
+          <details v-for="faq in seoGeoCoreFaqs" :key="faq.question">
+            <summary>{{ faq.question }}</summary>
+            <p>{{ faq.answer }}</p>
+          </details>
         </div>
       </div>
     </section>
