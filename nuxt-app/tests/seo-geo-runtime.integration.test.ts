@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GeoRewriteAdapter } from '../server/geo/contracts'
 import { geoRules } from '../server/geo/rules'
 
@@ -35,6 +35,8 @@ vi.mock('../server/seo-geo-core/repository', () => ({
 import { runOwnerProductionPlan } from '../server/seo-geo-core/service'
 
 describe('governed three-layer production runtime', () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals() })
+
   beforeEach(() => {
     state.plan.status = 'ready'
     state.deliverable.status = 'planned'
@@ -42,6 +44,21 @@ describe('governed three-layer production runtime', () => {
     state.transitions.length = 0
     state.appliedRuleIds.length = 0
     state.job.status = 'queued'
+    state.job.providerMode = 'reference_rules'
+  })
+
+  it('uses an explicitly configured content provider through the server resolver, with mocked provider calls only', async () => {
+    vi.stubEnv('NUXT_CONTENT_DRAFT_PROVIDER', 'autogeo_api')
+    vi.stubEnv('NUXT_AUTOGEO_GEMINI_API_KEY', 'configured-in-test')
+    const fetchMock = vi.fn(async () => ({ ok: true, async json() { return { candidates: [{ content: { parts: [{ text: '可核對的內容來源與方法說明。' }] } }] } } }))
+    vi.stubGlobal('fetch', fetchMock)
+    state.job.providerMode = 'autogeo_api'
+    const result = await runOwnerProductionPlan({ ownerUserId: 11, planId: 7 })
+    expect(result.generated[0]).toMatchObject({ deliverableId: 8, status: 'needs_human_review' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(state.drafts[0].provenance.actualProviderMode).toBe('autogeo_api')
+    expect(state.drafts[0].provenance.runtimeProvider).toMatchObject({ baseDraftRole: 'content-draft-provider', optimizerRole: 'selected-rule-autogeo-optimizer' })
+    expect(state.drafts[1].provenance.runtimeProvider).toMatchObject({ baseDraftRole: 'content-draft-provider', optimizerRole: 'selected-rule-autogeo-optimizer' })
   })
 
   it('runs the mocked happy path through base draft, selected-rule optimization, risk gate, and human review state', async () => {

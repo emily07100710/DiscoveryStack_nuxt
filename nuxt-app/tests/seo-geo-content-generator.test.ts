@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createDeterministicScaffoldGenerator } from '../server/seo-geo-core/contentGenerator'
+import { createDeterministicScaffoldGenerator, createGeoRewriteContentDraftProvider, createProviderContentDraftGenerator } from '../server/seo-geo-core/contentGenerator'
+import type { GeoRewriteAdapter } from '../server/geo/contracts'
 import type { ContentDraftGenerationInput } from '../server/seo-geo-core/contracts'
 
 const base = (contentType: ContentDraftGenerationInput['contentType']): ContentDraftGenerationInput => ({
@@ -26,6 +27,15 @@ describe('deterministic evidence-bound base draft generator', () => {
     expect(result.body).toContain(firstHeading)
     expect(result.body).toContain(secondHeading)
     expect(result.provenance.contentType).toBe(contentType)
+  })
+
+  it('keeps the base provider role separate from selected-rule optimization', async () => {
+    const adapter: GeoRewriteAdapter = { id: 'autogeo-api', version: 'provider-v1', async rewrite(document, rules) { expect(rules).toHaveLength(0); return { provider: 'autogeo-api', providerVersion: 'provider-v1', optimizedTitle: document.title, optimizedContent: `# ${document.title}\n\n${document.content}\n\n## Provider base section\n完整 provider base draft`, appliedRuleIds: [], safetyNotes: [], provenance: { requestedProvider: 'autogeo-api', execution: 'reference-fallback', upstreamRepository: 'cxcscmu/AutoGEO', upstreamRevision: 'test', rewriteMethod: 'autogeo_api', ruleset: 'Researchy-GEO / Gemini default rules', model: 'test' } } } }
+    const result = await createProviderContentDraftGenerator(createGeoRewriteContentDraftProvider(adapter)).generate(base('article'))
+    expect(result.mode).toBe('provider_draft')
+    expect(result.provenance.providerRole).toBe('content-draft-generator')
+    expect(result.provenance.stage).toBe('base_draft')
+    expect(result.body).toContain('Provider base section')
   })
 
   it('does not turn missing artifact text into a factual metadata draft', async () => {

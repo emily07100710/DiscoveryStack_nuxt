@@ -153,7 +153,7 @@ export const CONTENT_JOB_TRANSITIONS = {
   processing: ['candidate_ready', 'needs_human_review', 'blocked', 'failed'],
   candidate_ready: ['needs_human_review', 'approved', 'blocked'],
   needs_human_review: ['approved', 'blocked', 'failed'],
-  approved: ['delivered', 'blocked'],
+  approved: ['needs_human_review', 'delivered', 'blocked'],
   delivered: [],
   blocked: [],
   failed: [],

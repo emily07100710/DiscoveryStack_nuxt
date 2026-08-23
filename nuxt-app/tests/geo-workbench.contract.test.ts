@@ -3,7 +3,7 @@ import { AUTOGEO_UPSTREAM, buildOfficialAutoGeoPrompt, createAutoGeoApiAdapter }
 import { assertSafeHttpsOrigin } from '../server/audit/targetGuard'
 import { createAutoGeoBailianQwenAdapter, isAllowedBailianEndpoint } from '../server/geo/autogeo-bailian-qwen'
 import type { GeoRewriteAdapter } from '../server/geo/contracts'
-import { optimiseGeoDocument } from '../server/geo/optimise'
+import { optimiseGeoDocument, referenceRulesAdapter } from '../server/geo/optimise'
 import { assertSourceBoundRewrite, AutoGeoUnsafeOutputError } from '../server/geo/output-safety'
 import { geoRules } from '../server/geo/rules'
 
@@ -108,13 +108,38 @@ describe('GEO Workbench V1 contract', () => {
     expect(JSON.parse(String(request?.body)).contents[0].parts[0].text).toContain('Attribute all factual claims to credible, authoritative sources with clear citations.')
   })
 
+  it('applies selected reference rules as observable deterministic body transformations', async () => {
+    const byId = (id: string) => geoRules.filter(rule => rule.id === id)
+    const direct = await optimiseGeoDocument(input, referenceRulesAdapter, byId('direct-answer-first'))
+    const faq = await optimiseGeoDocument(input, referenceRulesAdapter, byId('faq-question-answer'))
+    const headings = await optimiseGeoDocument(input, referenceRulesAdapter, byId('heading-hierarchy'))
+    const citation = await optimiseGeoDocument(input, referenceRulesAdapter, byId('citation-readiness'))
+    expect(direct.candidate.optimizedContent).toContain('## 直接摘要')
+    expect(faq.candidate.optimizedContent).toContain('## 問題與回答')
+    expect(headings.candidate.optimizedContent).toContain(`# ${input.title}`)
+    expect(citation.candidate.optimizedContent).toContain('## 引用準備')
+    expect(direct.candidate.optimizedContent).not.toEqual(faq.candidate.optimizedContent)
+    expect(faq.candidate.optimizedContent).not.toEqual(headings.candidate.optimizedContent)
+    expect(headings.candidate.optimizedContent).not.toEqual(citation.candidate.optimizedContent)
+  })
+
+  it('has a deterministic body transformation for every canonical reference rule', async () => {
+    for (const rule of geoRules) {
+      const result = await optimiseGeoDocument(input, referenceRulesAdapter, [rule])
+      expect(result.candidate.appliedRuleIds).toEqual([rule.id])
+      expect(result.candidate.optimizedContent).not.toBe(result.original.content)
+    }
+  })
+
   it('passes only selected canonical rules to the adapter and candidate provenance', async () => {
     const selected = geoRules.filter(rule => ['direct-answer-first', 'claim-safety'].includes(rule.id))
     const adapter: GeoRewriteAdapter = { id: 'custom', version: 'selected-rule-test', async rewrite(document, rules) { return { provider: 'custom', providerVersion: 'selected-rule-test', optimizedTitle: document.title, optimizedContent: document.content, appliedRuleIds: rules.map(rule => rule.id), safetyNotes: [], provenance: { requestedProvider: 'autogeo-api', execution: 'reference-fallback', upstreamRepository: 'cxcscmu/AutoGEO', upstreamRevision: 'test', rewriteMethod: 'autogeo_api', ruleset: 'Researchy-GEO / Gemini default rules', model: 'test' } } } }
     const result = await optimiseGeoDocument(input, adapter, selected)
     expect(result.candidate.appliedRuleIds).toEqual(['direct-answer-first', 'claim-safety'])
     expect(result.candidate.appliedRuleIds).not.toContain('semantic-sections')
-    expect(buildOfficialAutoGeoPrompt(input, selected)).toContain('Selected canonical strategy rules')
+    const prompt = buildOfficialAutoGeoPrompt(input, selected)
+    expect(prompt).toContain('Selected canonical strategy rules')
+    expect(prompt).not.toContain(String.raw`\n`)
   })
 
   it('rejects oversize input before an adapter runs', async () => {

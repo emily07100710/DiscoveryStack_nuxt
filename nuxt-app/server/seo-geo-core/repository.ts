@@ -24,6 +24,8 @@ import { canTransitionContentJob } from './contracts'
 import { resolveCanonicalGeoRules } from '../geo/rules'
 import type { GeoRule } from '../geo/contracts'
 import { buildAutoGeoStrategyRecommendations } from './strategy'
+import { evaluateContentRisk, contentFingerprint } from './riskGate'
+import { resolveProductionRuntimeProviders } from './productionProviders'
 
 export function stableFingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -254,6 +256,10 @@ export async function getOwnerDiagnosis(ownerUserId: number, diagnosisId: number
   return diagnosis
 }
 
+export function preserveStrategyRerunStatus(status: AutoGeoStrategyRecommendation['status']): AutoGeoStrategyRecommendation['status'] {
+  return status
+}
+
 export async function createStrategyRecommendations(input: { ownerUserId: number, diagnosisId: number }) {
   const database = requireAuditDatabase()
   const diagnosis = await getOwnerDiagnosis(input.ownerUserId, input.diagnosisId)
@@ -293,7 +299,7 @@ export async function createStrategyRecommendations(input: { ownerUserId: number
     const [existing] = await database.select().from(seoGeoStrategyRecommendations).where(and(eq(seoGeoStrategyRecommendations.ownerUserId, input.ownerUserId), eq(seoGeoStrategyRecommendations.idempotencyKey, idempotencyKey))).limit(1)
     if (existing) {
       if (existing.status !== 'proposed' && (existing.evidenceSnapshotHash !== recommendation.evidenceSnapshotHash || existing.recommendationKey !== recommendation.recommendationKey)) throw createError({ statusCode: 409, statusMessage: 'Strategy recommendation snapshot conflicts with the selected plan.' })
-      await database.update(seoGeoStrategyRecommendations).set(row).where(eq(seoGeoStrategyRecommendations.id, existing.id))
+      await database.update(seoGeoStrategyRecommendations).set({ ...row, status: preserveStrategyRerunStatus(existing.status) }).where(eq(seoGeoStrategyRecommendations.id, existing.id))
     } else {
       await database.insert(seoGeoStrategyRecommendations).values(row)
     }
@@ -367,6 +373,12 @@ export async function resolveProductionContext(input: { ownerUserId: number, pla
   return { plan: bundle.plan, deliverable, selection, strategy, diagnosis, diagnosisResult, opportunity, rules, evidenceSnapshot, brief, job }
 }
 
+export function assertProductionPlanEvidenceSnapshot(strategyHashes: readonly string[], approvedHash: string): string {
+  const uniqueHashes = [...new Set(strategyHashes)]
+  if (uniqueHashes.length !== 1 || uniqueHashes[0] !== approvedHash) throw createError({ statusCode: 409, statusMessage: 'Production Plan evidence approval snapshot is stale; regenerate Strategy recommendations.' })
+  return approvedHash
+}
+
 export async function createProductionPlan(input: { ownerUserId: number, diagnosisId?: number, strategyRecommendationIds: number[], title: string, language: 'en' | 'zh-hant', idempotencyKey: string }) {
   const database = requireAuditDatabase()
   const ids = [...new Set(input.strategyRecommendationIds)]
@@ -378,8 +390,14 @@ export async function createProductionPlan(input: { ownerUserId: number, diagnos
   if (strategies.some(strategy => ['rejected', 'superseded'].includes(strategy.status))) throw createError({ statusCode: 422, statusMessage: 'Rejected 或 superseded strategy 不能加入 Production Plan。' })
   if (strategies.some(strategy => !jsonArray<EvidenceRef>(strategy.evidenceRefs).some(ref => Boolean(ref.artifactId)))) throw createError({ statusCode: 422, statusMessage: 'Production Plan 需要至少一項同一來源且同時通過 recommendation／content_draft approval 的 artifact。' })
   const diagnosisId = input.diagnosisId ?? strategies[0]?.diagnosisId
+  const diagnosis = diagnosisId ? await getOwnerDiagnosis(input.ownerUserId, diagnosisId) : undefined
+  const diagnosisResult = diagnosis?.result as DiagnosisResult | undefined
+  if (!diagnosis || !diagnosisResult || diagnosisResult.status === 'blocked' || diagnosisResult.status === 'not_ready') throw createError({ statusCode: 422, statusMessage: 'Production Plan 需要可用且未 blocked 的 Diagnosis。' })
   const snapshotHashes = [...new Set(strategies.map(strategy => strategy.evidenceSnapshotHash))]
   if (snapshotHashes.length !== 1) throw createError({ statusCode: 409, statusMessage: '同一 Production Plan 的 Strategy evidence snapshot 必須一致。' })
+  const requestedEvidenceRefs = [...new Map(strategies.flatMap(strategy => jsonArray<EvidenceRef>(strategy.evidenceRefs)).map(ref => [`${ref.sourceId || ''}:${ref.artifactId || ''}`, ref])).values()]
+  const approvedEvidence = await resolveApprovedEvidenceSnapshot(input.ownerUserId, requestedEvidenceRefs, ['recommendation', 'content_draft'], { requireArtifact: true })
+  assertProductionPlanEvidenceSnapshot(snapshotHashes, approvedEvidence.hash)
   const inputFingerprint = stableFingerprint({ diagnosisId: diagnosisId ?? null, strategyRecommendationIds: ids, title: input.title.trim(), language: input.language })
   const [existing] = await database.select().from(seoGeoProductionPlans).where(and(eq(seoGeoProductionPlans.ownerUserId, input.ownerUserId), eq(seoGeoProductionPlans.idempotencyKey, input.idempotencyKey))).limit(1)
   if (existing) {
@@ -421,6 +439,19 @@ function jsonRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+export function deriveDraftReviewEligibility(input: { stage?: unknown, safetyStatus?: string, jobStatus?: string, gateStatus?: string, approvedForPreview: boolean, approvedForDelivery: boolean }) {
+  const optimized = input.stage === 'optimized'
+  const safe = input.safetyStatus !== 'blocked' && input.gateStatus !== 'blocked'
+  const awaitingReview = input.jobStatus === 'candidate_ready' || input.jobStatus === 'needs_human_review'
+  const canApprovePreview = optimized && safe && awaitingReview
+  const canApproveDelivery = optimized && safe && (awaitingReview || (input.jobStatus === 'approved' && input.approvedForPreview))
+  return { canReview: canApprovePreview || canApproveDelivery, canApprovePreview, canApproveDelivery, canPreview: optimized && safe && input.jobStatus === 'approved' && (input.approvedForPreview || input.approvedForDelivery), canExport: optimized && safe && input.jobStatus === 'approved' && input.approvedForDelivery }
+}
+
+export function buildRevisionProvenance(input: { parentDraftId: number, parentDraftContentHash: string, changeRequestReviewId: number, selectedRuleIds: string[], evidenceSnapshotHash: string, revisionAuthor: number }) {
+  return { stage: 'optimized' as const, generationMode: 'owner_revision' as const, provider: 'owner-submitted-revision', parentDraftId: input.parentDraftId, parentDraftContentHash: input.parentDraftContentHash, changeRequestReviewId: input.changeRequestReviewId, selectedRuleIds: input.selectedRuleIds, appliedRuleIds: [], evidenceSnapshotHash: input.evidenceSnapshotHash, revisionAuthor: input.revisionAuthor }
+}
+
 export async function getProductionPlanDetail(ownerUserId: number, planId: number) {
   await recalculateProductionPlanStatus(ownerUserId, planId)
   const database = requireAuditDatabase()
@@ -455,11 +486,13 @@ export async function getProductionPlanDetail(ownerUserId: number, planId: numbe
     const job = jobsByDeliverable.get(deliverable.id)
     const allDrafts = (job ? draftsByJob.get(job.id) || [] : []).sort((left, right) => right.version - left.version)
     const baseDraft = allDrafts.find(draft => jsonRecord(draft.provenance).stage === 'base_draft')
-    const optimizedDraft = allDrafts.find(draft => jsonRecord(draft.provenance).stage === 'optimized') || allDrafts[0]
+      const optimizedDraft = allDrafts.find(draft => jsonRecord(draft.provenance).stage === 'optimized') || null
     const draftReviews = optimizedDraft ? reviewsByDraft.get(optimizedDraft.id) || [] : []
     const latestGate = optimizedDraft ? (gatesByDraft.get(optimizedDraft.id) || [])[0] : undefined
+    const approvedForPreview = draftReviews.some(review => review.decision === 'approved_for_preview' && review.evidenceSnapshotHash === bundle.plan.evidenceSnapshotHash)
     const approvedForDelivery = draftReviews.some(review => review.decision === 'approved_for_delivery' && review.evidenceSnapshotHash === bundle.plan.evidenceSnapshotHash)
-    return { ...deliverable, brief: briefsByDeliverable.get(deliverable.id) || null, job: job || null, baseDraft: baseDraft || null, optimizedDraft: optimizedDraft || null, riskGate: latestGate || null, reviews: draftReviews, previews: previews.filter(preview => preview.jobId === job?.id && preview.draftId === optimizedDraft?.id), eligibility: { canReview: Boolean(optimizedDraft && job && ['candidate_ready', 'needs_human_review'].includes(job.status) && latestGate?.status !== 'blocked'), canPreview: Boolean(optimizedDraft && job?.status === 'approved' && latestGate?.status !== 'blocked'), canExport: Boolean(optimizedDraft && job?.status === 'approved' && approvedForDelivery && latestGate?.status !== 'blocked') } }
+    const eligibility = deriveDraftReviewEligibility({ stage: jsonRecord(optimizedDraft?.provenance).stage, safetyStatus: optimizedDraft?.safetyStatus, jobStatus: job?.status, gateStatus: latestGate?.status, approvedForPreview, approvedForDelivery })
+    return { ...deliverable, brief: briefsByDeliverable.get(deliverable.id) || null, job: job || null, baseDraft: baseDraft || null, optimizedDraft, riskGate: latestGate || null, reviews: draftReviews, previews: previews.filter(preview => preview.jobId === job?.id && preview.draftId === optimizedDraft?.id), eligibility }
   })
   return {
     plan: bundle.plan,
@@ -568,7 +601,8 @@ export async function prepareProductionPlanGeneration(ownerUserId: number, planI
       const brief = await createCanonicalProductionBrief(ownerUserId, context)
       if (deliverable.briefId !== brief.id || deliverable.status === 'planned') await updateProductionDeliverable(ownerUserId, deliverable.id, { status: 'brief_ready', briefId: brief.id })
       const currentJob = context.job
-      const job = currentJob || await createContentJob({ ownerUserId, briefId: brief.id, operation: 'content_draft', providerMode: 'reference_rules', idempotencyKey: `plan:${bundle.plan.id}:job:${deliverable.id}`.slice(0, 128), productionPlanId: bundle.plan.id, strategyRecommendationId: context.strategy.id, productionDeliverableId: deliverable.id })
+      const runtimeProviders = resolveProductionRuntimeProviders()
+      const job = currentJob || await createContentJob({ ownerUserId, briefId: brief.id, operation: 'content_draft', providerMode: runtimeProviders.mode, idempotencyKey: `plan:${bundle.plan.id}:job:${deliverable.id}`.slice(0, 128), productionPlanId: bundle.plan.id, strategyRecommendationId: context.strategy.id, productionDeliverableId: deliverable.id })
       if (!currentJob) await updateProductionDeliverable(ownerUserId, deliverable.id, { status: 'job_queued', jobId: job.id, briefId: brief.id })
       prepared.push({ deliverableId: deliverable.id, briefId: brief.id, jobId: job.id, idempotencyKey: job.idempotencyKey })
     }
@@ -674,12 +708,21 @@ export async function createContentReview(input: { ownerUserId: number, jobId: n
   const database = requireAuditDatabase()
   const [job] = await database.select({ id: seoGeoContentJobs.id, evidenceSnapshotHash: seoGeoContentJobs.evidenceSnapshotHash, status: seoGeoContentJobs.status, productionDeliverableId: seoGeoContentJobs.productionDeliverableId, productionPlanId: seoGeoContentJobs.productionPlanId }).from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.id, input.jobId), eq(seoGeoContentJobs.ownerUserId, input.ownerUserId))).limit(1)
   if (!job) throw createError({ statusCode: 404, statusMessage: 'Content job was not found.' })
-  const [draft] = await database.select({ id: seoGeoContentDrafts.id, safetyStatus: seoGeoContentDrafts.safetyStatus }).from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, input.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1)
+  const [draft] = await database.select({ id: seoGeoContentDrafts.id, safetyStatus: seoGeoContentDrafts.safetyStatus, provenance: seoGeoContentDrafts.provenance }).from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, input.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1)
   if (!draft) throw createError({ statusCode: 404, statusMessage: 'Draft was not found for this job.' })
+  if (jsonRecord(draft.provenance).stage !== 'optimized') throw createError({ statusCode: 422, statusMessage: 'Only an optimized production draft can enter owner review.' })
+  if (input.decision.startsWith('approved')) {
+    const [pendingChange] = await database.select({ id: seoGeoContentReviews.id }).from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.jobId, job.id), eq(seoGeoContentReviews.draftId, draft.id), eq(seoGeoContentReviews.reviewerUserId, input.ownerUserId), eq(seoGeoContentReviews.evidenceSnapshotHash, job.evidenceSnapshotHash), eq(seoGeoContentReviews.decision, 'changes_requested'))).orderBy(desc(seoGeoContentReviews.id)).limit(1)
+    if (pendingChange) throw createError({ statusCode: 409, statusMessage: 'This draft has changes_requested; submit a new revision before approval.' })
+  }
   if (draft.safetyStatus === 'blocked' && input.decision.startsWith('approved')) throw createError({ statusCode: 422, statusMessage: 'Blocked draft cannot be approved for preview or delivery.' })
-  if (input.decision.startsWith('approved') && !['candidate_ready', 'needs_human_review'].includes(job.status)) throw createError({ statusCode: 409, statusMessage: 'Only a candidate awaiting human review can be approved.' })
+  const [priorPreview] = input.decision === 'approved_for_delivery' ? await database.select({ id: seoGeoContentReviews.id }).from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.jobId, job.id), eq(seoGeoContentReviews.draftId, draft.id), eq(seoGeoContentReviews.reviewerUserId, input.ownerUserId), eq(seoGeoContentReviews.evidenceSnapshotHash, job.evidenceSnapshotHash), eq(seoGeoContentReviews.decision, 'approved_for_preview'))).orderBy(desc(seoGeoContentReviews.id)).limit(1) : []
+  const approvalUpgrade = input.decision === 'approved_for_delivery' && job.status === 'approved' && Boolean(priorPreview)
+  if (input.decision === 'approved_for_delivery' && !approvalUpgrade && !['candidate_ready', 'needs_human_review'].includes(job.status)) throw createError({ statusCode: 409, statusMessage: 'Delivery approval must follow preview approval for an already approved draft, or start from a candidate awaiting review.' })
+  if (input.decision === 'approved_for_preview' && !['candidate_ready', 'needs_human_review'].includes(job.status)) throw createError({ statusCode: 409, statusMessage: 'Only a candidate awaiting human review can receive preview approval.' })
+  if (input.decision === 'changes_requested' && !['candidate_ready', 'needs_human_review', 'approved'].includes(job.status)) throw createError({ statusCode: 409, statusMessage: 'Changes can only be requested for a candidate under owner review.' })
   const next: ContentJobStatus = input.decision.startsWith('approved') ? 'approved' : input.decision === 'changes_requested' ? 'needs_human_review' : 'blocked'
-  if (!canTransitionContentJob(job.status, next) && job.status !== next) throw createError({ statusCode: 409, statusMessage: `Invalid content job transition: ${job.status} -> ${next}` })
+  if (!approvalUpgrade && !canTransitionContentJob(job.status, next) && job.status !== next) throw createError({ statusCode: 409, statusMessage: `Invalid content job transition: ${job.status} -> ${next}` })
   const review = await database.transaction(async tx => {
     const [reviewId] = await tx.insert(seoGeoContentReviews).values({ jobId: job.id, draftId: draft.id, reviewerUserId: input.ownerUserId, decision: input.decision, reviewNote: input.reviewNote?.trim() || null, evidenceSnapshotHash: job.evidenceSnapshotHash }).$returningId()
     await tx.update(seoGeoContentJobs).set({ status: next, completedAt: ['candidate_ready', 'needs_human_review', 'approved', 'blocked', 'failed', 'delivered'].includes(next) ? new Date() : null }).where(eq(seoGeoContentJobs.id, job.id))
@@ -691,6 +734,41 @@ export async function createContentReview(input: { ownerUserId: number, jobId: n
   })
   const planStatus = job.productionPlanId ? await recalculateProductionPlanStatus(input.ownerUserId, job.productionPlanId) : undefined
   return { jobId: job.id, reviewId: review?.id, nextStatus: next, planId: job.productionPlanId ?? undefined, planStatus }
+}
+
+export async function submitProductionDraftRevision(input: { ownerUserId: number, planId: number, deliverableId: number, title: string, body: string }) {
+  const context = await resolveProductionContext({ ownerUserId: input.ownerUserId, planId: input.planId, deliverableId: input.deliverableId, includeArtifacts: true })
+  const job = context.job
+  if (!job || job.status !== 'needs_human_review') throw createError({ statusCode: 409, statusMessage: 'A production job must be in needs_human_review before submitting a revision.' })
+  const database = requireAuditDatabase()
+  const drafts = await database.select().from(seoGeoContentDrafts).where(eq(seoGeoContentDrafts.jobId, job.id)).orderBy(desc(seoGeoContentDrafts.version))
+  const parentDraft = drafts.find(item => jsonRecord(item.provenance).stage === 'optimized')
+  if (!parentDraft) throw createError({ statusCode: 422, statusMessage: 'A revision requires an existing optimized draft.' })
+  const [changeRequest] = await database.select().from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.jobId, job.id), eq(seoGeoContentReviews.draftId, parentDraft.id), eq(seoGeoContentReviews.reviewerUserId, input.ownerUserId), eq(seoGeoContentReviews.evidenceSnapshotHash, context.evidenceSnapshot.hash), eq(seoGeoContentReviews.decision, 'changes_requested'))).orderBy(desc(seoGeoContentReviews.id)).limit(1)
+  if (!changeRequest) throw createError({ statusCode: 422, statusMessage: 'An owner changes_requested review is required before submitting a revision.' })
+  const title = input.title.trim()
+  const body = input.body.trim()
+  const revisionHash = contentFingerprint(title, body)
+  if (revisionHash === parentDraft.contentHash) throw createError({ statusCode: 409, statusMessage: 'Revision must change the title or body and produce a new content hash.' })
+  const source = { title: context.opportunity.title, content: context.evidenceSnapshot.context, language: context.plan.language, approvedEvidenceContext: context.evidenceSnapshot.context, approvedDiagnosisContext: JSON.stringify(context.diagnosisResult), approvedStrategyContext: JSON.stringify(context.rules), approvedBriefGoals: context.opportunity.goals, approvedBriefConstraints: context.opportunity.constraints }
+  const riskGate = evaluateContentRisk({ source, candidateTitle: title, candidateBody: body, evidenceCount: context.evidenceSnapshot.refs.length })
+  const draft = await saveContentCandidate({
+    jobId: job.id,
+    title,
+    body,
+    contentHash: revisionHash,
+    sourceMode: 'manual',
+    provenance: buildRevisionProvenance({ parentDraftId: parentDraft.id, parentDraftContentHash: parentDraft.contentHash, changeRequestReviewId: changeRequest.id, selectedRuleIds: context.rules.map(rule => rule.id), evidenceSnapshotHash: context.evidenceSnapshot.hash, revisionAuthor: input.ownerUserId }),
+    evidenceRefs: context.evidenceSnapshot.refs,
+    safetyStatus: riskGate.status === 'blocked' ? 'blocked' : riskGate.status === 'needs_human_review' ? 'needs_review' : 'passed',
+    safetyNotes: ['Owner revision was re-evaluated by the content risk gate.', 'A new revision must receive a new explicit owner review before preview or export.'],
+  })
+  await saveRiskGate({ draftId: draft.id, result: riskGate, evidenceSnapshotHash: context.evidenceSnapshot.hash })
+  const nextStatus: ContentJobStatus = riskGate.status === 'blocked' ? 'blocked' : 'needs_human_review'
+  await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: nextStatus, providerProvenance: { stage: 'owner_revision', parentDraftId: parentDraft.id, changeRequestReviewId: changeRequest.id, revisionDraftId: draft.id, contentHash: draft.contentHash } })
+  await updateProductionDeliverable(input.ownerUserId, context.deliverable.id, { status: nextStatus === 'blocked' ? 'blocked' : 'needs_human_review', briefId: context.brief?.id, jobId: job.id })
+  if (context.plan.id) await recalculateProductionPlanStatus(input.ownerUserId, context.plan.id)
+  return { draft, riskGate, job: { ...job, status: nextStatus }, parentDraftId: parentDraft.id, changeRequestReviewId: changeRequest.id }
 }
 
 export async function exportProductionDraft(input: { ownerUserId: number, planId: number, deliverableId: number, format: 'markdown' | 'json' }) {
@@ -706,11 +784,12 @@ export async function exportProductionDraft(input: { ownerUserId: number, planId
   const [gate] = await database.select().from(seoGeoContentRiskGates).where(and(eq(seoGeoContentRiskGates.draftId, draft.id), eq(seoGeoContentRiskGates.evidenceSnapshotHash, context.evidenceSnapshot.hash))).orderBy(desc(seoGeoContentRiskGates.id)).limit(1)
   if (!gate || gate.status === 'blocked') throw createError({ statusCode: 422, statusMessage: 'Export requires a non-blocked risk gate for the selected draft.' })
   const safeStem = context.opportunity.title.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/giu, '-').replace(/^-+|-+$/gu, '').slice(0, 80) || `production-${input.deliverableId}`
+  const exportLedger = { exportId: stableFingerprint({ planId: input.planId, deliverableId: input.deliverableId, draftId: draft.id, format: input.format, contentHash: draft.contentHash }), format: input.format, draftId: draft.id, reviewId: review.id, contentHash: draft.contentHash, evidenceSnapshotHash: context.evidenceSnapshot.hash, exportedAt: new Date().toISOString(), mode: 'owner_local_export' as const }
   const markdown = `# ${draft.title}\n\n${draft.body}\n\n---\n\nEvidence snapshot: ${context.evidenceSnapshot.hash}\nDraft content hash: ${draft.contentHash}\nGeneration provenance: ${JSON.stringify(jsonRecord(draft.provenance))}`
-  const body = input.format === 'markdown' ? markdown : JSON.stringify({ title: draft.title, body: draft.body, contentHash: draft.contentHash, evidenceSnapshotHash: context.evidenceSnapshot.hash, provenance: jsonRecord(draft.provenance), riskGate: gate, review: { id: review.id, decision: review.decision, evidenceSnapshotHash: review.evidenceSnapshotHash } }, null, 2)
-  await database.update(seoGeoProductionDeliverables).set({ status: 'exported' }).where(and(eq(seoGeoProductionDeliverables.id, context.deliverable.id), eq(seoGeoProductionDeliverables.ownerUserId, input.ownerUserId), eq(seoGeoProductionDeliverables.planId, input.planId)))
+  const body = input.format === 'markdown' ? markdown : JSON.stringify({ title: draft.title, body: draft.body, contentHash: draft.contentHash, evidenceSnapshotHash: context.evidenceSnapshot.hash, provenance: jsonRecord(draft.provenance), riskGate: gate, review: { id: review.id, decision: review.decision, evidenceSnapshotHash: review.evidenceSnapshotHash }, exportLedger }, null, 2)
+  await database.update(seoGeoProductionDeliverables).set({ status: 'exported', provenance: { ...jsonRecord(context.deliverable.provenance), exportLedger } }).where(and(eq(seoGeoProductionDeliverables.id, context.deliverable.id), eq(seoGeoProductionDeliverables.ownerUserId, input.ownerUserId), eq(seoGeoProductionDeliverables.planId, input.planId)))
   const planStatus = await recalculateProductionPlanStatus(input.ownerUserId, input.planId)
-  return { format: input.format, filename: `${safeStem}.${input.format === 'markdown' ? 'md' : 'json'}`, contentType: input.format === 'markdown' ? 'text/markdown; charset=utf-8' : 'application/json; charset=utf-8', body, contentHash: draft.contentHash, planId: input.planId, deliverableId: input.deliverableId, planStatus }
+  return { format: input.format, filename: `${safeStem}.${input.format === 'markdown' ? 'md' : 'json'}`, contentType: input.format === 'markdown' ? 'text/markdown; charset=utf-8' : 'application/json; charset=utf-8', body, contentHash: draft.contentHash, exportLedger, planId: input.planId, deliverableId: input.deliverableId, planStatus }
 }
 
 export async function prepareDeliveryPreview(input: { ownerUserId: number, jobId: number, draftId: number, targetId: number, idempotencyKey: string }) {
@@ -719,8 +798,8 @@ export async function prepareDeliveryPreview(input: { ownerUserId: number, jobId
   if (!target) throw createError({ statusCode: 404, statusMessage: 'Delivery target was not found or is not disabled.' })
   const [job] = await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.id, input.jobId), eq(seoGeoContentJobs.ownerUserId, input.ownerUserId), eq(seoGeoContentJobs.status, 'approved'))).limit(1)
   if (!job) throw createError({ statusCode: 422, statusMessage: 'Preview requires an owner-approved content job.' })
-  const [draft] = await database.select({ id: seoGeoContentDrafts.id, safetyStatus: seoGeoContentDrafts.safetyStatus, contentHash: seoGeoContentDrafts.contentHash }).from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, input.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1)
-  if (!draft || draft.safetyStatus === 'blocked') throw createError({ statusCode: 422, statusMessage: 'A non-blocked draft is required for preview.' })
+  const [draft] = await database.select({ id: seoGeoContentDrafts.id, safetyStatus: seoGeoContentDrafts.safetyStatus, contentHash: seoGeoContentDrafts.contentHash, provenance: seoGeoContentDrafts.provenance }).from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, input.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1)
+  if (!draft || jsonRecord(draft.provenance).stage !== 'optimized' || draft.safetyStatus === 'blocked') throw createError({ statusCode: 422, statusMessage: 'Preview requires a non-blocked optimized draft.' })
   const [review] = await database.select({ id: seoGeoContentReviews.id, decision: seoGeoContentReviews.decision, evidenceSnapshotHash: seoGeoContentReviews.evidenceSnapshotHash }).from(seoGeoContentReviews).where(and(
     eq(seoGeoContentReviews.jobId, job.id),
     eq(seoGeoContentReviews.draftId, draft.id),
@@ -753,7 +832,7 @@ export async function listOwnerSeoGeoWorkspace(ownerUserId: number) {
   const database = requireAuditDatabase()
   const [diagnoses, evidenceApprovals, strategies, plans, deliverables, briefs, jobs, targets] = await Promise.all([
     database.select({ id: seoGeoDiagnoses.id, status: seoGeoDiagnoses.status, diagnosisKind: seoGeoDiagnoses.diagnosisKind, createdAt: seoGeoDiagnoses.createdAt, inputFingerprint: seoGeoDiagnoses.inputFingerprint }).from(seoGeoDiagnoses).where(eq(seoGeoDiagnoses.ownerUserId, ownerUserId)).orderBy(desc(seoGeoDiagnoses.createdAt)).limit(20),
-    database.select({ id: seoGeoEvidenceApprovals.id, sourceId: seoGeoEvidenceApprovals.sourceId, artifactId: seoGeoEvidenceApprovals.artifactId, allowedFor: seoGeoEvidenceApprovals.allowedFor, status: seoGeoEvidenceApprovals.status, approvedAt: seoGeoEvidenceApprovals.approvedAt }).from(seoGeoEvidenceApprovals).where(eq(seoGeoEvidenceApprovals.ownerUserId, ownerUserId)).orderBy(desc(seoGeoEvidenceApprovals.updatedAt)).limit(50),
+    database.select({ id: seoGeoEvidenceApprovals.id, sourceId: seoGeoEvidenceApprovals.sourceId, artifactId: seoGeoEvidenceApprovals.artifactId, sourceName: publicIntelligenceSources.sourceName, sourceUrl: publicIntelligenceSources.canonicalUrl, fallbackSourceUrl: publicIntelligenceSources.sourceUrl, artifactType: publicIntelligenceArtifacts.artifactType, artifactHash: publicIntelligenceArtifacts.artifactHash, allowedFor: seoGeoEvidenceApprovals.allowedFor, status: seoGeoEvidenceApprovals.status, approvedAt: seoGeoEvidenceApprovals.approvedAt }).from(seoGeoEvidenceApprovals).innerJoin(publicIntelligenceSources, eq(seoGeoEvidenceApprovals.sourceId, publicIntelligenceSources.id)).leftJoin(publicIntelligenceArtifacts, eq(seoGeoEvidenceApprovals.artifactId, publicIntelligenceArtifacts.id)).where(and(eq(seoGeoEvidenceApprovals.ownerUserId, ownerUserId), eq(publicIntelligenceSources.ownerUserId, ownerUserId))).orderBy(desc(seoGeoEvidenceApprovals.updatedAt)).limit(50),
     database.select({ id: seoGeoStrategyRecommendations.id, diagnosisId: seoGeoStrategyRecommendations.diagnosisId, issueCode: seoGeoStrategyRecommendations.issueCode, recommendationKey: seoGeoStrategyRecommendations.recommendationKey, priority: seoGeoStrategyRecommendations.priority, status: seoGeoStrategyRecommendations.status, ruleIds: seoGeoStrategyRecommendations.ruleIds, contentOpportunities: seoGeoStrategyRecommendations.contentOpportunities, createdAt: seoGeoStrategyRecommendations.createdAt }).from(seoGeoStrategyRecommendations).where(eq(seoGeoStrategyRecommendations.ownerUserId, ownerUserId)).orderBy(desc(seoGeoStrategyRecommendations.createdAt)).limit(50),
     database.select({ id: seoGeoProductionPlans.id, diagnosisId: seoGeoProductionPlans.diagnosisId, title: seoGeoProductionPlans.title, language: seoGeoProductionPlans.language, status: seoGeoProductionPlans.status, evidenceSnapshotHash: seoGeoProductionPlans.evidenceSnapshotHash, createdAt: seoGeoProductionPlans.createdAt }).from(seoGeoProductionPlans).where(eq(seoGeoProductionPlans.ownerUserId, ownerUserId)).orderBy(desc(seoGeoProductionPlans.createdAt)).limit(20),
     database.select({ id: seoGeoProductionDeliverables.id, planId: seoGeoProductionDeliverables.planId, title: seoGeoProductionDeliverables.title, contentType: seoGeoProductionDeliverables.contentType, status: seoGeoProductionDeliverables.status, briefId: seoGeoProductionDeliverables.briefId, jobId: seoGeoProductionDeliverables.jobId, createdAt: seoGeoProductionDeliverables.createdAt }).from(seoGeoProductionDeliverables).where(eq(seoGeoProductionDeliverables.ownerUserId, ownerUserId)).orderBy(desc(seoGeoProductionDeliverables.createdAt)).limit(50),

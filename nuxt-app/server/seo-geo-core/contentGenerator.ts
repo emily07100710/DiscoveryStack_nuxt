@@ -64,21 +64,44 @@ export function createDeterministicScaffoldGenerator(): ContentDraftGenerator {
   return { id: 'discoverystack-deterministic-scaffold', version: 'content-scaffold-v1', async generate(input) { return scaffoldFor(input) } }
 }
 
-export function createProviderContentDraftGenerator(adapter: GeoRewriteAdapter): ContentDraftGenerator {
+export type ContentDraftProvider = {
+  id: string
+  version: string
+  generate: (document: GeoDocumentInput) => Promise<{ title: string, body: string, provider: string, providerVersion: string, provenance: Record<string, unknown>, limitations: string[] }>
+}
+
+export function createGeoRewriteContentDraftProvider(adapter: GeoRewriteAdapter): ContentDraftProvider {
   return {
-    id: `provider-base-draft:${adapter.id}`,
+    id: `content-provider:${adapter.id}`,
     version: adapter.version,
-    async generate(input) {
-      const providerRules = input.strategyRules.map(rule => ({ ...rule, category: 'planning' as const }))
-      const result = await adapter.rewrite(providerDocument(input), providerRules)
+    async generate(document) {
+      const result = await adapter.rewrite(document, [])
       return {
-        title: result.optimizedTitle || input.title,
+        title: result.optimizedTitle || document.title,
         body: result.optimizedContent,
+        provider: result.provider,
+        providerVersion: result.providerVersion,
+        provenance: { ...result.provenance, role: 'content-draft-provider', appliedRuleIds: [] },
+        limitations: ['Provider base draft remains a draft and must pass risk gate and owner review before preview or export.'],
+      }
+    },
+  }
+}
+
+export function createProviderContentDraftGenerator(provider: ContentDraftProvider): ContentDraftGenerator {
+  return {
+    id: provider.id,
+    version: provider.version,
+    async generate(input) {
+      const result = await provider.generate(providerDocument(input))
+      return {
+        title: result.title || input.title,
+        body: result.body,
         mode: 'provider_draft',
         provider: result.provider,
         providerVersion: result.providerVersion,
-        provenance: { ...result.provenance, stage: 'geoflow-base-draft', appliedRuleIds: result.appliedRuleIds },
-        limitations: ['Provider base draft remains a draft and must pass risk gate and owner review before preview or export.'],
+        provenance: { ...result.provenance, stage: 'base_draft', generationMode: 'provider_draft', providerRole: 'content-draft-generator' },
+        limitations: result.limitations,
       }
     },
   }
