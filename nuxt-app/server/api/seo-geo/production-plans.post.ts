@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { getOwnerDatabaseUserId } from '../../audit/repository'
-import { createProductionPlan } from '../../seo-geo-core/repository'
+import { getProductionPlanDetail, createProductionPlan } from '../../seo-geo-core/repository'
 import { requireOwner } from '../../utils/auth'
 
 const inputSchema = z.object({
@@ -15,5 +15,7 @@ export default defineEventHandler(async event => {
   const owner = await requireOwner(event)
   const parsed = inputSchema.safeParse(await readBody(event))
   if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Review the Production Plan fields.', data: parsed.error.flatten().fieldErrors })
-  return createProductionPlan({ ownerUserId: await getOwnerDatabaseUserId(owner.openId), ...parsed.data })
+  const ownerUserId = await getOwnerDatabaseUserId(owner.openId)
+  const created = await createProductionPlan({ ownerUserId, ...parsed.data })
+  return { ...created, detail: await getProductionPlanDetail(ownerUserId, created.plan.id) }
 })

@@ -1,10 +1,10 @@
 import { createError } from 'h3'
 import { AutoGeoConfigurationError, AutoGeoProviderError, AUTOGEO_UPSTREAM, createAutoGeoApiAdapter } from './autogeo-api'
 import { AutoGeoBailianConfigurationError, AutoGeoBailianProviderError, createAutoGeoBailianQwenAdapter } from './autogeo-bailian-qwen'
-import { GEO_WORKBENCH_VERSION, type GeoDocumentInput, type GeoFallbackReason, type GeoOptimizationResult, type GeoRequestedProvider, type GeoRewriteAdapter, type GeoRewriteCandidate } from './contracts'
+import { GEO_WORKBENCH_VERSION, type GeoDocumentInput, type GeoFallbackReason, type GeoOptimizationResult, type GeoRequestedProvider, type GeoRewriteAdapter, type GeoRewriteCandidate, type GeoRule } from './contracts'
 import { evaluateDocument } from './metrics'
 import { AutoGeoUnsafeOutputError } from './output-safety'
-import { GEO_RULESET_VERSION, geoRules } from './rules'
+import { GEO_RULESET_VERSION, geoRules, resolveCanonicalGeoRules } from './rules'
 
 const MAX_TITLE_LENGTH = 180
 const MAX_CONTENT_LENGTH = 12000
@@ -52,42 +52,44 @@ function referenceCandidate(document: GeoDocumentInput, rules: readonly { id: st
   return {
     provider: 'reference-rules-v1', providerVersion: '1.0.0', optimizedTitle, optimizedContent, appliedRuleIds: rules.map(rule => rule.id),
     safetyNotes: ['完整 AutoGEO API 本次未執行；此為 reference-rules-v1 fallback，不可稱為 AutoGEO 生成結果。', '保留原文作為詳細說明，避免透過摘要刪除重要限制。', '不新增排名、流量、轉換或第三方引擎效果保證。', '外部來源、數據與產品主張必須由 owner 人工驗證。'],
-    provenance: { requestedProvider, execution: 'reference-fallback', upstreamRepository: AUTOGEO_UPSTREAM.repository, upstreamRevision: AUTOGEO_UPSTREAM.revision, rewriteMethod: AUTOGEO_UPSTREAM.rewriteMethod, ruleset: AUTOGEO_UPSTREAM.ruleset, model, fallbackReason },
+    provenance: { requestedProvider, execution: 'reference-fallback', upstreamRepository: AUTOGEO_UPSTREAM.repository, upstreamRevision: AUTOGEO_UPSTREAM.revision, rewriteMethod: AUTOGEO_UPSTREAM.rewriteMethod, ruleset: AUTOGEO_UPSTREAM.ruleset, model, fallbackReason, ruleSource: 'discoverystack-autogeo-compatible' },
   }
 }
 
 export const referenceRulesAdapter: GeoRewriteAdapter = { id: 'reference-rules-v1', version: '1.0.0', async rewrite(document, rules) { return referenceCandidate(document, rules, 'autogeo-not-configured') } }
 
-function safeFallback(document: GeoDocumentInput): GeoRewriteCandidate {
-  const candidate = referenceCandidate(document, geoRules, 'provider-output-safety-rejected')
+function safeFallback(document: GeoDocumentInput, rules: readonly GeoRule[]): GeoRewriteCandidate {
+  const candidate = referenceCandidate(document, rules, 'provider-output-safety-rejected')
   candidate.safetyNotes.unshift('百鍊／AutoGEO provider 草稿加入原文未支持的商業主張，已由 server-side source-bound guard 拒絕。', '以下為 reference-rules-v1 fallback，供 owner 審閱；它不是 provider 成功產出，也不會自動發布。')
   return candidate
 }
 
-async function rewriteWithPreferredProvider(document: GeoDocumentInput): Promise<GeoRewriteCandidate> {
+async function rewriteWithPreferredProvider(document: GeoDocumentInput, rules: readonly GeoRule[]): Promise<GeoRewriteCandidate> {
   let bailianFallbackReason: GeoFallbackReason
-  try { return await createAutoGeoBailianQwenAdapter().rewrite(document, geoRules) }
+  try { return await createAutoGeoBailianQwenAdapter().rewrite(document, rules) }
   catch (error) {
-    if (isUnsafeProviderRewrite(error)) return safeFallback(document)
+    if (isUnsafeProviderRewrite(error)) return safeFallback(document, rules)
     if (!(error instanceof AutoGeoBailianConfigurationError) && !(error instanceof AutoGeoBailianProviderError)) throw error
     bailianFallbackReason = error instanceof AutoGeoBailianConfigurationError && error.issue === 'invalid-endpoint' ? 'bailian-invalid-configuration' : error instanceof AutoGeoBailianConfigurationError ? 'bailian-not-configured' : 'bailian-provider-unavailable'
   }
-  try { return await createAutoGeoApiAdapter().rewrite(document, geoRules) }
+  try { return await createAutoGeoApiAdapter().rewrite(document, rules) }
   catch (error) {
-    if (isUnsafeProviderRewrite(error)) return safeFallback(document)
+    if (isUnsafeProviderRewrite(error)) return safeFallback(document, rules)
     if (!(error instanceof AutoGeoConfigurationError) && !(error instanceof AutoGeoProviderError)) throw error
-    if (bailianFallbackReason !== 'bailian-not-configured') return referenceCandidate(document, geoRules, bailianFallbackReason, 'autogeo-bailian-qwen')
+    if (bailianFallbackReason !== 'bailian-not-configured') return referenceCandidate(document, rules, bailianFallbackReason, 'autogeo-bailian-qwen')
     const fallbackReason: GeoFallbackReason = error instanceof AutoGeoConfigurationError ? 'bailian-not-configured' : 'autogeo-provider-unavailable'
-    return referenceCandidate(document, geoRules, fallbackReason, error instanceof AutoGeoConfigurationError ? 'autogeo-bailian-qwen' : 'autogeo-api', error instanceof AutoGeoConfigurationError ? 'qwen-plus' : AUTOGEO_UPSTREAM.model)
+    return referenceCandidate(document, rules, fallbackReason, error instanceof AutoGeoConfigurationError ? 'autogeo-bailian-qwen' : 'autogeo-api', error instanceof AutoGeoConfigurationError ? 'qwen-plus' : AUTOGEO_UPSTREAM.model)
   }
 }
 
-export async function optimiseGeoDocument(input: GeoDocumentInput, adapter?: GeoRewriteAdapter): Promise<GeoOptimizationResult> {
+export async function optimiseGeoDocument(input: GeoDocumentInput, adapter?: GeoRewriteAdapter, selectedRules?: readonly GeoRule[]): Promise<GeoOptimizationResult> {
   const document = cleanInput(input)
+  const rules = selectedRules ? resolveCanonicalGeoRules(selectedRules.map(rule => rule.id)) : [...geoRules]
   const baseline = evaluateDocument(document)
   let candidate: GeoRewriteCandidate
-  try { candidate = adapter ? await adapter.rewrite(document, geoRules) : await rewriteWithPreferredProvider(document) }
-  catch (error) { if (isUnsafeProviderRewrite(error)) candidate = safeFallback(document); else throw error }
+  try { candidate = adapter ? await adapter.rewrite(document, rules) : await rewriteWithPreferredProvider(document, rules) }
+  catch (error) { if (isUnsafeProviderRewrite(error)) candidate = safeFallback(document, rules); else throw error }
+  candidate = { ...candidate, appliedRuleIds: rules.map(rule => rule.id) }
   const optimized = evaluateDocument({ title: candidate.optimizedTitle, content: candidate.optimizedContent, language: document.language }, { sourceContent: document.content })
   const comparison = baseline.metrics.map(metric => { const after = optimized.metrics.find(candidateMetric => candidateMetric.id === metric.id); return { ...metric, before: metric.score, after: after?.score || 0, delta: (after?.score || 0) - metric.score } })
   const changed = comparison.filter(metric => metric.delta > 0).map(metric => metric.label)

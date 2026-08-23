@@ -11,6 +11,18 @@ export type EvidenceRef = {
   reason: string
 }
 
+/** Server-resolved, approved artifact material. It is never accepted from the browser. */
+export type EvidenceMaterial = {
+  sourceId: number
+  artifactId: number
+  sourceName?: string
+  locator?: string
+  artifactType: string
+  artifactHash: string
+  reviewedText: string
+  reviewedFields?: Record<string, unknown>
+}
+
 export type DiagnosisPriority = 'high' | 'medium' | 'low'
 export type DiagnosisSeverity = 'critical' | 'high' | 'medium' | 'low'
 export type DiagnosisArea = 'technical_seo' | 'answer_content' | 'trust_evidence' | 'journey' | 'geo_structure'
@@ -89,12 +101,28 @@ export type ContentBriefInput = {
   goals: string[]
   constraints: string[]
   evidenceRefs: EvidenceRef[]
-  diagnosisId?: number
-  strategyRecommendationId?: number
-  productionPlanId?: number
-  productionDeliverableId?: number
-  ruleIds?: string[]
-  provenance?: Record<string, unknown>
+}
+
+export type ContentDraftGenerationInput = {
+  contentType: StrategyDeliverableType
+  title: string
+  audience: string
+  language: 'en' | 'zh-hant'
+  goals: string[]
+  constraints: string[]
+  diagnosisFindings: DiagnosisFinding[]
+  strategyRules: AutoGeoStrategyRule[]
+  evidenceMaterials: EvidenceMaterial[]
+}
+
+export type ContentDraftGenerationResult = {
+  title: string
+  body: string
+  mode: 'provider_draft' | 'deterministic_scaffold'
+  provider: string
+  providerVersion: string
+  provenance: Record<string, unknown>
+  limitations: string[]
 }
 
 export type RiskFinding = {

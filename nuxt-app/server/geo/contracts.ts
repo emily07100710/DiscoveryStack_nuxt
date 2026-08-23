@@ -48,6 +48,7 @@ export type GeoRewriteProvenance = {
   providerRequestId?: string
   usage?: { inputTokens?: number, outputTokens?: number, totalTokens?: number }
   fallbackReason?: GeoFallbackReason
+  ruleSource?: 'discoverystack-autogeo-compatible'
 }
 
 export type GeoRewriteCandidate = {

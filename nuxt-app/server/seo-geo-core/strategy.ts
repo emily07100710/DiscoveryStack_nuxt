@@ -116,7 +116,7 @@ export function buildAutoGeoStrategyRecommendation(diagnosisId: number, finding:
     status: 'proposed',
     limitations: ['此策略是 deterministic mapping，不是模型自動選擇或成效預測，也不代表排名、曝光、流量、轉換、營收或 ROI。', 'Provider 可協助文字說明，但不能更改 rule IDs、創造 evidence、案例或商業成效主張。', '選擇策略後仍需 owner 建立 Production Plan、Risk gate 與人工 review。'],
     version: 1,
-    provenance: { engine: AUTOGEO_STRATEGY_VERSION, diagnosisEngine: finding.engine, sourceRecommendationKey: finding.recommendationKey, ruleCatalogVersion: GEO_RULESET_VERSION },
+    provenance: { engine: AUTOGEO_STRATEGY_VERSION, diagnosisEngine: finding.engine, sourceRecommendationKey: finding.recommendationKey, ruleCatalogVersion: GEO_RULESET_VERSION, ruleSource: 'discoverystack-autogeo-compatible', ruleSourceKind: 'deterministic-compatible-catalog-not-official-extracted-rules' },
   }
 }
 

@@ -5,6 +5,7 @@ import { createAutoGeoBailianQwenAdapter, isAllowedBailianEndpoint } from '../se
 import type { GeoRewriteAdapter } from '../server/geo/contracts'
 import { optimiseGeoDocument } from '../server/geo/optimise'
 import { assertSourceBoundRewrite, AutoGeoUnsafeOutputError } from '../server/geo/output-safety'
+import { geoRules } from '../server/geo/rules'
 
 const input = { title: '網站可讀性改善', content: '這份說明介紹如何整理服務頁資訊，讓讀者理解服務內容與下一步。', language: 'zh-hant' as const }
 
@@ -105,6 +106,15 @@ describe('GEO Workbench V1 contract', () => {
     expect(result.candidate.provenance.upstreamRevision).toBe(AUTOGEO_UPSTREAM.revision)
     const request = fetchImpl.mock.calls[0]?.[1]
     expect(JSON.parse(String(request?.body)).contents[0].parts[0].text).toContain('Attribute all factual claims to credible, authoritative sources with clear citations.')
+  })
+
+  it('passes only selected canonical rules to the adapter and candidate provenance', async () => {
+    const selected = geoRules.filter(rule => ['direct-answer-first', 'claim-safety'].includes(rule.id))
+    const adapter: GeoRewriteAdapter = { id: 'custom', version: 'selected-rule-test', async rewrite(document, rules) { return { provider: 'custom', providerVersion: 'selected-rule-test', optimizedTitle: document.title, optimizedContent: document.content, appliedRuleIds: rules.map(rule => rule.id), safetyNotes: [], provenance: { requestedProvider: 'autogeo-api', execution: 'reference-fallback', upstreamRepository: 'cxcscmu/AutoGEO', upstreamRevision: 'test', rewriteMethod: 'autogeo_api', ruleset: 'Researchy-GEO / Gemini default rules', model: 'test' } } } }
+    const result = await optimiseGeoDocument(input, adapter, selected)
+    expect(result.candidate.appliedRuleIds).toEqual(['direct-answer-first', 'claim-safety'])
+    expect(result.candidate.appliedRuleIds).not.toContain('semantic-sections')
+    expect(buildOfficialAutoGeoPrompt(input, selected)).toContain('Selected canonical strategy rules')
   })
 
   it('rejects oversize input before an adapter runs', async () => {

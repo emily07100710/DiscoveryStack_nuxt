@@ -26,6 +26,9 @@ const homeSource = readFileSync(resolve(process.cwd(), 'pages/index.vue'), 'utf8
 const strategyRoute = readFileSync(resolve(process.cwd(), 'server/api/seo-geo/strategies.post.ts'), 'utf8')
 const planRoute = readFileSync(resolve(process.cwd(), 'server/api/seo-geo/production-plans.post.ts'), 'utf8')
 const generateRoute = readFileSync(resolve(process.cwd(), 'server/api/seo-geo/production-plans/[id]/generate.post.ts'), 'utf8')
+const detailRoute = readFileSync(resolve(process.cwd(), 'server/api/seo-geo/production-plans/[id].get.ts'), 'utf8')
+const exportRoute = readFileSync(resolve(process.cwd(), 'server/api/seo-geo/production-plans/[id]/export/[deliverableId].get.ts'), 'utf8')
+const briefRoute = readFileSync(resolve(process.cwd(), 'server/api/seo-geo/briefs.post.ts'), 'utf8')
 
 describe('SEO/GEO three-layer V1 contract', () => {
   it('emits rich, homepage-scoped findings with stable issue codes and limitations', () => {
@@ -76,6 +79,12 @@ describe('SEO/GEO three-layer V1 contract', () => {
     expect(pageSource).toContain('guidedDiagnose')
     expect(pageSource).toContain('guidedCreatePlan')
     expect(pageSource).toContain('guidedGeneratePlan')
+    expect(pageSource).toContain('guidedReview')
+    expect(pageSource).toContain('guidedPreview')
+    expect(pageSource).toContain('guidedExportUrl')
+    expect(pageSource).toContain("guided.selectedStrategyIds = []")
+    expect(pageSource).toContain('Base draft')
+    expect(pageSource).toContain('Optimized draft')
     expect(pageSource).toContain('/api/seo-geo/production-plans')
     expect(pageSource).toContain('進階單筆操作（需要 technical IDs；主要 guided flow 不使用此區）')
     expect(pageSource).not.toContain('approvedEvidenceContext:')
@@ -89,5 +98,17 @@ describe('SEO/GEO three-layer V1 contract', () => {
     expect(planRoute).toContain('requireOwner(event)')
     expect(generateRoute).toContain('requireOwner(event)')
     expect(generateRoute).toContain('runOwnerProductionPlan')
+    expect(detailRoute).toContain('requireOwner(event)')
+    expect(detailRoute).toContain("cache-control', 'no-store'")
+  })
+
+  it('keeps standalone briefs free of client canonical linkage and exposes approved-only export', () => {
+    expect(briefRoute).toContain('.strict()')
+    expect(briefRoute).toContain('forbiddenCanonicalFields')
+    expect(briefRoute).toContain('Canonical diagnosis, strategy, plan, deliverable, rule IDs, and provenance are server-owned')
+    expect(exportRoute).toContain('requireOwner(event)')
+    expect(exportRoute).toContain('exportProductionDraft')
+    expect(exportRoute).toContain('content-disposition')
+    expect(exportRoute).toContain("setHeader(event, 'cache-control', 'no-store')")
   })
 })

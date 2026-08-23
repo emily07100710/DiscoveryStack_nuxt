@@ -29,11 +29,13 @@ describe('SEO/GEO route integration contracts', () => {
     expect(recommendRoute).toContain('jobId: z.number().int().positive().optional()')
   })
 
-  it('resolves approved evidence on the server before provider execution', () => {
-    expect(service).toContain('resolveApprovedEvidenceSnapshot')
-    expect(service).toContain("['recommendation', 'content_draft']")
-    expect(service).toContain('approvedEvidenceContext: approvedEvidence.context')
-    expect(service).toContain('approvedEvidence.hash !== brief.evidenceSnapshotHash')
+  it('resolves canonical evidence and rules before a governed base-to-optimized production run', () => {
+    expect(service).toContain('resolveProductionContext')
+    expect(service).toContain('createDeterministicScaffoldGenerator')
+    expect(service).toContain("stage: 'base_draft'")
+    expect(service).toContain("stage: 'optimized'")
+    expect(service).toContain('selectedRuleIds')
+    expect(repository).toContain("['recommendation', 'content_draft']")
     expect(repository).toContain('inArray(seoGeoEvidenceApprovals.allowedFor, purposes)')
     expect(repository).toContain('options.requireArtifact')
   })

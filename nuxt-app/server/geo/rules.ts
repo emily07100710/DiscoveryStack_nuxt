@@ -1,3 +1,4 @@
+import { createError } from 'h3'
 import type { GeoRule } from './contracts'
 
 export const GEO_RULESET_VERSION = 'autogeo-compatible-rules-v1'
@@ -17,3 +18,12 @@ export const geoRules: readonly GeoRule[] = [
   { id: 'canonical-signal', category: 'structure', title: '確認 canonical 與語言路徑', instruction: '由網站擁有者確認 canonical、語言與多語 URL 對應，不能自行改寫網站設定或宣稱已部署。', rationale: '技術 SEO 建議必須與實際網站治理責任分開。', priority: 'medium' },
   { id: 'structured-data-safety', category: 'structure', title: '只產生內容支持的 structured data', instruction: '只有頁面可驗證地支持時才規劃 schema；不可為了 rich result 而虛構評分、價格、評論或資格。', rationale: '避免把 eligibility 建議誤當成展示保證。', priority: 'medium' },
 ]
+
+const geoRuleById = new Map(geoRules.map(rule => [rule.id, rule]))
+
+export function resolveCanonicalGeoRules(ruleIds: readonly string[]): GeoRule[] {
+  const uniqueIds = [...new Set(ruleIds)]
+  const rules = uniqueIds.map(id => geoRuleById.get(id))
+  if (rules.some(rule => !rule)) throw createError({ statusCode: 422, statusMessage: 'Strategy contains an unknown canonical rule ID.' })
+  return rules as GeoRule[]
+}

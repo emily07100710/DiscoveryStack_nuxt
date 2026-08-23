@@ -4,40 +4,109 @@ import { analysePublicHomepage } from '../utils/publicSiteAnalysis'
 import { requireAuditDatabase } from '../audit/repository'
 import { seoGeoProductionPlans } from '../database/schema'
 import { createAutoGeoApiAdapter } from '../geo/autogeo-api'
+import { createAutoGeoBailianQwenAdapter } from '../geo/autogeo-bailian-qwen'
 import { optimiseGeoDocument, referenceRulesAdapter } from '../geo/optimise'
-import type { GeoDocumentInput } from '../geo/contracts'
-import type { EvidenceRef } from './contracts'
-
-function records(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
-}
-
-function arrayOfStrings(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').slice(0, 20) : []
-}
+import type { GeoDocumentInput, GeoRewriteAdapter } from '../geo/contracts'
+import type { ContentDraftGenerationInput, EvidenceRef } from './contracts'
 import { createDeterministicDiagnosis } from './diagnosis'
 import { contentFingerprint, evaluateContentRisk } from './riskGate'
+import { createDeterministicScaffoldGenerator, createProviderContentDraftGenerator, buildOptimizationDocument, type ContentDraftGenerator } from './contentGenerator'
 import {
+  createCanonicalProductionBrief,
   createContentJob,
   createStrategyRecommendations,
   createContentBrief,
   createProductionPlan,
   findOwnerBriefForDeliverable,
   getProductionPlanBundle,
-  prepareProductionPlanGeneration,
   getOwnerContentBrief,
   getOwnerContentJob,
   resolveApprovedEvidenceSnapshot,
+  resolveProductionContext,
+  recalculateProductionPlanStatus,
+  prepareProductionPlanGeneration,
   saveContentCandidate,
   saveDiagnosis,
   saveRiskGate,
   transitionContentJob,
   updateProductionDeliverable,
 } from './repository'
+import { resolveCanonicalGeoRules } from '../geo/rules'
+
+function arrayOfStrings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').slice(0, 20) : []
+}
+
+function adapterForMode(providerMode: 'reference_rules' | 'autogeo_bailian_qwen' | 'autogeo_api' | 'manual'): GeoRewriteAdapter | undefined {
+  if (providerMode === 'reference_rules') return referenceRulesAdapter
+  if (providerMode === 'autogeo_api') return createAutoGeoApiAdapter()
+  if (providerMode === 'autogeo_bailian_qwen') return createAutoGeoBailianQwenAdapter()
+  return undefined
+}
+
+function generatorForMode(providerMode: 'reference_rules' | 'autogeo_bailian_qwen' | 'autogeo_api' | 'manual'): ContentDraftGenerator {
+  if (providerMode === 'manual') throw createError({ statusCode: 422, statusMessage: 'Manual jobs require an explicitly submitted draft and cannot run the governed production generator.' })
+  if (providerMode === 'reference_rules') return createDeterministicScaffoldGenerator()
+  return createProviderContentDraftGenerator(adapterForMode(providerMode)!)
+}
+
+function canonicalSource(context: { title: string, language: 'en' | 'zh-hant', evidenceContext: string, diagnosisContext: string, strategyContext: string, goals: string[], constraints: string[] }): GeoDocumentInput {
+  return {
+    title: context.title,
+    content: context.evidenceContext || 'No approved evidence text is available.',
+    language: context.language,
+    approvedEvidenceContext: context.evidenceContext,
+    approvedDiagnosisContext: context.diagnosisContext,
+    approvedStrategyContext: context.strategyContext,
+    approvedBriefGoals: context.goals,
+    approvedBriefConstraints: context.constraints,
+  }
+}
+
+function draftInput(context: Awaited<ReturnType<typeof resolveProductionContext>>): ContentDraftGenerationInput {
+  return {
+    contentType: context.opportunity.deliverableType,
+    title: context.opportunity.title,
+    audience: context.opportunity.audience,
+    language: context.plan.language,
+    goals: context.opportunity.goals,
+    constraints: context.opportunity.constraints,
+    diagnosisFindings: Array.isArray((context.diagnosisResult as { findings?: unknown }).findings) ? (context.diagnosisResult as { findings: ContentDraftGenerationInput['diagnosisFindings'] }).findings : [],
+    strategyRules: context.rules.map(rule => ({ id: rule.id, title: rule.title, instruction: rule.instruction, rationale: rule.rationale, priority: rule.priority })),
+    evidenceMaterials: context.evidenceSnapshot.materials,
+  }
+}
+
+function draftSource(context: Awaited<ReturnType<typeof resolveProductionContext>>, body?: string): GeoDocumentInput {
+  const input = draftInput(context)
+  return canonicalSource({
+    title: input.title,
+    language: input.language,
+    evidenceContext: body ? `${context.evidenceSnapshot.context}\n\nBase draft to optimize:\n${body}` : context.evidenceSnapshot.context,
+    diagnosisContext: JSON.stringify(input.diagnosisFindings).slice(0, 12000),
+    strategyContext: JSON.stringify(input.strategyRules).slice(0, 16000),
+    goals: input.goals,
+    constraints: input.constraints,
+  })
+}
+
+function sourceModeFor(provenance: Record<string, unknown>, provider: string): 'provider_candidate' | 'reference_fallback' | 'manual' {
+  if (provenance.generationMode === 'deterministic_scaffold' || provider === 'reference-rules-v1' || provider === 'discoverystack-deterministic-scaffold') return 'reference_fallback'
+  return 'provider_candidate'
+}
+
+function withEvidenceMaterialGate(result: ReturnType<typeof evaluateContentRisk>, materials: Array<{ reviewedText: string }>) {
+  if (materials.some(material => material.reviewedText.trim())) return result
+  return {
+    ...result,
+    status: 'blocked' as const,
+    findings: [...result.findings, { id: 'missing_reviewed_evidence_text', severity: 'blocking' as const, message: 'Approved artifact 沒有可用 reviewed text；不能把 metadata 當成 base draft 內容。', evidenceRequired: true }],
+  }
+}
 
 export async function runOwnerPublicDiagnosis(input: { ownerUserId: number, homepageUrl: string, sourceId?: number, auditRunId?: number }) {
   const analysis = await analysePublicHomepage(input.homepageUrl)
-  const approvedEvidence = input.sourceId ? await resolveApprovedEvidenceSnapshot(input.ownerUserId, [{ sourceId: input.sourceId, reason: 'Owner supplied source for diagnosis' }], 'diagnosis', { requireArtifact: false }) : { refs: [], context: '', hash: '' }
+  const approvedEvidence = input.sourceId ? await resolveApprovedEvidenceSnapshot(input.ownerUserId, [{ sourceId: input.sourceId, reason: 'Owner supplied source for diagnosis' }], 'diagnosis', { requireArtifact: false }) : { refs: [], context: '', hash: '', materials: [] }
   const diagnosis = createDeterministicDiagnosis(analysis, input.sourceId, approvedEvidence.refs)
   const stored = await saveDiagnosis({ ownerUserId: input.ownerUserId, sourceId: input.sourceId, auditRunId: input.auditRunId, diagnosis })
   const strategy = diagnosis.engine === 'deterministic-diagnosis-v1' && diagnosis.findings.length
@@ -46,88 +115,118 @@ export async function runOwnerPublicDiagnosis(input: { ownerUserId: number, home
   return { diagnosisId: stored.id, diagnosis, strategyRecommendations: strategy.recommendations, analysis: { finalUrl: analysis.finalUrl, snapshotFingerprint: analysis.snapshotFingerprint, analysisVersion: analysis.analysisVersion } }
 }
 
-/**
- * Executes one foreground owner-requested candidate generation. This is intentionally
- * not a background queue and never performs a delivery request. Autoscale retries are
- * represented as separate idempotent requests in the persisted job ledger.
- */
-export async function runOwnerAutoGeoContentJob(input: { ownerUserId: number, briefId: number, document: GeoDocumentInput, idempotencyKey: string, jobId?: number }) {
-  const brief = await getOwnerContentBrief(input.ownerUserId, input.briefId)
-  if (brief.status !== 'ready_for_generation') throw createError({ statusCode: 422, statusMessage: 'Content Brief is not ready for generation.' })
-  if (brief.language !== input.document.language) throw createError({ statusCode: 422, statusMessage: 'Document language must match the approved Content Brief.' })
-  const briefEvidenceRefs = Array.isArray(brief.evidenceRefs) ? brief.evidenceRefs as EvidenceRef[] : []
-  const approvedEvidence = await resolveApprovedEvidenceSnapshot(input.ownerUserId, briefEvidenceRefs, ['recommendation', 'content_draft'], { requireArtifact: true })
-  if (approvedEvidence.hash !== brief.evidenceSnapshotHash) throw createError({ statusCode: 409, statusMessage: 'Content Brief evidence snapshot is stale; create a new Brief before generating.' })
-  const approvedBriefGoals = Array.isArray(brief.goals) ? brief.goals.filter((item): item is string => typeof item === 'string').slice(0, 20) : []
-  const approvedBriefConstraints = Array.isArray(brief.constraints) ? brief.constraints.filter((item): item is string => typeof item === 'string').slice(0, 20) : []
-  const provenance = records(brief.provenance)
-  const diagnosisContext = provenance.diagnosisFindings ? JSON.stringify(provenance.diagnosisFindings).slice(0, 12000) : ''
-  const strategyContext = provenance.strategyRules ? JSON.stringify(provenance.strategyRules).slice(0, 16000) : ''
-  const document = { ...input.document, approvedEvidenceContext: approvedEvidence.context, ...(diagnosisContext ? { approvedDiagnosisContext: diagnosisContext } : {}), ...(strategyContext ? { approvedStrategyContext: strategyContext } : {}), approvedBriefGoals, approvedBriefConstraints }
-  const job = input.jobId
-    ? await getOwnerContentJob(input.ownerUserId, input.jobId)
-    : await createContentJob({ ownerUserId: input.ownerUserId, briefId: brief.id, operation: 'autogeo_recommendation', providerMode: 'autogeo_bailian_qwen', idempotencyKey: input.idempotencyKey, productionPlanId: brief.productionPlanId ?? undefined, strategyRecommendationId: brief.strategyRecommendationId ?? undefined, productionDeliverableId: brief.productionDeliverableId ?? undefined })
-  if (job.briefId !== brief.id || job.operation !== 'autogeo_recommendation') throw createError({ statusCode: 422, statusMessage: 'Job must belong to this Brief and use the AutoGEO recommendation operation.' })
-  if (job.productionPlanId !== (brief.productionPlanId ?? null) || job.strategyRecommendationId !== (brief.strategyRecommendationId ?? null) || job.productionDeliverableId !== (brief.productionDeliverableId ?? null)) throw createError({ statusCode: 422, statusMessage: 'Job plan linkage must match the approved Brief.' })
-  if (input.jobId && job.idempotencyKey !== input.idempotencyKey) throw createError({ statusCode: 409, statusMessage: 'The supplied idempotency key does not match this content job.' })
-  if (job.providerMode === 'manual') throw createError({ statusCode: 422, statusMessage: 'Manual jobs require a separately submitted draft and cannot run AutoGEO generation.' })
+export type ProductionRuntimeDependencies = {
+  baseDraftGenerator?: ContentDraftGenerator
+  optimizationAdapter?: GeoRewriteAdapter
+}
+
+async function runOwnerProductionDeliverable(input: { ownerUserId: number, context: Awaited<ReturnType<typeof resolveProductionContext>>, job: Awaited<ReturnType<typeof getOwnerContentJob>>, dependencies?: ProductionRuntimeDependencies }) {
+  const { context, job } = input
+  if (job.operation !== 'content_draft') throw createError({ statusCode: 422, statusMessage: 'Production job must use the content_draft operation.' })
   if (job.status === 'candidate_ready' || job.status === 'needs_human_review' || job.status === 'approved' || job.status === 'blocked') return { job, replayed: true }
   if (job.status !== 'queued') throw createError({ statusCode: 409, statusMessage: `Content job is not executable from status ${job.status}.` })
   await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: 'processing' })
+  const brief = context.brief || await createCanonicalProductionBrief(input.ownerUserId, context)
+  const inputForDraft = draftInput(context)
+  const source = draftSource(context)
   try {
-    const result = await optimiseGeoDocument(document, job.providerMode === 'reference_rules' ? referenceRulesAdapter : job.providerMode === 'autogeo_api' ? createAutoGeoApiAdapter() : undefined)
-    const candidate = result.candidate
-    const riskGate = evaluateContentRisk({ source: result.original, candidateTitle: candidate.optimizedTitle, candidateBody: candidate.optimizedContent, evidenceCount: approvedEvidence.refs.length })
-    const draft = await saveContentCandidate({
+    const baseGenerator = input.dependencies?.baseDraftGenerator || generatorForMode(job.providerMode)
+    const baseResult = await baseGenerator.generate(inputForDraft)
+    const baseRisk = withEvidenceMaterialGate(evaluateContentRisk({ source, candidateTitle: baseResult.title, candidateBody: baseResult.body, evidenceCount: context.evidenceSnapshot.refs.length }), context.evidenceSnapshot.materials)
+    const baseDraft = await saveContentCandidate({
+      jobId: job.id,
+      title: baseResult.title,
+      body: baseResult.body,
+      contentHash: contentFingerprint(baseResult.title, baseResult.body),
+      sourceMode: sourceModeFor({ ...baseResult.provenance, generationMode: baseResult.mode }, baseResult.provider),
+      provenance: { ...baseResult.provenance, stage: 'base_draft', generationMode: baseResult.mode, generator: baseGenerator.id, generatorVersion: baseGenerator.version, evidenceSnapshotHash: context.evidenceSnapshot.hash, selectedRuleIds: context.rules.map(rule => rule.id), briefId: brief.id },
+      evidenceRefs: context.evidenceSnapshot.refs,
+      safetyStatus: baseRisk.status === 'blocked' ? 'blocked' : baseRisk.status === 'needs_human_review' ? 'needs_review' : 'passed',
+      safetyNotes: [...baseResult.limitations, 'Base draft is an evidence-bound draft and is not a publishable result.'],
+    })
+    await saveRiskGate({ draftId: baseDraft.id, result: baseRisk, evidenceSnapshotHash: context.evidenceSnapshot.hash })
+    if (baseRisk.status === 'blocked') {
+      await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: 'blocked', providerProvenance: { stage: 'base_draft', generator: baseGenerator.id, generationMode: baseResult.mode } })
+      await updateProductionDeliverable(input.ownerUserId, context.deliverable.id, { status: 'blocked', briefId: brief.id, jobId: job.id })
+      return { job: { ...job, status: 'blocked' as const }, baseDraft, riskGate: baseRisk, replayed: false }
+    }
+
+    const selectedRules = resolveCanonicalGeoRules(context.rules.map(rule => rule.id))
+    const optimizationDocument = buildOptimizationDocument({ title: baseResult.title, body: baseResult.body, language: inputForDraft.language, goals: inputForDraft.goals, constraints: inputForDraft.constraints, diagnosisFindings: inputForDraft.diagnosisFindings, strategyRules: inputForDraft.strategyRules, evidenceMaterials: inputForDraft.evidenceMaterials })
+    const optimizationResult = await optimiseGeoDocument(optimizationDocument, input.dependencies?.optimizationAdapter || adapterForMode(job.providerMode), selectedRules)
+    const candidate = optimizationResult.candidate
+    const optimizedRisk = withEvidenceMaterialGate(evaluateContentRisk({ source, candidateTitle: candidate.optimizedTitle, candidateBody: candidate.optimizedContent, evidenceCount: context.evidenceSnapshot.refs.length }), context.evidenceSnapshot.materials)
+    const optimizedDraft = await saveContentCandidate({
       jobId: job.id,
       title: candidate.optimizedTitle,
       body: candidate.optimizedContent,
       contentHash: contentFingerprint(candidate.optimizedTitle, candidate.optimizedContent),
       sourceMode: candidate.provider === 'reference-rules-v1' ? 'reference_fallback' : 'provider_candidate',
-      provenance: { provider: candidate.provider, providerVersion: candidate.providerVersion, provenance: candidate.provenance, rulesetVersion: result.rulesetVersion, workbenchVersion: result.version },
-      evidenceRefs: approvedEvidence.refs,
-      safetyStatus: riskGate.status === 'blocked' ? 'blocked' : riskGate.status === 'needs_human_review' ? 'needs_review' : 'passed',
-      safetyNotes: candidate.safetyNotes,
+      provenance: { provider: candidate.provider, providerVersion: candidate.providerVersion, providerProvenance: candidate.provenance, stage: 'optimized', generationMode: 'selected_rule_optimization', parentDraftId: baseDraft.id, parentBaseDraftHash: baseDraft.contentHash, rulesetVersion: optimizationResult.rulesetVersion, selectedRuleIds: selectedRules.map(rule => rule.id), appliedRuleIds: candidate.appliedRuleIds, evidenceSnapshotHash: context.evidenceSnapshot.hash, briefId: brief.id },
+      evidenceRefs: context.evidenceSnapshot.refs,
+      safetyStatus: optimizedRisk.status === 'blocked' ? 'blocked' : optimizedRisk.status === 'needs_human_review' ? 'needs_review' : 'passed',
+      safetyNotes: [...candidate.safetyNotes, optimizationResult.interpretationLimit, 'Optimization is a selected-rule AutoGEO-compatible pass; it is not a ranking or conversion prediction.'],
     })
+    await saveRiskGate({ draftId: optimizedDraft.id, result: optimizedRisk, evidenceSnapshotHash: context.evidenceSnapshot.hash })
+    const finalStatus = optimizedRisk.status === 'blocked' ? 'blocked' : 'needs_human_review'
+    await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: finalStatus, providerProvenance: { stage: 'optimized', provider: candidate.provider, providerVersion: candidate.providerVersion, selectedRuleIds: selectedRules.map(rule => rule.id), appliedRuleIds: candidate.appliedRuleIds, baseDraftId: baseDraft.id, optimizedDraftId: optimizedDraft.id, execution: candidate.provenance.execution || 'selected-rule-optimization', fallbackReason: candidate.provenance.fallbackReason ?? null } })
+    await updateProductionDeliverable(input.ownerUserId, context.deliverable.id, { status: finalStatus === 'blocked' ? 'blocked' : 'needs_human_review', briefId: brief.id, jobId: job.id })
+    return { job: { ...job, status: finalStatus }, baseDraft: { id: baseDraft.id, version: baseDraft.version, sourceMode: baseDraft.sourceMode }, draft: { id: optimizedDraft.id, version: optimizedDraft.version, sourceMode: optimizedDraft.sourceMode }, result: optimizationResult, riskGate: optimizedRisk, replayed: false }
+  } catch (error) {
+    await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: 'failed', errorCode: 'production_generation_failed', errorSummary: error instanceof Error ? error.message.slice(0, 500) : 'Unknown production generation error' })
+    await updateProductionDeliverable(input.ownerUserId, context.deliverable.id, { status: 'blocked', briefId: brief.id, jobId: job.id })
+    throw error
+  }
+}
+
+/** Standalone owner request. Governed Production Plans use runOwnerProductionPlan below. */
+export async function runOwnerAutoGeoContentJob(input: { ownerUserId: number, briefId: number, document: GeoDocumentInput, idempotencyKey: string, jobId?: number }) {
+  const brief = await getOwnerContentBrief(input.ownerUserId, input.briefId)
+  if (brief.status !== 'ready_for_generation') throw createError({ statusCode: 422, statusMessage: 'Content Brief is not ready for generation.' })
+  if (brief.language !== input.document.language) throw createError({ statusCode: 422, statusMessage: 'Document language must match the approved Content Brief.' })
+  const approvedEvidence = await resolveApprovedEvidenceSnapshot(input.ownerUserId, (Array.isArray(brief.evidenceRefs) ? brief.evidenceRefs : []) as EvidenceRef[], 'content_draft', { requireArtifact: true })
+  if (approvedEvidence.hash !== brief.evidenceSnapshotHash) throw createError({ statusCode: 409, statusMessage: 'Content Brief evidence snapshot is stale; create a new Brief before generating.' })
+  const job = input.jobId ? await getOwnerContentJob(input.ownerUserId, input.jobId) : await createContentJob({ ownerUserId: input.ownerUserId, briefId: brief.id, operation: 'content_draft', providerMode: 'reference_rules', idempotencyKey: input.idempotencyKey, productionPlanId: brief.productionPlanId ?? undefined, strategyRecommendationId: brief.strategyRecommendationId ?? undefined, productionDeliverableId: brief.productionDeliverableId ?? undefined })
+  if (job.briefId !== brief.id || job.operation !== 'content_draft') throw createError({ statusCode: 422, statusMessage: 'Job must belong to this Brief and use the content_draft operation.' })
+  if (input.jobId && job.idempotencyKey !== input.idempotencyKey) throw createError({ statusCode: 409, statusMessage: 'The supplied idempotency key does not match this content job.' })
+  if (brief.productionPlanId && brief.productionDeliverableId) {
+    const context = await resolveProductionContext({ ownerUserId: input.ownerUserId, planId: brief.productionPlanId, deliverableId: brief.productionDeliverableId, includeArtifacts: true })
+    return runOwnerProductionDeliverable({ ownerUserId: input.ownerUserId, context: { ...context, brief, job }, job, dependencies: { baseDraftGenerator: createDeterministicScaffoldGenerator(), optimizationAdapter: referenceRulesAdapter } })
+  }
+  if (job.status === 'candidate_ready' || job.status === 'needs_human_review' || job.status === 'approved' || job.status === 'blocked') return { job, replayed: true }
+  await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: 'processing' })
+  try {
+    const source = { ...input.document, approvedEvidenceContext: approvedEvidence.context, approvedBriefGoals: arrayOfStrings(brief.goals), approvedBriefConstraints: arrayOfStrings(brief.constraints) }
+    const result = await optimiseGeoDocument(source, referenceRulesAdapter)
+    const candidate = result.candidate
+    const riskGate = evaluateContentRisk({ source: result.original, candidateTitle: candidate.optimizedTitle, candidateBody: candidate.optimizedContent, evidenceCount: approvedEvidence.refs.length })
+    const draft = await saveContentCandidate({ jobId: job.id, title: candidate.optimizedTitle, body: candidate.optimizedContent, contentHash: contentFingerprint(candidate.optimizedTitle, candidate.optimizedContent), sourceMode: 'reference_fallback', provenance: { ...candidate.provenance, stage: 'optimized', generationMode: 'standalone-optimization', rulesetVersion: result.rulesetVersion }, evidenceRefs: approvedEvidence.refs, safetyStatus: riskGate.status === 'blocked' ? 'blocked' : riskGate.status === 'needs_human_review' ? 'needs_review' : 'passed', safetyNotes: [...candidate.safetyNotes, result.interpretationLimit] })
     await saveRiskGate({ draftId: draft.id, result: riskGate, evidenceSnapshotHash: approvedEvidence.hash })
     const finalStatus = riskGate.status === 'blocked' ? 'blocked' : 'needs_human_review'
-    await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: finalStatus, providerProvenance: { provider: candidate.provider, providerVersion: candidate.providerVersion, execution: candidate.provenance.execution, fallbackReason: candidate.provenance.fallbackReason ?? null } })
-    return { job: { ...job, status: finalStatus }, result, draft: { id: draft.id, version: draft.version, sourceMode: draft.sourceMode }, riskGate, replayed: false }
+    await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: finalStatus, providerProvenance: { stage: 'standalone-optimization', provider: candidate.provider, appliedRuleIds: candidate.appliedRuleIds } })
+    return { job: { ...job, status: finalStatus }, draft: { id: draft.id, version: draft.version, sourceMode: draft.sourceMode }, result, riskGate, replayed: false }
   } catch (error) {
     await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: 'failed', errorCode: 'candidate_generation_failed', errorSummary: error instanceof Error ? error.message.slice(0, 500) : 'Unknown candidate generation error' })
     throw error
   }
 }
 
-export async function runOwnerProductionPlan(input: { ownerUserId: number, planId: number }) {
+export async function runOwnerProductionPlan(input: { ownerUserId: number, planId: number, dependencies?: ProductionRuntimeDependencies }) {
   const current = await getProductionPlanBundle(input.ownerUserId, input.planId)
   if (current.plan.status === 'completed' || current.plan.status === 'blocked') return { ...current, generated: [], replayed: true }
   const prepared = await prepareProductionPlanGeneration(input.ownerUserId, input.planId)
-  const generated: Array<{ deliverableId: number, jobId: number, status: string, draftId?: number }> = []
+  const generated: Array<{ deliverableId: number, jobId: number, status: string, baseDraftId?: number, draftId?: number }> = []
   for (const item of prepared.prepared) {
-    const brief = await getOwnerContentBrief(input.ownerUserId, item.briefId)
-    const sourceContent = [
-      `Content opportunity: ${brief.title}`,
-      `Audience: ${brief.audience}`,
-      'Goals:',
-      ...arrayOfStrings(brief.goals).map(goal => `- ${goal}`),
-      'Constraints:',
-      ...arrayOfStrings(brief.constraints).map(constraint => `- ${constraint}`),
-      'This is a bounded owner-approved template source. It contains no asserted client result or external outcome.',
-    ].join('\\n').slice(0, 12000)
     try {
-      const result = await runOwnerAutoGeoContentJob({ ownerUserId: input.ownerUserId, briefId: item.briefId, jobId: item.jobId, document: { title: brief.title, content: sourceContent, language: brief.language }, idempotencyKey: item.idempotencyKey })
-      const status = result.job.status === 'blocked' ? 'blocked' : 'candidate_ready'
-      await updateProductionDeliverable(input.ownerUserId, item.deliverableId, { status, jobId: item.jobId, briefId: item.briefId })
-      generated.push({ deliverableId: item.deliverableId, jobId: item.jobId, status, draftId: result.draft?.id })
+      const context = await resolveProductionContext({ ownerUserId: input.ownerUserId, planId: input.planId, deliverableId: item.deliverableId, includeArtifacts: true })
+      const brief = context.brief || await createCanonicalProductionBrief(input.ownerUserId, context)
+      const job = context.job || await getOwnerContentJob(input.ownerUserId, item.jobId)
+      const result = await runOwnerProductionDeliverable({ ownerUserId: input.ownerUserId, context: { ...context, brief, job }, job, dependencies: input.dependencies })
+      generated.push({ deliverableId: item.deliverableId, jobId: item.jobId, status: result.job.status, baseDraftId: 'baseDraft' in result ? result.baseDraft?.id : undefined, draftId: 'draft' in result ? result.draft?.id : undefined })
     } catch {
-      await updateProductionDeliverable(input.ownerUserId, item.deliverableId, { status: 'blocked', jobId: item.jobId, briefId: item.briefId })
       generated.push({ deliverableId: item.deliverableId, jobId: item.jobId, status: 'blocked' })
-      continue
     }
   }
-  const finalStatus = generated.some(item => item.status === 'blocked') ? 'blocked' : 'completed'
-  const database = requireAuditDatabase()
-  await database.update(seoGeoProductionPlans).set({ status: finalStatus }).where(and(eq(seoGeoProductionPlans.id, input.planId), eq(seoGeoProductionPlans.ownerUserId, input.ownerUserId)))
+  await recalculateProductionPlanStatus(input.ownerUserId, input.planId)
   return { ...await getProductionPlanBundle(input.ownerUserId, input.planId), generated, replayed: false }
 }
