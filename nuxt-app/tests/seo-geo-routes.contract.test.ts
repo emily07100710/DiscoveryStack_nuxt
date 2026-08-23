@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const root = process.cwd()
 const workbench = readFileSync(join(root, 'pages/audit-lab/seo-geo.vue'), 'utf8')
+const diagnosisRoute = readFileSync(join(root, 'server/api/seo-geo/diagnose.post.ts'), 'utf8')
 const jobsRoute = readFileSync(join(root, 'server/api/seo-geo/jobs.post.ts'), 'utf8')
 const recommendRoute = readFileSync(join(root, 'server/api/seo-geo/recommend.post.ts'), 'utf8')
 const service = readFileSync(join(root, 'server/seo-geo-core/service.ts'), 'utf8')
@@ -11,6 +12,12 @@ const repository = readFileSync(join(root, 'server/seo-geo-core/repository.ts'),
 const targetRoute = readFileSync(join(root, 'server/api/seo-geo/delivery-targets.post.ts'), 'utf8')
 
 describe('SEO/GEO route integration contracts', () => {
+  it('keeps Diagnosis UI and API request contracts aligned', () => {
+    expect(workbench).toContain('homepageUrl: diagnosisForm.url')
+    expect(workbench).not.toContain('{ url: diagnosisForm.url')
+    expect(diagnosisRoute).toContain('homepageUrl: z.string()')
+  })
+
   it('keeps queued Job creation separate from foreground recommendation execution', () => {
     expect(jobsRoute).toContain("import { createContentJob } from '../../seo-geo-core/repository'")
     expect(jobsRoute).not.toContain("import { runOwnerAutoGeoContentJob }")

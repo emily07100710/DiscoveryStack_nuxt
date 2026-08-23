@@ -50,7 +50,7 @@ function saveEvidenceApproval() {
   return post('/api/seo-geo/evidence-approvals', { sourceId: Number(approvalForm.sourceId), artifactId: numberOrUndefined(approvalForm.artifactId), allowedFor: approvalForm.allowedFor, reviewNote: approvalForm.reviewNote }, 'Evidence approval 已寫入；它僅限本次明確用途。')
 }
 function runDiagnosis() {
-  return post('/api/seo-geo/diagnose', { url: diagnosisForm.url, sourceId: numberOrUndefined(diagnosisForm.sourceId), auditRunId: numberOrUndefined(diagnosisForm.auditRunId) }, 'Diagnosis 已建立。若尚無核准模型 artifact，結果會明確標示 deterministic 或 not-ready。')
+  return post('/api/seo-geo/diagnose', { homepageUrl: diagnosisForm.url, sourceId: numberOrUndefined(diagnosisForm.sourceId), auditRunId: numberOrUndefined(diagnosisForm.auditRunId) }, 'Diagnosis 已建立。若尚無核准模型 artifact，結果會明確標示 deterministic 或 not-ready。')
 }
 function saveBrief() {
   return post('/api/seo-geo/briefs', {
