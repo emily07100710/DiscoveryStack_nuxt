@@ -1,0 +1,23 @@
+<script setup lang="ts">
+const route = useRoute()
+const activeSection = computed(() => route.path === '/audit-lab/geo' ? 'geo' : 'audit')
+useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
+</script>
+
+<template>
+  <div class="owner-layout">
+    <header class="owner-layout__header">
+      <NuxtLink class="owner-layout__brand" to="/audit-lab" aria-label="DiscoveryStack 私有稽核實驗室首頁">DISCOVERYSTACK<span>.</span><small>PRIVATE WORKBENCH</small></NuxtLink>
+      <nav class="owner-layout__nav" aria-label="私有工作台導覽">
+        <NuxtLink to="/audit-lab" :aria-current="activeSection === 'audit' ? 'page' : undefined">Audit Lab</NuxtLink>
+        <NuxtLink to="/audit-lab/geo" :aria-current="activeSection === 'geo' ? 'page' : undefined">GEO Workbench</NuxtLink>
+      </nav>
+      <NuxtLink class="owner-layout__exit" to="/zh-hant">返回公開網站 <span aria-hidden="true">↗</span></NuxtLink>
+    </header>
+    <main id="owner-workbench"><slot /></main>
+  </div>
+</template>
+
+<style scoped>
+.owner-layout { min-height:100vh; background:#101319; color:#eff3f7; }.owner-layout__header { position:sticky; top:0; z-index:30; display:grid; grid-template-columns:minmax(12rem,1fr) auto minmax(12rem,1fr); align-items:center; gap:1rem; min-height:4.5rem; padding:.75rem clamp(1rem,4vw,4rem); border-bottom:1px solid rgba(230,238,246,.13); background:rgba(16,19,25,.94); backdrop-filter:blur(16px); }.owner-layout__brand,.owner-layout__exit,.owner-layout__nav a { color:inherit; text-decoration:none; }.owner-layout__brand { display:inline-flex; align-items:baseline; gap:.32rem; width:max-content; color:#fff; font-size:.83rem; font-weight:800; letter-spacing:.11em; }.owner-layout__brand span { color:#8eb7ec; }.owner-layout__brand small { color:#aeb9c5; font-size:.55rem; letter-spacing:.1em; }.owner-layout__nav { display:flex; gap:.2rem; padding:.22rem; border:1px solid rgba(230,238,246,.12); border-radius:999px; }.owner-layout__nav a,.owner-layout__exit { padding:.48rem .7rem; border-radius:999px; color:#b9c3ce; font-size:.7rem; font-weight:700; }.owner-layout__nav a[aria-current='page'],.owner-layout__nav a:hover,.owner-layout__nav a:focus-visible { color:#111820; background:#dce9f6; outline:none; }.owner-layout__exit { justify-self:end; border:1px solid rgba(230,238,246,.18); }#owner-workbench { min-height:calc(100vh - 4.5rem); background:#f4f6f8; color:#17253d; }@media(max-width:720px){.owner-layout__header{grid-template-columns:1fr auto;gap:.7rem}.owner-layout__nav{grid-column:1/-1;grid-row:2;justify-content:center}.owner-layout__brand small{display:none}}
+</style>

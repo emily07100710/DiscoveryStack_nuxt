@@ -16,6 +16,8 @@ type IngestionJob = { id: number, sourceId: number, sourceName: string | null, r
 type PublicInference = { id: number, sourceId: number, sourceName: string | null, ingestionJobId: number | null, analysisKind: string, modelFamily: string, modelVersion: string, status: string, requiresHumanReview: boolean, createdAt: string }
 
 const state = ref<'loading' | 'signin' | 'ready' | 'error'>('loading')
+const route = useRoute()
+const isNestedAuditRoute = computed(() => route.path.startsWith('/audit-lab/'))
 const overview = ref<Overview | null>(null)
 const errorMessage = ref('')
 const formStatus = ref<'idle' | 'saving' | 'success' | 'error'>('idle')
@@ -81,7 +83,7 @@ const mlMessage = ref('')
 const ingestionForm = reactive({ sourceId: 0, requestedUrl: '', mode: 'site' as 'document' | 'site', maxPages: 10, maxDepth: 1 })
 const bgeJobIds = ref<number[]>([])
 
-definePageMeta({ i18n: false })
+definePageMeta({ i18n: false, layout: 'owner' })
 useHead({ title: '私有稽核實驗室 · 發現方式Stack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 
 async function loadOverview() {
@@ -377,11 +379,12 @@ async function approvePublicDataset(datasetId: number) {
   } catch (error: unknown) { datasetApprovalStatus.value = 'error'; errorMessage.value = (error as { statusMessage?: string }).statusMessage || '資料集 manifest 無法核准。' }
 }
 
-onMounted(loadOverview)
+onMounted(() => { if (!isNestedAuditRoute.value) void loadOverview() })
 </script>
 
 <template>
-  <section class="audit-lab" aria-labelledby="audit-title">
+  <NuxtPage v-if="isNestedAuditRoute" />
+  <section v-else class="audit-lab" aria-labelledby="audit-title">
     <div class="audit-lab-head">
       <p class="eyebrow">私有／旅程洞察</p>
       <h1 id="audit-title">稽核路徑。<br><em>治理證據。</em></h1>

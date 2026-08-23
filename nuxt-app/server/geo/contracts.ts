@@ -1,0 +1,83 @@
+export const GEO_WORKBENCH_VERSION = 'geo-workbench-v1'
+
+export type GeoLanguage = 'en' | 'zh-hant'
+export type GeoRuleCategory = 'answerability' | 'structure' | 'context' | 'evidence' | 'utility'
+export type GeoProviderId = 'reference-rules-v1' | 'autogeo-api' | 'autogeo-bailian-qwen' | 'custom'
+export type GeoRequestedProvider = 'autogeo-api' | 'autogeo-bailian-qwen'
+export type GeoProviderExecution = 'official-autogeo-api' | 'autogeo-framework-bailian-qwen' | 'reference-fallback'
+export type GeoFallbackReason =
+  | 'bailian-not-configured'
+  | 'bailian-invalid-configuration'
+  | 'bailian-provider-unavailable'
+  | 'provider-output-safety-rejected'
+  | 'autogeo-not-configured'
+  | 'autogeo-provider-unavailable'
+
+export type GeoDocumentInput = {
+  title: string
+  content: string
+  language: GeoLanguage
+}
+
+export type GeoRule = {
+  id: string
+  category: GeoRuleCategory
+  title: string
+  instruction: string
+  rationale: string
+  priority: 'high' | 'medium'
+}
+
+export type GeoRewriteProvenance = {
+  requestedProvider: GeoRequestedProvider
+  execution: GeoProviderExecution
+  upstreamRepository: 'cxcscmu/AutoGEO'
+  upstreamRevision: string
+  rewriteMethod: 'autogeo_api'
+  ruleset: 'Researchy-GEO / Gemini default rules'
+  model: 'gemini-2.5-pro' | 'qwen-plus' | (string & {})
+  providerRequestId?: string
+  usage?: { inputTokens?: number, outputTokens?: number, totalTokens?: number }
+  fallbackReason?: GeoFallbackReason
+}
+
+export type GeoRewriteCandidate = {
+  provider: GeoProviderId
+  providerVersion: string
+  optimizedTitle: string
+  optimizedContent: string
+  appliedRuleIds: string[]
+  safetyNotes: string[]
+  provenance: GeoRewriteProvenance
+}
+
+export type GeoRewriteAdapter = {
+  id: GeoProviderId
+  version: string
+  rewrite: (document: GeoDocumentInput, rules: readonly GeoRule[]) => Promise<GeoRewriteCandidate>
+}
+
+export type GeoMetricId = 'answerability' | 'structure' | 'context' | 'evidence' | 'scannability' | 'sourcePreservation'
+
+export type GeoMetric = { id: GeoMetricId, label: string, score: number, explanation: string }
+
+export type GeoDocumentEvaluation = {
+  totalScore: number
+  metrics: GeoMetric[]
+  method: 'deterministic-heuristic-v1'
+  limitations: string[]
+}
+
+export type GeoMetricComparison = GeoMetric & { before: number, after: number, delta: number }
+
+export type GeoOptimizationResult = {
+  version: typeof GEO_WORKBENCH_VERSION
+  rulesetVersion: string
+  original: GeoDocumentInput
+  candidate: GeoRewriteCandidate
+  baseline: GeoDocumentEvaluation
+  optimized: GeoDocumentEvaluation
+  comparison: GeoMetricComparison[]
+  summary: string
+  interpretationLimit: string
+}
