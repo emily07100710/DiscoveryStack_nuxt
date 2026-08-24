@@ -69,6 +69,7 @@ describe('Google Trends parser', () => {
     const result = parseGoogleTrendsCsv(SYNTHETIC_CSV, {
       snapshotId: 'csv-synthetic-01',
       keyword: 'synthetic topic',
+      scaleKey: 'web-search-us-2026-01',
       locale: 'en-US',
       window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T00:00:00.000Z',
@@ -82,7 +83,7 @@ describe('Google Trends parser', () => {
   it('normalizes suppressed <1 values without treating them as missing network data', () => {
     const csv = 'date,value\n2026-01-01,<1\n2026-01-02,2'
     const result = parseGoogleTrendsCsv(csv, {
-      snapshotId: 'csv-synthetic-02', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      snapshotId: 'csv-synthetic-02', keyword: 'synthetic topic', scaleKey: 'web-search-us-2026-01', locale: 'en-US', window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(true)
@@ -93,7 +94,7 @@ describe('Google Trends parser', () => {
   it('rejects a missing or wrong CSV header', () => {
     const csv = 'day,interest\n2026-01-01,10'
     const result = parseGoogleTrendsCsv(csv, {
-      snapshotId: 'csv-synthetic-03', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      snapshotId: 'csv-synthetic-03', keyword: 'synthetic topic', scaleKey: 'web-search-us-2026-01', locale: 'en-US', window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(false)
@@ -103,7 +104,7 @@ describe('Google Trends parser', () => {
   it('rejects invalid dates and out-of-window observations', () => {
     const csv = 'date,value\n2026-02-30,10\n2026-01-05,20'
     const result = parseGoogleTrendsCsv(csv, {
-      snapshotId: 'csv-synthetic-04', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      snapshotId: 'csv-synthetic-04', keyword: 'synthetic topic', scaleKey: 'web-search-us-2026-01', locale: 'en-US', window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(false)
@@ -114,7 +115,7 @@ describe('Google Trends parser', () => {
   it('rejects duplicate observations rather than silently overwriting them', () => {
     const csv = 'date,value\n2026-01-01,10\n2026-01-01,20'
     const result = parseGoogleTrendsCsv(csv, {
-      snapshotId: 'csv-synthetic-05', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      snapshotId: 'csv-synthetic-05', keyword: 'synthetic topic', scaleKey: 'web-search-us-2026-01', locale: 'en-US', window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(false)
@@ -124,7 +125,7 @@ describe('Google Trends parser', () => {
   it('rejects malformed and non-numeric rows', () => {
     const csv = 'date,value\n2026-01-01,ten\n2026-01-02,10,extra'
     const result = parseGoogleTrendsCsv(csv, {
-      snapshotId: 'csv-synthetic-06', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      snapshotId: 'csv-synthetic-06', keyword: 'synthetic topic', scaleKey: 'web-search-us-2026-01', locale: 'en-US', window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(false)
@@ -133,7 +134,7 @@ describe('Google Trends parser', () => {
 
   it('requires a SHA-256 source hash', () => {
     const result = parseGoogleTrendsCsv(SYNTHETIC_CSV, {
-      snapshotId: 'csv-synthetic-07', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      snapshotId: 'csv-synthetic-07', keyword: 'synthetic topic', scaleKey: 'web-search-us-2026-01', locale: 'en-US', window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: 'not-a-hash',
     })
     expect(result.ok).toBe(false)
@@ -375,7 +376,7 @@ describe('evidence integrity hardening', () => {
   it('rejects a valid-looking Google hash when the CSV content changes', () => {
     const csv = 'date,value\n2026-01-01,20\n2026-01-02,30'
     const result = parseGoogleTrendsCsv(`${csv}\n`, {
-      snapshotId: 'hash-synthetic-01', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      snapshotId: 'hash-synthetic-01', keyword: 'synthetic topic', scaleKey: 'web-search-us-2026-01', locale: 'en-US', window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T00:00:00Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(false)
@@ -385,7 +386,7 @@ describe('evidence integrity hardening', () => {
   it('accepts Google Trends only with the exact UTF-8 CSV hash, case normalized', () => {
     const csv = 'date,value\n2026-01-01,20\n2026-01-02,30'
     const result = parseGoogleTrendsCsv(csv, {
-      snapshotId: 'hash-synthetic-02', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      snapshotId: 'hash-synthetic-02', keyword: 'synthetic topic', scaleKey: 'web-search-us-2026-01', locale: 'en-US', window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T00:00:00+00:00', sourceHash: sha256(csv).toUpperCase(),
     })
     expect(result.ok).toBe(true)
@@ -468,11 +469,11 @@ describe('evidence integrity hardening', () => {
     expect(normalizeIsoDateTime('2026-01-01T00:00:00')).toBeNull()
     expect(normalizeIsoDateTime('2026-01-01T08:00:00+08:00')).toBe('2026-01-01T00:00:00.000Z')
     const utc = parseGoogleTrendsCsv(SYNTHETIC_CSV, {
-      snapshotId: 'time-utc', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      snapshotId: 'time-utc', keyword: 'synthetic topic', scaleKey: 'web-search-us-2026-01', locale: 'en-US', window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T00:00:00Z', sourceHash: SYNTHETIC_CSV_HASH,
     })
     const offset = parseGoogleTrendsCsv(SYNTHETIC_CSV, {
-      snapshotId: 'time-offset', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      snapshotId: 'time-offset', keyword: 'synthetic topic', scaleKey: 'web-search-us-2026-01', locale: 'en-US', window: SYNTHETIC_WINDOW,
       capturedAt: '2026-01-05T08:00:00+08:00', sourceHash: SYNTHETIC_CSV_HASH,
     })
     expect(utc.value?.capturedAt).toBe(offset.value?.capturedAt)
@@ -540,5 +541,82 @@ describe('evidence integrity hardening', () => {
     expect(metrics?.firstValue).toBe(10)
     expect(metrics?.latestValue).toBe(10)
     expect(metrics?.direction).toBe('stable')
+  })
+})
+
+
+describe('Google Trends scaleKey provenance regression', () => {
+  function parseScale(scaleKey: unknown, snapshotId: string) {
+    return parseGoogleTrendsCsv(SYNTHETIC_CSV, {
+      snapshotId,
+      keyword: 'synthetic topic',
+      scaleKey: scaleKey as string,
+      locale: 'en-US',
+      window: SYNTHETIC_WINDOW,
+      capturedAt: '2026-01-05T00:00:00Z',
+      sourceHash: SYNTHETIC_CSV_HASH,
+    })
+  }
+
+  it('preserves normalized scaleKey in parser output', () => {
+    const result = parseScale(' Web-Search-US-2026-01 ', 'scale-preserve')
+    expect(result.ok).toBe(true)
+    expect(result.value?.scaleKey).toBe('web-search-us-2026-01')
+  })
+
+  it('rejects missing, null, non-string, empty, and whitespace-only scaleKey', () => {
+    for (const scaleKey of [undefined, null, 42, '', '   ']) {
+      const result = parseScale(scaleKey, `scale-missing-${String(scaleKey)}`)
+      expect(result.ok).toBe(false)
+      expect(result.value).toBeUndefined()
+      expect(result.errors.map((error) => error.code)).toContain('MISSING_REQUIRED_FIELD')
+    }
+  })
+
+  it('keeps the CSV source hash contract independent from scaleKey', () => {
+    const us = parseScale('web-search-us-2026-01', 'scale-hash-us')
+    const world = parseScale('web-search-world-2026-01', 'scale-hash-world')
+    expect(us.value?.sourceHash).toBe(SYNTHETIC_CSV_HASH)
+    expect(world.value?.sourceHash).toBe(SYNTHETIC_CSV_HASH)
+  })
+
+  it('does not produce SCALE_MISMATCH for normalized-equivalent parser scales', () => {
+    const first = parseScale(' Web-Search-US-2026-01 ', 'scale-equivalent-a')
+    const second = parseScale('web-search-us-2026-01', 'scale-equivalent-b')
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    const assessment = assessMarketSignal(trendRequest({ googleTrends: [first.value!, second.value!] }))
+    expect(assessment.status).toBe('ready')
+    expect(assessment.rejectionReasons).not.toContain('SCALE_MISMATCH')
+  })
+
+  it('rejects different parser scales without merging them into ready metrics', () => {
+    const us = parseScale('web-search-us-2026-01', 'scale-different-us')
+    const world = parseScale('web-search-world-2026-01', 'scale-different-world')
+    expect(us.ok).toBe(true)
+    expect(world.ok).toBe(true)
+    const assessment = assessMarketSignal(trendRequest({ googleTrends: [us.value!, world.value!] }))
+    expect(['not_ready', 'rejected']).toContain(assessment.status)
+    expect(assessment.rejectionReasons).toContain('SCALE_MISMATCH')
+    expect(assessment.rejectedSnapshotIds).toContain('scale-different-world')
+  })
+
+  it('rejects direct snapshots with missing or malformed scaleKey before metrics', () => {
+    for (const scaleKey of [undefined, null, 42, '', '   ']) {
+      const snapshot = { ...syntheticTrendSnapshot({ snapshotId: `direct-scale-${String(scaleKey)}` }), scaleKey: scaleKey as string }
+      const assessment = assessMarketSignal(trendRequest({ googleTrends: [snapshot] }))
+      expect(['not_ready', 'rejected']).toContain(assessment.status)
+      expect(assessment.acceptedSnapshotIds).toEqual([])
+      expect(assessment.trendMetrics).toBeNull()
+      expect(assessment.rejectionReasons).toContain('MISSING_REQUIRED_FIELD')
+    }
+  })
+
+  it('does not let missing scaleKey silently become default during alignment', () => {
+    const missing = { ...syntheticTrendSnapshot({ snapshotId: 'scale-no-default' }), scaleKey: undefined as unknown as string }
+    const assessment = assessMarketSignal(trendRequest({ googleTrends: [missing] }))
+    expect(assessment.rejectionReasons).not.toContain('SCALE_MISMATCH')
+    expect(assessment.acceptedSnapshotIds).not.toContain('scale-no-default')
+    expect(assessment.status).toBe('rejected')
   })
 })

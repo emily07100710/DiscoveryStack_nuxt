@@ -110,6 +110,8 @@ export function parseGoogleTrendsCsv(csv: unknown, options: unknown): ParseResul
     const errors: ParseIssue[] = []
     const warnings: ParseIssue[] = []
     if (typeof candidate.snapshotId !== 'string' || !candidate.snapshotId.trim() || typeof candidate.keyword !== 'string' || !candidate.keyword.trim() || typeof candidate.locale !== 'string' || !candidate.locale.trim()) errors.push(issue('MISSING_REQUIRED_FIELD', 'snapshotId, keyword and locale are required.'))
+    const scaleKey = typeof candidate.scaleKey === 'string' ? normalizeKeyword(candidate.scaleKey) : ''
+    if (!scaleKey) errors.push(issue('MISSING_REQUIRED_FIELD', 'scaleKey is required and must not be empty after normalization.'))
     if (!hasValidWindow(candidate.window)) errors.push(issue('INVALID_DATE', 'The observation window must contain valid ordered ISO dates.'))
     const capturedAt = normalizeIsoDateTime(candidate.capturedAt)
     if (!capturedAt) errors.push(issue('INVALID_DATE', 'capturedAt must be an ISO date-time with an explicit timezone.'))
@@ -172,6 +174,7 @@ export function parseGoogleTrendsCsv(csv: unknown, options: unknown): ParseResul
         window,
         capturedAt: capturedAt!,
         sourceHash: expectedHash,
+        scaleKey,
         observations,
         limitations: [
           'Google Trends is a normalized relative-interest signal, not search volume, causation, or proof of a factual claim.',

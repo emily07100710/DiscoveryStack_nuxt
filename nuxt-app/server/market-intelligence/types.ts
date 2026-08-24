@@ -77,7 +77,7 @@ export interface GoogleTrendsSnapshot {
   window: DateWindow
   capturedAt: string
   sourceHash: string
-  scaleKey?: string
+  scaleKey: string
   observations: GoogleTrendsObservation[]
   limitations: string[]
 }
@@ -89,7 +89,7 @@ export interface GoogleTrendsParseOptions {
   window: DateWindow
   capturedAt: string
   sourceHash?: string
-  scaleKey?: string
+  scaleKey: string
 }
 
 export interface ParseResult<T> {

@@ -16,7 +16,7 @@ Market Intelligence Signal Engine V1 是一個 **offline、pure TypeScript、det
 
 | 輸入 | V1 支援內容 | V1 不做的事 |
 | --- | --- | --- |
-| Google Trends | synthetic CSV parser、日期、0–100 值、`<1` suppressed value、locale、window、source hash | 不發出 Google request、不 scraping、不保存真實查詢資料、不把相對興趣當搜尋量 |
+| Google Trends | synthetic CSV parser、日期、0–100 值、`<1` suppressed value、locale、window、必要且 normalized 的 `scaleKey`、source hash | 不發出 Google request、不 scraping、不保存真實查詢資料、不把相對興趣當搜尋量 |
 | Meta Ad Library | synthetic metadata snapshot、publisher identity、ad ID、creative hash、日期、status、locale、window、source hash | 不發出 Meta request、不下載廣告素材、不保存客戶資料、不推導市占或轉換率 |
 | Engine output | bounded metrics、accepted/rejected snapshot IDs、policy reason、missing evidence、limitations、fingerprint | 不含 quote、DOI、頁碼、研究結論、全文、PDF 或自動引用 |
 
@@ -28,7 +28,7 @@ Market Intelligence Signal Engine V1 是一個 **offline、pure TypeScript、det
 
 CSV 必須使用精確 header `date,value`，每一列都必須是 ISO date 與 0 到 100 的有限數字。`<1` 會被明確轉成 `0`，並附加 `SUPPRESSED_VALUE` warning 與 limitation；它不會被偽裝成精確數字。重複日期、錯誤日期、越界數字、window 外 observation、錯誤欄位數、缺 hash 或非 SHA-256 hash 都會 fail closed。
 
-Parser 需要呼叫端提供 `snapshotId`、`keyword`、`locale`、`window`、`capturedAt` 與原始輸入的 SHA-256 `sourceHash`。引擎會以 UTF-8 bytes 對實際 CSV 字串計算 SHA-256，並與傳入 hash 做大小寫正規化後的精確比對；只有 hash 外觀正確但內容不一致時也會 fail closed。引擎不會自己抓取或重新取得資料。`capturedAt` 必須含 `Z` 或明確 `±HH:MM` timezone，保存前統一為 canonical UTC ISO timestamp。
+Parser 需要呼叫端提供 `snapshotId`、`keyword`、`locale`、`window`、`capturedAt` 與原始輸入的 SHA-256 `sourceHash`。引擎會以 UTF-8 bytes 對實際 CSV 字串計算 SHA-256，並與傳入 hash 做大小寫正規化後的精確比對；只有 hash 外觀正確但內容不一致時也會 fail closed。`scaleKey` 是獨立且必要的 provenance 欄位，不會被加入 CSV hash；它會做 NFKC、trim、lowercase 與 whitespace normalization，缺少、錯誤型別或 normalized 後為空都會 fail closed，不會 fallback 成 `default`。引擎不會自己抓取或重新取得資料。`capturedAt` 必須含 `Z` 或明確 `±HH:MM` timezone，保存前統一為 canonical UTC ISO timestamp。
 
 ### Meta snapshot
 
@@ -38,7 +38,7 @@ Meta snapshot 需要 `snapshotId`、publisher、locale、window、capturedAt、S
 
 ### Trend metrics
 
-引擎會依 ISO date 排序 observation；同一天只有在 keyword 與 `scaleKey` 完全一致時才可進入同一 assessment，否則以 `KEYWORD_MISMATCH` 或 `SCALE_MISMATCH` 拒絕衝突 snapshot，絕不平均不同 query 或 normalization scale 的數字。輸出包含 `pointCount`、first/latest/mean/min/max、change percentage、線性回歸 slope、volatility、peak、coverage 與 direction。當 baseline 為零時，`changePercent` 為 `null`，不會製造無限大或假百分比；少於兩個 distinct observation 時 direction 為 `insufficient_data`。request window 與每一個 snapshot window 必須精確相同，且每一個 observation date 必須同時落在兩者內。
+引擎會依 ISO date 排序 observation；每個 Google Trends snapshot 都必須有非空 normalized `scaleKey`，同一天只有在 keyword 與 `scaleKey` 完全一致時才可進入同一 assessment，否則以 `KEYWORD_MISMATCH` 或 `SCALE_MISMATCH` 拒絕衝突 snapshot，絕不平均不同 query 或 normalization scale 的數字。輸出包含 `pointCount`、first/latest/mean/min/max、change percentage、線性回歸 slope、volatility、peak、coverage 與 direction。當 baseline 為零時，`changePercent` 為 `null`，不會製造無限大或假百分比；少於兩個 distinct observation 時 direction 為 `insufficient_data`。request window 與每一個 snapshot window 必須精確相同，且每一個 observation date 必須同時落在兩者內。
 
 方向判定是治理用 threshold，不是預測模型：少於兩點是 `insufficient_data`；未達 change 與 slope threshold 是 `stable`；`latest > first` 是 `rising`；`latest < first` 是 `falling`；端點相等永遠是 `stable`，即使中間波動很大。所有數字固定 rounding，所有集合依 stable sort 與 duplicate removal 處理。
 
@@ -68,4 +68,4 @@ Policy catalog 集中管理 snapshot、observation、ad 與 request 限制，並
 
 ## 測試覆蓋
 
-`tests/market-intelligence-signal-engine.test.ts` 包含 59 個有意義案例，涵蓋 CSV content-bound hash、Meta canonical payload hash、creative hash、publisher normalization、suppressed values、invalid dates、duplicate records、keyword／scale／window alignment、timezone canonicalization、multi-publisher metrics、bounded snapshots、missing evidence、unsupported factual/ranking/investment use、malformed runtime input、deterministic metrics、stable ordering、fingerprint、no fabricated citation fields 與 no-network purity boundary。Fixtures 位於 `tests/fixtures/market-intelligence/`，僅使用 synthetic metadata。
+`tests/market-intelligence-signal-engine.test.ts` 包含 66 個有意義案例，涵蓋 CSV content-bound hash、Meta canonical payload hash、creative hash、publisher normalization、suppressed values、invalid dates、duplicate records、keyword／scale／window alignment、required scaleKey provenance、parser-to-assessment mismatch、timezone canonicalization、multi-publisher metrics、bounded snapshots、missing evidence、unsupported factual/ranking/investment use、malformed runtime input、deterministic metrics、stable ordering、fingerprint、no fabricated citation fields 與 no-network purity boundary。Fixtures 位於 `tests/fixtures/market-intelligence/`，僅使用 synthetic metadata。

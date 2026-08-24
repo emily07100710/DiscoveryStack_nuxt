@@ -83,7 +83,7 @@ function canonicalTrendSnapshot(input: unknown): GoogleTrendsSnapshot {
     window: { start: typeof rawWindow.start === 'string' ? rawWindow.start : '', end: typeof rawWindow.end === 'string' ? rawWindow.end : '' },
     capturedAt: typeof snapshot.capturedAt === 'string' ? normalizeIsoDateTime(snapshot.capturedAt) ?? snapshot.capturedAt : '',
     sourceHash: typeof snapshot.sourceHash === 'string' ? snapshot.sourceHash.trim().toLocaleLowerCase('en-US') : '',
-    scaleKey: typeof snapshot.scaleKey === 'string' ? normalizeText(snapshot.scaleKey) : 'default',
+    scaleKey: typeof snapshot.scaleKey === 'string' ? normalizeText(snapshot.scaleKey) : '',
     observations,
     limitations: rawLimitations.filter((value): value is string => typeof value === 'string').slice().sort(),
   }
@@ -182,7 +182,7 @@ function validateTrendSnapshot(snapshot: unknown, request: MarketSignalRequest):
   const policy = MARKET_SIGNAL_POLICIES.google_trends
   if (snapshot.provider !== 'google_trends') reasons.push('UNKNOWN_PROVIDER')
   if (typeof snapshot.keyword !== 'string' || !snapshot.keyword.trim()) reasons.push('MISSING_REQUIRED_FIELD')
-  if (typeof snapshot.scaleKey !== 'undefined' && typeof snapshot.scaleKey !== 'string') reasons.push('INVALID_INPUT')
+  if (typeof snapshot.scaleKey !== 'string' || !normalizeText(snapshot.scaleKey)) reasons.push('MISSING_REQUIRED_FIELD')
   if (!Array.isArray(snapshot.observations) || snapshot.observations.length === 0) reasons.push('MISSING_REQUIRED_FIELD')
   else if (snapshot.observations.length > policy.maxObservationsPerSnapshot) reasons.push('INVALID_INPUT')
   if (Array.isArray(snapshot.observations)) {
@@ -293,13 +293,13 @@ export function assessMarketSignal(input: unknown): MarketSignalAssessment {
       const reasons = validateTrendSnapshot(snapshot, request)
       const snapshotId = normalizedSnapshotId(isRecord(snapshot) ? snapshot.snapshotId : '')
       const keyword = isRecord(snapshot) && typeof snapshot.keyword === 'string' ? normalizeKeyword(snapshot.keyword) : ''
-      const scale = isRecord(snapshot) && typeof snapshot.scaleKey === 'string' ? normalizeText(snapshot.scaleKey) : 'default'
+      const scale = isRecord(snapshot) && typeof snapshot.scaleKey === 'string' ? normalizeText(snapshot.scaleKey) : ''
       if (seenSnapshotIds.has(snapshotId)) reasons.push('DUPLICATE_SNAPSHOT_ID')
       seenSnapshotIds.add(snapshotId)
-      if (referenceKeyword === null && keyword) referenceKeyword = keyword
-      else if (keyword && referenceKeyword !== keyword) reasons.push('KEYWORD_MISMATCH')
-      if (referenceScale === null && scale) referenceScale = scale
-      else if (scale && referenceScale !== scale) reasons.push('SCALE_MISMATCH')
+      if (referenceKeyword === null) referenceKeyword = keyword
+      else if (keyword.length > 0 && referenceKeyword !== keyword) reasons.push('KEYWORD_MISMATCH')
+      if (referenceScale === null) referenceScale = scale
+      else if (referenceScale.length > 0 && scale.length > 0 && referenceScale !== scale) reasons.push('SCALE_MISMATCH')
       if (index >= policy.maxSnapshots) reasons.push('INVALID_INPUT')
       if (reasons.length > 0) {
         assessment.rejectedSnapshotIds.push(snapshotId)
