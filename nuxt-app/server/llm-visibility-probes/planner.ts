@@ -1,0 +1,86 @@
+import {
+  canonicalFingerprint,
+  canonicalProbeIdentity,
+  normalizeProbePlanInput,
+  normalizePrompt,
+} from './normalization'
+import {
+  type ProbePlanResult,
+  type ProviderTarget,
+  type QuerySnapshot,
+  PROBE_LIMITATION_CODE,
+} from './types'
+import { MAX_PROBES, PROBE_ENGINE_VERSION_DEFAULT } from './normalization'
+import type { VisibilityProbe, VisibilityProbePlan } from './types'
+
+function blocked(reasonCodes: string[]): ProbePlanResult {
+  return { status: 'blocked', reasonCodes: [...new Set(reasonCodes)].sort(), limitationCode: 'probe_plan_invalid' }
+}
+
+function stableTargetOrder(left: ProviderTarget, right: ProviderTarget): number {
+  return left.provider.localeCompare(right.provider) || left.modelLabel.localeCompare(right.modelLabel) || left.adapterKey.localeCompare(right.adapterKey)
+}
+
+function stableQueryOrder(left: QuerySnapshot, right: QuerySnapshot): number {
+  return left.locale.localeCompare(right.locale) || left.queryId.localeCompare(right.queryId) || left.promptHash.localeCompare(right.promptHash)
+}
+
+export function buildVisibilityProbePlan(input: unknown): ProbePlanResult {
+  let normalized: ReturnType<typeof normalizeProbePlanInput>
+  try { normalized = normalizeProbePlanInput(input) } catch (error: unknown) {
+    const reasonCode = error instanceof Error && error.message ? error.message : 'MALFORMED_PLAN_INPUT'
+    return blocked([reasonCode])
+  }
+  if (normalized.engineVersion !== PROBE_ENGINE_VERSION_DEFAULT) return blocked(['ENGINE_VERSION_MISMATCH'])
+  const activeQueries = normalized.activeQuerySnapshots.filter(query => query.active).sort(stableQueryOrder)
+  const activeTargets = normalized.providerTargets.filter(target => target.status === 'active').sort(stableTargetOrder)
+  if (!activeQueries.length) return blocked(['NO_ACTIVE_QUERIES'])
+  if (!activeTargets.length) return blocked(['NO_ACTIVE_PROVIDER_TARGETS'])
+  const reasons: string[] = []
+  const seenPromptHashes = new Set<string>()
+  for (const query of activeQueries) {
+    if (query.locale !== normalized.project.locale) reasons.push('QUERY_LOCALE_MISMATCH')
+    if (seenPromptHashes.has(query.promptHash)) reasons.push('DUPLICATE_NORMALIZED_PROMPT')
+    seenPromptHashes.add(query.promptHash)
+  }
+  const eligibleTargets = activeTargets.filter(target => target.allowedLocales.includes(normalized.project.locale))
+  if (eligibleTargets.length !== activeTargets.length) reasons.push('PROVIDER_LOCALE_MISMATCH')
+  if (reasons.length) return blocked(reasons)
+
+  const probes: VisibilityProbe[] = []
+  const seenCombinations = new Set<string>()
+  for (const target of eligibleTargets) {
+    for (const query of activeQueries) {
+      const normalizedPrompt = normalizePrompt(query.promptText)
+      const identityKey = `${target.provider}|${target.modelLabel}|${query.queryId}|${query.locale}`
+      if (seenCombinations.has(identityKey)) return blocked(['DUPLICATE_PROVIDER_MODEL_QUERY'])
+      seenCombinations.add(identityKey)
+      const probeBase = { ownerScopeKey: normalized.ownerScopeKey, projectId: normalized.project.projectId, queryId: query.queryId, provider: target.provider, modelLabel: target.modelLabel, locale: query.locale, observationWindowKey: normalized.observationWindowKey }
+      const requestFingerprint = canonicalProbeIdentity(probeBase, query.promptHash, normalized.engineVersion)
+      const probeId = canonicalFingerprint({ identityKey, requestFingerprint })
+      probes.push({
+        probeId,
+        requestFingerprint,
+        identityKey,
+        ownerScopeKey: normalized.ownerScopeKey,
+        projectId: normalized.project.projectId,
+        queryId: query.queryId,
+        provider: target.provider,
+        modelLabel: target.modelLabel,
+        adapterKey: target.adapterKey,
+        locale: query.locale,
+        normalizedPrompt,
+        observationWindowKey: normalized.observationWindowKey,
+        limitationCode: PROBE_LIMITATION_CODE,
+        provenance: { engineVersion: normalized.engineVersion, observationMode: 'provider_api_observation', consumerSurfaceEquivalent: false },
+        status: 'planned',
+      })
+    }
+  }
+  probes.sort((left, right) => left.provider.localeCompare(right.provider) || left.modelLabel.localeCompare(right.modelLabel) || left.locale.localeCompare(right.locale) || left.queryId.localeCompare(right.queryId) || left.requestFingerprint.localeCompare(right.requestFingerprint))
+  if (!probes.length) return blocked(['NO_VALID_PROBES'])
+  if (probes.length > MAX_PROBES || probes.length > normalized.maximumProbes) return blocked(['MAXIMUM_PROBES_EXCEEDED'])
+  const planBody = { engineVersion: normalized.engineVersion, ownerScopeKey: normalized.ownerScopeKey, project: normalized.project, observationWindowKey: normalized.observationWindowKey, maximumProbes: normalized.maximumProbes, providerTargets: activeTargets, probes, limitationCode: PROBE_LIMITATION_CODE }
+  const plan: VisibilityProbePlan = { status: 'planned', ...planBody, planFingerprint: canonicalFingerprint(planBody) }
+  return { status: 'planned', plan }
+}
