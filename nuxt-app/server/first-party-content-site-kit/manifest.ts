@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { isOpaqueReference, isValidContentRoot, isValidSha256, isValidSlug, strictTimestamp, utf8ByteLength } from '../first-party-publishing/normalization'
-import { compareCanonicalStrings, safeJsonStringify } from './canonical'
+import { compareCanonicalStrings, isJsonSafe, safeJsonStringify } from './canonical'
 import type {
   FirstPartyContentBlockedResult,
   FirstPartyContentDocument,
@@ -82,7 +82,7 @@ function sourceRootAndPath(value: unknown, language: FirstPartyContentLanguage, 
 
 export function isNormalizedFirstPartyContentDocument(value: unknown): value is FirstPartyContentDocument {
   try {
-    if (!isRecord(value) || Object.keys(value).some(key => !DOCUMENT_KEYS.has(key))) return false
+    if (!isRecord(value) || !isJsonSafe(value) || Object.keys(value).some(key => !DOCUMENT_KEYS.has(key))) return false
     const status = read(value, 'status')
     const title = read(value, 'title')
     const slug = read(value, 'slug')

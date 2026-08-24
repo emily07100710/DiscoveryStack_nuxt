@@ -32,7 +32,8 @@ export function isJsonSafe(value: unknown, seen = new Set<object>()): boolean {
     }
     const objectValue = value as Record<string, unknown>
     for (const key of ownNames) {
-      if (!isJsonSafe(objectValue[key], seen)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value') || !isJsonSafe(descriptor.value, seen)) {
         seen.delete(value)
         return false
       }

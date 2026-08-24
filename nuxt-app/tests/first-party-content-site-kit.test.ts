@@ -332,6 +332,7 @@ describe('SEO and metadata projection', () => {
       expect(result.meta.openGraph.type).toBe('article')
       expect(result.meta.openGraph.publishedTime).toBe(document.publishedAt)
       expect(result.jsonLd[0]).toMatchObject({ '@type': 'Article', headline: document.title, datePublished: document.publishedAt })
+      expect(result.jsonLd[0]?.mainEntityOfPage).toEqual({ '@type': 'WebPage', '@id': result.canonicalUrl })
       expect(JSON.stringify(result)).not.toContain('undefined')
     }
   })
@@ -346,6 +347,17 @@ describe('SEO and metadata projection', () => {
       expect(result.description).not.toContain('https://')
       expect(result.description).not.toContain('`')
       expect(result.description.length).toBeLessThanOrEqual(160)
+    }
+  })
+
+  it('truncates descriptions by Unicode code point without leaving a lone surrogate', () => {
+    const document = makeDocument({ title: 'T', body: `${'a'.repeat(156)}😀tail` })
+    const result = buildFirstPartySeoProjection(documentInput(document))
+    expect(result.status).toBe('verified')
+    if (result.status === 'verified') {
+      expect(Array.from(result.description)).toHaveLength(160)
+      expect(result.description.endsWith('😀')).toBe(true)
+      expect(result.description).not.toContain('\uFFFD')
     }
   })
 
@@ -408,6 +420,8 @@ describe('SEO and metadata projection', () => {
     expect(withoutPairs.status).toBe('verified')
     expect(withPairs.status).toBe('verified')
     if (withoutPairs.status === 'verified' && withPairs.status === 'verified') {
+      expect(withoutPairs.meta.openGraph.type).toBe('website')
+      expect(withPairs.meta.openGraph.type).toBe('website')
       expect(withoutPairs.jsonLd.some(item => item['@type'] === 'FAQPage')).toBe(false)
       expect(withPairs.jsonLd.some(item => item['@type'] === 'FAQPage')).toBe(true)
       expect(withPairs.jsonLd.find(item => item['@type'] === 'FAQPage')).toMatchObject({ mainEntity: [{ name: 'What is verified?', acceptedAnswer: { text: 'It is a tested content document.' } }] })
@@ -658,6 +672,20 @@ describe('first-party content site kit repair contracts', () => {
     expect(() => safeJsonStringify(proxy)).not.toThrow()
     expect(safeJsonStringify(getter)).toBeUndefined()
     expect(safeJsonStringify(proxy)).toBeUndefined()
+  })
+
+  it('rejects accessors and non-enumerable data instead of silently omitting hidden fields', () => {
+    const accessor = Object.defineProperty({}, 'value', { enumerable: true, get: () => 'safe-looking' })
+    const hidden = Object.defineProperty({}, 'hiddenSecret', { enumerable: false, value: 'must-not-survive' })
+    expect(isJsonSafe(accessor)).toBe(false)
+    expect(isJsonSafe(hidden)).toBe(false)
+    expect(safeJsonStringify(accessor)).toBeUndefined()
+    expect(safeJsonStringify(hidden)).toBeUndefined()
+
+    const document = makeDocument() as ReturnType<typeof makeDocument> & { hiddenSecret?: string }
+    Object.defineProperty(document, 'hiddenSecret', { enumerable: false, value: 'must-not-survive' })
+    expect(buildAstroContentProjection(documentInput(document))).toMatchObject({ status: 'blocked' })
+    expect(buildNuxtContentProjection(documentInput(document))).toMatchObject({ status: 'blocked' })
   })
 
   it('rejects hreflang alternates from a different content type or production plan', () => {

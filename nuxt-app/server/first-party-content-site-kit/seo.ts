@@ -83,7 +83,7 @@ function plainExcerpt(document: FirstPartyContentDocument): string {
     .replace(/\s+/g, ' ')
     .trim()
   const combined = `${document.title}. ${transformed}`.trim()
-  return combined.slice(0, 160).trim()
+  return Array.from(combined).slice(0, 160).join('').trim()
 }
 
 function breadcrumb(origin: string, document: FirstPartyContentDocument): readonly FirstPartySeoMeta['breadcrumb'][number][] {
@@ -182,7 +182,7 @@ function jsonLdFor(origin: string, document: FirstPartyContentDocument, siteName
       '@id': `${url}#article`,
       headline: document.title,
       datePublished: document.publishedAt,
-      mainEntityOfPage: { '@id': `${url}#webpage` },
+      mainEntityOfPage: { '@type': 'WebPage', '@id': url },
     }]
   }
   if (document.contentType === 'faq' && faqPairs !== undefined) {
@@ -251,7 +251,7 @@ export function buildFirstPartySeoProjection(input: unknown): FirstPartySeoResul
       canonicalUrl: canonical,
       robots: 'index, follow',
       openGraph: {
-        type: documentValue.contentType === 'service_page' ? 'website' : 'article',
+        type: documentValue.contentType === 'article' ? 'article' : 'website',
         title: documentValue.title,
         description,
         url: canonical,
