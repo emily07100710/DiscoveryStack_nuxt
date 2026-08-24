@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import {
-  canonicalJson,
   isOpaqueReference,
   isValidContentRoot,
   isValidSha256,
@@ -9,6 +8,7 @@ import {
   strictTimestamp,
   utf8ByteLength,
 } from '../first-party-publishing/normalization'
+import { compareCanonicalStrings, safeJsonStringify } from './canonical'
 import type {
   FirstPartyContentBlockedResult,
   FirstPartyContentDocument,
@@ -110,16 +110,20 @@ function sortedOpaqueList(values: ParsedFrontmatter, key: string): string[] | un
     if (!isOpaqueReference(item) || result.includes(item)) return undefined
     result.push(item)
   }
-  return result.sort((left, right) => left.localeCompare(right))
+  return result.sort(compareCanonicalStrings)
 }
 
-function validSourcePath(contentRoot: string, sourcePath: unknown, slug: string): sourcePath is string {
+function routeSegment(contentType: FirstPartyContentType): 'articles' | 'faq' | 'services' {
+  return contentType === 'article' ? 'articles' : contentType === 'faq' ? 'faq' : 'services'
+}
+
+function validSourcePath(contentRoot: string, sourcePath: unknown, language: FirstPartyContentLanguage, contentType: FirstPartyContentType, slug: string): sourcePath is string {
   if (typeof sourcePath !== 'string' || sourcePath.length <= contentRoot.length || sourcePath.length > 512) return false
   if (CONTROL.test(sourcePath) || sourcePath.startsWith('/') || sourcePath.includes('\\') || sourcePath.includes('%') || sourcePath.includes('?') || sourcePath.includes('#') || sourcePath.includes('//')) return false
-  if (!sourcePath.startsWith(`${contentRoot}/`)) return false
+  const expected = `${contentRoot}/${language}/${routeSegment(contentType)}/${slug}.md`
+  if (sourcePath !== expected) return false
   const segments = sourcePath.split('/')
-  if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) return false
-  return sourcePath.endsWith(`/${slug}.md`)
+  return segments.every(segment => segment.length > 0 && segment !== '.' && segment !== '..')
 }
 
 function publicationIdentity(values: ParsedFrontmatter): FirstPartyContentDocument['publicationIdentity'] | undefined {
@@ -168,7 +172,7 @@ export function parseFirstPartyContentDocument(input: unknown): FirstPartyConten
     if (typeof parsed.body !== 'string' || parsed.body.length < 1 || CONTROL.test(parsed.body)) return blocked('DOCUMENT_INVALID', 'body is missing or contains forbidden control characters')
     const timestamp = strictTimestamp(publishedAt)
     if (!timestamp.ok) return blocked('FRONTMATTER_FIELD_INVALID', timestamp.reason)
-    if (!validSourcePath(contentRoot, sourcePath, slug)) return blocked('PATH_INVALID', 'sourcePath must stay under contentRoot and end with the approved slug')
+    if ((language !== 'en' && language !== 'zh-hant') || (contentType !== 'article' && contentType !== 'faq' && contentType !== 'service_page') || typeof slug !== 'string' || !validSourcePath(contentRoot, sourcePath, language as FirstPartyContentLanguage, contentType as FirstPartyContentType, slug)) return blocked('PATH_INVALID', 'sourcePath must exactly match contentRoot, language, contentType route segment, and slug')
     if (authoritySourceIds === undefined || appliedRuleIds === undefined) return blocked('FRONTMATTER_FIELD_INVALID', 'authoritySourceIds and appliedRuleIds must be non-empty unique arrays')
     const calculatedBodyHash = createHash('sha256').update(parsed.body, 'utf8').digest('hex')
     if (calculatedBodyHash !== contentHash.toLowerCase()) return blocked('BODY_HASH_MISMATCH', 'contentHash does not equal the body UTF-8 SHA-256')
@@ -190,7 +194,7 @@ export function parseFirstPartyContentDocument(input: unknown): FirstPartyConten
       appliedRuleIds,
       publishedAt: timestamp.iso,
     }
-    const fingerprintJson = canonicalJson(fingerprintInput)
+    const fingerprintJson = safeJsonStringify(fingerprintInput)
     if (fingerprintJson === undefined) return blocked('DOCUMENT_INVALID', 'document fingerprint could not be canonicalized')
     const document: FirstPartyContentDocument = {
       status: 'verified',

@@ -67,6 +67,14 @@ export interface FirstPartyFaqPair {
   readonly answer: string
 }
 
+export interface FirstPartyFaqEvidenceEnvelope {
+  readonly status: 'bound_faq_v1'
+  readonly documentFingerprint: string
+  readonly evidenceSnapshotHash: string
+  readonly pairs: readonly FirstPartyFaqPair[]
+  readonly pairsFingerprint: string
+}
+
 export interface FirstPartyHreflangAlternate {
   readonly language: FirstPartyContentLanguage
   readonly href: string
@@ -134,6 +142,35 @@ export interface FirstPartyAstroContentProjection {
 
 export type FirstPartyAstroProjectionResult = FirstPartyAstroContentProjection | FirstPartyContentBlockedResult
 
+export interface FirstPartyNuxtMetaName {
+  readonly name: string
+  readonly content: string
+}
+
+export interface FirstPartyNuxtMetaProperty {
+  readonly property: string
+  readonly content: string
+}
+
+export type FirstPartyNuxtMeta = FirstPartyNuxtMetaName | FirstPartyNuxtMetaProperty
+
+export interface FirstPartyNuxtHead {
+  readonly title: string
+  readonly htmlAttrs: {
+    readonly lang: FirstPartyContentLanguage
+  }
+  readonly meta: Array<FirstPartyNuxtMeta>
+  readonly link: Array<{
+    readonly rel: string
+    readonly href: string
+    readonly hreflang?: string
+  }>
+  readonly script: Array<{
+    readonly type: 'application/ld+json'
+    readonly textContent: string
+  }>
+}
+
 export interface FirstPartyNuxtContentProjection {
   readonly status: 'verified'
   readonly framework: 'nuxt'
@@ -142,7 +179,7 @@ export interface FirstPartyNuxtContentProjection {
     readonly document: FirstPartyContentDocument
     readonly seo: FirstPartySeoProjection
   }
-  readonly useHead: FirstPartySeoMeta
+  readonly useHead: FirstPartyNuxtHead
   readonly jsonLd: readonly Record<string, unknown>[]
   readonly sitemap: FirstPartySitemapEntry
 }

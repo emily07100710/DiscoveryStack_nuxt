@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import * as contentSiteKitApi from '../server/first-party-content-site-kit'
 import {
   buildAstroContentProjection,
   buildFirstPartyContentManifest,
@@ -14,6 +15,7 @@ import {
   FIXTURE_EVIDENCE_HASH,
   FIXTURE_NOW,
   makeArtifactMarkdown,
+  makeBoundFaqEnvelope,
   makeDocument,
   makeFaqDocument,
   makePublication,
@@ -22,6 +24,7 @@ import {
   makeServiceDocument,
   sha256,
 } from './fixtures/first-party-content-site-kit/fixtures'
+import { isJsonSafe, safeJsonStringify } from '../server/first-party-content-site-kit/canonical'
 import type { ApprovedFirstPartyPublication } from '../server/first-party-publishing/types'
 
 function parsePublication(publication: ApprovedFirstPartyPublication = makePublication(), sourcePath?: string, contentRoot = CONTENT_ROOT) {
@@ -156,8 +159,9 @@ describe('first-party content parser', () => {
   })
 
   it('rejects invalid language and content type', () => {
-    const language = parsePublication(makePublication({ language: 'fr' as never }))
-    const contentType = parsePublication(makePublication({ contentType: 'landing' as never }))
+    const artifact = makeArtifactMarkdown()
+    const language = parseFirstPartyContentDocument({ contentRoot: CONTENT_ROOT, sourcePath: artifact.sourcePath, markdown: replaceFrontmatter(artifact.markdown, 'language', JSON.stringify('fr')) })
+    const contentType = parseFirstPartyContentDocument({ contentRoot: CONTENT_ROOT, sourcePath: artifact.sourcePath, markdown: replaceFrontmatter(artifact.markdown, 'contentType', JSON.stringify('landing')) })
     expect(language).toMatchObject({ status: 'blocked', code: 'FRONTMATTER_FIELD_INVALID' })
     expect(contentType).toMatchObject({ status: 'blocked', code: 'FRONTMATTER_FIELD_INVALID' })
   })
@@ -358,7 +362,7 @@ describe('SEO and metadata projection', () => {
 
   it('emits hreflang alternates in stable language order', () => {
     const en = makeDocument()
-    const zh = makeDocument({ language: 'zh-hant', slug: 'zh-article', productionDeliverableId: 'publication-zh', scheduleEntryId: 'schedule-zh', productionPlanId: 'plan-zh', jobId: 'job-zh', draftId: 'draft-zh', reviewId: 'review-zh' })
+    const zh = makeDocument({ language: 'zh-hant', slug: 'zh-article', productionDeliverableId: 'publication-zh', scheduleEntryId: 'schedule-zh', productionPlanId: 'production-plan-001', jobId: 'job-zh', draftId: 'draft-zh', reviewId: 'review-zh' })
     const result = buildFirstPartySeoProjection(makeSeoInput(en, { alternateDocuments: [zh] }))
     expect(result.status).toBe('verified')
     if (result.status === 'verified') expect(result.meta.hreflang).toEqual([
@@ -376,7 +380,7 @@ describe('SEO and metadata projection', () => {
 
   it('emits x-default only for an explicit alternate fallback', () => {
     const en = makeDocument()
-    const zh = makeDocument({ language: 'zh-hant', slug: 'zh-article', productionDeliverableId: 'publication-zh', scheduleEntryId: 'schedule-zh', productionPlanId: 'plan-zh', jobId: 'job-zh', draftId: 'draft-zh', reviewId: 'review-zh' })
+    const zh = makeDocument({ language: 'zh-hant', slug: 'zh-article', productionDeliverableId: 'publication-zh', scheduleEntryId: 'schedule-zh', productionPlanId: 'production-plan-001', jobId: 'job-zh', draftId: 'draft-zh', reviewId: 'review-zh' })
     const result = buildFirstPartySeoProjection(makeSeoInput(en, { alternateDocuments: [zh], fallbackDocument: zh }))
     expect(result.status).toBe('verified')
     if (result.status === 'verified') expect(result.meta.xDefault).toBe('https://client.example.com/zh-hant/articles/zh-article')
@@ -400,7 +404,7 @@ describe('SEO and metadata projection', () => {
   it('builds FAQPage only when verified FAQ pairs are present', () => {
     const document = makeFaqDocument()
     const withoutPairs = buildFirstPartySeoProjection(documentInput(document))
-    const withPairs = buildFirstPartySeoProjection(makeSeoInput(document, { faqPairs: [{ question: 'What is verified?', answer: 'It is a tested content document.' }] }))
+    const withPairs = buildFirstPartySeoProjection(makeSeoInput(document, { faqPairs: makeBoundFaqEnvelope(document) }))
     expect(withoutPairs.status).toBe('verified')
     expect(withPairs.status).toBe('verified')
     if (withoutPairs.status === 'verified' && withPairs.status === 'verified') {
@@ -490,7 +494,26 @@ describe('Astro and Nuxt headless projections', () => {
       expect(result.framework).toBe('nuxt')
       expect(result.routeParams).toEqual({ lang: 'zh-hant', slug: 'nuxt-article' })
       expect(result.pageData.document.routePath).toBe('/zh-hant/articles/nuxt-article')
-      expect(result.useHead).toEqual(result.pageData.seo.meta)
+      expect(result.useHead.title).toBe(document.title)
+      expect(result.useHead.htmlAttrs).toEqual({ lang: 'zh-hant' })
+      expect(Array.isArray(result.useHead.meta)).toBe(true)
+      expect(Array.isArray(result.useHead.link)).toBe(true)
+      expect(Array.isArray(result.useHead.script)).toBe(true)
+      expect(result.useHead.meta).toEqual(expect.arrayContaining([
+        { name: 'description', content: result.pageData.seo.description },
+        { name: 'robots', content: 'index, follow' },
+        { property: 'og:type', content: 'article' },
+        { property: 'og:title', content: document.title },
+        { property: 'og:description', content: result.pageData.seo.description },
+        { property: 'og:url', content: result.pageData.seo.canonicalUrl },
+        { property: 'og:locale', content: 'zh-hant' },
+        { property: 'article:published_time', content: document.publishedAt },
+      ]))
+      expect(result.useHead.link).toEqual(expect.arrayContaining([
+        { rel: 'canonical', href: result.pageData.seo.canonicalUrl },
+        { rel: 'alternate', href: result.pageData.seo.canonicalUrl, hreflang: 'zh-hant' },
+      ]))
+      expect(result.useHead.script).toEqual([{ type: 'application/ld+json', textContent: JSON.stringify(result.jsonLd[0]) }])
       expect(result.sitemap).toEqual(result.pageData.seo.sitemap)
     }
   })
@@ -543,5 +566,184 @@ describe('Astro and Nuxt headless projections', () => {
       expect(astro.collection.data.bodyHash).toBe(document.bodyHash)
       expect(nuxt.pageData.document.bodyHash).toBe(document.bodyHash)
     }
+  })
+})
+
+
+describe('first-party content site kit repair contracts', () => {
+  it('uses the same code-unit ordering for parser and manifest', () => {
+    const values = ['a-', 'a_', 'A', 'a', 'source:1', 'source.1']
+    const publication = makePublication({ authoritySourceIds: values, ruleIds: values })
+    const parsed = parsePublication(publication)
+    expect(parsed.status).toBe('verified')
+    if (parsed.status !== 'verified') return
+    expect(parsed.document.authoritySourceIds).toEqual(['A', 'a', 'a-', 'a_', 'source.1', 'source:1'])
+    expect(parsed.document.appliedRuleIds).toEqual(['A', 'a', 'a-', 'a_', 'source.1', 'source:1'])
+    const manifest = buildFirstPartyContentManifest([parsed])
+    expect(manifest.status).toBe('verified')
+    if (manifest.status === 'verified') {
+      expect(manifest.manifest.documents[0]?.authoritySourceIds).toEqual(parsed.document.authoritySourceIds)
+      expect(manifest.manifest.documents[0]?.appliedRuleIds).toEqual(parsed.document.appliedRuleIds)
+    }
+  })
+
+  it('keeps parser and manifest fingerprints stable across repeated runs and input order', () => {
+    const values = ['a-', 'a_', 'A', 'a', 'source:1', 'source.1']
+    const firstParsed = parsePublication(makePublication({ authoritySourceIds: values, ruleIds: values }))
+    const secondParsed = parsePublication(makePublication({ authoritySourceIds: [...values].reverse(), ruleIds: [...values].reverse() }))
+    expect(firstParsed.status).toBe('verified')
+    expect(secondParsed.status).toBe('verified')
+    if (firstParsed.status === 'verified' && secondParsed.status === 'verified') {
+      expect(firstParsed.document.documentFingerprint).toBe(secondParsed.document.documentFingerprint)
+      const firstManifest = buildFirstPartyContentManifest([firstParsed.document])
+      const secondManifest = buildFirstPartyContentManifest([secondParsed.document])
+      expect(firstManifest.status).toBe('verified')
+      expect(secondManifest.status).toBe('verified')
+      if (firstManifest.status === 'verified' && secondManifest.status === 'verified') expect(firstManifest.manifest.manifestFingerprint).toBe(secondManifest.manifest.manifestFingerprint)
+    }
+  })
+
+  it.each([
+    ['en', 'article', 'content/en/articles/path-article.md'],
+    ['zh-hant', 'article', 'content/zh-hant/articles/path-article.md'],
+    ['en', 'faq', 'content/en/faq/path-faq.md'],
+    ['zh-hant', 'service_page', 'content/zh-hant/services/path-service.md'],
+  ] as const)('binds %s %s sourcePath to the exact formal route segment', (language, contentType, sourcePath) => {
+    const slug = sourcePath.split('/').at(-1)?.replace(/\.md$/, '') ?? 'path'
+    const parsed = parsePublication(makePublication({ language, contentType, slug, productionDeliverableId: `publication-${language}-${contentType}`, draftId: `draft-${language}-${contentType}`, reviewId: `review-${language}-${contentType}` }), sourcePath)
+    expect(parsed.status).toBe('verified')
+    if (parsed.status === 'verified') expect(parsed.document.sourcePath).toBe(sourcePath)
+  })
+
+  it.each([
+    'content/zh-hant/articles/verified-first-party-article.md',
+    'content/en/faq/verified-first-party-article.md',
+    'content/en/articles/other-slug.md',
+  ])('blocks a sourcePath that mismatches language, contentType folder, or slug: %s', sourcePath => {
+    expect(parsePublication(makePublication(), sourcePath)).toMatchObject({ status: 'blocked', code: 'PATH_INVALID' })
+  })
+
+  it('accepts ordinary article text containing non-finite words without false JSON rejection', () => {
+    const document = makeDocument({ body: 'undefined NaN Infinity -Infinity' })
+    const seo = buildFirstPartySeoProjection(documentInput(document))
+    const astro = buildAstroContentProjection(documentInput(document))
+    const nuxt = buildNuxtContentProjection(documentInput(document))
+    expect(seo.status).toBe('verified')
+    expect(astro.status).toBe('verified')
+    expect(nuxt.status).toBe('verified')
+  })
+
+  it.each([null, true, false, 'undefined', 'NaN', 'Infinity', '-Infinity', 0, 1.5, [], {}])('accepts a JSON-safe primitive or plain container: %s', value => {
+    expect(isJsonSafe(value)).toBe(true)
+    expect(safeJsonStringify(value)).toBeTypeOf('string')
+  })
+
+  it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, () => 'function', Symbol('symbol'), 1n])('rejects a non-JSON-safe runtime value without throwing', value => {
+    expect(() => isJsonSafe(value)).not.toThrow()
+    expect(isJsonSafe(value)).toBe(false)
+    expect(safeJsonStringify(value)).toBeUndefined()
+  })
+
+  it('rejects circular JSON input without throwing', () => {
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    expect(() => safeJsonStringify(circular)).not.toThrow()
+    expect(safeJsonStringify(circular)).toBeUndefined()
+  })
+
+  it('rejects getter and Proxy exceptions without exposing a raw error', () => {
+    const getter = Object.defineProperty({}, 'value', { enumerable: true, get: () => { throw new Error('getter fixture') } })
+    const proxy = new Proxy({ value: 'safe' }, { get: () => { throw new Error('proxy fixture') } })
+    expect(() => safeJsonStringify(getter)).not.toThrow()
+    expect(() => safeJsonStringify(proxy)).not.toThrow()
+    expect(safeJsonStringify(getter)).toBeUndefined()
+    expect(safeJsonStringify(proxy)).toBeUndefined()
+  })
+
+  it('rejects hreflang alternates from a different content type or production plan', () => {
+    const article = makeDocument()
+    const faq = makeFaqDocument({ language: 'zh-hant', productionPlanId: article.publicationIdentity.productionPlanId })
+    const differentPlan = makeDocument({ language: 'zh-hant', slug: 'different-plan', productionDeliverableId: 'publication-different-plan', productionPlanId: 'different-plan', draftId: 'draft-different-plan', reviewId: 'review-different-plan' })
+    expect(buildFirstPartySeoProjection(makeSeoInput(article, { alternateDocuments: [faq] }))).toMatchObject({ status: 'blocked', code: 'SEO_INPUT_INVALID' })
+    expect(buildFirstPartySeoProjection(makeSeoInput(article, { alternateDocuments: [differentPlan] }))).toMatchObject({ status: 'blocked', code: 'SEO_INPUT_INVALID' })
+  })
+
+  it('rejects duplicate hreflang language, fingerprint, route, and the primary document', () => {
+    const article = makeDocument()
+    const zh = makeDocument({ language: 'zh-hant', slug: 'zh-article', productionDeliverableId: 'publication-zh', productionPlanId: article.publicationIdentity.productionPlanId, draftId: 'draft-zh', reviewId: 'review-zh' })
+    expect(buildFirstPartySeoProjection(makeSeoInput(article, { alternateDocuments: [article] }))).toMatchObject({ status: 'blocked', code: 'SEO_INPUT_INVALID' })
+    expect(buildFirstPartySeoProjection(makeSeoInput(article, { alternateDocuments: [zh, zh] }))).toMatchObject({ status: 'blocked', code: 'SEO_INPUT_INVALID' })
+  })
+
+  it('fails closed when fallbackDocument and xDefaultDocument are both supplied', () => {
+    const article = makeDocument()
+    const zh = makeDocument({ language: 'zh-hant', slug: 'zh-article', productionDeliverableId: 'publication-zh', productionPlanId: article.publicationIdentity.productionPlanId, draftId: 'draft-zh', reviewId: 'review-zh' })
+    expect(buildFirstPartySeoProjection(makeSeoInput(article, { alternateDocuments: [zh], fallbackDocument: zh, xDefaultDocument: zh }))).toMatchObject({ status: 'blocked', code: 'SEO_INPUT_INVALID' })
+  })
+
+  it('rejects the primary document as an x-default fallback', () => {
+    const article = makeDocument()
+    expect(buildFirstPartySeoProjection(makeSeoInput(article, { fallbackDocument: article }))).toMatchObject({ status: 'blocked', code: 'SEO_INPUT_INVALID' })
+  })
+
+  it('blocks raw FAQ arrays instead of treating them as verified evidence', () => {
+    const faq = makeFaqDocument()
+    expect(buildFirstPartySeoProjection(makeSeoInput(faq, { faqPairs: [{ question: 'raw', answer: 'not bound' }] }))).toMatchObject({ status: 'blocked', code: 'FAQ_PAIRS_INVALID' })
+  })
+
+  it('blocks stale FAQ document fingerprint, evidence hash, and pairs fingerprint', () => {
+    const faq = makeFaqDocument()
+    const envelope = makeBoundFaqEnvelope(faq)
+    expect(buildFirstPartySeoProjection(makeSeoInput(faq, { faqPairs: { ...envelope, documentFingerprint: 'b'.repeat(64) } }))).toMatchObject({ status: 'blocked', code: 'FAQ_PAIRS_INVALID' })
+    expect(buildFirstPartySeoProjection(makeSeoInput(faq, { faqPairs: { ...envelope, evidenceSnapshotHash: 'b'.repeat(64) } }))).toMatchObject({ status: 'blocked', code: 'FAQ_PAIRS_INVALID' })
+    expect(buildFirstPartySeoProjection(makeSeoInput(faq, { faqPairs: { ...envelope, pairsFingerprint: 'b'.repeat(64) } }))).toMatchObject({ status: 'blocked', code: 'FAQ_PAIRS_INVALID' })
+  })
+
+  it('blocks duplicate FAQ questions and an FAQ envelope on an article', () => {
+    const faq = makeFaqDocument()
+    const duplicate = makeBoundFaqEnvelope(faq, [{ question: 'same', answer: 'one' }, { question: 'same', answer: 'two' }])
+    const article = makeDocument()
+    const articleEnvelope = makeBoundFaqEnvelope(article)
+    expect(buildFirstPartySeoProjection(makeSeoInput(faq, { faqPairs: duplicate }))).toMatchObject({ status: 'blocked', code: 'FAQ_PAIRS_INVALID' })
+    expect(buildFirstPartySeoProjection(makeSeoInput(article, { faqPairs: articleEnvelope }))).toMatchObject({ status: 'blocked', code: 'FAQ_PAIRS_INVALID' })
+  })
+
+  it('serializes Nuxt JSON-LD scripts deterministically and escapes less-than safely', () => {
+    const document = makeDocument({ title: '</script><script>alert(1)</script>' })
+    const result = buildNuxtContentProjection(documentInput(document))
+    expect(result.status).toBe('verified')
+    if (result.status === 'verified') {
+      expect(result.useHead.script).toHaveLength(result.jsonLd.length)
+      expect(result.useHead.script.every(script => script.type === 'application/ld+json')).toBe(true)
+      expect(result.useHead.script.every(script => !script.textContent.includes('</script>'))).toBe(true)
+      expect(result.useHead.script[0]?.textContent).toContain('\\u003C/script>')
+      expect(result.useHead.script[0]?.textContent).toBe(JSON.stringify(result.jsonLd[0]).replace(/</g, '\\u003C'))
+    }
+  })
+
+  it('emits x-default and every alternate as direct useHead links', () => {
+    const article = makeDocument()
+    const zh = makeDocument({ language: 'zh-hant', slug: 'zh-article', productionDeliverableId: 'publication-zh', productionPlanId: article.publicationIdentity.productionPlanId, draftId: 'draft-zh', reviewId: 'review-zh' })
+    const result = buildNuxtContentProjection(makeSeoInput(article, { alternateDocuments: [zh], fallbackDocument: zh }))
+    expect(result.status).toBe('verified')
+    if (result.status === 'verified') {
+      expect(result.useHead.link).toEqual(expect.arrayContaining([
+        { rel: 'canonical', href: result.pageData.seo.canonicalUrl },
+        { rel: 'alternate', href: 'https://client.example.com/en/articles/verified-first-party-article', hreflang: 'en' },
+        { rel: 'alternate', href: 'https://client.example.com/zh-hant/articles/zh-article', hreflang: 'zh-hant' },
+        { rel: 'alternate', href: 'https://client.example.com/zh-hant/articles/zh-article', hreflang: 'x-default' },
+      ]))
+    }
+  })
+
+  it('exposes exactly the five runtime public APIs', () => {
+    expect(Object.keys(contentSiteKitApi).sort()).toEqual([
+      'buildAstroContentProjection',
+      'buildFirstPartyContentManifest',
+      'buildFirstPartySeoProjection',
+      'buildNuxtContentProjection',
+      'parseFirstPartyContentDocument',
+    ])
+    expect('computeSeoProjectionFingerprint' in contentSiteKitApi).toBe(false)
   })
 })

@@ -1,6 +1,6 @@
 export { parseFirstPartyContentDocument } from './parser'
 export { buildFirstPartyContentManifest } from './manifest'
-export { buildFirstPartySeoProjection, computeSeoProjectionFingerprint } from './seo'
+export { buildFirstPartySeoProjection } from './seo'
 export { buildAstroContentProjection } from './astro'
 export { buildNuxtContentProjection } from './nuxt'
 export type {
@@ -16,9 +16,14 @@ export type {
   FirstPartyContentParseResult,
   FirstPartyContentPublicationIdentity,
   FirstPartyContentType,
+  FirstPartyFaqEvidenceEnvelope,
   FirstPartyFaqPair,
   FirstPartyHreflangAlternate,
   FirstPartyNuxtContentProjection,
+  FirstPartyNuxtHead,
+  FirstPartyNuxtMeta,
+  FirstPartyNuxtMetaName,
+  FirstPartyNuxtMetaProperty,
   FirstPartyNuxtProjectionResult,
   FirstPartyParseInput,
   FirstPartyProjectionInput,

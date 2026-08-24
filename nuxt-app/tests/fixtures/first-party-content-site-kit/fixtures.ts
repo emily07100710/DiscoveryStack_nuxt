@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { buildFirstPartyMarkdownArtifact } from '../../../server/first-party-publishing/artifact'
 import { parseFirstPartyContentDocument } from '../../../server/first-party-content-site-kit/parser'
 import type { ApprovedFirstPartyPublication } from '../../../server/first-party-publishing/types'
-import type { FirstPartyContentDocument, FirstPartyContentType } from '../../../server/first-party-content-site-kit/types'
+import type { FirstPartyContentDocument, FirstPartyContentType, FirstPartyFaqEvidenceEnvelope, FirstPartyFaqPair } from '../../../server/first-party-content-site-kit/types'
 
 export const CONTENT_ROOT = 'content'
 export const FIXTURE_EVIDENCE_HASH = 'a'.repeat(64)
@@ -73,6 +73,22 @@ export function makeFaqDocument(overrides: Partial<ApprovedFirstPartyPublication
     title: overrides.title ?? 'Verified FAQ',
     contentType: 'faq',
   })
+}
+
+export function makeBoundFaqEnvelope(document: FirstPartyContentDocument, pairs: readonly FirstPartyFaqPair[] = [{ question: 'What is verified?', answer: 'It is a tested content document.' }]): FirstPartyFaqEvidenceEnvelope {
+  const payload = {
+    version: 'bound_faq_v1',
+    documentFingerprint: document.documentFingerprint,
+    evidenceSnapshotHash: document.evidenceSnapshotHash,
+    pairs,
+  }
+  return {
+    status: 'bound_faq_v1',
+    documentFingerprint: document.documentFingerprint,
+    evidenceSnapshotHash: document.evidenceSnapshotHash,
+    pairs,
+    pairsFingerprint: sha256(JSON.stringify(payload)),
+  }
 }
 
 export function makeServiceDocument(overrides: Partial<ApprovedFirstPartyPublication> = {}): FirstPartyContentDocument {

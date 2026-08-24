@@ -1,4 +1,5 @@
 import { buildFirstPartySeoProjection } from './seo'
+import { safeJsonStringify } from './canonical'
 import type {
   FirstPartyAstroProjectionResult,
   FirstPartyContentBlockedResult,
@@ -52,8 +53,7 @@ export function buildAstroContentProjection(input: unknown): FirstPartyAstroProj
       jsonLd: seo.jsonLd,
       sitemap: seo.sitemap,
     }
-    const serialized = JSON.stringify(projection)
-    if (serialized === undefined || serialized.includes('undefined') || serialized.includes('NaN') || serialized.includes('Infinity')) return blocked('Astro projection is not JSON-safe')
+    if (safeJsonStringify(projection) === undefined) return blocked('Astro projection is not JSON-safe')
     return projection
   } catch {
     return blocked('Astro projection input could not be safely read')

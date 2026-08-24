@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { canonicalJson, isOpaqueReference, isValidSha256, isValidSlug, strictTimestamp, utf8ByteLength } from '../first-party-publishing/normalization'
+import { isOpaqueReference, isValidContentRoot, isValidSha256, isValidSlug, strictTimestamp, utf8ByteLength } from '../first-party-publishing/normalization'
+import { compareCanonicalStrings, safeJsonStringify } from './canonical'
 import type {
   FirstPartyContentBlockedResult,
   FirstPartyContentDocument,
@@ -8,6 +9,8 @@ import type {
   FirstPartyContentManifestResult,
   FirstPartyContentType,
 } from './types'
+
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/
 
 const DOCUMENT_KEYS = new Set([
   'status',
@@ -50,7 +53,7 @@ function isSortedUnique(values: unknown): values is readonly string[] {
   for (let index = 1; index < values.length; index += 1) {
     const previous = values[index - 1]
     const current = values[index]
-    if (previous === undefined || current === undefined || previous >= current) return false
+    if (previous === undefined || current === undefined || compareCanonicalStrings(previous, current) >= 0) return false
   }
   return true
 }
@@ -62,69 +65,87 @@ function isPublicationIdentity(value: unknown): value is FirstPartyContentDocume
   return ['publicationId', 'scheduleEntryId', 'productionPlanId', 'draftId', 'reviewId'].every(key => isOpaqueReference(read(value, key)))
 }
 
-function isSafeRelativeSourcePath(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length < 1 || value.length > 512 || value.startsWith('/') || value.includes('\\') || value.includes('%') || value.includes('?') || value.includes('#') || value.includes('//')) return false
+function routeSegment(contentType: FirstPartyContentType): 'articles' | 'faq' | 'services' {
+  return contentType === 'article' ? 'articles' : contentType === 'faq' ? 'faq' : 'services'
+}
+
+function sourceRootAndPath(value: unknown, language: FirstPartyContentLanguage, contentType: FirstPartyContentType, slug: string): { root: string; path: string } | undefined {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 512 || value.startsWith('/') || value.includes('\\') || value.includes('%') || value.includes('?') || value.includes('#') || value.includes('//')) return undefined
+  const suffix = `/${language}/${routeSegment(contentType)}/${slug}.md`
+  if (!value.endsWith(suffix)) return undefined
+  const root = value.slice(0, -suffix.length)
+  if (!isValidContentRoot(root)) return undefined
   const segments = value.split('/')
-  return segments.every(segment => segment.length > 0 && segment !== '.' && segment !== '..')
+  if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) return undefined
+  return { root, path: value }
 }
 
 export function isNormalizedFirstPartyContentDocument(value: unknown): value is FirstPartyContentDocument {
-  if (!isRecord(value) || Object.keys(value).some(key => !DOCUMENT_KEYS.has(key))) return false
-  const status = read(value, 'status')
-  const title = read(value, 'title')
-  const slug = read(value, 'slug')
-  const language = read(value, 'language')
-  const contentType = read(value, 'contentType')
-  const body = read(value, 'body')
-  const bodyHash = read(value, 'bodyHash')
-  const evidenceHash = read(value, 'evidenceSnapshotHash')
-  const publishedAt = read(value, 'publishedAt')
-  const sourcePath = read(value, 'sourcePath')
-  const routePath = read(value, 'routePath')
-  const canonicalPath = read(value, 'canonicalPath')
-  const fingerprint = read(value, 'documentFingerprint')
-  const timestamp = strictTimestamp(publishedAt)
-  const identity = read(value, 'publicationIdentity')
-  const authorities = read(value, 'authoritySourceIds')
-  const rules = read(value, 'appliedRuleIds')
-  const expectedRoute = (language === 'en' || language === 'zh-hant') && (contentType === 'article' || contentType === 'faq' || contentType === 'service_page') && typeof slug === 'string'
-    ? `/${language}/${contentType === 'article' ? 'articles' : contentType === 'faq' ? 'faq' : 'services'}/${slug}`
-    : undefined
-  const fingerprintInput = {
-    publicationIdentity: identity,
-    routePath: expectedRoute,
-    canonicalPath: expectedRoute,
-    title,
-    language,
-    contentType,
-    contentHash: typeof bodyHash === 'string' ? bodyHash.toLowerCase() : bodyHash,
-    evidenceSnapshotHash: evidenceHash,
-    authoritySourceIds: authorities,
-    appliedRuleIds: rules,
-    publishedAt,
-  }
-  let fingerprintMatches = false
   try {
-    fingerprintMatches = typeof fingerprint === 'string' && isValidSha256(fingerprint) && createHash('sha256').update(JSON.stringify(fingerprintInput), 'utf8').digest('hex') === fingerprint
+    if (!isRecord(value) || Object.keys(value).some(key => !DOCUMENT_KEYS.has(key))) return false
+    const status = read(value, 'status')
+    const title = read(value, 'title')
+    const slug = read(value, 'slug')
+    const language = read(value, 'language')
+    const contentType = read(value, 'contentType')
+    const body = read(value, 'body')
+    const bodyHash = read(value, 'bodyHash')
+    const evidenceHash = read(value, 'evidenceSnapshotHash')
+    const publishedAt = read(value, 'publishedAt')
+    const sourcePath = read(value, 'sourcePath')
+    const routePath = read(value, 'routePath')
+    const canonicalPath = read(value, 'canonicalPath')
+    const fingerprint = read(value, 'documentFingerprint')
+    const timestamp = strictTimestamp(publishedAt)
+    const identity = read(value, 'publicationIdentity')
+    const authorities = read(value, 'authoritySourceIds')
+    const rules = read(value, 'appliedRuleIds')
+    const validLanguage = language === 'en' || language === 'zh-hant'
+    const validContentType = contentType === 'article' || contentType === 'faq' || contentType === 'service_page'
+    const validSlug = typeof slug === 'string' && isValidSlug(slug)
+    const expectedRoute = validLanguage && validContentType && validSlug
+      ? `/${language}/${routeSegment(contentType as FirstPartyContentType)}/${slug}`
+      : undefined
+    const source = validLanguage && validContentType && validSlug
+      ? sourceRootAndPath(sourcePath, language as FirstPartyContentLanguage, contentType as FirstPartyContentType, slug)
+      : undefined
+    const fingerprintInput = {
+      publicationIdentity: identity,
+      routePath: expectedRoute,
+      canonicalPath: expectedRoute,
+      title,
+      language,
+      contentType,
+      contentHash: typeof bodyHash === 'string' ? bodyHash.toLowerCase() : bodyHash,
+      evidenceSnapshotHash: evidenceHash,
+      authoritySourceIds: authorities,
+      appliedRuleIds: rules,
+      publishedAt,
+    }
+    const fingerprintJson = safeJsonStringify(fingerprintInput)
+    const fingerprintMatches = typeof fingerprintJson === 'string'
+      && typeof fingerprint === 'string'
+      && isValidSha256(fingerprint)
+      && createHash('sha256').update(fingerprintJson, 'utf8').digest('hex') === fingerprint
+    return status === 'verified'
+      && isPublicationIdentity(identity)
+      && typeof title === 'string' && title.length >= 1 && title.length <= 512 && !CONTROL.test(title) && !title.includes('\n') && !title.includes('\r')
+      && validSlug
+      && validLanguage
+      && validContentType
+      && typeof body === 'string' && body.length >= 1 && utf8ByteLength(body) >= 1 && !CONTROL.test(body)
+      && isValidSha256(bodyHash) && createHash('sha256').update(body, 'utf8').digest('hex') === bodyHash.toLowerCase()
+      && isValidSha256(evidenceHash) && evidenceHash === evidenceHash.toLowerCase()
+      && timestamp.ok && publishedAt === timestamp.iso
+      && isSortedUnique(authorities)
+      && isSortedUnique(rules)
+      && source !== undefined
+      && expectedRoute !== undefined && routePath === expectedRoute
+      && canonicalPath === routePath
+      && fingerprintMatches
   } catch {
-    fingerprintMatches = false
+    return false
   }
-  return status === 'verified'
-    && isPublicationIdentity(identity)
-    && typeof title === 'string' && title.length >= 1 && title.length <= 512
-    && typeof slug === 'string' && isValidSlug(slug)
-    && (language === 'en' || language === 'zh-hant')
-    && (contentType === 'article' || contentType === 'faq' || contentType === 'service_page')
-    && typeof body === 'string' && body.length >= 1 && utf8ByteLength(body) >= 1
-    && isValidSha256(bodyHash) && createHash('sha256').update(body, 'utf8').digest('hex') === bodyHash.toLowerCase()
-    && isValidSha256(evidenceHash) && evidenceHash === evidenceHash.toLowerCase()
-    && timestamp.ok && publishedAt === timestamp.iso
-    && isSortedUnique(authorities)
-    && isSortedUnique(rules)
-    && isSafeRelativeSourcePath(sourcePath)
-    && expectedRoute !== undefined && routePath === expectedRoute
-    && canonicalPath === routePath
-    && fingerprintMatches
 }
 
 function compareDocuments(left: FirstPartyContentDocument, right: FirstPartyContentDocument): number {
@@ -133,8 +154,8 @@ function compareDocuments(left: FirstPartyContentDocument, right: FirstPartyCont
   for (let index = 0; index < leftValues.length; index += 1) {
     const leftValue = leftValues[index] ?? ''
     const rightValue = rightValues[index] ?? ''
-    if (leftValue < rightValue) return -1
-    if (leftValue > rightValue) return 1
+    const comparison = compareCanonicalStrings(leftValue, rightValue)
+    if (comparison !== 0) return comparison
   }
   return 0
 }
@@ -187,7 +208,7 @@ export function buildFirstPartyContentManifest(input: unknown): FirstPartyConten
         documentFingerprint: document.documentFingerprint,
       })),
     }
-    const fingerprintJson = canonicalJson(fingerprintInput)
+    const fingerprintJson = safeJsonStringify(fingerprintInput)
     if (fingerprintJson === undefined) return blocked('DOCUMENT_INVALID', 'manifest fingerprint could not be canonicalized')
     const manifestFingerprint = createHash('sha256').update(fingerprintJson, 'utf8').digest('hex')
     const manifest: FirstPartyContentManifest = {

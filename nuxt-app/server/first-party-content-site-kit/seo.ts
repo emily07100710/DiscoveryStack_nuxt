@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto'
 import { isPublicHttpsOrigin } from '../first-party-publishing/target-guard'
 import { isOpaqueReference, isValidSha256, strictTimestamp } from '../first-party-publishing/normalization'
 import { isNormalizedFirstPartyContentDocument } from './manifest'
+import { compareCanonicalStrings, safeJsonStringify } from './canonical'
 import type {
   FirstPartyContentBlockedResult,
   FirstPartyContentDocument,
   FirstPartyContentLanguage,
   FirstPartyContentType,
+  FirstPartyFaqEvidenceEnvelope,
   FirstPartyFaqPair,
   FirstPartyHreflangAlternate,
   FirstPartySeoInput,
@@ -15,7 +17,7 @@ import type {
   FirstPartySeoResult,
 } from './types'
 
-const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
 const INPUT_KEYS = new Set(['document', 'siteOrigin', 'siteName', 'organizationLogoUrl', 'alternateDocuments', 'fallbackDocument', 'xDefaultDocument', 'faqPairs'])
 const LANGUAGE_ORDER: readonly FirstPartyContentLanguage[] = ['en', 'zh-hant']
 
@@ -103,24 +105,55 @@ function normalizedAlternates(origin: string, document: FirstPartyContentDocumen
     }
   }
   const byLanguage = new Map<FirstPartyContentLanguage, FirstPartyContentDocument>()
+  const fingerprints = new Set<string>()
+  const routes = new Set<string>()
   for (const candidate of candidates) {
+    if (candidate.contentType !== document.contentType) return { ok: false, reason: 'alternateDocuments must use the same contentType' }
+    if (candidate.publicationIdentity.productionPlanId !== document.publicationIdentity.productionPlanId) return { ok: false, reason: 'alternateDocuments must use the same productionPlanId' }
     if (byLanguage.has(candidate.language)) return { ok: false, reason: 'alternateDocuments contains duplicate language entries' }
-    if (canonicalUrl(origin, candidate).includes('?') || canonicalUrl(origin, candidate).includes('#')) return { ok: false, reason: 'alternate document route is not canonical' }
+    if (fingerprints.has(candidate.documentFingerprint)) return { ok: false, reason: 'alternateDocuments contains duplicate document fingerprints' }
+    const route = canonicalUrl(origin, candidate)
+    if (routes.has(route)) return { ok: false, reason: 'alternateDocuments contains duplicate routes' }
+    if (route.includes('?') || route.includes('#')) return { ok: false, reason: 'alternate document route is not canonical' }
     byLanguage.set(candidate.language, candidate)
+    fingerprints.add(candidate.documentFingerprint)
+    routes.add(route)
   }
   return { ok: true, documents: LANGUAGE_ORDER.filter(language => byLanguage.has(language)).map(language => byLanguage.get(language) as FirstPartyContentDocument) }
 }
 
-function verifiedFaqPairs(raw: unknown): { ok: true; pairs: FirstPartyFaqPair[] } | { ok: false; reason: string } {
-  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 32) return { ok: false, reason: 'faqPairs must contain 1-32 verified pairs' }
+function verifiedFaqPairs(raw: unknown, document: FirstPartyContentDocument): { ok: true; pairs: FirstPartyFaqPair[] } | { ok: false; reason: string } {
+  if (!isRecord(raw)) return { ok: false, reason: 'faqPairs must be a bound_faq_v1 envelope' }
+  const keys = Object.keys(raw)
+  if (keys.length !== 5 || keys.some(key => !['status', 'documentFingerprint', 'evidenceSnapshotHash', 'pairs', 'pairsFingerprint'].includes(key))) return { ok: false, reason: 'faqPairs envelope has an invalid field set' }
+  if (read(raw, 'status') !== 'bound_faq_v1') return { ok: false, reason: 'faqPairs envelope status is invalid' }
+  const documentFingerprint = read(raw, 'documentFingerprint')
+  const evidenceSnapshotHash = read(raw, 'evidenceSnapshotHash')
+  const pairsFingerprint = read(raw, 'pairsFingerprint')
+  const rawPairs = read(raw, 'pairs')
+  if (!isOpaqueReference(documentFingerprint) || !isValidSha256(documentFingerprint) || documentFingerprint !== document.documentFingerprint) return { ok: false, reason: 'faqPairs document fingerprint is stale or invalid' }
+  if (!isValidSha256(evidenceSnapshotHash) || evidenceSnapshotHash !== evidenceSnapshotHash.toLowerCase() || evidenceSnapshotHash !== document.evidenceSnapshotHash) return { ok: false, reason: 'faqPairs evidence snapshot hash is stale or invalid' }
+  if (!isValidSha256(pairsFingerprint) || pairsFingerprint !== pairsFingerprint.toLowerCase()) return { ok: false, reason: 'faqPairs pairs fingerprint is invalid' }
+  if (!Array.isArray(rawPairs) || rawPairs.length < 1 || rawPairs.length > 32) return { ok: false, reason: 'faqPairs envelope must contain 1-32 pairs' }
   const pairs: FirstPartyFaqPair[] = []
-  for (const value of raw) {
-    if (!isRecord(value) || Object.keys(value).length !== 2 || !Object.keys(value).every(key => key === 'question' || key === 'answer')) return { ok: false, reason: 'faq pair contains an unknown key' }
+  const questions = new Set<string>()
+  for (const value of rawPairs) {
+    if (!isRecord(value) || Object.keys(value).length !== 2 || Object.keys(value).some(key => key !== 'question' && key !== 'answer')) return { ok: false, reason: 'faq pair contains an unknown key' }
     const question = read(value, 'question')
     const answer = read(value, 'answer')
     if (!safeString(question, 512) || !safeString(answer, 5_000) || CONTROL.test(question) || CONTROL.test(answer)) return { ok: false, reason: 'faq pair question and answer must be bounded safe strings' }
+    if (questions.has(question)) return { ok: false, reason: 'faq pair questions must be unique' }
+    questions.add(question)
     pairs.push({ question, answer })
   }
+  const payload = {
+    version: 'bound_faq_v1',
+    documentFingerprint,
+    evidenceSnapshotHash,
+    pairs,
+  }
+  const payloadJson = safeJsonStringify(payload)
+  if (payloadJson === undefined || createHash('sha256').update(payloadJson, 'utf8').digest('hex') !== pairsFingerprint) return { ok: false, reason: 'faqPairs pairs fingerprint does not match the canonical payload' }
   return { ok: true, pairs }
 }
 
@@ -190,19 +223,22 @@ export function buildFirstPartySeoProjection(input: unknown): FirstPartySeoResul
     if (logoRaw !== undefined && logoUrl === undefined) return blocked('ORIGIN_INVALID', 'organizationLogoUrl must be a public HTTPS URL')
     const alternates = normalizedAlternates(origin, documentValue, read(input, 'alternateDocuments'))
     if (!alternates.ok) return blocked('SEO_INPUT_INVALID', alternates.reason)
-    const fallbackRaw = read(input, 'fallbackDocument') ?? read(input, 'xDefaultDocument')
+    const fallbackProvided = Object.prototype.hasOwnProperty.call(input, 'fallbackDocument')
+    const xDefaultProvided = Object.prototype.hasOwnProperty.call(input, 'xDefaultDocument')
+    if (fallbackProvided && xDefaultProvided) return blocked('SEO_INPUT_INVALID', 'fallbackDocument and xDefaultDocument cannot both be provided')
+    const fallbackRaw = fallbackProvided ? read(input, 'fallbackDocument') : xDefaultProvided ? read(input, 'xDefaultDocument') : undefined
     let fallback: FirstPartyContentDocument | undefined
     if (fallbackRaw !== undefined) {
       if (!isNormalizedFirstPartyContentDocument(fallbackRaw)) return blocked('SEO_INPUT_INVALID', 'fallbackDocument must be a verified document')
-      if (!alternates.documents.some(document => document.documentFingerprint === fallbackRaw.documentFingerprint)) return blocked('SEO_INPUT_INVALID', 'fallbackDocument must be one of the explicit alternate documents')
+      if (fallbackRaw.documentFingerprint === documentValue.documentFingerprint || !alternates.documents.some(candidate => candidate.documentFingerprint === fallbackRaw.documentFingerprint && candidate.documentFingerprint !== documentValue.documentFingerprint)) return blocked('SEO_INPUT_INVALID', 'fallbackDocument must be one of the explicit alternate documents')
       fallback = fallbackRaw
     }
     const faqRaw = read(input, 'faqPairs')
     let faqPairs: FirstPartyFaqPair[] | undefined
     if (faqRaw !== undefined) {
-      const faqResult = verifiedFaqPairs(faqRaw)
-      if (!faqResult.ok) return blocked('FAQ_PAIRS_INVALID', faqResult.reason)
       if (documentValue.contentType !== 'faq') return blocked('FAQ_PAIRS_INVALID', 'faqPairs are only accepted for faq documents')
+      const faqResult = verifiedFaqPairs(faqRaw, documentValue)
+      if (!faqResult.ok) return blocked('FAQ_PAIRS_INVALID', faqResult.reason)
       faqPairs = faqResult.pairs
     }
     const canonical = canonicalUrl(origin, documentValue)
@@ -236,16 +272,11 @@ export function buildFirstPartySeoProjection(input: unknown): FirstPartySeoResul
       jsonLd: jsonLdFor(origin, documentValue, siteName, logoUrl, faqPairs),
       sitemap: { loc: canonical, lastmod: documentValue.publishedAt, alternates: hreflang },
     }
-    const serialized = JSON.stringify(projection)
-    if (serialized === undefined || serialized.includes('undefined') || serialized.includes('NaN') || serialized.includes('Infinity')) return blocked('SEO_INPUT_INVALID', 'SEO projection is not JSON-safe')
+    if (safeJsonStringify(projection) === undefined) return blocked('SEO_INPUT_INVALID', 'SEO projection is not JSON-safe')
     return projection
   } catch {
     return blocked('SEO_INPUT_INVALID', 'SEO input could not be safely read')
   }
-}
-
-export function computeSeoProjectionFingerprint(projection: FirstPartySeoProjection): string {
-  return createHash('sha256').update(JSON.stringify(projection), 'utf8').digest('hex')
 }
 
 export type { FirstPartyContentLanguage, FirstPartyContentType }
