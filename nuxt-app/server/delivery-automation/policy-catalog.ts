@@ -5,7 +5,6 @@ export const MAX_DELIVERY_ATTEMPTS = 5 as const
 export const MAX_ATTEMPT_HISTORY = 20 as const
 export const RETRY_DELAYS_SECONDS = [60, 300, 1800, 7200, 0] as const
 export const SUPPORTED_DELIVERY_ADAPTERS = ['wordpress_rest', 'generic_http', 'manual_export'] as const satisfies readonly DeliveryAdapter[]
-
 export const TERMINAL_DELIVERY_STATES = ['delivered', 'permanent_failed', 'blocked', 'cancelled'] as const satisfies readonly DeliveryState[]
 
 export const ALLOWED_DELIVERY_TRANSITIONS: Readonly<Record<DeliveryState, readonly DeliveryState[]>> = {
@@ -37,7 +36,8 @@ export function isRetryableFailure(input: {
   readonly httpStatus?: number
   readonly confirmedSameIdempotentDelivery?: boolean
 }): boolean {
-  if (input.code === 'timeout' || input.code === 'connection_reset') return true
+  if (input.code === 'timeout' || input.code === 'connection_reset' || input.code === 'http_408' || input.code === 'http_429' || input.code === 'http_5xx') return true
+  if (input.code === 'http_409' && input.confirmedSameIdempotentDelivery === true) return true
   if (input.httpStatus === 408 || input.httpStatus === 429) return true
   if (typeof input.httpStatus === 'number' && input.httpStatus >= 500 && input.httpStatus <= 599) return true
   if (input.httpStatus === 409 && input.confirmedSameIdempotentDelivery === true) return true
@@ -48,7 +48,7 @@ export function normalizedFailureCode(input: {
   readonly code?: DeliveryFailureCode | string
   readonly httpStatus?: number
 }): DeliveryFailureCode {
-  if (input.code === 'timeout' || input.code === 'connection_reset' || input.code === 'malformed_response' || input.code === 'invalid_remote_identity' || input.code === 'policy_violation' || input.code === 'credential_missing' || input.code === 'revoked_target' || input.code === 'content_hash_mismatch' || input.code === 'evidence_hash_mismatch') return input.code
+  if (input.code === 'timeout' || input.code === 'connection_reset' || input.code === 'http_400' || input.code === 'http_401' || input.code === 'http_403' || input.code === 'http_404' || input.code === 'http_408' || input.code === 'http_409' || input.code === 'http_429' || input.code === 'http_5xx' || input.code === 'malformed_response' || input.code === 'invalid_remote_identity' || input.code === 'policy_violation' || input.code === 'credential_missing' || input.code === 'revoked_target' || input.code === 'content_hash_mismatch' || input.code === 'evidence_hash_mismatch' || input.code === 'unknown_failure') return input.code
   if (typeof input.httpStatus === 'number') {
     if (input.httpStatus === 400) return 'http_400'
     if (input.httpStatus === 401) return 'http_401'

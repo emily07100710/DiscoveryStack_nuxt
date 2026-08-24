@@ -1,3 +1,4 @@
+import { computeDeliveryIdempotencyKey } from '../../../server/delivery-automation'
 import type {
   ApprovedPublicationInput,
   DeliveryAttemptRecord,
@@ -9,7 +10,7 @@ export const FIXTURE_NOW = '2026-08-24T00:00:00.000Z'
 export const FIXTURE_ORIGIN = 'https://target.example.com'
 export const FIXTURE_HASH = 'a'.repeat(64)
 export const FIXTURE_HASH_B = 'b'.repeat(64)
-export const FIXTURE_KEY = 'c'.repeat(64)
+export const FIXTURE_RESULT_FINGERPRINT = 'f'.repeat(64)
 
 export function makeTarget(overrides: Partial<DeliveryTargetInput> = {}): DeliveryTargetInput {
   return {
@@ -51,6 +52,29 @@ export function makePublication(overrides: Partial<ApprovedPublicationInput> = {
   }
 }
 
+function fixtureIdentityInput() {
+  return {
+    ownerScopeKey: 'owner-1',
+    targetId: 'target-1',
+    adapter: 'wordpress_rest' as const,
+    scheduleEntryId: 'schedule-1',
+    scheduleKey: '2026-08-24T00:00:00.000Z:article-1',
+    productionPlanId: 'plan-1',
+    jobId: 'job-1',
+    draftId: 'draft-1',
+    draftVersion: 1,
+    reviewId: 'review-1',
+    evidenceSnapshotHash: FIXTURE_HASH,
+    contentHash: FIXTURE_HASH_B,
+  }
+}
+
+export const FIXTURE_KEY = (() => {
+  const result = computeDeliveryIdempotencyKey(fixtureIdentityInput())
+  if (result.status !== 'ok') throw new Error('fixture identity must be valid')
+  return result.key
+})()
+
 export function makeAttempt(overrides: Partial<DeliveryAttemptRecord> = {}): DeliveryAttemptRecord {
   return {
     attemptNumber: 1,
@@ -59,6 +83,16 @@ export function makeAttempt(overrides: Partial<DeliveryAttemptRecord> = {}): Del
     idempotencyKey: FIXTURE_KEY,
     ...overrides,
   }
+}
+
+export function makeRetryWaitAttempt(overrides: Partial<DeliveryAttemptRecord> = {}): DeliveryAttemptRecord {
+  return makeAttempt({
+    state: 'retry_wait',
+    occurredAt: '2026-08-23T23:59:00.000Z',
+    failureCode: 'timeout',
+    retryEligibleAt: FIXTURE_NOW,
+    ...overrides,
+  })
 }
 
 export function makePlanInput(overrides: Partial<DeliveryPlanInput> = {}): DeliveryPlanInput {

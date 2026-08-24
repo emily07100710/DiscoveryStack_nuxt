@@ -60,6 +60,14 @@ export type DeliveryDecisionCode =
   | 'HTTP_SUCCESS_MISSING_REMOTE_ID'
   | 'INVALID_TARGET_ORIGIN'
   | 'INVALID_ENDPOINT_PATH'
+  | 'POLICY_VERSION_MISMATCH'
+  | 'RETRY_NOT_DUE'
+  | 'ATTEMPT_STILL_IN_FLIGHT'
+  | 'ATTEMPT_IDEMPOTENCY_MISMATCH'
+  | 'ATTEMPT_RETRY_EVIDENCE_INVALID'
+  | 'PUBLISHED_AT_IN_FUTURE'
+  | 'PUBLISHED_AT_BEFORE_ATTEMPT'
+  | 'RESPONSE_FINGERPRINT_INVALID'
 
 export interface DeliveryTargetInput {
   readonly targetId: string
@@ -96,8 +104,12 @@ export interface ApprovedPublicationInput {
 }
 
 export interface ValidatedDeliveryTarget extends DeliveryTargetInput {
+  readonly targetOrigin: string
+  readonly endpointPath: string
   readonly normalizedOrigin: string
   readonly normalizedEndpointPath: string
+  readonly allowedContentTypes: readonly string[]
+  readonly allowedLanguages: readonly string[]
 }
 
 export interface TargetValidationResult {
@@ -155,6 +167,7 @@ export interface IdempotencyPayload {
   readonly adapter: DeliveryAdapter
   readonly scheduleEntryId: string
   readonly scheduleKey: string
+  readonly productionPlanId: string
   readonly jobId: string
   readonly draftId: string
   readonly draftVersion: number
@@ -175,6 +188,17 @@ export type IdempotencyResult =
       readonly reasons: readonly string[]
     }
 
+export type DeliveryResultFingerprintResult =
+  | {
+      readonly status: 'ok'
+      readonly fingerprint: string
+    }
+  | {
+      readonly status: 'blocked'
+      readonly code: 'INVALID_INPUT' | 'INVALID_SHA256'
+      readonly reasons: readonly string[]
+    }
+
 export interface DeliveryAttemptRecord {
   readonly attemptNumber: number
   readonly state: DeliveryState
@@ -182,6 +206,8 @@ export interface DeliveryAttemptRecord {
   readonly idempotencyKey: string
   readonly failureCode?: DeliveryFailureCode
   readonly httpStatus?: number
+  readonly retryAfterSeconds?: number
+  readonly retryEligibleAt?: string
 }
 
 export interface DeliveryFailureInput {
@@ -213,13 +239,17 @@ export interface DeliveryResultInput {
 export interface DeliveryTransitionEvent {
   readonly type: 'mark_eligible' | 'plan_dispatch' | 'retry_due' | 'failure' | 'success' | 'block' | 'cancel'
   readonly now?: string
+  readonly attemptStartedAt?: string
   readonly attempts?: readonly DeliveryAttemptRecord[]
   readonly failure?: DeliveryFailureInput
   readonly expectedIdempotencyKey?: string
   readonly result?: DeliveryResultInput
   readonly targetOrigin?: string
   readonly priorRemoteContentId?: string
+  readonly priorDeliveryResultFingerprint?: string
   readonly httpStatus?: number
+  readonly retryEligibleAt?: string
+  readonly attemptNumber?: number
 }
 
 export type DeliveryStateResult =
@@ -230,6 +260,7 @@ export type DeliveryStateResult =
       readonly transition: `${DeliveryState}->${DeliveryState}`
       readonly classification?: DeliveryFailureClassification
       readonly remoteContentId?: string
+      readonly deliveryResultFingerprint?: string
     }
   | {
       readonly status: 'blocked'
@@ -263,8 +294,15 @@ export interface DeliveryFailureHistoryRecord {
   readonly idempotencyKey: string
   readonly targetId: string
   readonly ownerScopeKey: string
+  readonly adapter: DeliveryAdapter
+  readonly scheduleEntryId: string
+  readonly scheduleKey: string
+  readonly productionPlanId: string
+  readonly jobId: string
   readonly draftId: string
-  readonly contentHash: string
+  readonly draftVersion: number
   readonly reviewId: string
+  readonly evidenceSnapshotHash: string
+  readonly contentHash: string
   readonly state: DeliveryState
 }
