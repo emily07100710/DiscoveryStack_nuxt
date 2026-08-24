@@ -11,14 +11,18 @@ export {
   calculateTrendMetrics,
 } from './metrics'
 export {
+  canonicalMetaAdPayload,
   fingerprint,
   isIsoDate,
   isIsoDateTime,
   isSha256Hex,
+  normalizeIsoDateTime,
+  normalizeKeyword,
   normalizePublisherIdentity,
   normalizeText,
   parseGoogleTrendsCsv,
   parseMetaAdSnapshot,
+  metaSnapshotSourceHash,
   sha256,
   stableStringify,
 } from './normalization'

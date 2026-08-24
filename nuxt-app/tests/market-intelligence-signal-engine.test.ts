@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest'
 import {
   assessmentFingerprint,
   assessMarketSignal,
+  canonicalMetaAdPayload,
   calculateMetaMetrics,
   calculateTrendMetrics,
   fingerprint,
   isMarketSignalEnginePure,
+  normalizeIsoDateTime,
+  normalizeKeyword,
   normalizePublisherIdentity,
   parseGoogleTrendsCsv,
   parseMetaAdSnapshot,
+  metaSnapshotSourceHash,
   sha256,
+  stableStringify,
 } from '../server/market-intelligence'
 import type {
   GoogleTrendsSnapshot,
@@ -19,6 +24,7 @@ import type {
 } from '../server/market-intelligence'
 import {
   SYNTHETIC_CSV,
+  SYNTHETIC_CSV_HASH,
   SYNTHETIC_HASH_A,
   SYNTHETIC_HASH_B,
   SYNTHETIC_HASH_C,
@@ -74,9 +80,10 @@ describe('Google Trends parser', () => {
   })
 
   it('normalizes suppressed <1 values without treating them as missing network data', () => {
-    const result = parseGoogleTrendsCsv('date,value\n2026-01-01,<1\n2026-01-02,2', {
+    const csv = 'date,value\n2026-01-01,<1\n2026-01-02,2'
+    const result = parseGoogleTrendsCsv(csv, {
       snapshotId: 'csv-synthetic-02', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
-      capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: SYNTHETIC_HASH_A,
+      capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(true)
     expect(result.value?.observations[0]).toMatchObject({ value: 0, suppressedBelowOne: true })
@@ -84,18 +91,20 @@ describe('Google Trends parser', () => {
   })
 
   it('rejects a missing or wrong CSV header', () => {
-    const result = parseGoogleTrendsCsv('day,interest\n2026-01-01,10', {
+    const csv = 'day,interest\n2026-01-01,10'
+    const result = parseGoogleTrendsCsv(csv, {
       snapshotId: 'csv-synthetic-03', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
-      capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: SYNTHETIC_HASH_A,
+      capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(false)
     expect(result.errors.map((error) => error.code)).toContain('MISSING_TIME_SERIES_HEADER')
   })
 
   it('rejects invalid dates and out-of-window observations', () => {
-    const result = parseGoogleTrendsCsv('date,value\n2026-02-30,10\n2026-01-05,20', {
+    const csv = 'date,value\n2026-02-30,10\n2026-01-05,20'
+    const result = parseGoogleTrendsCsv(csv, {
       snapshotId: 'csv-synthetic-04', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
-      capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: SYNTHETIC_HASH_A,
+      capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(false)
     expect(result.errors.filter((error) => error.code === 'INVALID_DATE')).toHaveLength(1)
@@ -103,18 +112,20 @@ describe('Google Trends parser', () => {
   })
 
   it('rejects duplicate observations rather than silently overwriting them', () => {
-    const result = parseGoogleTrendsCsv('date,value\n2026-01-01,10\n2026-01-01,20', {
+    const csv = 'date,value\n2026-01-01,10\n2026-01-01,20'
+    const result = parseGoogleTrendsCsv(csv, {
       snapshotId: 'csv-synthetic-05', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
-      capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: SYNTHETIC_HASH_A,
+      capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(false)
     expect(result.errors.map((error) => error.code)).toContain('DUPLICATE_OBSERVATION')
   })
 
   it('rejects malformed and non-numeric rows', () => {
-    const result = parseGoogleTrendsCsv('date,value\n2026-01-01,ten\n2026-01-02,10,extra', {
+    const csv = 'date,value\n2026-01-01,ten\n2026-01-02,10,extra'
+    const result = parseGoogleTrendsCsv(csv, {
       snapshotId: 'csv-synthetic-06', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
-      capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: SYNTHETIC_HASH_A,
+      capturedAt: '2026-01-05T00:00:00.000Z', sourceHash: sha256(csv),
     })
     expect(result.ok).toBe(false)
     expect(result.errors.map((error) => error.code)).toEqual(expect.arrayContaining(['INVALID_NUMBER', 'MALFORMED_CSV']))
@@ -356,5 +367,178 @@ describe('market signal assessment policy', () => {
     expect(assessment.status).toBe('ready')
     expect(assessment.rejectedSnapshotIds).toEqual(['bad'])
     expect(assessment.limitations.join(' ')).toContain('部分輸入被拒絕')
+  })
+})
+
+
+describe('evidence integrity hardening', () => {
+  it('rejects a valid-looking Google hash when the CSV content changes', () => {
+    const csv = 'date,value\n2026-01-01,20\n2026-01-02,30'
+    const result = parseGoogleTrendsCsv(`${csv}\n`, {
+      snapshotId: 'hash-synthetic-01', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      capturedAt: '2026-01-05T00:00:00Z', sourceHash: sha256(csv),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.errors.map((error) => error.code)).toContain('INVALID_SOURCE_HASH')
+  })
+
+  it('accepts Google Trends only with the exact UTF-8 CSV hash, case normalized', () => {
+    const csv = 'date,value\n2026-01-01,20\n2026-01-02,30'
+    const result = parseGoogleTrendsCsv(csv, {
+      snapshotId: 'hash-synthetic-02', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      capturedAt: '2026-01-05T00:00:00+00:00', sourceHash: sha256(csv).toUpperCase(),
+    })
+    expect(result.ok).toBe(true)
+    expect(result.value?.sourceHash).toBe(sha256(csv))
+    expect(result.value?.capturedAt).toBe('2026-01-05T00:00:00.000Z')
+  })
+
+  it('hashes Meta canonical payload without sourceHash or derived limitations', () => {
+    const input = metaInput()
+    const payload = canonicalMetaAdPayload(input)
+    expect(payload).not.toHaveProperty('sourceHash')
+    expect(payload).not.toHaveProperty('limitations')
+    expect(metaSnapshotSourceHash(input)).toBe(sha256(stableStringify(payload)))
+  })
+
+  it('accepts a Meta snapshot only with its canonical bounded metadata hash', () => {
+    const input = metaInput()
+    const result = parseMetaAdSnapshot({ ...input, sourceHash: metaSnapshotSourceHash(input).toUpperCase() })
+    expect(result.ok).toBe(true)
+    expect(result.value?.sourceHash).toBe(metaSnapshotSourceHash(input))
+  })
+
+  it('rejects a valid-looking Meta hash when an ad field changes', () => {
+    const input = metaInput()
+    const result = parseMetaAdSnapshot({ ...input, ads: input.ads.map((ad, index) => index === 0 ? { ...ad, status: 'active' } : ad) })
+    expect(result.ok).toBe(false)
+    expect(result.errors.map((error) => error.code)).toContain('INVALID_SOURCE_HASH')
+  })
+
+  it('rejects non-SHA-256 creative hashes instead of treating non-empty text as valid', () => {
+    const result = parseMetaAdSnapshot(metaInput({ ads: [{ adId: 'creative-bad', startedAt: '2026-01-01', lastSeenAt: '2026-01-02', status: 'active', creativeHash: 'not-a-hash' }] }))
+    expect(result.ok).toBe(false)
+    expect(result.errors.map((error) => error.code)).toContain('INVALID_SOURCE_HASH')
+  })
+
+  it('normalizes equivalent keyword case, whitespace, and full-width text', () => {
+    expect(normalizeKeyword('  Synthetic　Topic  ')).toBe(normalizeKeyword('synthetic topic'))
+    const first = syntheticTrendSnapshot({ keyword: 'Synthetic Topic' })
+    const second = syntheticTrendSnapshot({ snapshotId: 'equivalent', keyword: ' synthetic　topic ' })
+    const assessment = assessMarketSignal(trendRequest({ googleTrends: [first, second] }))
+    expect(assessment.status).toBe('ready')
+    expect(assessment.rejectionReasons).not.toContain('KEYWORD_MISMATCH')
+  })
+
+  it('rejects apple and banana snapshots as a keyword conflict', () => {
+    const assessment = assessMarketSignal(trendRequest({ googleTrends: [
+      syntheticTrendSnapshot({ snapshotId: 'apple', keyword: 'apple' }),
+      syntheticTrendSnapshot({ snapshotId: 'banana', keyword: 'banana' }),
+    ] }))
+    expect(assessment.status).toBe('not_ready')
+    expect(assessment.rejectionReasons).toContain('KEYWORD_MISMATCH')
+    expect(assessment.rejectedSnapshotIds).toContain('banana')
+  })
+
+  it('rejects different normalization scales rather than averaging incompatible numbers', () => {
+    const assessment = assessMarketSignal(trendRequest({ googleTrends: [
+      syntheticTrendSnapshot({ snapshotId: 'scale-a', scaleKey: 'web-search-us-2026-01' }),
+      syntheticTrendSnapshot({ snapshotId: 'scale-b', scaleKey: 'web-search-world-2026-01' }),
+    ] }))
+    expect(assessment.status).toBe('not_ready')
+    expect(assessment.rejectionReasons).toContain('SCALE_MISMATCH')
+  })
+
+  it('rejects a partially overlapping request window', () => {
+    const assessment = assessMarketSignal(trendRequest({ window: { start: '2026-01-02', end: '2026-01-05' } }))
+    expect(assessment.status).toBe('rejected')
+    expect(assessment.rejectionReasons).toContain('WINDOW_MISMATCH')
+  })
+
+  it('rejects an observation outside its snapshot window even when it is inside the request window', () => {
+    const assessment = assessMarketSignal(trendRequest({ googleTrends: [syntheticTrendSnapshot({
+      window: { start: '2026-01-01', end: '2026-01-02' },
+      observations: [{ date: '2026-01-01', value: 20 }, { date: '2026-01-03', value: 30 }],
+    })] }))
+    expect(assessment.status).toBe('rejected')
+    expect(assessment.rejectionReasons).toContain('INVALID_DATE')
+  })
+
+  it('requires explicit timezone on parser datetimes and canonicalizes equivalent offsets', () => {
+    expect(normalizeIsoDateTime('2026-01-01T00:00:00')).toBeNull()
+    expect(normalizeIsoDateTime('2026-01-01T08:00:00+08:00')).toBe('2026-01-01T00:00:00.000Z')
+    const utc = parseGoogleTrendsCsv(SYNTHETIC_CSV, {
+      snapshotId: 'time-utc', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      capturedAt: '2026-01-05T00:00:00Z', sourceHash: SYNTHETIC_CSV_HASH,
+    })
+    const offset = parseGoogleTrendsCsv(SYNTHETIC_CSV, {
+      snapshotId: 'time-offset', keyword: 'synthetic topic', locale: 'en-US', window: SYNTHETIC_WINDOW,
+      capturedAt: '2026-01-05T08:00:00+08:00', sourceHash: SYNTHETIC_CSV_HASH,
+    })
+    expect(utc.value?.capturedAt).toBe(offset.value?.capturedAt)
+  })
+
+  it('orders Meta snapshots by epoch rather than offset string', () => {
+    const earlier = metaSnapshot({ snapshotId: 'earlier', capturedAt: '2026-01-05T00:00:00Z' })
+    const later = metaSnapshot({ snapshotId: 'later', capturedAt: '2026-01-05T08:00:00+08:00' })
+    const metrics = calculateMetaMetrics([later, earlier])
+    expect(metrics?.snapshotCount).toBe(2)
+    expect(metrics?.publisherDirections['synthetic example']).toBe('stable')
+  })
+
+  it('gives equivalent offset snapshots the same assessment fingerprint', () => {
+    const first = trendRequest({ googleTrends: [syntheticTrendSnapshot({ capturedAt: '2026-01-05T00:00:00Z' })] })
+    const second = trendRequest({ googleTrends: [syntheticTrendSnapshot({ capturedAt: '2026-01-05T08:00:00+08:00' })] })
+    expect(assessMarketSignal(first).deterministicFingerprint).toBe(assessMarketSignal(second).deterministicFingerprint)
+  })
+
+  it('uses each publisher latest snapshot when summing active Meta ads', () => {
+    const alphaOld = metaSnapshot({ publisher: 'Alpha Ltd.', publisherIdentity: 'alpha', snapshotId: 'alpha-old', capturedAt: '2026-01-01T00:00:00Z', ads: [{ adId: 'a1', startedAt: '2026-01-01', lastSeenAt: '2026-01-02', status: 'active', creativeHash: SYNTHETIC_HASH_A }] })
+    const alphaNew = metaSnapshot({ publisher: 'Alpha Ltd.', publisherIdentity: 'alpha', snapshotId: 'alpha-new', capturedAt: '2026-01-04T00:00:00Z', ads: [{ adId: 'a1', startedAt: '2026-01-01', lastSeenAt: '2026-01-04', status: 'inactive', creativeHash: SYNTHETIC_HASH_A }] })
+    const betaOnly = metaSnapshot({ publisher: 'Beta LLC', publisherIdentity: 'beta', snapshotId: 'beta-only', capturedAt: '2026-01-03T00:00:00Z', ads: [{ adId: 'b1', startedAt: '2026-01-02', lastSeenAt: '2026-01-03', status: 'active', creativeHash: SYNTHETIC_HASH_B }] })
+    const metrics = calculateMetaMetrics([alphaNew, betaOnly, alphaOld])
+    expect(metrics?.activeAdCount).toBe(1)
+    expect(metrics?.publisherCount).toBe(2)
+    expect(metrics?.publisherDirections).toEqual({ alpha: 'decreasing', beta: 'insufficient_data' })
+    expect(metrics?.activityDirection).toBe('insufficient_data')
+  })
+
+  it('preserves Limited as a brand word while stripping only terminal company suffixes', () => {
+    expect(normalizePublisherIdentity('Limited Run Games')).toBe('limited run games')
+    expect(normalizePublisherIdentity('Synthetic Example Ltd.')).toBe('synthetic example')
+    expect(normalizePublisherIdentity('https://WWW.Example.com/path')).toBe('example com')
+  })
+
+  it('fails closed for null, wrong-type, malformed-array, and missing-nested-object parser input', () => {
+    expect(() => parseGoogleTrendsCsv(null, null)).not.toThrow()
+    expect(parseGoogleTrendsCsv(null, null).errors.map((error) => error.code)).toContain('INVALID_INPUT')
+    expect(parseGoogleTrendsCsv(123, {})).toMatchObject({ ok: false, errors: expect.arrayContaining([expect.objectContaining({ code: 'INVALID_INPUT' })]) })
+    expect(() => parseMetaAdSnapshot(null)).not.toThrow()
+    expect(parseMetaAdSnapshot(null).errors.map((error) => error.code)).toContain('INVALID_INPUT')
+    expect(parseMetaAdSnapshot({ ...metaInput(), ads: [null as unknown as never] }).errors.map((error) => error.code)).toContain('INVALID_INPUT')
+    expect(parseMetaAdSnapshot({ ...metaInput(), window: undefined }).errors.map((error) => error.code)).toContain('INVALID_DATE')
+    const malformedAssessment = assessMarketSignal({ ...trendRequest(), googleTrends: 'not-an-array' as unknown as GoogleTrendsSnapshot[] })
+    expect(malformedAssessment.status).toBe('rejected')
+    expect(malformedAssessment.rejectionReasons).toContain('INVALID_INPUT')
+  })
+
+  it('fails closed for malformed assessment input without exposing raw input or stack data', () => {
+    const assessment = assessMarketSignal(null)
+    expect(assessment.status).toBe('rejected')
+    expect(assessment.rejectionReasons).toContain('INVALID_INPUT')
+    expect(JSON.stringify(assessment)).not.toContain('TypeError')
+    expect(JSON.stringify(assessment)).not.toContain('stack')
+  })
+
+  it('keeps equal endpoints stable even when the middle trend swings sharply', () => {
+    const metrics = calculateTrendMetrics([syntheticTrendSnapshot({ observations: [
+      { date: '2026-01-01', value: 10 },
+      { date: '2026-01-02', value: 100 },
+      { date: '2026-01-03', value: 0 },
+      { date: '2026-01-04', value: 10 },
+    ] })])
+    expect(metrics?.firstValue).toBe(10)
+    expect(metrics?.latestValue).toBe(10)
+    expect(metrics?.direction).toBe('stable')
   })
 })

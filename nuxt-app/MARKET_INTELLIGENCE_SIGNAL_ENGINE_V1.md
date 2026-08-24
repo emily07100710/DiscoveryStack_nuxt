@@ -28,23 +28,23 @@ Market Intelligence Signal Engine V1 是一個 **offline、pure TypeScript、det
 
 CSV 必須使用精確 header `date,value`，每一列都必須是 ISO date 與 0 到 100 的有限數字。`<1` 會被明確轉成 `0`，並附加 `SUPPRESSED_VALUE` warning 與 limitation；它不會被偽裝成精確數字。重複日期、錯誤日期、越界數字、window 外 observation、錯誤欄位數、缺 hash 或非 SHA-256 hash 都會 fail closed。
 
-Parser 需要呼叫端提供 `snapshotId`、`keyword`、`locale`、`window`、`capturedAt` 與原始輸入的 SHA-256 `sourceHash`。引擎不會自己抓取或重新取得資料。
+Parser 需要呼叫端提供 `snapshotId`、`keyword`、`locale`、`window`、`capturedAt` 與原始輸入的 SHA-256 `sourceHash`。引擎會以 UTF-8 bytes 對實際 CSV 字串計算 SHA-256，並與傳入 hash 做大小寫正規化後的精確比對；只有 hash 外觀正確但內容不一致時也會 fail closed。引擎不會自己抓取或重新取得資料。`capturedAt` 必須含 `Z` 或明確 `±HH:MM` timezone，保存前統一為 canonical UTC ISO timestamp。
 
 ### Meta snapshot
 
-Meta snapshot 需要 `snapshotId`、publisher、locale、window、capturedAt、SHA-256 `sourceHash` 與 ad metadata。每筆 ad 需要 `adId`、`startedAt`、`lastSeenAt`、`status` 與 `creativeHash`。重複 ad ID、未知 status、日期錯誤、沒有 publisher、沒有 hash 或不與 window 重疊的 ad 會被拒絕。Publisher identity 會做 Unicode normalization、lowercase、網址前綴移除、公司型態字尾清理與 exact stable identity normalization；不同頁面不能僅靠不同 ad ID 假裝成不同 publisher。
+Meta snapshot 需要 `snapshotId`、publisher、locale、window、capturedAt、SHA-256 `sourceHash` 與 ad metadata。每筆 ad 需要 `adId`、`startedAt`、`lastSeenAt`、`status` 與有效 SHA-256 `creativeHash`。Meta 的 source hash 不是假格式檢查：`metaSnapshotSourceHash` 會對 provider、snapshotId、publisher、locale、window、canonical UTC capturedAt 與排序後的 ads 組成 canonical bounded metadata payload，排除 `sourceHash` 與衍生 `limitations` 後計算 SHA-256，再與輸入精確比對。重複 normalized ad ID、未知 status、日期錯誤、沒有 publisher、沒有 hash 或 ad 不與 snapshot／request window 相交的輸入會被拒絕。Publisher identity 會做 Unicode normalization、lowercase、網址前綴移除，且只從尾端清理公司型態；`Limited Run Games` 不會因中間的 `Limited` 被刪除。不同頁面不能僅靠不同 ad ID 假裝成不同 publisher。
 
 ## Deterministic metrics
 
 ### Trend metrics
 
-引擎會依 ISO date 排序 observation；同一天來自多個 snapshot 的值會以 arithmetic mean 合併。輸出包含 `pointCount`、first/latest/mean/min/max、change percentage、線性回歸 slope、volatility、peak、coverage 與 direction。當 baseline 為零時，`changePercent` 為 `null`，不會製造無限大或假百分比；少於兩個 distinct observation 時 direction 為 `insufficient_data`。
+引擎會依 ISO date 排序 observation；同一天只有在 keyword 與 `scaleKey` 完全一致時才可進入同一 assessment，否則以 `KEYWORD_MISMATCH` 或 `SCALE_MISMATCH` 拒絕衝突 snapshot，絕不平均不同 query 或 normalization scale 的數字。輸出包含 `pointCount`、first/latest/mean/min/max、change percentage、線性回歸 slope、volatility、peak、coverage 與 direction。當 baseline 為零時，`changePercent` 為 `null`，不會製造無限大或假百分比；少於兩個 distinct observation 時 direction 為 `insufficient_data`。request window 與每一個 snapshot window 必須精確相同，且每一個 observation date 必須同時落在兩者內。
 
-方向判定是治理用 threshold，不是預測模型。所有數字固定 rounding，所有集合依 stable sort 與 duplicate removal 處理。
+方向判定是治理用 threshold，不是預測模型：少於兩點是 `insufficient_data`；未達 change 與 slope threshold 是 `stable`；`latest > first` 是 `rising`；`latest < first` 是 `falling`；端點相等永遠是 `stable`，即使中間波動很大。所有數字固定 rounding，所有集合依 stable sort 與 duplicate removal 處理。
 
 ### Meta activity metrics
 
-引擎會依 `publisherIdentity:adId` deduplicate ad identity，計算 snapshot count、publisher count、total/unique ad count、latest active ad count、unique creative count、bounded window 內 new ad count、平均廣告年齡與活動方向。只有一個 snapshot 時 activity direction 為 `insufficient_data`；它仍可描述該 bounded snapshot，但不會偽造時間方向。
+引擎會依 `publisherIdentity:adId` deduplicate ad identity，計算 snapshot count、publisher count、total/unique ad count、各 publisher 最新 snapshot 的 active ad 總和、unique creative count、bounded window 內 new ad count、平均廣告年齡、全域活動方向與 `publisherDirections`。每個 publisher 都以自己的 first/latest snapshot 比較；若任何 publisher 沒有至少兩個可比較 snapshot，全域方向為 `insufficient_data`，不會用其他 publisher 的時間序列替代。
 
 ## Policy 與 fail-closed status
 
@@ -56,7 +56,7 @@ Policy catalog 集中管理 snapshot、observation、ad 與 request 限制，並
 | `not_ready` | 輸入本身可被辨識，但沒有足夠 observation／snapshot 形成可靠的 bounded comparison；不可偷偷 fallback |
 | `rejected` | claim use、格式、provider、日期、locale、hash、status 或其他安全條件不合格；不得進入下游假設 |
 
-每一次 assessment 都回傳 accepted/rejected snapshot IDs、rejection reasons、missing evidence types、limitations、policy version、engine version 與 deterministic fingerprint。`deterministicFingerprint` 對相同 canonical input 穩定；輸入陣列順序不會改變結果 identity。
+每一次 assessment 都回傳 accepted/rejected snapshot IDs、rejection reasons、missing evidence types、limitations、policy version、engine version 與 deterministic fingerprint。所有 datetime 先 canonicalize 到 UTC，`deterministicFingerprint` 對相同 canonical input 穩定；等價 timezone offset 與輸入陣列順序都不會改變結果 identity。公開 parser 與 assessment entrypoint 對 null、undefined、錯誤型別、malformed array 與缺少 nested object 一律回傳結構化 fail-closed 結果，不回傳 raw input、stack 或 secret。
 
 ## Human review checklist
 
@@ -68,4 +68,4 @@ Policy catalog 集中管理 snapshot、observation、ad 與 request 限制，並
 
 ## 測試覆蓋
 
-`tests/market-intelligence-signal-engine.test.ts` 包含 40 個有意義案例，涵蓋 CSV parser、Meta snapshot validation、publisher normalization、suppressed values、invalid dates、source hash、duplicate records、bounded snapshots、missing evidence、locale/window mismatch、unsupported factual/ranking/investment use、deterministic metrics、stable ordering、fingerprint、no fabricated citation fields 與 no-network purity boundary。Fixtures 位於 `tests/fixtures/market-intelligence/`，僅使用 synthetic metadata。
+`tests/market-intelligence-signal-engine.test.ts` 包含 59 個有意義案例，涵蓋 CSV content-bound hash、Meta canonical payload hash、creative hash、publisher normalization、suppressed values、invalid dates、duplicate records、keyword／scale／window alignment、timezone canonicalization、multi-publisher metrics、bounded snapshots、missing evidence、unsupported factual/ranking/investment use、malformed runtime input、deterministic metrics、stable ordering、fingerprint、no fabricated citation fields 與 no-network purity boundary。Fixtures 位於 `tests/fixtures/market-intelligence/`，僅使用 synthetic metadata。

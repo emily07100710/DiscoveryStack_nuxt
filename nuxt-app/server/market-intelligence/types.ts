@@ -18,6 +18,8 @@ export const REJECTION_REASONS = [
   'INVALID_DATE',
   'INVALID_NUMBER',
   'INVALID_SOURCE_HASH',
+  'KEYWORD_MISMATCH',
+  'SCALE_MISMATCH',
   'MISSING_REQUIRED_FIELD',
   'DUPLICATE_OBSERVATION',
   'DUPLICATE_SNAPSHOT_ID',
@@ -75,6 +77,7 @@ export interface GoogleTrendsSnapshot {
   window: DateWindow
   capturedAt: string
   sourceHash: string
+  scaleKey?: string
   observations: GoogleTrendsObservation[]
   limitations: string[]
 }
@@ -86,6 +89,7 @@ export interface GoogleTrendsParseOptions {
   window: DateWindow
   capturedAt: string
   sourceHash?: string
+  scaleKey?: string
 }
 
 export interface ParseResult<T> {
@@ -102,6 +106,7 @@ export interface ParseIssue {
 }
 
 export type MetaAdStatus = 'active' | 'inactive' | 'unknown'
+export type ActivityDirection = 'increasing' | 'decreasing' | 'stable' | 'insufficient_data'
 
 export interface MetaAdRecord {
   adId: string
@@ -161,7 +166,8 @@ export interface MetaMetrics {
   uniqueCreativeCount: number
   newAdCount: number
   averageAdAgeDays: number | null
-  activityDirection: 'increasing' | 'decreasing' | 'stable' | 'insufficient_data'
+  activityDirection: ActivityDirection
+  publisherDirections: Record<string, ActivityDirection>
 }
 
 export interface MarketSignalAssessment {
