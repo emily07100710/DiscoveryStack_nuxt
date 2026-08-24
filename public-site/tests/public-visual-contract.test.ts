@@ -56,6 +56,14 @@ describe('public-site visual and boundary contract', () => {
     expect(journey).toContain("window.removeEventListener('scroll'")
   })
 
+  it('keeps the legacy homepage scroll choreography continuous after the Astro split', () => {
+    expect(home).toContain("document.querySelectorAll('#journeySteps .step')")
+    expect(home).toContain("document.querySelectorAll('#railNumbers b')")
+    expect(home).toContain("rootMargin: '-35% 0px -45% 0px'")
+    expect(home).toContain("setActiveJourneyStep(Number(activeEntry.target.getAttribute('data-step') || 0))")
+    expect(source('src/layouts/BaseLayout.astro')).toContain('window.requestAnimationFrame(updateScroll)')
+  })
+
   it('keeps accessible bounded AI QA and analysis forms on the public API allowlist', () => {
     expect(aiQa).toContain('class="qa-launcher"')
     expect(aiQa).toContain(':aria-controls="panelId"')

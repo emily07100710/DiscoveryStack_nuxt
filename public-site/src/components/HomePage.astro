@@ -103,6 +103,27 @@ const pricingOptions = isZh ? [
       }, { rootMargin: '0px 0px -12% 0px', threshold: 0.15 });
       revealables.forEach((element) => observer.observe(element));
     }
+
+    const journeySteps = Array.from(document.querySelectorAll('#journeySteps .step'));
+    const journeyNumbers = Array.from(document.querySelectorAll('#railNumbers b'));
+    const journeyLabel = document.getElementById('railLabel');
+    const journeyTrack = document.getElementById('railTrack');
+    const setActiveJourneyStep = (index = 0) => {
+      const boundedIndex = Math.min(Math.max(index, 0), Math.max(journeySteps.length - 1, 0));
+      journeyNumbers.forEach((number, numberIndex) => number.classList.toggle('is-active', numberIndex === boundedIndex));
+      if (journeyLabel && journeySteps[boundedIndex]) journeyLabel.textContent = journeySteps[boundedIndex].getAttribute('data-label') || '';
+      if (journeyTrack && journeySteps.length > 0) journeyTrack.style.width = `${((boundedIndex + 1) / journeySteps.length) * 100}%`;
+    };
+    if (!reduceMotion && journeySteps.length > 0 && 'IntersectionObserver' in window) {
+      const journeyObserver = new IntersectionObserver((entries) => {
+        const activeEntry = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
+        if (activeEntry) setActiveJourneyStep(Number(activeEntry.target.getAttribute('data-step') || 0));
+      }, { rootMargin: '-35% 0px -45% 0px', threshold: [0, 0.25, 0.6] });
+      journeySteps.forEach((step) => journeyObserver.observe(step));
+    }
+    setActiveJourneyStep(0);
   </script>
 <style>
     .pricing-safety-net > .owner-workbench-placeholder { color: var(--paper); font: 500 .7rem/1.4 var(--font-mono); letter-spacing: .06em; white-space: nowrap; border-bottom: 1px solid rgba(250,247,241,.55); }

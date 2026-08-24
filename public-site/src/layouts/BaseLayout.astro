@@ -89,12 +89,18 @@ const favicon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%2
       const toggle = document.getElementById('navToggle');
       const header = document.getElementById('siteHeader');
       const rail = document.querySelector('.route-rail');
+      let scrollFrame = 0;
       const updateScroll = () => {
         header?.classList.toggle('is-stuck', window.scrollY > 12);
         if (rail) {
           const max = document.documentElement.scrollHeight - window.innerHeight;
           rail.setAttribute('style', `--route-progress: ${max > 0 ? (window.scrollY / max) * 100 : 0}%`);
         }
+        scrollFrame = 0;
+      };
+      const queueScrollUpdate = () => {
+        if (scrollFrame) return;
+        scrollFrame = window.requestAnimationFrame(updateScroll);
       };
       toggle?.addEventListener('click', () => {
         const open = nav?.classList.toggle('is-open') ?? false;
@@ -105,7 +111,8 @@ const favicon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%2
         nav.classList.remove('is-open');
         toggle?.setAttribute('aria-expanded', 'false');
       }));
-      window.addEventListener('scroll', updateScroll, { passive: true });
+      window.addEventListener('scroll', queueScrollUpdate, { passive: true });
+      window.addEventListener('resize', queueScrollUpdate);
       updateScroll();
       document.getElementById('cookie-settings')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('discoverystack:open-cookie-settings')));
     </script>
