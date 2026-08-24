@@ -1,0 +1,326 @@
+<script setup lang="ts">
+type Framework = 'Astro' | 'Nuxt'
+type PublicationTransport = 'first_party_git' | 'first_party_signed_api'
+type CadenceDays = 3 | 7 | 15 | 30
+type CatchUpPolicy = 'skip_missed' | 'one_catch_up'
+type ActionState = 'idle' | 'saving' | 'success' | 'error'
+
+type Client = {
+  id: string | number
+  displayName: string
+  canonicalSiteOrigin: string
+  framework: Framework
+  publicationTransport: PublicationTransport
+  timeZone: string
+  defaultCadenceDays: CadenceDays
+  defaultPublishLocalTime: string
+  monthlyBudgetUnits: number
+  status?: string
+  publisherCapability?: string
+}
+
+type Calendar = {
+  id: string | number
+  clientId: string | number
+  productionPlanId: string
+  planStartDate: string
+  planEndDate: string
+  publishLocalTime: string
+  cadenceDays: CadenceDays
+  monthlyBudgetUnits: number
+  defaultCostUnits: number
+  maxItemsPerCalendarMonth: number
+  maximumTotalItems: number
+  catchUpPolicy: CatchUpPolicy
+  planFingerprint?: string
+  status?: string
+}
+
+type ContentEntry = {
+  id: string | number
+  calendarId?: string | number
+  clientId?: string | number
+  plannedLocalDate: string
+  title?: string | null
+  topic?: string | null
+  contentType: string
+  language: string
+  status: string
+  framework?: Framework | string
+  target?: string | null
+  hasApprovedDraft: boolean
+  hasPassedRiskGate: boolean
+  nextAction?: string | null
+  approvedDraftId?: string | number | null
+  contentHash?: string | null
+  evidenceHash?: string | null
+}
+
+type Run = { id: string | number, entryId?: string | number, status: string, retryAt?: string | null }
+type OutcomeAssessment = { id?: string | number, entryId?: string | number, status: string, validPairCount?: number, assessedAt?: string | null }
+type Capabilities = {
+  schedulerAvailable: boolean
+  generationExecutorConfigured: boolean
+  firstPartyPublisherConfigured: boolean
+  outcomeCollectionConfigured: boolean
+}
+type Workspace = {
+  clients: Client[]
+  calendars: Calendar[]
+  entries: ContentEntry[]
+  runs: Run[]
+  outcomeAssessments: OutcomeAssessment[]
+  capabilities: Capabilities
+  limitations: string[]
+}
+
+type ClientForm = {
+  displayName: string
+  canonicalSiteOrigin: string
+  framework: Framework
+  publicationTransport: PublicationTransport
+  timeZone: string
+  defaultCadenceDays: CadenceDays
+  defaultPublishLocalTime: string
+  monthlyBudgetUnits: number | null
+}
+type CalendarForm = {
+  clientId: string
+  productionPlanId: string
+  planStartDate: string
+  planEndDate: string
+  publishLocalTime: string
+  cadenceDays: CadenceDays
+  monthlyBudgetUnits: number | null
+  defaultCostUnits: number | null
+  maxItemsPerCalendarMonth: number | null
+  maximumTotalItems: number | null
+  catchUpPolicy: CatchUpPolicy
+}
+
+const emptyWorkspace = (): Workspace => ({
+  clients: [], calendars: [], entries: [], runs: [], outcomeAssessments: [],
+  capabilities: { schedulerAvailable: false, generationExecutorConfigured: false, firstPartyPublisherConfigured: false, outcomeCollectionConfigured: false },
+  limitations: [],
+})
+
+definePageMeta({ i18n: false, layout: 'owner' })
+useHead({
+  title: '內容營運 Workbench · DiscoveryStack',
+  meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }],
+})
+
+const { data: workspaceData, pending, error: workspaceError, refresh } = await useAsyncData<Workspace>(
+  'content-operations-owner-workspace',
+  () => $fetch<Workspace>('/api/content-operations/workspace'),
+  { server: false, default: emptyWorkspace },
+)
+const workspace = computed(() => workspaceData.value || emptyWorkspace())
+const actionState = ref<ActionState>('idle')
+const actionNotice = ref('')
+const actionError = ref('')
+
+const clientForm = reactive<ClientForm>({
+  displayName: '', canonicalSiteOrigin: '', framework: 'Astro', publicationTransport: 'first_party_git',
+  timeZone: 'Asia/Taipei', defaultCadenceDays: 7, defaultPublishLocalTime: '09:00', monthlyBudgetUnits: null,
+})
+const calendarForm = reactive<CalendarForm>({
+  clientId: '', productionPlanId: '', planStartDate: '', planEndDate: '', publishLocalTime: '09:00', cadenceDays: 7,
+  monthlyBudgetUnits: null, defaultCostUnits: null, maxItemsPerCalendarMonth: null, maximumTotalItems: null, catchUpPolicy: 'skip_missed',
+})
+
+const isSaving = computed(() => actionState.value === 'saving')
+const isUnauthorized = computed(() => {
+  const status = (workspaceError.value as { status?: number, statusCode?: number } | null)?.status ?? (workspaceError.value as { statusCode?: number } | null)?.statusCode
+  return status === 401 || status === 403
+})
+const workspaceErrorMessage = computed(() => isUnauthorized.value ? '這個工作台只對 owner 開放，請先回到私有稽核實驗室登入。' : '目前無法載入內容營運資料；沒有任何資料被修改。')
+const monthKey = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit' })
+const currentMonth = monthKey.format(new Date())
+const monthEntries = computed(() => workspace.value.entries.filter(entry => entry.plannedLocalDate.startsWith(currentMonth)))
+const nextEntry = computed(() => workspace.value.entries.slice().sort((left, right) => left.plannedLocalDate.localeCompare(right.plannedLocalDate))[0] || null)
+const reviewEntries = computed(() => workspace.value.entries.filter(entry => ['waiting_review', 'manual_review', 'review_pending'].includes(entry.status) || !entry.hasApprovedDraft))
+const readyEntries = computed(() => workspace.value.entries.filter(entry => ['ready_to_publish', 'can_publish'].includes(entry.status) || (entry.hasApprovedDraft && entry.hasPassedRiskGate)))
+const retryEntries = computed(() => workspace.value.entries.filter(entry => ['retry_wait', 'failed'].includes(entry.status)))
+const publishedEntries = computed(() => workspace.value.entries.filter(entry => ['published', 'observing', 'learning_candidate'].includes(entry.status)))
+const outcomeEntries = computed(() => {
+  const assessedIds = new Set(workspace.value.outcomeAssessments.filter(assessment => ['ready', 'partial', 'sufficient_data'].includes(assessment.status)).map(assessment => String(assessment.entryId)))
+  return workspace.value.entries.filter(entry => assessedIds.has(String(entry.id)) || entry.status === 'observing' || entry.status === 'learning_candidate')
+})
+
+const capabilityItems = computed(() => [
+  { key: 'schedulerAvailable', label: '排程器', falseMessage: '排程器尚未接通', trueMessage: '排程器已接通', available: workspace.value.capabilities.schedulerAvailable },
+  { key: 'generationExecutorConfigured', label: '自動內容生成', falseMessage: '自動內容生成尚未接通', trueMessage: '自動內容生成已接通', available: workspace.value.capabilities.generationExecutorConfigured },
+  { key: 'firstPartyPublisherConfigured', label: '第一方網站發布器', falseMessage: '第一方網站發布器尚未設定', trueMessage: '第一方網站發布器已設定', available: workspace.value.capabilities.firstPartyPublisherConfigured },
+  { key: 'outcomeCollectionConfigured', label: '成效資料回收', falseMessage: '成效資料尚未自動回收', trueMessage: '成效資料回收已接通', available: workspace.value.capabilities.outcomeCollectionConfigured },
+])
+
+const cadenceOptions: CadenceDays[] = [3, 7, 15, 30]
+const statusLabels: Record<string, string> = {
+  planned: '已排程', scheduled: '已排程', awaiting_generation: '等待產生', waiting_generation: '等待產生',
+  waiting_review: '等待人工審核', manual_review: '等待人工審核', review_pending: '等待人工審核', ready_to_publish: '可以發布', can_publish: '可以發布',
+  publishing: '發布中', published: '已發布', observing: '成效觀察', learning_candidate: '學習候選', blocked: '已阻擋', failed: '發布失敗', retry_wait: '等待重試',
+}
+const statusClass = (status: string) => ['blocked', 'failed', 'retry_wait'].includes(status) ? 'status status--danger' : ['published', 'observing', 'learning_candidate'].includes(status) ? 'status status--positive' : ['ready_to_publish', 'can_publish'].includes(status) ? 'status status--ready' : 'status status--neutral'
+const statusLabel = (status: string) => statusLabels[status] || status || '未提供狀態'
+const clientName = (clientId: string | number | undefined) => workspace.value.clients.find(client => String(client.id) === String(clientId))?.displayName || '未指定客戶'
+const formatDate = (value: string | null | undefined) => {
+  if (!value) return '尚未提供'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('zh-Hant', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+const calendarName = (calendarId: string | number | undefined) => workspace.value.calendars.find(calendar => String(calendar.id) === String(calendarId))?.productionPlanId || '未指定月曆'
+const runForEntry = (entryId: string | number) => workspace.value.runs.find(run => String(run.entryId) === String(entryId))
+const assessmentForEntry = (entryId: string | number) => workspace.value.outcomeAssessments.find(assessment => String(assessment.entryId) === String(entryId))
+const entryNextAction = (entry: ContentEntry) => entry.nextAction || (entry.status === 'waiting_review' ? '請人工審核草稿' : entry.status === 'ready_to_publish' ? '確認後發布' : entry.status === 'retry_wait' ? '等待重試時間或人工介入' : entry.status === 'failed' ? '檢查失敗原因並決定是否重試' : entry.status === 'observing' ? '等待足夠成效資料' : '查看內容詳細狀態')
+const pipelineSteps = [
+  { key: 'scheduled', label: '已排程' }, { key: 'awaiting_generation', label: '等待產生' }, { key: 'waiting_review', label: '等待人工審核' },
+  { key: 'ready_to_publish', label: '可以發布' }, { key: 'publishing', label: '發布中' }, { key: 'published', label: '已發布' },
+  { key: 'observing', label: '成效觀察' }, { key: 'learning_candidate', label: '學習候選' },
+]
+
+function idempotencyKey(prefix: string) {
+  return globalThis.crypto?.randomUUID?.() || `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+async function post<T = unknown>(route: string, body: Record<string, unknown>, successMessage: string): Promise<T | undefined> {
+  if (actionState.value === 'saving') return undefined
+  actionState.value = 'saving'; actionNotice.value = ''; actionError.value = ''
+  try {
+    const result = await $fetch<T>(route, { method: 'POST', body })
+    await refresh()
+    actionState.value = 'success'; actionNotice.value = successMessage
+    return result as T
+  } catch (error: unknown) {
+    const data = (error as { data?: { message?: string } } | null)?.data
+    actionState.value = 'error'; actionError.value = data?.message || '這個操作沒有完成；請先檢查欄位與目前能力限制。'
+    return undefined
+  } finally {
+    if (actionState.value === 'saving') actionState.value = 'idle'
+  }
+}
+
+function createClient() {
+  return post('/api/content-operations/clients', {
+    displayName: clientForm.displayName.trim(), canonicalSiteOrigin: clientForm.canonicalSiteOrigin.trim(), framework: clientForm.framework,
+    publicationTransport: clientForm.publicationTransport, timeZone: clientForm.timeZone, defaultCadenceDays: clientForm.defaultCadenceDays,
+    defaultPublishLocalTime: clientForm.defaultPublishLocalTime, monthlyBudgetUnits: clientForm.monthlyBudgetUnits, idempotencyKey: idempotencyKey('client'),
+  }, '客戶網站設定已送出；畫面正在重新整理。')
+}
+
+function createCalendar() {
+  return post('/api/content-operations/calendars', {
+    clientId: calendarForm.clientId, productionPlanId: calendarForm.productionPlanId.trim(), planStartDate: calendarForm.planStartDate,
+    planEndDate: calendarForm.planEndDate, publishLocalTime: calendarForm.publishLocalTime, cadenceDays: calendarForm.cadenceDays,
+    monthlyBudgetUnits: calendarForm.monthlyBudgetUnits, defaultCostUnits: calendarForm.defaultCostUnits,
+    maxItemsPerCalendarMonth: calendarForm.maxItemsPerCalendarMonth, maximumTotalItems: calendarForm.maximumTotalItems,
+    catchUpPolicy: calendarForm.catchUpPolicy, idempotencyKey: idempotencyKey('calendar'),
+  }, '內容月曆已送出；畫面正在重新整理。')
+}
+
+function replanCalendar(calendar: Calendar) {
+  return post(`/api/content-operations/calendars/${calendar.id}/replan`, {
+    expectedPlanFingerprint: calendar.planFingerprint, planStartDate: calendar.planStartDate, planEndDate: calendar.planEndDate,
+    publishLocalTime: calendar.publishLocalTime, cadenceDays: calendar.cadenceDays, monthlyBudgetUnits: calendar.monthlyBudgetUnits,
+    defaultCostUnits: calendar.defaultCostUnits, maxItemsPerCalendarMonth: calendar.maxItemsPerCalendarMonth,
+    maximumTotalItems: calendar.maximumTotalItems, catchUpPolicy: calendar.catchUpPolicy, idempotencyKey: idempotencyKey('replan'),
+  }, '月曆重新規劃已送出；畫面正在重新整理。')
+}
+
+function materializeCalendar(calendar: Calendar) {
+  return post(`/api/content-operations/calendars/${calendar.id}/materialize`, {
+    expectedPlanFingerprint: calendar.planFingerprint, idempotencyKey: idempotencyKey('materialize'),
+  }, '月曆內容項目建立已送出；畫面正在重新整理。')
+}
+</script>
+
+<template>
+  <main class="operations-page">
+    <header class="operations-hero">
+      <NuxtLink class="back-link" to="/audit-lab">← 返回私有稽核實驗室</NuxtLink>
+      <p class="eyebrow">OWNER-ONLY · CONTENT OPERATIONS V1</p>
+      <h1>把內容營運，<em>排得清楚。</em></h1>
+      <p class="hero-copy">在同一個私有工作台查看客戶網站、內容月曆、文章流程與成效資料是否已足夠。這裡只呈現 API 回傳的實際狀態，不把尚未接通的能力說成已完成，也不顯示虛構的排名、流量、ROI 或 LLM 提及數。</p>
+    </header>
+
+    <section v-if="pending" class="state-card" role="status" aria-live="polite"><strong>正在讀取內容營運資料…</strong><span>請稍候，尚未執行任何寫入操作。</span></section>
+    <section v-else-if="workspaceError" class="state-card state-card--error" role="alert"><strong>{{ isUnauthorized ? '這是 owner-only 工作台' : '目前無法載入工作台' }}</strong><span>{{ workspaceErrorMessage }}</span><NuxtLink v-if="isUnauthorized" to="/audit-lab">回到私有稽核實驗室</NuxtLink></section>
+    <template v-else>
+      <section v-if="actionNotice || actionError" class="notice-stack" aria-live="polite">
+        <p v-if="actionNotice" class="notice notice--success" role="status">{{ actionNotice }}</p>
+        <p v-if="actionError" class="notice notice--error" role="alert">{{ actionError }}</p>
+      </section>
+
+      <section class="overview-section" aria-labelledby="overview-title">
+        <div class="section-heading"><div><p class="eyebrow">OVERVIEW</p><h2 id="overview-title">現在需要注意什麼？</h2></div><span class="data-note">只根據 workspace response</span></div>
+        <div v-if="workspace.clients.length === 0 && workspace.entries.length === 0" class="empty-card"><strong>還沒有內容營運資料</strong><span>先建立一個客戶網站，再建立內容月曆；完成後資料會從 workspace 重新整理。</span></div>
+        <div v-else class="kpi-grid">
+          <article class="kpi-card"><span>啟用中的客戶</span><strong>{{ workspace.clients.filter(client => client.status !== 'disabled').length }}</strong><small>以 API 回傳的客戶狀態為準</small></article>
+          <article class="kpi-card"><span>本月預計內容</span><strong>{{ monthEntries.length }}</strong><small>依 plannedLocalDate 計算</small></article>
+          <article class="kpi-card"><span>下一篇發布日期</span><strong class="kpi-date">{{ nextEntry ? formatDate(nextEntry.plannedLocalDate) : '尚未排程' }}</strong><small>{{ nextEntry?.title || nextEntry?.topic || '沒有下一篇資料' }}</small></article>
+          <article class="kpi-card"><span>等待人工 Review</span><strong>{{ reviewEntries.length }}</strong><small>沒有 approved draft 也會保留提醒</small></article>
+          <article class="kpi-card"><span>Ready to publish</span><strong>{{ readyEntries.length }}</strong><small>草稿與 risk gate 需以資料為準</small></article>
+          <article class="kpi-card"><span>Retry wait / Failed</span><strong>{{ retryEntries.length }}</strong><small>失敗不會偽裝成成功</small></article>
+          <article class="kpi-card"><span>已發布</span><strong>{{ publishedEntries.length }}</strong><small>包含已發布、觀察中與學習候選</small></article>
+          <article class="kpi-card"><span>Outcome 有資料</span><strong>{{ outcomeEntries.length }}</strong><small>不代表因果成效或模型品質</small></article>
+        </div>
+      </section>
+
+      <section class="capability-panel" aria-labelledby="capability-title">
+        <div class="section-heading"><div><p class="eyebrow">CAPABILITIES</p><h2 id="capability-title">哪些能力現在真的可用？</h2></div></div>
+        <div class="capability-grid">
+          <article v-for="item in capabilityItems" :key="item.key" class="capability-card" :class="item.available ? 'capability-card--available' : 'capability-card--unavailable'">
+            <span class="capability-mark" aria-hidden="true">{{ item.available ? '✓' : '—' }}</span><div><strong>{{ item.label }}</strong><p>{{ item.available ? item.trueMessage : item.falseMessage }}</p></div>
+          </article>
+        </div>
+        <ul v-if="workspace.limitations.length" class="limitation-list"><li v-for="limitation in workspace.limitations" :key="limitation">{{ limitation }}</li></ul>
+      </section>
+
+      <section class="work-grid" aria-label="網站與內容月曆設定">
+        <article class="work-card"><div class="section-heading"><div><p class="eyebrow">CLIENT SITE</p><h2>新增客戶網站設定</h2></div></div><p class="section-copy">用客戶看得懂的設定開始。網站必須是 HTTPS origin；發布方式只提供第一方 Git 或第一方 Signed API。</p>
+          <form class="form-grid" @submit.prevent="createClient">
+            <label>客戶／專案名稱<input v-model.trim="clientForm.displayName" required maxlength="120" autocomplete="off"></label>
+            <label>網站 HTTPS origin<input v-model.trim="clientForm.canonicalSiteOrigin" required type="url" placeholder="https://example.com" autocomplete="url"></label>
+            <label>Framework<select v-model="clientForm.framework"><option value="Astro">Astro</option><option value="Nuxt">Nuxt</option></select></label>
+            <label>發布方式<select v-model="clientForm.publicationTransport"><option value="first_party_git">First-party Git</option><option value="first_party_signed_api">First-party Signed API</option></select></label>
+            <label>時區<input v-model.trim="clientForm.timeZone" required placeholder="Asia/Taipei"></label>
+            <label>預設發布時間<input v-model="clientForm.defaultPublishLocalTime" required type="time"></label>
+            <label>預設頻率<select v-model.number="clientForm.defaultCadenceDays"><option v-for="days in cadenceOptions" :key="days" :value="days">每 {{ days }} 天</option></select></label>
+            <label>每月預算單位<input v-model.number="clientForm.monthlyBudgetUnits" required type="number" min="0" step="1"></label>
+            <button class="primary-button" type="submit" :disabled="isSaving">{{ isSaving ? '正在儲存…' : '建立客戶網站' }}</button>
+          </form>
+        </article>
+
+        <article class="work-card"><div class="section-heading"><div><p class="eyebrow">CONTENT CALENDAR</p><h2>建立內容月曆</h2></div></div><p class="section-copy">選擇客戶、Production Plan 與發布節奏。Missed content policy 只會是 Skip missed 或 One catch-up。</p>
+          <form class="form-grid" @submit.prevent="createCalendar">
+            <label>客戶<select v-model="calendarForm.clientId" required><option disabled value="">請選擇客戶</option><option v-for="client in workspace.clients" :key="client.id" :value="String(client.id)">{{ client.displayName }}</option></select></label>
+            <label>Production Plan ID<input v-model.trim="calendarForm.productionPlanId" required maxlength="160" autocomplete="off"></label>
+            <label>開始日期<input v-model="calendarForm.planStartDate" required type="date"></label>
+            <label>結束日期<input v-model="calendarForm.planEndDate" required type="date"></label>
+            <label>發布時間<input v-model="calendarForm.publishLocalTime" required type="time"></label>
+            <label>發布頻率<select v-model.number="calendarForm.cadenceDays"><option v-for="days in cadenceOptions" :key="days" :value="days">每 {{ days }} 天</option></select></label>
+            <label>每月預算<input v-model.number="calendarForm.monthlyBudgetUnits" required type="number" min="0" step="1"></label>
+            <label>單篇預設成本<input v-model.number="calendarForm.defaultCostUnits" required type="number" min="0" step="1"></label>
+            <label>每月最多篇數<input v-model.number="calendarForm.maxItemsPerCalendarMonth" required type="number" min="1" step="1"></label>
+            <label>全計畫最多篇數<input v-model.number="calendarForm.maximumTotalItems" required type="number" min="1" step="1"></label>
+            <label>Missed content policy<select v-model="calendarForm.catchUpPolicy"><option value="skip_missed">Skip missed</option><option value="one_catch_up">One catch-up</option></select></label>
+            <button class="primary-button" type="submit" :disabled="isSaving || workspace.clients.length === 0">{{ isSaving ? '正在儲存…' : '建立內容月曆' }}</button>
+          </form>
+          <p v-if="workspace.clients.length === 0" class="inline-help">請先建立客戶網站，才能建立內容月曆。</p>
+        </article>
+      </section>
+
+      <section class="section-block" aria-labelledby="clients-title"><div class="section-heading"><div><p class="eyebrow">CLIENTS</p><h2 id="clients-title">客戶網站</h2></div></div><div v-if="workspace.clients.length === 0" class="empty-card"><strong>尚未建立客戶網站</strong><span>完成上面的表單後，客戶會在這裡顯示。</span></div><div v-else class="client-grid"><article v-for="client in workspace.clients" :key="client.id" class="client-card"><div class="client-card__top"><div><h3>{{ client.displayName }}</h3><p>{{ client.framework }} · {{ client.timeZone }} · 每 {{ client.defaultCadenceDays }} 天</p></div><span class="status" :class="client.status === 'active' ? 'status--positive' : 'status--neutral'">{{ client.status || '狀態未提供' }}</span></div><p class="site-origin">{{ client.canonicalSiteOrigin }}</p><div class="client-capability"><strong>發布能力</strong><span>{{ client.publisherCapability || (workspace.capabilities.firstPartyPublisherConfigured ? '第一方發布器已設定' : '第一方網站發布器尚未設定') }}</span></div><details><summary>Advanced details</summary><dl><div><dt>Client ID</dt><dd>{{ client.id }}</dd></div><div><dt>發布方式</dt><dd>{{ client.publicationTransport }}</dd></div><div><dt>每月預算單位</dt><dd>{{ client.monthlyBudgetUnits }}</dd></div></dl></details></article></div></section>
+
+      <section class="section-block" aria-labelledby="calendar-title"><div class="section-heading"><div><p class="eyebrow">CALENDARS</p><h2 id="calendar-title">內容月曆</h2></div></div><div v-if="workspace.calendars.length === 0" class="empty-card"><strong>尚未建立內容月曆</strong><span>建立後會在這裡看到計畫期間、發布頻率與下一步操作。</span></div><div v-else class="calendar-list"><article v-for="calendar in workspace.calendars" :key="calendar.id" class="calendar-card"><div class="calendar-card__top"><div><h3>{{ clientName(calendar.clientId) }}</h3><p>{{ calendar.planStartDate }} → {{ calendar.planEndDate }} · 每 {{ calendar.cadenceDays }} 天</p></div><span class="status status--neutral">{{ calendar.status || '狀態未提供' }}</span></div><div class="calendar-facts"><span><strong>發布時間</strong>{{ calendar.publishLocalTime }}</span><span><strong>每月預算</strong>{{ calendar.monthlyBudgetUnits }}</span><span><strong>單篇成本</strong>{{ calendar.defaultCostUnits }}</span><span><strong>Missed policy</strong>{{ calendar.catchUpPolicy === 'one_catch_up' ? 'One catch-up' : 'Skip missed' }}</span></div><div class="button-row"><button class="secondary-button" type="button" :disabled="isSaving" @click="replanCalendar(calendar)">重新規劃</button><button class="secondary-button" type="button" :disabled="isSaving" @click="materializeCalendar(calendar)">建立內容項目</button></div><details><summary>Advanced details</summary><dl><div><dt>Calendar ID</dt><dd>{{ calendar.id }}</dd></div><div><dt>Production Plan ID</dt><dd>{{ calendar.productionPlanId }}</dd></div><div><dt>Plan fingerprint</dt><dd>{{ calendar.planFingerprint || '尚未提供' }}</dd></div></dl></details></article></div></section>
+
+      <section class="section-block" aria-labelledby="entries-title"><div class="section-heading"><div><p class="eyebrow">CONTENT PIPELINE</p><h2 id="entries-title">每篇內容目前走到哪裡？</h2></div><span class="data-note">blocked、failed、retry_wait 會獨立顯示</span></div><div v-if="workspace.entries.length === 0" class="empty-card"><strong>還沒有內容項目</strong><span>先建立月曆，再由 runtime materialize 內容項目。</span></div><div v-else class="entry-list"><article v-for="entry in workspace.entries" :key="entry.id" class="entry-card"><div class="entry-card__header"><div><p class="entry-date">{{ formatDate(entry.plannedLocalDate) }}</p><h3>{{ entry.title || entry.topic || '未命名內容' }}</h3><p>{{ entry.contentType }} · {{ entry.language }} · {{ entry.framework || 'Framework 未提供' }}{{ entry.target ? ` · ${entry.target}` : '' }}</p></div><span :class="statusClass(entry.status)">{{ statusLabel(entry.status) }}</span></div><div class="pipeline" aria-label="內容 pipeline"><span v-for="step in pipelineSteps" :key="step.key" class="pipeline-step" :class="{ 'pipeline-step--active': entry.status === step.key, 'pipeline-step--complete': pipelineSteps.findIndex(item => item.key === entry.status) > pipelineSteps.findIndex(item => item.key === step.key) }">{{ step.label }}</span></div><div class="entry-checks"><span :class="entry.hasApprovedDraft ? 'check check--yes' : 'check check--no'">{{ entry.hasApprovedDraft ? '✓ 已有 approved draft' : '— 尚無 approved draft' }}</span><span :class="entry.hasPassedRiskGate ? 'check check--yes' : 'check check--no'">{{ entry.hasPassedRiskGate ? '✓ risk gate passed' : '— risk gate 尚未通過' }}</span><span v-if="runForEntry(entry.id)" class="check">Run：{{ statusLabel(runForEntry(entry.id)!.status) }}</span></div><p class="next-action"><strong>下一動作</strong>{{ entryNextAction(entry) }}</p><div v-if="assessmentForEntry(entry.id)" class="outcome-note"><strong>Outcome Learning</strong><span>{{ assessmentForEntry(entry.id)!.status }}<template v-if="assessmentForEntry(entry.id)!.validPairCount !== undefined"> · {{ assessmentForEntry(entry.id)!.validPairCount }} 個有效資料配對</template></span></div><details><summary>Advanced details</summary><dl><div><dt>Entry ID</dt><dd>{{ entry.id }}</dd></div><div><dt>Calendar</dt><dd>{{ calendarName(entry.calendarId) }}</dd></div><div><dt>Approved draft ID</dt><dd>{{ entry.approvedDraftId || '尚未提供' }}</dd></div><div><dt>Evidence hash</dt><dd>{{ entry.evidenceHash || '尚未提供' }}</dd></div><div><dt>Content hash</dt><dd>{{ entry.contentHash || '尚未提供' }}</dd></div><div v-if="runForEntry(entry.id)"><dt>Run ID</dt><dd>{{ runForEntry(entry.id)!.id }}</dd></div></dl></details></article></div></section>
+
+      <section v-if="workspace.entries.length" class="section-block outcome-summary" aria-labelledby="outcome-title"><div class="section-heading"><div><p class="eyebrow">OUTCOME LEARNING</p><h2 id="outcome-title">成效資料是否足夠？</h2></div></div><div class="outcome-grid"><article><strong>{{ outcomeEntries.length }}</strong><span>目前有 assessment 資料或已進入觀察的內容</span></article><article><strong>{{ workspace.capabilities.outcomeCollectionConfigured ? '已接通' : '尚未接通' }}</strong><span>{{ workspace.capabilities.outcomeCollectionConfigured ? '資料回收能力已由 API 標示可用' : '成效資料尚未自動回收' }}</span></article></div><p class="section-copy">這裡只呈現資料是否存在與 assessment 狀態，不把 observational signal 說成因果成效，也不推估排名、流量、轉換或 ROI。</p></section>
+    </template>
+  </main>
+</template>
+
+<style scoped>
+.operations-page{--ink:#14231f;--moss:#254b3f;--moss-dark:#18372e;--paper:#faf9f3;--line:#d5ddd4;--muted:#617069;--danger:#9e3535;max-width:1240px;margin:0 auto;padding:3.5rem clamp(1rem,4vw,3rem) 6rem;color:var(--ink)}.operations-hero{max-width:820px;margin-bottom:3rem}.back-link{color:var(--moss);font-weight:800;text-decoration:none}.eyebrow{margin:0 0 .55rem;color:var(--moss);font-size:.7rem;font-weight:900;letter-spacing:.14em}.operations-hero h1{margin:.75rem 0 1.25rem;font-size:clamp(2.8rem,7vw,5.8rem);line-height:.9;letter-spacing:-.065em}.operations-hero h1 em{color:var(--moss);font-family:Georgia,serif;font-weight:400}.hero-copy,.section-copy{max-width:760px;color:#50605a;line-height:1.75}.state-card,.empty-card{display:grid;gap:.35rem;padding:1.35rem 1.5rem;border:1px dashed #aebdb2;background:#fff;color:#34443d}.state-card--error{border-color:#d39b9b;background:#fff5f5}.state-card a{width:max-content;margin-top:.45rem;color:var(--moss);font-weight:800}.notice-stack{display:grid;gap:.6rem;margin-bottom:1.2rem}.notice{margin:0;padding:.8rem 1rem;border-left:4px solid;font-weight:700}.notice--success{border-color:#368456;background:#eff8f0;color:#235e39}.notice--error{border-color:#b44a4a;background:#fff1f1;color:#873333}.section-block,.overview-section,.capability-panel{margin-top:3.2rem}.section-heading{display:flex;align-items:end;justify-content:space-between;gap:1rem;margin-bottom:1.1rem}.section-heading h2{margin:0;font-size:clamp(1.5rem,3vw,2.1rem);letter-spacing:-.035em}.data-note{color:var(--muted);font-size:.78rem}.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem}.kpi-card{min-height:8.6rem;padding:1rem;border:1px solid var(--line);background:var(--paper)}.kpi-card span,.kpi-card small{display:block;color:var(--muted);font-size:.78rem}.kpi-card strong{display:block;margin:.55rem 0 .35rem;color:var(--moss-dark);font-size:2rem;line-height:1}.kpi-card .kpi-date{font-size:1.1rem;line-height:1.2}.capability-panel{padding:1.5rem;border:1px solid var(--line);background:#edf5ee}.capability-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem}.capability-card{display:flex;gap:.7rem;align-items:flex-start;min-height:5.2rem;padding:1rem;background:#fff;border:1px solid var(--line)}.capability-card--available{border-color:#8db99a}.capability-card--unavailable{border-color:#d4b1a7;background:#fffaf7}.capability-mark{display:grid;place-items:center;width:1.5rem;height:1.5rem;border-radius:50%;background:#d7e8d9;color:#23623c;font-weight:900}.capability-card--unavailable .capability-mark{background:#f2ded7;color:#9e493d}.capability-card strong{font-size:.9rem}.capability-card p{margin:.35rem 0 0;color:var(--muted);font-size:.78rem;line-height:1.4}.limitation-list{margin:1.2rem 0 0;padding:1rem 1rem 1rem 2rem;border-top:1px solid #c7d7c9;color:#52655a;font-size:.84rem;line-height:1.6}.work-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:3.2rem}.work-card{padding:1.5rem;border:1px solid var(--line);background:var(--paper)}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.9rem}.form-grid label{display:grid;gap:.4rem;color:#30453b;font-size:.8rem;font-weight:800}.form-grid input,.form-grid select{width:100%;box-sizing:border-box;border:1px solid #b8c6bb;border-radius:4px;background:#fff;color:var(--ink);font:inherit;padding:.72rem}.primary-button,.secondary-button{width:max-content;border:0;border-radius:4px;cursor:pointer;font:inherit;font-weight:900;padding:.75rem 1rem}.primary-button{background:var(--moss);color:#fff}.secondary-button{border:1px solid #91a79a;background:#fff;color:var(--moss)}button:disabled{cursor:wait;opacity:.55}.inline-help{margin:.9rem 0 0;color:var(--muted);font-size:.8rem}.client-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:1rem}.client-card,.calendar-card,.entry-card{padding:1.35rem;border:1px solid var(--line);background:var(--paper)}.client-card__top,.calendar-card__top,.entry-card__header{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem}.client-card h3,.calendar-card h3,.entry-card h3{margin:0;font-size:1.15rem}.client-card p,.calendar-card p,.entry-card p{margin:.35rem 0 0;color:var(--muted);font-size:.82rem;line-height:1.5}.site-origin{word-break:break-all}.status{display:inline-flex;align-items:center;justify-content:center;width:max-content;padding:.3rem .55rem;border:1px solid;border-radius:999px;font-size:.7rem;font-weight:900;white-space:nowrap}.status--positive{border-color:#78a886;background:#eef7ef;color:#24623a}.status--ready{border-color:#7794b6;background:#eef4fa;color:#2c547d}.status--danger{border-color:#d49797;background:#fff0f0;color:#963737}.status--neutral{border-color:#b5c1b8;background:#f1f4f1;color:#4e6257}.client-capability{display:grid;gap:.25rem;margin:1rem 0;padding:.8rem;border-left:3px solid #94b69d;background:#eff6ef;font-size:.8rem}.client-capability span{color:#52655a}.calendar-list,.entry-list{display:grid;gap:.9rem}.calendar-facts{display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem;margin:1.1rem 0}.calendar-facts span{display:grid;gap:.25rem;padding:.7rem;background:#fff;border:1px solid #e1e6e1;color:var(--muted);font-size:.78rem}.calendar-facts strong{color:var(--ink);font-size:.7rem}.button-row{display:flex;gap:.6rem;flex-wrap:wrap}.pipeline{display:flex;gap:.35rem;overflow:auto;margin:1.1rem 0;padding-bottom:.35rem}.pipeline-step{flex:0 0 auto;padding:.38rem .55rem;border:1px solid #cad4cc;background:#fff;color:#718078;font-size:.68rem;font-weight:800}.pipeline-step--complete{border-color:#a9c5ad;background:#edf7ee;color:#39704a}.pipeline-step--active{border-color:var(--moss);background:var(--moss);color:#fff}.entry-date{color:var(--moss)!important;font-size:.75rem!important;font-weight:900}.entry-checks{display:flex;gap:.55rem;flex-wrap:wrap;margin-top:1rem}.check{padding:.38rem .55rem;border:1px solid #cbd5cd;background:#fff;color:#64736b;font-size:.72rem;font-weight:800}.check--yes{border-color:#9fc2a5;background:#eff8f0;color:#2f7042}.check--no{border-color:#dfc0bb;background:#fff7f4;color:#8f5b54}.next-action{display:flex;gap:.5rem;align-items:baseline;margin-top:1rem!important;padding:.7rem;border-left:3px solid #a9bda9;background:#f2f6f1}.outcome-note{display:flex;gap:.5rem;align-items:baseline;margin-top:.7rem;padding:.7rem;border-left:3px solid #8caab9;background:#f0f6fa;font-size:.8rem}.outcome-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.outcome-grid article{display:grid;gap:.4rem;padding:1.2rem;border:1px solid var(--line);background:#f4f7f4}.outcome-grid strong{color:var(--moss);font-size:1.75rem}.outcome-grid span{color:var(--muted);font-size:.82rem}.client-card details,.calendar-card details,.entry-card details{margin-top:1rem;border-top:1px solid var(--line);padding-top:.8rem}.client-card summary,.calendar-card summary,.entry-card summary{cursor:pointer;color:var(--moss);font-size:.75rem;font-weight:900}.client-card dl,.calendar-card dl,.entry-card dl{display:grid;gap:.45rem;margin:.8rem 0 0}.client-card dl div,.calendar-card dl div,.entry-card dl div{display:grid;grid-template-columns:9rem 1fr;gap:.6rem;font-size:.74rem}.client-card dt,.calendar-card dt,.entry-card dt{color:var(--muted)}.client-card dd,.calendar-card dd,.entry-card dd{margin:0;word-break:break-all}.empty-card{margin-top:.5rem}.empty-card span{color:var(--muted);font-size:.84rem;line-height:1.5}@media(max-width:900px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.capability-grid{grid-template-columns:repeat(2,1fr)}.work-grid{grid-template-columns:1fr}.calendar-facts{grid-template-columns:repeat(2,1fr)}}@media(max-width:620px){.operations-page{padding:2.2rem 1rem 4rem}.section-heading{display:grid;align-items:start}.kpi-grid,.capability-grid,.client-grid,.outcome-grid,.form-grid{grid-template-columns:1fr}.client-card__top,.calendar-card__top,.entry-card__header{display:grid}.calendar-facts{grid-template-columns:1fr}.pipeline{margin-right:-.5rem}.data-note{font-size:.72rem}.client-card dl div,.calendar-card dl div,.entry-card dl div{grid-template-columns:1fr;gap:.15rem}}
+</style>
