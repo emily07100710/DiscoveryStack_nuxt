@@ -1,0 +1,35 @@
+{
+  "name": "discoverystack-public-site",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "packageManager": "pnpm@10.24.0",
+  "scripts": {
+    "dev": "astro dev --host 0.0.0.0",
+    "build": "astro build",
+    "preview": "astro preview --host 0.0.0.0",
+    "check": "astro check",
+    "typecheck": "astro check",
+    "test": "pnpm build && vitest run",
+    "test:unit": "vitest run tests/public-forms.interaction.test.ts tests/public-visual-contract.test.ts"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "3.7.3",
+    "@astrojs/vue": "7.0.2",
+    "astro": "7.2.4",
+    "vue": "3.5.41"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "@astrojs/markdown-remark": "7.2.4",
+    "@types/node": "24.7.0",
+    "@vitejs/plugin-vue": "6.0.2",
+    "@vue/test-utils": "2.4.6",
+    "jsdom": "27.0.0",
+    "typescript": "5.9.3",
+    "vitest": "4.0.18"
+  }
+}

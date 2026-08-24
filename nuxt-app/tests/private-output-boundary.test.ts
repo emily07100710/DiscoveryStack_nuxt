@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const publicRoot = join(process.cwd(), '.output/public')
-const defaultLayout = readFileSync(join(process.cwd(), 'layouts/default.vue'), 'utf8')
+const privateLayoutSource = readFiles(join(process.cwd(), 'layouts'), path => path.endsWith('.vue')).join('\n')
 
 function readFiles(directory: string, predicate: (path: string) => boolean): string[] {
   return readdirSync(directory).flatMap((entry) => {
@@ -27,7 +27,7 @@ describe('Private output boundary', () => {
 
   it('does not ship a global reference to an unavailable manus-storage brand asset', () => {
     const publicHtml = readFiles(publicRoot, (path) => path.endsWith('.html')).join('\n')
-    expect(defaultLayout).not.toContain('/manus-storage/')
+    expect(privateLayoutSource).not.toContain('/manus-storage/')
     expect(publicHtml).not.toContain('/manus-storage/')
   })
 })

@@ -22,7 +22,7 @@ const analysis: PublicSiteAnalysisResult = {
 const approvedArtifact = { sourceId: 81, artifactId: 901, locator: 'https://example.com/reviewed-artifact', artifactHash: 'approved-artifact-hash', reason: 'approved for strategy and content draft' }
 
 const pageSource = readFileSync(resolve(process.cwd(), 'pages/audit-lab/seo-geo.vue'), 'utf8')
-const homeSource = readFileSync(resolve(process.cwd(), 'pages/index.vue'), 'utf8')
+const homeSource = readFileSync(resolve(process.cwd(), '../public-site/src/components/HomePage.astro'), 'utf8')
 const strategyRoute = readFileSync(resolve(process.cwd(), 'server/api/seo-geo/strategies.post.ts'), 'utf8')
 const planRoute = readFileSync(resolve(process.cwd(), 'server/api/seo-geo/production-plans.post.ts'), 'utf8')
 const generateRoute = readFileSync(resolve(process.cwd(), 'server/api/seo-geo/production-plans/[id]/generate.post.ts'), 'utf8')

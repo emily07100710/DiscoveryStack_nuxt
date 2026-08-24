@@ -15,7 +15,7 @@ type Lead = {
   createdAt: string
 }
 
-definePageMeta({ i18n: false })
+definePageMeta({ i18n: false, layout: 'owner' })
 useHead({ title: '客戶名單 · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 
 const state = ref<'loading' | 'signin' | 'ready' | 'error'>('loading')

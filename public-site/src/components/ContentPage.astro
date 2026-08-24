@@ -1,0 +1,53 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro'
+import { pageJsonLd } from '../lib/site'
+import { publicSiteOrigin } from '../lib/publicApi'
+
+interface Props {
+  page: { data: { title: string; description: string; locale: 'en' | 'zh-hant'; route: string; contentRole: string; cluster: string; summaryAnswer: string; updatedAt: string; evidenceStatus: string; translationKey: string; relatedRoutes?: string[] } }
+  Content: any
+}
+
+const { page, Content } = Astro.props
+const data = page.data
+const isZh = data.locale === 'zh-hant'
+---
+<BaseLayout
+  locale={data.locale}
+  title={data.title}
+  description={data.description}
+  canonicalPath={data.route}
+  jsonLd={pageJsonLd({ ...data, translationKey: data.translationKey }, publicSiteOrigin)}
+  noindex={false}
+>
+  <article class="content-page">
+    <header class="content-hero">
+      <p class="eyebrow">{data.contentRole} / {data.cluster}</p>
+      <h1>{data.title}</h1>
+      <p class="content-deck">{data.description}</p>
+      <aside class="answer-block" aria-label={isZh ? '摘要答案' : 'Summary answer'}>
+        <span>{isZh ? '摘要答案' : 'Answer first'}</span>
+        <p>{data.summaryAnswer}</p>
+      </aside>
+      <p class="content-meta">{isZh ? '最後更新' : 'Last updated'} · {data.updatedAt} · {data.evidenceStatus}</p>
+    </header>
+    <div class="content-body"><Content /></div>
+    <script is:inline>
+      document.querySelectorAll('.content-body h2[id], .content-body h3[id], .content-body h4[id], .content-body h5[id], .content-body h6[id]').forEach((heading) => {
+        if (heading.querySelector(':scope > a')) return
+        const anchor = document.createElement('a')
+        anchor.href = `#${heading.id}`
+        while (heading.firstChild) anchor.appendChild(heading.firstChild)
+        heading.appendChild(anchor)
+      })
+    </script>
+    {data.relatedRoutes?.length && (
+      <nav class="related-links" aria-label={isZh ? '相關閱讀' : 'Related reading'}>
+        <p class="eyebrow">{isZh ? '延伸閱讀' : 'Continue the path'}</p>
+        {data.relatedRoutes.map((item) => (
+          <a href={item}>{item.replace(/^\/(en|zh-hant)\//, '').replaceAll('-', ' ')} <span aria-hidden="true">↗</span></a>
+        ))}
+      </nav>
+    )}
+  </article>
+</BaseLayout>

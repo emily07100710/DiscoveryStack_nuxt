@@ -28,7 +28,7 @@ const trainingDatasetId = ref(0)
 const crawlForm = reactive({ sourceId: 0, requestedUrl: '', maxPages: 5, maxDepth: 1 })
 
 useHead({ title: '機器學習工作台 · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }, { name: 'description', content: '私有、受限的爬取、清洗與監督式訓練工作台。' }] })
-definePageMeta({ i18n: false })
+definePageMeta({ i18n: false, layout: 'owner' })
 
 const eligibleSources = computed(() => sources.value.filter(source => source.reviewStatus === 'approved' && !source.removedAt && source.allowedUse !== 'blocked' && source.robotsStatus === 'reviewed_allow' && ['allows_research', 'allows_evaluation', 'allows_training'].includes(source.termsStatus) && source.copyrightRisk === 'low' && source.piiStatus === 'none_detected'))
 const completedJobs = computed(() => jobs.value.filter(job => job.status === 'completed'))

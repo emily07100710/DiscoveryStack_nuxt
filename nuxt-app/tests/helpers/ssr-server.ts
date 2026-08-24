@@ -26,7 +26,7 @@ export async function startSsrServer() {
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
-      const response = await fetch(`${baseUrl}/en`)
+      const response = await fetch(`${baseUrl}/audit-lab`)
       if (response.ok) return
     } catch {
       // The production server is still booting.

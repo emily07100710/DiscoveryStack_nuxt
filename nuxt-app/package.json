@@ -5,10 +5,9 @@
   "type": "module",
   "packageManager": "pnpm@10.24.0",
   "scripts": {
-    "dev": "node scripts/create-visual-preview.mjs && node scripts/managed-static-preview.mjs",
-    "dev:nuxt": "node scripts/managed-nuxt-dev.mjs",
+    "dev": "nuxt dev --host 0.0.0.0 --port 3000",
+    "dev:nuxt": "nuxt dev --host 0.0.0.0 --port 3000",
     "build": "nuxt build",
-    "generate": "nuxt generate",
     "preview": "nuxt preview --host 0.0.0.0 --port 3000",
     "typecheck": "nuxt typecheck",
     "test": "vitest run",
@@ -18,9 +17,6 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.693.0",
     "@aws-sdk/s3-request-presigner": "^3.693.0",
-    "@nuxt/content": "3.15.2",
-    "@nuxt/image": "2.1.0",
-    "@nuxtjs/i18n": "10.6.0",
     "axios": "^1.19.0",
     "better-sqlite3": "^12.5.0",
     "drizzle-orm": "^0.45.2",

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+const config = useRuntimeConfig()
+const publicSiteOrigin = String(config.public.discoveryStackPublicSiteOrigin || 'https://www.example.com').replace(/\/$/, '')
 const route = useRoute()
 const activeSection = computed(() => route.path === '/audit-lab/geo' ? 'geo' : route.path === '/audit-lab/seo-geo' ? 'core' : route.path === '/audit-lab/llm-visibility' ? 'visibility' : 'audit')
 useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
@@ -14,7 +16,7 @@ useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
         <NuxtLink to="/audit-lab/seo-geo" :aria-current="activeSection === 'core' ? 'page' : undefined">SEO / GEO Core</NuxtLink>
         <NuxtLink to="/audit-lab/llm-visibility" :aria-current="activeSection === 'visibility' ? 'page' : undefined">LLM Visibility</NuxtLink>
       </nav>
-      <NuxtLink class="owner-layout__exit" to="/zh-hant">返回公開網站 <span aria-hidden="true">↗</span></NuxtLink>
+      <a class="owner-layout__exit" :href="`${publicSiteOrigin}/zh-hant`">返回公開網站 <span aria-hidden="true">↗</span></a>
     </header>
     <main id="owner-workbench"><slot /></main>
   </div>

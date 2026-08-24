@@ -1,0 +1,39 @@
+{
+  "capturedAt": "2026-08-24T06:11:45.240786+00:00",
+  "baselineUrl": "http://127.0.0.1:4312",
+  "candidateUrl": "http://127.0.0.1:4313",
+  "chromium": "Chromium 151.0.7922.71 built on Ubuntu 24.04.4 LTS",
+  "viewports": {
+    "desktop": [
+      1440,
+      1000
+    ],
+    "mobile": [
+      390,
+      844
+    ]
+  },
+  "routes": [
+    "/en",
+    "/zh-hant",
+    "/en/privacy",
+    "/zh-hant/privacy",
+    "/en/services/seo-geo-growth-system",
+    "/zh-hant/services/seo-geo-growth-system",
+    "/en/methodology/journey-intelligence",
+    "/zh-hant/methodology/journey-intelligence",
+    "/en/glossary/geo",
+    "/zh-hant/glossary/geo",
+    "/en/publications/what-a-public-website-can-tell-you",
+    "/zh-hant/publications/what-a-public-website-can-tell-you"
+  ],
+  "fontWait": [
+    "document.fonts.ready",
+    "Noto Sans TC",
+    "Noto Serif TC",
+    "DM Mono"
+  ],
+  "animationStrategy": "prefers-reduced-motion=reduce plus injected animation/transition/caret disable CSS",
+  "settle": "two requestAnimationFrame calls plus 700ms",
+  "scrollY": 0
+}

@@ -23,7 +23,7 @@ type PipelineResponse = {
   readiness: { approvedHumanAnnotations: number, stageCounts: Record<string, number>, productionMinimum: number, productionMinimumPerStage: number, productionReady: boolean }
 }
 
-definePageMeta({ i18n: false })
+definePageMeta({ i18n: false, layout: 'owner' })
 useHead({ title: '自動訓練資料管線 · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 
 const state = ref<'loading' | 'signin' | 'ready' | 'error'>('loading')

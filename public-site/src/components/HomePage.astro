@@ -1,0 +1,111 @@
+---
+import AiQaDock from './AiQaDock.vue'
+import AutomaticSiteAnalysis from './AutomaticSiteAnalysis.vue'
+import DepartmentTabs from './DepartmentTabs.vue'
+import FitReviewFormIsland from './FitReviewFormIsland.vue'
+import HybridDemandWave from './HybridDemandWave.vue'
+import ModelProof from './ModelProof.vue'
+import VisibilityServices from './VisibilityServices.vue'
+import BaseLayout from '../layouts/BaseLayout.astro'
+import { publicSiteOrigin } from '../lib/publicApi'
+import { homeJsonLd } from '../lib/site'
+
+interface Props { locale: 'en' | 'zh-hant' }
+const { locale } = Astro.props
+const isZh = locale === 'zh-hant'
+const title = isZh ? '一站式行銷、網站、系統、AI 與 SEO／GEO 公司' : 'End-to-end marketing, web, systems, AI and SEO/GEO'
+const description = isZh ? 'DiscoveryStack 以五個專業部門與受治理的搜尋情報研發，整合行銷、網站設計、系統規劃、AI 導入與 SEO／GEO。' : 'DiscoveryStack combines marketing, web design, systems, AI adoption and SEO/GEO through five specialist departments and governed search-intelligence research.'
+const hero = isZh ? { title: '客戶正在搜尋。', accent: '讓答案先指向你。', description: '當客戶問 Google 或 AI「哪家公司值得選？」，我們讓你的品牌被找到、被理解，也更容易被選擇。網站、行銷、系統、AI 與 SEO／GEO，由同一團隊負責到底。', kicker: 'DiscoveryStack', subkicker: '一間公司 · 五個部門 · 一條獲客路徑', action: '免費分析你的網站', secondaryAction: '選擇你遇到的問題' } : { title: 'Customers are searching.', accent: 'Make the answer point to you.', description: 'When customers ask Google or AI who to choose, we make your brand easier to find, understand and trust. One team owns web, marketing, systems, AI and SEO/GEO from first signal to enquiry.', kicker: 'DiscoveryStack', subkicker: 'One company · Five departments · One acquisition route', action: 'Analyse your website for free', secondaryAction: 'Choose the problem first' }
+const demandQuestions = isZh ? ['台灣 SEO／GEO 公司怎麼選？', '誰能把網站、系統與行銷一起做好？', '我的品牌為什麼沒有出現在 AI 回答？', '有流量卻沒有詢問，問題在哪裡？', '如何把客服與公司知識接進 AI？'] : ['How do I choose an SEO/GEO agency?', 'Who can connect web, systems and marketing?', 'Why is my brand absent from AI answers?', 'We have traffic but no enquiries—why?', 'How do we connect company knowledge to AI?']
+const seoGeoCoreLayers = isZh ? [
+  { number: '01', label: 'DIAGNOSIS', title: '先找出可驗證的問題。', body: '以公開網站結構訊號、已核准 evidence 與可用的受治理模型訊號建立診斷。模型尚未達 production gate 時，系統會明確標示 not ready，而不是假裝成模型預測。', output: '可追溯診斷與限制說明' },
+  { number: '02', label: 'AUTOGEO STRATEGY', title: '把診斷轉成有規則的改善選項。', body: '原文、已核准 evidence 與 versioned rules 一起進入策略映射。每個 recommendation 都保留 issue code、rule IDs、rationale、bounded opportunities 與 evidence snapshot；不代表排名、流量、轉換或 ROI。', output: '可追溯 Strategy recommendations 與規則快照' },
+  { number: '03', label: 'GEOFLOW CORE', title: '用 Production Plan 管理 bounded deliverables。', body: 'Owner 選擇 Strategy 後，系統建立 Production Plan、selection、Brief、Job、candidate、risk gate、人工 review 與 preview ledger。V1 不會自行發布到 CMS、WordPress 或 HTTP target。', output: '可審核的 Plan／Brief／Job 鏈與零外部寫入 preview' },
+] : [
+  { number: '01', label: 'DIAGNOSIS', title: 'Start with an inspectable problem.', body: 'Public-site structure signals, approved evidence and only production-eligible governed model signals create the diagnosis. If the model has not passed its gate, the system says not ready rather than presenting a model prediction.', output: 'Traceable diagnosis with stated limits' },
+  { number: '02', label: 'AUTOGEO STRATEGY', title: 'Turn diagnosis into rules-based options.', body: 'Source text, approved evidence and versioned rules enter the strategy mapping together. Each recommendation keeps an issue code, rule IDs, rationale, bounded opportunities and an evidence snapshot; it is not a ranking, traffic, conversion or ROI forecast.', output: 'Traceable Strategy recommendations and rule snapshots' },
+  { number: '03', label: 'GEOFLOW CORE', title: 'Manage bounded deliverables through a Production Plan.', body: 'After owner selection, the system creates a Production Plan, selections, briefs, jobs, candidates, risk gates, human reviews and preview ledgers. V1 does not autonomously publish to a CMS, WordPress or HTTP target.', output: 'Auditable Plan / Brief / Job chain and zero-write preview' },
+]
+const seoGeoCoreFaqs = isZh ? [
+  { question: '這會保證 Google、ChatGPT 或其他 AI 平台的排名嗎？', answer: '不會。結構比較與診斷是可重現的內容與網站訊號，不是外部平台的排名、曝光、流量、轉換或營收保證。任何真實 measurement 都要在取得同意、建立基線與人工判讀後另外記錄。' },
+  { question: '系統會自動發布或覆寫我的網站內容嗎？', answer: '不會。候選稿必須通過 evidence 與 risk gate，再由人員明確 review。V1 僅提供 preview 與 delivery ledger，不會對 CMS、WordPress 或 HTTP target 發出寫入。' },
+  { question: '哪些資料可以用來支撐內容建議？', answer: '只有在獨立 evidence approval ledger 中明確核准的來源才可進入 brief 與候選稿。研究、訓練或抓取資格不等於內容生產與發布授權。' },
+] : [
+  { question: 'Does this guarantee rankings in Google, ChatGPT or other AI platforms?', answer: 'No. Structural comparisons and diagnoses are repeatable content and site signals, not guarantees of third-party ranking, visibility, traffic, conversion or revenue. Real measurements must be recorded separately after consent, a baseline and human interpretation.' },
+  { question: 'Will the system automatically publish or overwrite website content?', answer: 'No. Candidates must pass evidence and risk gates, then receive explicit human review. V1 offers previews and a delivery ledger only; it makes no write request to a CMS, WordPress or HTTP target.' },
+  { question: 'What data may support a recommendation?', answer: 'Only sources explicitly approved in the separate evidence-approval ledger may enter a brief or candidate. Research, training or crawling eligibility is not permission for content production or publication.' },
+]
+const journeySteps = isZh ? [
+  { num: '01', tag: '診斷', label: '看清問題', title: '先找出訂單卡在哪裡。', desc: '從網站、搜尋、AI 能見度、內容、資料與轉換訊號建立共同基準，不急著先賣你某一項服務。' },
+  { num: '02', tag: '組隊', label: '組成解法', title: '只讓需要的部門進場。', desc: '依問題組成行銷、網站、系統、AI 與 SEO／GEO 的執行路徑，定義優先序、責任與可驗證成果。' },
+  { num: '03', tag: '落地', label: '整合執行', title: '策略、介面與系統一起上線。', desc: '同一份需求脈絡貫穿內容、設計、開發、資料與自動化，避免五間廠商各自完成卻彼此接不起來。' },
+  { num: '04', tag: '成長', label: '持續改善', title: '用真實訊號決定下一輪。', desc: '追蹤搜尋、AI 引用、有效詢問、成交來源與營運效率，把結果重新帶回模型、內容與流程改善。' },
+] : [
+  { num: '01', tag: 'Diagnose', label: 'See the problem', title: 'Find what is really blocking the order.', desc: 'Build a shared baseline across web, search, AI visibility, content, data and conversion before prescribing a service.' },
+  { num: '02', tag: 'Assemble', label: 'Build the route', title: 'Bring in only the departments the problem needs.', desc: 'Define priorities, ownership and inspectable outcomes across Marketing, Web, Systems, AI and SEO/GEO.' },
+  { num: '03', tag: 'Deliver', label: 'Execute together', title: 'Strategy, interface and systems land together.', desc: 'Keep one demand context across content, design, development, data and automation so the parts actually connect.' },
+  { num: '04', tag: 'Improve', label: 'Keep learning', title: 'Let real signals decide the next cycle.', desc: 'Feed search, AI citations, qualified enquiries, revenue source and operational efficiency back into the next improvements.' },
+]
+const faqs = isZh ? [
+  { q: 'SEO、GEO 和 AEO 到底差在哪裡？', a: 'SEO 處理網站被搜尋引擎抓取、理解與排名的基礎；GEO 關注品牌是否會被生成式 AI 檢索、描述與引用；AEO 則讓內容更容易成為直接答案。三者共享技術、內容與權威基礎，不應拆成互不相干的三包服務。' },
+  { q: '只做 GEO，不改網站也可以嗎？', a: '通常不行。若網站抓取、架構、品牌實體或內容證據不完整，AI 沒有可靠來源可引用。DiscoveryStack 會先判斷缺口是在技術、內容、外部權威，還是整個網站與系統需要一起調整。' },
+  { q: '你們真的會做網站、系統和資料庫嗎？', a: '會。網站設計部負責品牌與轉換介面；系統規劃部處理 CMS、CRM、會員、資料庫、API 與後台；行銷、AI 和 SEO／GEO 部門在同一份需求路徑上共同工作。' },
+  { q: 'AI Chatbot 是接一個通用模型就結束嗎？', a: '不是。我們會先定義知識來源、權限、不可回答範圍、真人轉接與資料回寫，再決定使用 RAG、工作流程、自研模型或其他模型組合。' },
+  { q: '多久可以看到結果？', a: '網站與追蹤修正可以較快驗證；搜尋排名、外部權威與 AI 引用需要依網站基礎、競爭程度與平台更新週期累積。我們不承諾固定天數，而是先給基準、優先序和每一階段可驗證的訊號。' },
+  { q: '不知道該買哪一項服務，也能詢問嗎？', a: '可以。先使用免費網站分析或合作諮詢，我們會把問題分到正確部門，再組成一條跨部門執行路徑，不要求你先替自己診斷。' },
+] : [
+  { q: 'What is the difference between SEO, GEO and AEO?', a: 'SEO builds crawl, understanding and ranking foundations. GEO focuses on whether generative AI retrieves, describes and cites the brand. AEO structures content to become a direct answer. They share technical, content and authority foundations and should not be sold as disconnected packages.' },
+  { q: 'Can we do GEO without changing the website?', a: 'Usually not. If crawlability, architecture, entities or evidence are weak, AI systems have no reliable source to cite. We first locate the gap across technical, content, authority, web and systems.' },
+  { q: 'Do you really build websites, systems and databases?', a: 'Yes. Web owns brand and conversion interfaces; Systems owns CMS, CRM, memberships, databases, APIs and operations; Marketing, AI and SEO/GEO work against the same demand route.' },
+  { q: 'Is an AI chatbot just a generic model connection?', a: 'No. We define knowledge, permissions, refusal boundaries, human hand-off and data write-back before choosing RAG, workflows, our own model or another model mix.' },
+  { q: 'How quickly will we see results?', a: 'Site and tracking fixes can be validated sooner. Rankings, authority and AI citations depend on the starting point, competition and platform cycles. We provide baselines and stage-level signals rather than a fixed-day promise.' },
+  { q: 'Can we ask for help if we do not know which service to buy?', a: 'Yes. Start with the free analysis or fit review. We route the problem to the right departments instead of asking you to diagnose it first.' },
+]
+const pricingOptions = isZh ? [
+  { code: '00', kicker: '先自己看看', title: '網站獲客快檢', price: '免費', unit: '不用先承諾合作', summary: '輸入公開網址，先看 SEO／GEO、品牌、內容與使用體驗的基礎分數。', details: ['公開網址即可開始', '先看快篩分數，再決定是否解鎖報告', '完整報告會清楚標示哪些是公開訊號、哪些仍需真人確認'], note: '真實讀取公開首頁的結構訊號；不會假裝知道流量、訂單或後台資料。', cta: '先免費看看', href: '#analysis' },
+  { code: '01', kicker: '讓客戶找到你', title: 'SEO／GEO 成長', price: 'NT$28,800', unit: '／月起', summary: '從技術基礎、搜尋需求到 AI 引用與內容優先序，先把最影響能見度的地方做對。', details: ['SEO／GEO 基準與競品差距', '搜尋需求、提示詞與內容優先序', '技術、實體、Schema 與可引用性建議', '每月檢查進度並決定下一輪工作'], note: '可先用三個月建立基準與驗證方向；不以保證排名取代真實交付。', cta: '說明你的現況', href: '#fit' },
+  { code: '02', kicker: '把網站變成生意入口', title: '品牌成長型官網', price: 'NT$78,800', unit: '起', summary: '適合需要重新整理品牌、服務邏輯、手機體驗與詢問路徑的企業官網。', details: ['網站架構與主要轉換路徑', '客製視覺與響應式介面', '基礎 SEO、追蹤與表單設定', '依實際頁數、內容與功能確認最終報價'], note: '採階段付款；電商、會員、預約及客製系統會先確認規格再另行報價。', cta: '談談網站需求', href: '#fit' },
+] : [
+  { code: '00', kicker: 'Look first', title: 'Acquisition website check', price: 'Free', unit: 'No commitment required', summary: 'Enter a public URL to see a foundation score across SEO/GEO, brand, content and user experience.', details: ['Start with a public URL', 'See the quick score before choosing whether to unlock the report', 'The full report separates public signals from questions that still need human confirmation'], note: 'Uses real structural signals from the public homepage without inventing traffic, orders or private analytics.', cta: 'Scan for free', href: '#analysis' },
+  { code: '01', kicker: 'Be found', title: 'SEO / GEO Growth', price: 'NT$28,800', unit: '/ month from', summary: 'Fix the highest-impact technical, demand, citation and content priorities first.', details: ['SEO/GEO baseline and competitor gaps', 'Search demand, prompt and content priorities', 'Technical, entity, schema and citation-readiness guidance', 'Monthly progress review and next-cycle priorities'], note: 'Start with a three-month baseline and validation period. We deliver inspectable work, not ranking guarantees.', cta: 'Share your situation', href: '#fit' },
+  { code: '02', kicker: 'Build a growth entry point', title: 'Brand growth website', price: 'NT$78,800', unit: 'from', summary: 'For businesses that need clearer positioning, service logic, mobile experience and enquiry routes.', details: ['Site architecture and primary conversion route', 'Custom visual and responsive interface', 'Foundational SEO, tracking and forms', 'Final scope based on pages, content and functionality'], note: 'Paid by milestones. Commerce, membership, booking and custom systems are scoped separately.', cta: 'Discuss the website', href: '#fit' },
+]
+---
+<BaseLayout locale={locale} title={title} description={description} canonicalPath={`/${locale}`} jsonLd={homeJsonLd(locale, title, description, publicSiteOrigin)}>
+  <article class="hybrid-home">
+    <section class="hero shell"><div class="hero-meta"><p class="eyebrow">{hero.kicker}</p><span class="rule"></span><p class="eyebrow">{hero.subkicker}</p></div><h1 id="heroTitle"><span class="line"><span>{hero.title.split('。')[0]}</span></span><span class="line"><span><em>{hero.accent}</em></span></span></h1><div class="hero-foot"><p>{hero.description}</p><div class="hero-actions"><a class="cta" href="#analysis">{hero.action} <span class="arrow" aria-hidden="true">↘</span></a><a class="text-link" href="#departments">{hero.secondaryAction} <span aria-hidden="true">→</span></a></div></div></section>
+    <section class="demand-ribbon" aria-label={isZh ? '客戶正在提出的問題' : 'Questions customers are asking'}><div class="demand-track">{[...demandQuestions, ...demandQuestions].map((question, index) => <span data-index={index}><b>{isZh ? '正在搜尋' : 'Searching'}</b>{question}</span>)}</div></section>
+    <HybridDemandWave locale={locale} />
+    <section class="section departments" id="departments"><div class="shell"><div class="section-head reveal"><p class="eyebrow">{isZh ? '每個問題都有專業的部門' : 'One company / Five departments'}</p><h2>{isZh ? '別讓五間供應商，做出五個接不起來的答案。' : 'Do not let five vendors deliver five disconnected answers.'}</h2></div><DepartmentTabs client:load locale={locale} /></div></section>
+    <AutomaticSiteAnalysis client:visible locale={locale} />
+    <ModelProof client:visible locale={locale} />
+    <section id="seo-geo-core" class="section visibility-system"><div class="shell"><div class="section-head reveal"><p class="eyebrow">SEO / GEO CORE · EVIDENCE BEFORE OUTPUT</p><h2>{isZh ? '不是一鍵產文；是三層可追溯的內容決策流程。' : 'Not one-click content. A traceable three-layer decision flow.'}</h2><p>{isZh ? 'Diagnosis 找出問題，AutoGEO 提出受證據約束的改法，GEOFlow Core 把已核准的內容變成可人工審核的工作。' : 'Diagnosis finds the problem, AutoGEO recommends an evidence-bound change, and GEOFlow Core turns approved content into human-reviewable work.'}</p></div><div class="visibility-grid">{seoGeoCoreLayers.map((layer) => <article class="visibility-step is-active"><p><span>{layer.number}</span>{layer.label}</p><h3>{layer.title}</h3><p>{layer.body}</p><small>{layer.output}</small></article>)}</div><div class="pricing-safety-net"><div><p class="eyebrow">OWNER-ONLY WORKBENCH</p><h3>{isZh ? '先驗證內容與流程，再決定是否發布。' : 'Validate the content and process before deciding whether to publish.'}</h3></div><p>{isZh ? '目前工作台僅供 owner 使用，保留 evidence、版本、風險 gate、人工 review 與 preview 記錄。對外發布必須是未來另行配置、明確核准與可稽核的動作。' : 'The current workbench is owner-only and retains evidence, versions, risk-gate, human-review and preview records. External publication remains a separately configured, explicitly approved and auditable future action.'}</p><span class="owner-workbench-placeholder" aria-disabled="true">{isZh ? '查看 owner 工作台' : 'Open the owner workbench'} <span aria-hidden="true">→</span></span></div><div class="faq-grid" style="margin-top: 2.5rem;">{seoGeoCoreFaqs.map((faq) => <details><summary>{faq.question}</summary><p>{faq.answer}</p></details>)}</div></div></section>
+    <VisibilityServices client:visible locale={locale} />
+    <section class="section journey" id="journey"><div class="shell"><div class="section-head reveal"><p class="eyebrow">{isZh ? '合作不是轉包，是同一條交付路徑' : 'One delivery route, not a chain of subcontractors'}</p><h2>{isZh ? '一個團隊，對同一個成長結果負責。' : 'One team accountable for one growth outcome.'}</h2></div><div class="journey-grid"><aside class="journey-rail" aria-hidden="true"><div class="rail-numbers" id="railNumbers">{journeySteps.map((step, i) => <b class:is-active={i === 0} data-step={i}>{step.num}</b>)}</div><p class="rail-label" id="railLabel">{journeySteps[0].label}</p><div class="rail-track"><i id="railTrack"></i></div></aside><div class="journey-steps" id="journeySteps">{journeySteps.map((step, i) => <article class="step" data-step={i} data-label={step.label}><p class="step-tag"><b>{step.num}</b> {step.tag}</p><h3>{step.title}</h3><p>{step.desc}</p></article>)}</div></div></div></section>
+    <section class="section faq-system" id="faq"><div class="shell faq-grid"><div class="faq-intro"><p class="eyebrow">FAQ / {isZh ? '先把重要的說清楚' : 'Clarity before the call'}</p><h2>{isZh ? '決定合作前，你應該先知道。' : 'What you should know before hiring us.'}</h2><p>{isZh ? '不說術語堆成的漂亮話，只回答會影響決定的問題。' : 'No jargon theatre—only answers that affect the decision.'}</p></div><div class="faq-list">{faqs.map((faq, index) => <details open={index === 0}><summary><span>0{index + 1}</span>{faq.q}<i aria-hidden="true">＋</i></summary><p>{faq.a}</p></details>)}</div></div></section>
+    <section class="section pricing-system" id="pricing"><div class="shell"><header class="pricing-head reveal"><div><p class="eyebrow">{isZh ? '合作預算／先知道大概，不必先承諾' : 'Working budget / Know the range before committing'}</p><h2>{isZh ? '先知道預算，也知道你會買到什麼。' : 'Know the budget—and what it actually buys.'}</h2></div><div class="pricing-intro"><p>{isZh ? '這些是常見合作起價，不是把所有公司塞進同一個套餐。真正報價會依目標、現況與需要進場的部門確認；如果不需要某一項，就不會硬包進去。' : 'These are common starting points, not rigid packages. The final scope follows the objective, current state and departments actually needed.'}</p><span>{isZh ? '以下價格為未稅起價' : 'Starting prices before tax'}</span></div></header><div class="pricing-list">{pricingOptions.map((option) => <details class:list={{ 'pricing-card-free': option.code === '00' }}><summary><span class="pricing-code">{option.code}</span><span class="pricing-name"><small>{option.kicker}</small><strong>{option.title}</strong></span><span class="pricing-price"><strong>{option.price}</strong><small>{option.unit}</small></span><i aria-hidden="true"></i></summary><div class="pricing-detail"><p>{option.summary}</p><ul>{option.details.map((item) => <li>{item}</li>)}</ul><small>{option.note}</small><a href={option.href}>{option.cta} <span aria-hidden="true">↗</span></a></div></details>)}</div><div class="pricing-safety-net"><div><p class="eyebrow">{isZh ? '還不知道該選哪個？' : 'Not sure where to start?'}</p><h3>{isZh ? '先做一次人工深度診斷。' : 'Begin with one human-led diagnosis.'}</h3></div><p>{isZh ? 'NT$8,800／次。30 天內進入後續合作可全額折抵；我們會先指出真正的問題，不會先把最高方案推給你。' : 'NT$8,800 once, fully credited when a project starts within 30 days. We identify the real problem before recommending a larger engagement.'}</p><a href="#fit">{isZh ? '預約診斷' : 'Book a diagnosis'} <span aria-hidden="true">→</span></a></div></div></section>
+    <section class="section fit" id="fit"><div class="shell fit-grid"><div class="fit-intro reveal"><p class="eyebrow">{isZh ? '合作諮詢' : 'Fit Review'}</p><h2 style="margin-top:1.25rem;">{isZh ? '先說問題。我們再說該不該合作。' : 'Tell us the problem. Then we will say if we should work together.'}</h2><p>{isZh ? '留下最少但足夠的背景。我們會直接告訴你問題在哪、誰該進場，以及現在是否值得花錢。' : 'Share the essential context. We will tell you what is wrong, who should own it and whether it is worth spending now.'}</p></div><FitReviewFormIsland client:visible locale={locale} /></div></section>
+    <AiQaDock client:idle locale={locale} proactive-delay={45000} />
+  </article>
+  <script is:inline>
+    const heroTitle = document.getElementById('heroTitle');
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (heroTitle && !reduceMotion) setTimeout(() => heroTitle.classList.add('is-in'), 80);
+    const revealables = document.querySelectorAll('.reveal');
+    if (!reduceMotion && 'IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-in');
+            observer.unobserve(entry.target);
+          }
+        });
+      }, { rootMargin: '0px 0px -12% 0px', threshold: 0.15 });
+      revealables.forEach((element) => observer.observe(element));
+    }
+  </script>
+<style>
+    .pricing-safety-net > .owner-workbench-placeholder { color: var(--paper); font: 500 .7rem/1.4 var(--font-mono); letter-spacing: .06em; white-space: nowrap; border-bottom: 1px solid rgba(250,247,241,.55); }
+    @media (max-width: 58rem) { .pricing-safety-net > .owner-workbench-placeholder { width: fit-content; } }
+  </style>
+</BaseLayout>

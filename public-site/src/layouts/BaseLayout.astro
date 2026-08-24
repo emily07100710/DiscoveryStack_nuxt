@@ -1,0 +1,113 @@
+---
+import CookieConsent from '../components/CookieConsent.vue'
+import { publicSiteOrigin } from '../lib/publicApi'
+import { absoluteUrl, isPlaceholderSiteUrl, routeForLocale } from '../lib/site'
+import '../styles/redesign.css'
+import '../styles/immersive.css'
+import '../styles/hybrid-refresh.css'
+import '../styles/site-shell.css'
+
+interface Props {
+  locale: 'en' | 'zh-hant'
+  title: string
+  description: string
+  canonicalPath: string
+  jsonLd?: Record<string, unknown>
+  noindex?: boolean
+}
+
+const { locale, title, description, canonicalPath, jsonLd, noindex = false } = Astro.props
+const isZh = locale === 'zh-hant'
+const canonical = absoluteUrl(canonicalPath, publicSiteOrigin)
+const englishPath = routeForLocale(canonicalPath, 'en')
+const chinesePath = routeForLocale(canonicalPath, 'zh-hant')
+const xDefaultPath = canonicalPath.startsWith('/zh-hant') ? englishPath : canonicalPath.startsWith('/en') ? canonicalPath : '/en'
+const robots = noindex || isPlaceholderSiteUrl(publicSiteOrigin) ? 'noindex, nofollow, noarchive' : 'index, follow'
+const favicon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%234d5dad%22/%3E%3Cpath d=%22M8 23V16h4v7H8Zm6 0V10h4v13h-4Zm6 0V6h4v17h-4Z%22 fill=%22%23f5f2eb%22/%3E%3C/svg%3E'
+---
+<!doctype html>
+<html lang={isZh ? 'zh-Hant' : 'en-US'} dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#4d5dad" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="description" content={description} />
+    <meta name="robots" content={robots} />
+    <title>{title} — DiscoveryStack</title>
+    <link rel="icon" type="image/svg+xml" href={favicon} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700;900&display=swap" />
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" hreflang="en" href={absoluteUrl(englishPath, publicSiteOrigin)} />
+    <link rel="alternate" hreflang="zh-Hant" href={absoluteUrl(chinesePath, publicSiteOrigin)} />
+    <link rel="alternate" hreflang="x-default" href={absoluteUrl(xDefaultPath, publicSiteOrigin)} />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:site_name" content="DiscoveryStack" />
+    <meta name="twitter:card" content="summary" />
+    {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
+  </head>
+  <body>
+    <div class="route-rail" aria-hidden="true"></div>
+    <header class="site-header" id="siteHeader">
+      <div class="shell header-inner">
+        <a href={isZh ? '/zh-hant' : '/en'} class="brand">DISCOVERYSTACK<span>.</span></a>
+        <nav class="site-nav" id="siteNav" aria-label={isZh ? '主要導覽' : 'Primary navigation'}>
+          <a href={`${isZh ? '/zh-hant' : '/en'}#departments`}>{isZh ? '五個部門' : 'Departments'}</a>
+          <a href={`${isZh ? '/zh-hant' : '/en'}#analysis`}>{isZh ? '免費分析' : 'Free analysis'}</a>
+          <a href={`${isZh ? '/zh-hant' : '/en'}#journey`}>{isZh ? '合作流程' : 'Process'}</a>
+          <a href={isZh ? '/zh-hant/services/seo-geo-growth-system' : '/en/services/seo-geo-growth-system'}>SEO／GEO</a>
+          <a href={`${isZh ? '/zh-hant' : '/en'}#pricing`}>{isZh ? '合作預算' : 'Pricing'}</a>
+          <a href={`${isZh ? '/zh-hant' : '/en'}#fit`}>{isZh ? '合作諮詢' : 'Fit Review'}</a>
+        </nav>
+        <div style="display:flex; align-items:center; gap:0.75rem;">
+          <a class="lang-switch" href={isZh ? '/en' : '/zh-hant'} aria-label={isZh ? 'Switch to English' : '切換至繁體中文'}>{isZh ? 'EN' : '繁'}</a>
+          <button class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="siteNav" data-open-label={isZh ? '關閉' : 'Close'} data-closed-label={isZh ? '選單' : 'Menu'}>{isZh ? '選單' : 'Menu'}</button>
+        </div>
+      </div>
+    </header>
+    <main id="top"><slot /></main>
+    <footer class="site-footer">
+      <div class="shell">
+        <p class="footer-statement">{isZh ? '需求不是消失；它在路徑裡失去推進力。' : 'Demand does not vanish. It loses momentum on the route.'}</p>
+        <div class="footer-cols">
+          <div class="footer-col"><h3>{isZh ? '服務' : 'Services'}</h3><ul><li><a href={isZh ? '/zh-hant/services/seo-geo-growth-system' : '/en/services/seo-geo-growth-system'}>{isZh ? 'SEO／GEO 成長系統' : 'SEO/GEO Growth System'}</a></li><li><a href={`${isZh ? '/zh-hant' : '/en'}#fit`}>{isZh ? '需求路徑診斷' : 'Demand Path Diagnosis'}</a></li></ul></div>
+          <div class="footer-col"><h3>{isZh ? '方法' : 'Methodology'}</h3><ul><li><a href={isZh ? '/zh-hant/methodology/journey-intelligence' : '/en/methodology/journey-intelligence'}>{isZh ? '需求路徑情報' : 'Journey Intelligence'}</a></li><li><a href={isZh ? '/zh-hant/methodology/bounded-ai-assistant' : '/en/methodology/bounded-ai-assistant'}>{isZh ? '有邊界的 AI 助理' : 'Bounded AI Assistant'}</a></li></ul></div>
+          <div class="footer-col"><h3>{isZh ? '詞彙' : 'Glossary'}</h3><ul><li><a href={isZh ? '/zh-hant/glossary/seo' : '/en/glossary/seo'}>SEO</a></li><li><a href={isZh ? '/zh-hant/glossary/geo' : '/en/glossary/geo'}>GEO</a></li><li><a href={isZh ? '/zh-hant/glossary/journey-intelligence' : '/en/glossary/journey-intelligence'}>{isZh ? '需求路徑情報' : 'Journey Intelligence'}</a></li></ul></div>
+          <div class="footer-col"><h3>{isZh ? '出版品' : 'Publications'}</h3><ul><li><a href={isZh ? '/zh-hant/publications/what-a-public-website-can-tell-you' : '/en/publications/what-a-public-website-can-tell-you'}>{isZh ? '一個公開網站能告訴你什麼' : 'What a Public Website Can Tell You'}</a></li></ul></div>
+        </div>
+        <div class="footer-base"><span>© {new Date().getFullYear()} DiscoveryStack</span><span class="footer-preferences">{isZh ? '繁體中文' : 'English'} · {isZh ? 'English' : '繁體中文'} <a href={isZh ? '/zh-hant/privacy' : '/en/privacy'}>{isZh ? '隱私說明' : 'Privacy'}</a> <button type="button" id="cookie-settings">{isZh ? 'Cookie 設定' : 'Cookie settings'}</button></span></div>
+      </div>
+    </footer>
+    <CookieConsent client:load locale={locale} />
+    <script is:inline>
+      const nav = document.getElementById('siteNav');
+      const toggle = document.getElementById('navToggle');
+      const header = document.getElementById('siteHeader');
+      const rail = document.querySelector('.route-rail');
+      const updateScroll = () => {
+        header?.classList.toggle('is-stuck', window.scrollY > 12);
+        if (rail) {
+          const max = document.documentElement.scrollHeight - window.innerHeight;
+          rail.setAttribute('style', `--route-progress: ${max > 0 ? (window.scrollY / max) * 100 : 0}%`);
+        }
+      };
+      toggle?.addEventListener('click', () => {
+        const open = nav?.classList.toggle('is-open') ?? false;
+        toggle?.setAttribute('aria-expanded', String(open));
+        if (toggle) toggle.textContent = open ? (toggle.dataset.openLabel || 'Close') : (toggle.dataset.closedLabel || 'Menu');
+      });
+      nav?.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => {
+        nav.classList.remove('is-open');
+        toggle?.setAttribute('aria-expanded', 'false');
+      }));
+      window.addEventListener('scroll', updateScroll, { passive: true });
+      updateScroll();
+      document.getElementById('cookie-settings')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('discoverystack:open-cookie-settings')));
+    </script>
+  </body>
+</html>

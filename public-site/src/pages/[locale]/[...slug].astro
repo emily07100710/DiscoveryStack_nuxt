@@ -1,0 +1,19 @@
+---
+import { getCollection, render } from 'astro:content'
+import type { CollectionEntry } from 'astro:content'
+import ContentPage from '../../components/ContentPage.astro'
+
+export async function getStaticPaths() {
+  const pages = await getCollection('pages')
+  return Promise.all(pages.map(async (page: CollectionEntry<'pages'>) => {
+    const route = page.data.route
+    const match = route.match(/^\/(en|zh-hant)\/(.+)$/)
+    if (!match) return null
+    const { Content } = await render(page)
+    return { params: { locale: match[1], slug: match[2] }, props: { page, Content } }
+  })).then((paths) => paths.filter(Boolean))
+}
+
+const { page, Content } = Astro.props
+---
+<ContentPage page={page} Content={Content} />
