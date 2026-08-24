@@ -30,4 +30,3 @@
   .privacy-page > header > p:last-child { grid-column: auto; }
   .privacy-grid section:nth-child(odd) { border-right: 0; }
 }
-
