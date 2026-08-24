@@ -1,7 +1,7 @@
 export const DELIVERY_AUTOMATION_ENGINE_VERSION = 'governed-delivery-automation-engine-v1' as const
 export const DELIVERY_COMMAND_VERSION = 'delivery-command-v1' as const
 
-export type DeliveryAdapter = 'wordpress_rest' | 'generic_http' | 'manual_export'
+export type DeliveryAdapter = 'wordpress_rest' | 'generic_http' | 'manual_export' | 'first_party_git' | 'first_party_signed_api'
 export type DeliveryTargetStatus = 'active' | 'paused' | 'revoked'
 export type DeliveryState =
   | 'scheduled'
