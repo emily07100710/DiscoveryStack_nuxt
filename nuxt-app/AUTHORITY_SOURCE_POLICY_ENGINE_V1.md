@@ -4,7 +4,7 @@
 
 Authority Source Policy Engine V1 是一個 **server-side TypeScript、deterministic、offline、fail-closed** 的來源資格判斷核心。它接受已經由治理流程整理的來源 metadata，正規化可比較欄位、驗證 metadata hash，然後判斷某個來源是否適合指定客戶產業、內容主題、locale、jurisdiction 與用途。
 
-輸出是明確的 `approved`、`review_required`、`not_ready` 或 `blocked` 決策，並附上 authority tier、matched sectors/topics、reason codes、limitations、source hash 與 deterministic fingerprint。相同輸入會產生相同輸出與穩定的多來源排序。
+輸出是明確的 `approved`、`review_required`、`not_ready` 或 `blocked` 決策，並附上 authority tier、matched sectors/topics、reason codes、limitations、source hash 與 deterministic fingerprint。只有 `approved` decision 可以回傳非空 `allowedPurposes`；`review_required`、`not_ready` 與 `blocked` 的 `allowedPurposes` 永遠是 `[]`。相同輸入會產生相同輸出與穩定的多來源排序。
 
 ## 這不是什麼
 
@@ -37,7 +37,7 @@ interface AuthorityPolicyRequest {
 
 `canonicalAuthoritySourcePayload(candidateWithoutHash)` 只保留正規化後的來源 metadata，排除 `sourceHash`，也不包含衍生的 decision、limitations 或 fingerprint。`authoritySourceHash(candidateWithoutHash)` 對該 canonical payload 的 stable serialization 計算 SHA-256。陣列輸入順序不影響 hash；大寫 SHA-256 hex 會先正規化為 lowercase。
 
-任何 metadata 改變而未同步更新 hash 都會產生 `SOURCE_HASH_MISMATCH` 並回傳 `blocked`。不符合 64 字元 SHA-256 hex 的值產生 `INVALID_SOURCE_HASH`。URL 必須是公開 HTTPS，不得含帳密、private/loopback/link-local/reserved 位址或保留 hostname；`publisherDomain` 必須與 URL hostname 精確一致。
+任何 metadata 改變而未同步更新 hash 都會產生 `SOURCE_HASH_MISMATCH` 並回傳 `blocked`。不符合 64 字元 SHA-256 hex 的值產生 `INVALID_SOURCE_HASH`。URL 必須是公開 HTTPS，不得含帳密、private/loopback/link-local/reserved 位址或保留 hostname；非 IP hostname 必須至少包含一個 `.`，因此單一 hostname 一律拒絕；`.onion` 及其子網域也一律拒絕；`publisherDomain` 必須與 URL hostname 精確一致。不進行 DNS lookup 或 network request。
 
 日期必須是帶 `Z` 或明確 offset 的 ISO datetime，並保存為 UTC ISO。非 null 日期必須符合 `publishedAt <= updatedAt <= capturedAt <= asOf`；不能用假日期取代缺失的 null metadata。
 
@@ -55,7 +55,7 @@ Tier 不代表 truth score，也不能繞過來源 relevance、hash、licence、
 
 ## arXiv 與 preprint 限制
 
-`arxiv.org` 只能在 metadata `sourceType` 為 `preprint_repository` 時被辨識為 preprint repository，且仍需有 sector 或 topic relevance。所有 preprint 都附帶 `preprint_not_peer_reviewed` limitation；本 engine 不得把 preprint 描述成已完成同儕審查。
+`arxiv.org` 與所有 `.arxiv.org` 子網域只能在 metadata `sourceType` 為 `preprint_repository` 時被辨識為 preprint repository，且仍需有 sector 或 topic relevance；`export.arxiv.org`、`subdomain.arxiv.org` 等子網域不得繞過規則。所有 arXiv/preprint 都附帶 `preprint_not_peer_reviewed` limitation；本 engine 不得把 preprint 描述成已完成同儕審查。
 
 一般技術或 AI 主題的 preprint 在 `research_reference` 且治理欄位完整時可以 `approved`。在 healthcare、medical、medicine、pharmaceutical、legal、law、finance、financial services、investment 或 insurance 等高風險產業，用於 `content_citation` 或 `evidence_support` 時至少 `review_required`。
 
@@ -69,7 +69,7 @@ Tier 不代表 truth score，也不能繞過來源 relevance、hash、licence、
 
 ## Multi-source selection ordering
 
-`selectAuthoritySources` 最多接受 50 筆 candidate，`maxSelected` 必須是 1 至 10 的整數，且每筆都以相同的 `evaluateAuthoritySource` 規則判斷。malformed candidate 不會被靜默忽略。相同 normalized `sourceId` 或相同 `sourceHash` 視為 duplicate，重複項目會以 `DUPLICATE_SOURCE` fail closed。
+`selectAuthoritySources` 最多接受 50 筆 candidate，`maxSelected` 必須是 1 至 10 的整數，且每筆都以相同的 `evaluateAuthoritySource` 規則判斷。當 `candidates.length > 50` 時，engine 在任何 candidate sort、欄位讀取、hash 或 evaluate 之前立即回傳 `rejected`，所有輸出 decision arrays 都是空陣列，並加入 `MAX_CANDIDATES_EXCEEDED` limitation；不會讀取或處理第 51 筆或其他 candidate 欄位。malformed candidate 不會被靜默忽略。相同 normalized `sourceId` 或相同 `sourceHash` 視為 duplicate，重複項目會以 `DUPLICATE_SOURCE` fail closed。
 
 穩定排序依序是：`approved`、`review_required`、`not_ready`、`blocked`；接著是 `primary`、`high`、`contextual`、`weak`、`ineligible`；再接著是 matched topic 數量由多到少；最後是 sourceId 字典序。`selected` 不會用 review_required 補位；approved 不足時整體 status truthful 並說明不足。selection fingerprint 共同納入 policy version、normalized request context、stable ordered decision fingerprints 與 `maxSelected`，所以 candidates 原始順序不影響結果。
 

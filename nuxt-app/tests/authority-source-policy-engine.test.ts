@@ -476,3 +476,113 @@ describe('Authority Source Policy Engine V1 contract', () => {
     expect(first.decisionFingerprint).toBe(second.decisionFingerprint)
   })
 })
+
+
+describe('Authority Source Policy Engine V1 merge-blocker regressions', () => {
+  it('rejects a single-label public hostname', () => {
+    expect(normalizeAuthoritySourceUrl('https://intranet/source')).toBeNull()
+  })
+
+  it('rejects the .onion apex domain', () => {
+    expect(normalizeAuthoritySourceUrl('https://hidden-service.onion/source')).toBeNull()
+  })
+
+  it('rejects an onion subdomain', () => {
+    expect(normalizeAuthoritySourceUrl('https://sub.hidden-service.onion/source')).toBeNull()
+  })
+
+  it('rejects IPv6 100::/64 special-use discard-only space', () => {
+    expect(normalizeAuthoritySourceUrl('https://[100::1]/source')).toBeNull()
+  })
+
+  it.each([
+    ['copyright blocked', makeAuthoritySource({ copyrightRisk: 'blocked' })],
+    ['PII restricted', makeAuthoritySource({ piiStatus: 'restricted' })],
+    ['no relevance', makeAuthoritySource({ sectors: ['unrelated sector'], topics: ['unrelated topic'] })],
+  ])('%s cannot return allowed purposes', (_label, candidate) => {
+    const overrides = _label === 'no relevance' ? { clientSector: 'healthcare', contentTopics: ['data governance'] } : {}
+    const decision = decisionFor(candidate, overrides)
+    expect(decision.status).toBe('blocked')
+    expect(decision.allowedPurposes).toEqual([])
+  })
+
+  it('returns empty allowed purposes for unknown terms review', () => {
+    const decision = decisionFor(makeAuthoritySource({ termsStatus: 'unknown' }))
+    expect(decision.status).toBe('review_required')
+    expect(decision.allowedPurposes).toEqual([])
+  })
+
+  it('preserves allowed purposes for an approved government source', () => {
+    const decision = decisionFor(syntheticAuthoritySources.government)
+    expect(decision.status).toBe('approved')
+    expect(decision.allowedPurposes).toEqual(['content_citation', 'evidence_support'])
+  })
+
+  it('blocks export.arxiv.org news as a non-preprint source and keeps the limitation', () => {
+    const candidate = makeAuthoritySource({ sourceId: 'export-news', sourceName: 'Synthetic Export News', sourceUrl: 'https://export.arxiv.org/news/1', publisherDomain: 'export.arxiv.org', sourceType: 'news' })
+    const decision = decisionFor(candidate)
+    expect(decision.status).toBe('blocked')
+    expect(decision.reasonCodes).toContain('ARXIV_SOURCE_TYPE_REQUIRED')
+    expect(decision.limitations).toContain('preprint_not_peer_reviewed')
+    expect(decision.allowedPurposes).toEqual([])
+  })
+
+  it('keeps the preprint limitation for export.arxiv.org preprints', () => {
+    const candidate = makeAuthoritySource({ sourceId: 'export-preprint', sourceName: 'Synthetic Export Preprint', sourceUrl: 'https://export.arxiv.org/abs/1234.5678', publisherDomain: 'export.arxiv.org', sourceType: 'preprint_repository', sectors: ['technology'], topics: ['machine learning'], termsStatus: 'allows_research' })
+    const decision = decisionFor(candidate, { purpose: 'research_reference', clientSector: 'technology', contentTopics: ['machine learning'], targetJurisdiction: null })
+    expect(decision.status).toBe('approved')
+    expect(decision.limitations).toContain('preprint_not_peer_reviewed')
+  })
+
+  it('blocks a subdomain.arxiv.org non-preprint source', () => {
+    const candidate = makeAuthoritySource({ sourceId: 'subdomain-news', sourceName: 'Synthetic Subdomain News', sourceUrl: 'https://subdomain.arxiv.org/news/1', publisherDomain: 'subdomain.arxiv.org', sourceType: 'news' })
+    const decision = decisionFor(candidate)
+    expect(decision.status).toBe('blocked')
+    expect(decision.reasonCodes).toContain('ARXIV_SOURCE_TYPE_REQUIRED')
+  })
+
+  it('does not classify not-arxiv.org as an arXiv domain', () => {
+    const candidate = makeAuthoritySource({ sourceId: 'not-arxiv', sourceName: 'Synthetic Not Arxiv', sourceUrl: 'https://not-arxiv.org/item/1', publisherDomain: 'not-arxiv.org', sourceType: 'news' })
+    const decision = decisionFor(candidate)
+    expect(decision.status).toBe('approved')
+    expect(decision.reasonCodes).not.toContain('ARXIV_SOURCE_TYPE_REQUIRED')
+    expect(decision.limitations).not.toContain('preprint_not_peer_reviewed')
+  })
+
+  it('processes exactly 50 candidates normally', () => {
+    const candidates = Array.from({ length: 50 }, (_, index) => makeAuthoritySource({ sourceId: `bounded-${String(index).padStart(2, '0')}`, sourceUrl: `https://bounded-${String(index).padStart(2, '0')}.synthetic.example.org/item`, publisherDomain: `bounded-${String(index).padStart(2, '0')}.synthetic.example.org` }))
+    const result = selectAuthoritySources(makeSelectionRequest({ candidates, maxSelected: 10 }))
+    expect(result.status).toBe('ready')
+    expect(result.selected).toHaveLength(10)
+    expect(result.reviewRequired).toHaveLength(0)
+    expect(result.blocked).toHaveLength(0)
+  })
+
+  it('does not read any candidate field when 51 candidates are supplied', () => {
+    let fieldReads = 0
+    const guarded = new Proxy(makeAuthoritySource({ sourceId: 'guarded-candidate' }), {
+      get() {
+        fieldReads += 1
+        throw new Error('candidate field must not be read')
+      },
+    })
+    const candidates = Array.from({ length: 50 }, (_, index) => makeAuthoritySource({ sourceId: `early-${String(index).padStart(2, '0')}`, sourceUrl: `https://early-${String(index).padStart(2, '0')}.synthetic.example.org/item`, publisherDomain: `early-${String(index).padStart(2, '0')}.synthetic.example.org` }))
+    candidates.push(guarded)
+    const result = selectAuthoritySources(makeSelectionRequest({ candidates, maxSelected: 10 }))
+    expect(result.status).toBe('rejected')
+    expect(result.selected).toEqual([])
+    expect(result.reviewRequired).toEqual([])
+    expect(result.blocked).toEqual([])
+    expect(result.limitations).toContain('MAX_CANDIDATES_EXCEEDED')
+    expect(fieldReads).toBe(0)
+  })
+
+  it('uses final allowed purposes in a stable blocked decision fingerprint', () => {
+    const candidate = makeAuthoritySource({ copyrightRisk: 'blocked' })
+    const first = decisionFor(candidate)
+    const second = decisionFor(candidate)
+    expect(first.status).toBe('blocked')
+    expect(first.allowedPurposes).toEqual([])
+    expect(first.decisionFingerprint).toBe(second.decisionFingerprint)
+  })
+})

@@ -74,6 +74,17 @@ function isReservedIpv4(hostname: string): boolean {
   return first === 255 && second === 255 && third === 255 && fourth === 255
 }
 
+function parseIpv6Hextets(hostname: string): number[] | null {
+  const parts = hostname.split('::')
+  if (parts.length > 2) return null
+  const left = parts[0] ? parts[0].split(':') : []
+  const right = parts.length === 2 && parts[1] ? parts[1].split(':') : []
+  if (left.some((part) => !/^[a-f0-9]{1,4}$/u.test(part)) || right.some((part) => !/^[a-f0-9]{1,4}$/u.test(part))) return null
+  const missing = 8 - left.length - right.length
+  if (parts.length === 1 ? missing !== 0 : missing < 1) return null
+  return [...left.map((part) => Number.parseInt(part, 16)), ...Array.from({ length: missing }, () => 0), ...right.map((part) => Number.parseInt(part, 16))]
+}
+
 function isReservedIpv6(hostname: string): boolean {
   const normalized = hostname.toLocaleLowerCase('en-US')
   if (normalized === '::' || normalized === '::1') return true
@@ -81,13 +92,15 @@ function isReservedIpv6(hostname: string): boolean {
   if (/^f[cd]/u.test(normalized)) return true
   if (/^ff/u.test(normalized)) return true
   if (normalized === '2001:db8' || normalized.startsWith('2001:db8:')) return true
+  const hextets = parseIpv6Hextets(normalized)
+  if (hextets && hextets[0] === 0x0100 && hextets[1] === 0 && hextets[2] === 0 && hextets[3] === 0) return true
   if (normalized.startsWith('::ffff:')) {
     const mapped = normalized.slice('::ffff:'.length)
     if (isIP(mapped) === 4) return isReservedIpv4(mapped)
-    const hextets = mapped.split(':')
-    if (hextets.length === 2 && hextets.every((part) => /^[a-f0-9]{1,4}$/u.test(part))) {
-      const high = Number.parseInt(hextets[0]!, 16)
-      const low = Number.parseInt(hextets[1]!, 16)
+    const mappedHextets = mapped.split(':')
+    if (mappedHextets.length === 2 && mappedHextets.every((part) => /^[a-f0-9]{1,4}$/u.test(part))) {
+      const high = Number.parseInt(mappedHextets[0]!, 16)
+      const low = Number.parseInt(mappedHextets[1]!, 16)
       return isReservedIpv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`)
     }
   }
@@ -97,10 +110,11 @@ function isReservedIpv6(hostname: string): boolean {
 function isPublicHostname(hostname: string): boolean {
   const normalized = normalizeAuthorityDomain(hostname).replace(/^\[|\]$/gu, '')
   if (!normalized || /[\s\u0000-\u001f\u007f]/u.test(normalized)) return false
-  if (normalized === 'localhost' || normalized.endsWith('.localhost') || normalized.endsWith('.local') || normalized.endsWith('.internal') || normalized.endsWith('.test') || normalized.endsWith('.invalid') || normalized.endsWith('.example')) return false
+  if (normalized === 'localhost' || normalized.endsWith('.localhost') || normalized.endsWith('.local') || normalized.endsWith('.internal') || normalized.endsWith('.test') || normalized.endsWith('.invalid') || normalized.endsWith('.example') || normalized === 'onion' || normalized.endsWith('.onion')) return false
   const addressType = isIP(normalized)
   if (addressType === 4) return !isReservedIpv4(normalized)
   if (addressType === 6) return !isReservedIpv6(normalized)
+  if (!normalized.includes('.')) return false
   return true
 }
 

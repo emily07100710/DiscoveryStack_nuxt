@@ -39,6 +39,10 @@ const MAX_MAX_SELECTED = 10
 const HIGH_RISK_SET = new Set<string>(HIGH_RISK_AUTHORITY_SECTORS)
 const TIER_INDEX = new Map(AUTHORITY_TIER_ORDER.map((tier, index) => [tier, index]))
 
+function isArxivDomain(domain: string): boolean {
+  return domain === 'arxiv.org' || domain.endsWith('.arxiv.org')
+}
+
 const SOURCE_ALLOWED_PURPOSES: Record<Exclude<AuthorityTier, 'ineligible'>, readonly (typeof authorityPurposes[number])[]> = {
   primary: ['research_reference', 'content_citation', 'evidence_support', 'model_evaluation'],
   high: ['research_reference', 'content_citation', 'evidence_support', 'model_evaluation'],
@@ -114,7 +118,7 @@ function allowedPurposesFor(candidate: AuthoritySourceCandidate | null, requeste
 
 function decisionLimitations(candidate: AuthoritySourceCandidate | null, context: Omit<AuthorityPolicyRequest, 'candidate'> | null, matchedTopics: string[]): string[] {
   const limitations: string[] = [...AUTHORITY_POLICY_LIMITATIONS]
-  if (candidate?.sourceType === 'preprint_repository' || candidate?.publisherDomain === 'arxiv.org') limitations.push('preprint_not_peer_reviewed')
+  if (candidate?.sourceType === 'preprint_repository' || (candidate?.publisherDomain ? isArxivDomain(candidate.publisherDomain) : false)) limitations.push('preprint_not_peer_reviewed')
   if (candidate && context && matchedTopics.length === 0) limitations.push('來源沒有與目標 contentTopics 的直接相符項目。')
   if (candidate?.copyrightRisk === 'high' || candidate?.copyrightRisk === 'unreviewed') limitations.push('著作權風險 metadata 尚未達到自動核准所需的確定性。')
   if (candidate?.piiStatus === 'possible' || candidate?.piiStatus === 'unreviewed') limitations.push('來源可能含有個人資料；使用前需要人工確認。')
@@ -145,13 +149,14 @@ function buildDecision(input: unknown, context: Omit<AuthorityPolicyRequest, 'ca
   const matched = matchedValues(candidate, context)
   const authorityTier = candidate ? AUTHORITY_TIER_BY_SOURCE_TYPE[candidate.sourceType] : tierForSource(input)
   const allowedPurposes = allowedPurposesFor(candidate, context?.purpose)
+  const finalAllowedPurposes = status === 'approved' ? allowedPurposes : []
   const limitations = decisionLimitations(candidate, context, matched.topics)
   const normalizedReasonCodes = uniqueSorted(reasonCodes)
-  const fingerprint = decisionFingerprint({ context, candidate, status, authorityTier, allowedPurposes, matchedSectors: matched.sectors, matchedTopics: matched.topics, reasonCodes: normalizedReasonCodes, limitations, sourceId, sourceHash })
+  const fingerprint = decisionFingerprint({ context, candidate, status, authorityTier, allowedPurposes: finalAllowedPurposes, matchedSectors: matched.sectors, matchedTopics: matched.topics, reasonCodes: normalizedReasonCodes, limitations, sourceId, sourceHash })
   return {
     status,
     authorityTier,
-    allowedPurposes,
+    allowedPurposes: finalAllowedPurposes,
     matchedSectors: matched.sectors,
     matchedTopics: matched.topics,
     reasonCodes: normalizedReasonCodes,
@@ -191,7 +196,7 @@ export function evaluateAuthoritySource(input: unknown): AuthorityPolicyDecision
       if ((candidate.sourceType === 'commercial_blog' || candidate.sourceType === 'community' || candidate.sourceType === 'social') && context.purpose === 'evidence_support') reasonCodes.push('WEAK_SOURCE_FOR_EVIDENCE')
       if (context.targetJurisdiction && candidate.jurisdiction !== context.targetJurisdiction && (context.purpose === 'content_citation' || context.purpose === 'evidence_support')) reasonCodes.push('JURISDICTION_REVIEW_REQUIRED')
       if ((context.purpose === 'content_citation' || context.purpose === 'evidence_support') && !candidate.publishedAt && !candidate.updatedAt) reasonCodes.push('RECENCY_REVIEW_REQUIRED')
-      if (candidate.publisherDomain === 'arxiv.org' && candidate.sourceType !== 'preprint_repository') reasonCodes.push('ARXIV_SOURCE_TYPE_REQUIRED')
+      if (isArxivDomain(candidate.publisherDomain) && candidate.sourceType !== 'preprint_repository') reasonCodes.push('ARXIV_SOURCE_TYPE_REQUIRED')
       if (candidate.locale !== 'multilingual' && candidate.locale !== context.targetLocale) reasonCodes.push('LOCALE_REVIEW_REQUIRED')
     }
 
@@ -259,7 +264,7 @@ function duplicateDecision(decision: AuthorityPolicyDecision): AuthorityPolicyDe
   const reasonCodes = uniqueSorted([...decision.reasonCodes, 'DUPLICATE_SOURCE'])
   const limitations = uniqueSorted([...decision.limitations, AUTHORITY_REVIEW_LIMITATIONS.duplicate])
   const nextStatus: AuthorityPolicyDecision['status'] = 'blocked'
-  return { ...decision, status: nextStatus, reasonCodes, limitations, decisionFingerprint: decisionFingerprint({ context: null, candidate: null, status: nextStatus, authorityTier: decision.authorityTier, allowedPurposes: decision.allowedPurposes, matchedSectors: decision.matchedSectors, matchedTopics: decision.matchedTopics, reasonCodes, limitations, sourceId: decision.sourceId, sourceHash: decision.sourceHash }) }
+  return { ...decision, status: nextStatus, allowedPurposes: [], reasonCodes, limitations, decisionFingerprint: decisionFingerprint({ context: null, candidate: null, status: nextStatus, authorityTier: decision.authorityTier, allowedPurposes: [], matchedSectors: decision.matchedSectors, matchedTopics: decision.matchedTopics, reasonCodes, limitations, sourceId: decision.sourceId, sourceHash: decision.sourceHash }) }
 }
 
 function selectionFingerprint(context: Omit<AuthoritySourceSelectionRequest, 'candidates' | 'maxSelected'> | null, maxSelected: number, ordered: readonly AuthorityPolicyDecision[]): string {
@@ -283,6 +288,11 @@ export function selectAuthoritySources(input: unknown): AuthoritySelectionResult
       return { status: 'rejected', selected: [], reviewRequired: [], blocked: [], limitations, policyVersion: AUTHORITY_POLICY_VERSION, selectionFingerprint: selectionFingerprint(context, maxSelected, []) }
     }
 
+    if (candidates.length > MAX_CANDIDATES) {
+      const limitations: string[] = [...baseLimitations, 'MAX_CANDIDATES_EXCEEDED']
+      return { status: 'rejected', selected: [], reviewRequired: [], blocked: [], limitations: uniqueSorted(limitations), policyVersion: AUTHORITY_POLICY_VERSION, selectionFingerprint: selectionFingerprint(context, maxSelected, []) }
+    }
+
     const orderedInputs = candidates.slice().sort((left, right) => candidateSortKey(left).localeCompare(candidateSortKey(right)))
     const decisions: AuthorityPolicyDecision[] = []
     const seenIds = new Set<string>()
@@ -298,11 +308,10 @@ export function selectAuthoritySources(input: unknown): AuthoritySelectionResult
     }
 
     const sortedDecisions = decisions.slice().sort(compareDecisions)
-    const selected = candidates.length > MAX_CANDIDATES ? [] : sortedDecisions.filter((decision) => decision.status === 'approved').slice(0, maxSelected)
+    const selected = sortedDecisions.filter((decision) => decision.status === 'approved').slice(0, maxSelected)
     const reviewRequired = sortedDecisions.filter((decision) => decision.status === 'review_required' || decision.status === 'not_ready')
     const blocked = sortedDecisions.filter((decision) => decision.status === 'blocked')
     const limitations: string[] = [...baseLimitations]
-    if (candidates.length > MAX_CANDIDATES) limitations.push('MAX_CANDIDATES_EXCEEDED')
     if (selected.length < Math.min(maxSelected, candidates.length)) limitations.push(AUTHORITY_REVIEW_LIMITATIONS.insufficientApproved)
     if (decisions.some((decision) => decision.reasonCodes.includes('DUPLICATE_SOURCE'))) limitations.push(AUTHORITY_REVIEW_LIMITATIONS.duplicate)
     if (blocked.length > 0) limitations.push('一個或多個候選來源未通過本 V1 的 fail-closed 規則。')
