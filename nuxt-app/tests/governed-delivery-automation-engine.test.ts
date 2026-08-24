@@ -45,15 +45,18 @@ function successEvent(overrides: Record<string, unknown> = {}) {
     type: 'success',
     now: FIXTURE_NOW,
     attemptStartedAt: '2026-08-23T23:59:00.000Z',
-    expectedIdempotencyKey: 'd'.repeat(64),
+    expectedIdempotencyKey: FIXTURE_KEY,
+    attemptNumber: 1,
+    attempts: [makeAttempt()],
     targetOrigin: FIXTURE_ORIGIN,
     result: {
-      idempotencyKey: 'd'.repeat(64),
+      idempotencyKey: FIXTURE_KEY,
       remoteContentId: 'remote-1',
       publishedAt: FIXTURE_NOW,
       remoteUrl: 'https://target.example.com/posts/remote-1',
       noPublicUrl: false,
       responseFingerprint: FIXTURE_RESULT_FINGERPRINT,
+      httpStatus: 201,
     },
     ...overrides,
   }
@@ -488,20 +491,20 @@ describe('state machine and result identity', () => {
   })
 
   it('moves dispatch_planned to retry_wait for a temporary failure', () => {
-    expect(reduceDeliveryAttemptState('dispatch_planned', { type: 'failure', failure: { attemptNumber: 1, code: 'timeout' } })).toMatchObject({ status: 'ok', state: 'retry_wait' })
+    expect(reduceDeliveryAttemptState('dispatch_planned', { type: 'failure', now: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 1, attempts: [makeAttempt()], failure: { attemptNumber: 1, code: 'timeout' } })).toMatchObject({ status: 'ok', state: 'retry_wait' })
   })
 
   it('moves retry_wait back to dispatch_planned only on retry_due with time proof', () => {
-    const result = reduceDeliveryAttemptState('retry_wait', { type: 'retry_due', now: FIXTURE_NOW, retryEligibleAt: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 2 })
+    const result = reduceDeliveryAttemptState('retry_wait', { type: 'retry_due', now: FIXTURE_NOW, retryEligibleAt: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 2, attempts: [makeRetryWaitAttempt()] })
     expect(result).toMatchObject({ status: 'ok', state: 'dispatch_planned' })
   })
 
   it('moves dispatch_planned to permanent_failed for a permanent failure', () => {
-    expect(reduceDeliveryAttemptState('dispatch_planned', { type: 'failure', failure: { attemptNumber: 1, httpStatus: 400 } })).toMatchObject({ status: 'ok', state: 'permanent_failed' })
+    expect(reduceDeliveryAttemptState('dispatch_planned', { type: 'failure', now: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 1, attempts: [makeAttempt()], failure: { attemptNumber: 1, httpStatus: 400 } })).toMatchObject({ status: 'ok', state: 'permanent_failed' })
   })
 
   it('moves dispatch_planned to blocked for a configuration failure', () => {
-    expect(reduceDeliveryAttemptState('dispatch_planned', { type: 'failure', failure: { attemptNumber: 1, httpStatus: 401 } })).toMatchObject({ status: 'ok', state: 'blocked' })
+    expect(reduceDeliveryAttemptState('dispatch_planned', { type: 'failure', now: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 1, attempts: [makeAttempt()], failure: { attemptNumber: 1, httpStatus: 401 } })).toMatchObject({ status: 'ok', state: 'blocked' })
   })
 
   it('allows cancellation from scheduled', () => {
@@ -521,18 +524,18 @@ describe('state machine and result identity', () => {
   })
 
   it('delivers a result that explicitly has no public URL', () => {
-    const event = successEvent({ result: { idempotencyKey: 'd'.repeat(64), remoteContentId: 'remote-1', publishedAt: FIXTURE_NOW, noPublicUrl: true, responseFingerprint: FIXTURE_RESULT_FINGERPRINT } })
+    const event = successEvent({ result: { idempotencyKey: FIXTURE_KEY, remoteContentId: 'remote-1', publishedAt: FIXTURE_NOW, noPublicUrl: true, responseFingerprint: FIXTURE_RESULT_FINGERPRINT, httpStatus: 201 } })
     expect(reduceDeliveryAttemptState('dispatch_planned', event)).toMatchObject({ status: 'ok', state: 'delivered' })
   })
 
   it('rejects HTTP 2xx-style results without remote content identity', () => {
-    const event = successEvent({ result: { idempotencyKey: 'd'.repeat(64), publishedAt: FIXTURE_NOW, remoteUrl: 'https://target.example.com/posts/remote-1', noPublicUrl: false, responseFingerprint: FIXTURE_RESULT_FINGERPRINT } })
+    const event = successEvent({ result: { idempotencyKey: FIXTURE_KEY, publishedAt: FIXTURE_NOW, remoteUrl: 'https://target.example.com/posts/remote-1', noPublicUrl: false, responseFingerprint: FIXTURE_RESULT_FINGERPRINT, httpStatus: 201 } })
     expect(reduceDeliveryAttemptState('dispatch_planned', event)).toMatchObject({ status: 'blocked', code: 'HTTP_SUCCESS_MISSING_REMOTE_ID' })
   })
 
   it('rejects a mismatched idempotency key', () => {
     const event = successEvent({ expectedIdempotencyKey: 'e'.repeat(64) })
-    expect(reduceDeliveryAttemptState('dispatch_planned', event)).toMatchObject({ status: 'blocked', code: 'REMOTE_RESULT_INVALID' })
+    expect(reduceDeliveryAttemptState('dispatch_planned', event)).toMatchObject({ status: 'blocked', code: 'ATTEMPT_IDEMPOTENCY_MISMATCH' })
   })
 
   it.each([
@@ -733,7 +736,7 @@ describe('retry timing and attempt evidence hardening', () => {
 })
 
 describe('retry_due proof hardening', () => {
-  const dueEvent = { type: 'retry_due', now: FIXTURE_NOW, retryEligibleAt: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 2 }
+  const dueEvent = { type: 'retry_due', now: FIXTURE_NOW, retryEligibleAt: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 2, attempts: [makeRetryWaitAttempt()] }
 
   it('requires now on retry_due', () => {
     const { now: _now, ...event } = dueEvent
@@ -1036,7 +1039,7 @@ describe('success result time and fingerprint hardening', () => {
 
   it('requires event now', () => {
     const { now: _now, ...event } = successEvent()
-    expect(reduceDeliveryAttemptState('dispatch_planned', event)).toMatchObject({ status: 'blocked', code: 'REMOTE_RESULT_INVALID' })
+    expect(reduceDeliveryAttemptState('dispatch_planned', event)).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
   })
 
   it('requires attemptStartedAt', () => {
@@ -1203,5 +1206,192 @@ describe('encoded endpoint and eligibility timestamp regressions', () => {
       expect(result.command.eligibleAt).toBe(FIXTURE_NOW)
       expect(result.command.eligibleAt).not.toBe('2026-08-24T00:01:00.000Z')
     }
+  })
+})
+
+
+describe('persisted transition proof hardening', () => {
+  it('rejects an arbitrary valid SHA key for retry_due', () => {
+    const result = reduceDeliveryAttemptState('retry_wait', { ...dueEventForProof(), expectedIdempotencyKey: '0'.repeat(64) })
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_IDEMPOTENCY_MISMATCH' })
+  })
+
+  it('rejects a retry_due event that skips from attempt one to attempt five', () => {
+    const result = reduceDeliveryAttemptState('retry_wait', { ...dueEventForProof(), attemptNumber: 5 })
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
+  it('rejects a forged retry_due deadline that differs from persisted history', () => {
+    const result = reduceDeliveryAttemptState('retry_wait', { ...dueEventForProof(), retryEligibleAt: '2026-08-23T23:59:00.000Z' })
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
+  it('rejects retry_due when the persisted latest attempt is not retry_wait', () => {
+    const result = reduceDeliveryAttemptState('retry_wait', { ...dueEventForProof(), attempts: [makeAttempt()] })
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
+  it('rejects retry_due when persisted retry_wait lacks failure evidence', () => {
+    const result = reduceDeliveryAttemptState('retry_wait', { ...dueEventForProof(), attempts: [makeAttempt({ state: 'retry_wait', retryEligibleAt: FIXTURE_NOW })] })
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
+  it('accepts lowercase-equivalent persisted and event keys under the canonical key contract', () => {
+    const result = reduceDeliveryAttemptState('retry_wait', { ...dueEventForProof(), expectedIdempotencyKey: FIXTURE_KEY.toUpperCase() })
+    expect(result).toMatchObject({ status: 'ok', state: 'dispatch_planned' })
+  })
+
+  it('rejects failure without a persisted dispatch_planned attempt', () => {
+    const result = reduceDeliveryAttemptState('dispatch_planned', { type: 'failure', now: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 1, failure: { attemptNumber: 1, code: 'timeout' } })
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
+  it('rejects success without a persisted dispatch_planned attempt', () => {
+    const result = reduceDeliveryAttemptState('dispatch_planned', successEvent({ attempts: undefined }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
+  it('rejects failure with an attempt number different from persisted latest attempt', () => {
+    const result = reduceDeliveryAttemptState('dispatch_planned', { type: 'failure', now: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 2, attempts: [makeAttempt()], failure: { attemptNumber: 2, code: 'timeout' } })
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
+  it('rejects success with a key different from persisted latest attempt', () => {
+    const result = reduceDeliveryAttemptState('dispatch_planned', successEvent({ expectedIdempotencyKey: 'e'.repeat(64) }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_IDEMPOTENCY_MISMATCH' })
+  })
+
+  it('rejects success with an attempt number different from persisted latest attempt', () => {
+    const result = reduceDeliveryAttemptState('dispatch_planned', successEvent({ attemptNumber: 2 }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
+  it('rejects a retry_due event whose persisted attempt is not the next sequence', () => {
+    const result = reduceDeliveryAttemptState('retry_wait', { ...dueEventForProof(), attempts: [makeRetryWaitAttempt()], attemptNumber: 3 })
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+})
+
+function dueEventForProof() {
+  return { type: 'retry_due' as const, now: FIXTURE_NOW, retryEligibleAt: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 2, attempts: [makeRetryWaitAttempt()] }
+}
+
+describe('persisted HTTP 409 retry evidence', () => {
+  const confirmed409 = () => makeRetryWaitAttempt({ failureCode: 'http_409', httpStatus: 409, confirmedSameIdempotentDelivery: true })
+
+  it('carries confirmed 409 evidence from classification through retry_wait to dispatch', () => {
+    const planned = planDeliveryAttempt(makePlanInput({ attempts: [confirmed409()] }))
+    expect(planned).toMatchObject({ status: 'dispatch_planned' })
+    const due = reduceDeliveryAttemptState('retry_wait', { type: 'retry_due', now: FIXTURE_NOW, retryEligibleAt: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 2, attempts: [confirmed409()] })
+    expect(due).toMatchObject({ status: 'ok', state: 'dispatch_planned' })
+  })
+
+  it.each([undefined, false])('does not retry a 409 without confirmed evidence: %s', (confirmedSameIdempotentDelivery) => {
+    const result = planDeliveryAttempt(makePlanInput({ attempts: [makeRetryWaitAttempt({ failureCode: 'http_409', httpStatus: 409, confirmedSameIdempotentDelivery })] }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
+  it('does not give HTTP 500 extra retry permission when confirmation is true', () => {
+    const withoutConfirmation = classifyDeliveryFailure({ attemptNumber: 1, httpStatus: 500 })
+    const withConfirmation = classifyDeliveryFailure({ attemptNumber: 1, httpStatus: 500, confirmedSameIdempotentDelivery: true })
+    expect(withConfirmation).toEqual(withoutConfirmation)
+  })
+
+  it.each([401, 403])('never retries HTTP %s even when 409 confirmation is true', (httpStatus) => {
+    expect(classifyDeliveryFailure({ attemptNumber: 1, httpStatus, confirmedSameIdempotentDelivery: true })).toMatchObject({ retryable: false, nextState: 'blocked' })
+  })
+
+  it('rejects a non-boolean persisted 409 confirmation', () => {
+    const result = planDeliveryAttempt(makePlanInput({ attempts: [makeRetryWaitAttempt({ failureCode: 'http_409', httpStatus: 409, confirmedSameIdempotentDelivery: 'yes' as unknown as boolean })] }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+})
+
+describe('prior identity key recomputation', () => {
+  it('rejects a prior record with the same complete identity and a different valid SHA key', () => {
+    const result = planDeliveryAttempt(makePlanInput({ priorDeliveries: [makePriorDelivery({ idempotencyKey: 'c'.repeat(64) })] }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'IDEMPOTENCY_COLLISION' })
+  })
+
+  it('accepts an uppercase prior key when it is canonical-equivalent to the recomputed key', () => {
+    const result = planDeliveryAttempt(makePlanInput({ priorDeliveries: [makePriorDelivery({ idempotencyKey: FIXTURE_KEY.toUpperCase() })] }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'DUPLICATE_PUBLICATION' })
+  })
+})
+
+describe('canonical HTTP success proof', () => {
+  it.each([200, 201, 299])('accepts HTTP %s as a successful result', (httpStatus) => {
+    const result = reduceDeliveryAttemptState('dispatch_planned', successEvent({ result: { ...successEvent().result, httpStatus } }))
+    expect(result).toMatchObject({ status: 'ok', state: 'delivered' })
+  })
+
+  it('rejects success when httpStatus is missing', () => {
+    const result = reduceDeliveryAttemptState('dispatch_planned', successEvent({ result: { ...successEvent().result, httpStatus: undefined } }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'REMOTE_RESULT_INVALID' })
+  })
+
+  it.each([199, 300, 400, 409, 429, 500, 599])('rejects HTTP %s as a success result', (httpStatus) => {
+    const result = reduceDeliveryAttemptState('dispatch_planned', successEvent({ result: { ...successEvent().result, httpStatus } }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'REMOTE_RESULT_INVALID' })
+  })
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 200.5, '200'])('rejects malformed success httpStatus %s', (httpStatus) => {
+    const result = reduceDeliveryAttemptState('dispatch_planned', successEvent({ result: { ...successEvent().result, httpStatus } }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'REMOTE_RESULT_INVALID' })
+  })
+
+  it('rejects a 2xx status supplied as failure evidence', () => {
+    const result = reduceDeliveryAttemptState('dispatch_planned', { type: 'failure', now: FIXTURE_NOW, expectedIdempotencyKey: FIXTURE_KEY, attemptNumber: 1, attempts: [makeAttempt()], failure: { attemptNumber: 1, httpStatus: 201 } })
+    expect(result).toMatchObject({ status: 'blocked', code: 'INVALID_INPUT' })
+  })
+
+  it('changes result fingerprint when only httpStatus changes', () => {
+    const first = computeDeliveryResultFingerprint({ ...successEvent().result, httpStatus: 200 }, FIXTURE_ORIGIN)
+    const second = computeDeliveryResultFingerprint({ ...successEvent().result, httpStatus: 201 }, FIXTURE_ORIGIN)
+    expect(first.status).toBe('ok')
+    expect(second.status).toBe('ok')
+    if (first.status === 'ok' && second.status === 'ok') expect(first.fingerprint).not.toBe(second.fingerprint)
+  })
+
+  it('blocks replay when only httpStatus changes', () => {
+    const original = successEvent({ result: { ...successEvent().result, httpStatus: 200 } })
+    const event = successEvent({ result: { ...original.result, httpStatus: 201 }, priorDeliveryResultFingerprint: resultFingerprint(original) })
+    expect(reduceDeliveryAttemptState('delivered', event)).toMatchObject({ status: 'blocked', code: 'REMOTE_IDENTITY_COLLISION' })
+  })
+})
+
+describe('strict calendar timestamp validation', () => {
+  const invalidScheduledAt = [
+    '2026-02-30T00:00:00.000Z',
+    '2026-02-29T00:00:00.000Z',
+    '2026-04-31T00:00:00.000Z',
+    '2026-00-01T00:00:00.000Z',
+    '2026-13-01T00:00:00.000Z',
+    '2026-01-00T00:00:00.000Z',
+    '2026-01-01T24:00:00.000Z',
+    '2026-01-01T00:60:00.000Z',
+    '2026-01-01T00:00:60.000Z',
+    '2026-01-01T00:00:00.000',
+    '2026-01-01T00:00:00.000+24:00',
+    '2026-01-01T00:00:00.000+01:60',
+    '2026-01-01T00:00:00.000+0100',
+  ]
+
+  it.each(invalidScheduledAt)('rejects nonexistent or malformed timestamp %s', (scheduledAt) => {
+    expect(evaluateDeliveryEligibility(makeTarget(), makePublication({ scheduledAt }), FIXTURE_NOW)).toMatchObject({ status: 'blocked', code: 'INVALID_TIMESTAMP' })
+  })
+
+  it('accepts leap-day February 29 in a leap year', () => {
+    expect(evaluateDeliveryEligibility(makeTarget(), makePublication({ scheduledAt: '2028-02-29T00:00:00.000Z' }), '2028-03-01T00:00:00.000Z').status).toBe('eligible')
+  })
+
+  it('accepts a valid signed timezone offset and canonicalizes the instant', () => {
+    const result = evaluateDeliveryEligibility(makeTarget(), makePublication({ scheduledAt: '2026-08-24T08:00:00.000+08:00' }), FIXTURE_NOW)
+    expect(result).toMatchObject({ status: 'eligible', now: FIXTURE_NOW })
+    if (result.status === 'eligible') expect(result.publication?.scheduledAt).toBe(FIXTURE_NOW)
+  })
+
+  it('rejects a nonexistent injected now date', () => {
+    expect(evaluateDeliveryEligibility(makeTarget(), makePublication(), '2026-02-30T00:00:00.000Z')).toMatchObject({ status: 'blocked', code: 'INVALID_TIMESTAMP' })
   })
 })

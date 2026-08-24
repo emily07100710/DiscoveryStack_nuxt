@@ -99,9 +99,27 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function safeTimestamp(value: unknown): TimestampResult {
   if (!stringValue(value)) return { ok: false, reason: 'timestamp must be a non-empty string' }
-  if (!/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return { ok: false, reason: 'timestamp must include a timezone' }
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value)
+  if (!match) return { ok: false, reason: 'timestamp must be a strict timezone-bearing ISO value' }
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const hour = Number(match[4])
+  const minute = Number(match[5])
+  const second = Number(match[6])
+  const zone = match[8]
+  if (zone === undefined) return { ok: false, reason: 'timestamp timezone is missing' }
+  const zoneHour = zone === 'Z' ? 0 : Number(zone.slice(1, 3))
+  const zoneMinute = zone === 'Z' ? 0 : Number(zone.slice(4, 6))
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const monthDays = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  const maximumDay = monthDays[month - 1]
+  if (month < 1 || month > 12 || maximumDay === undefined || day < 1 || day > maximumDay) return { ok: false, reason: 'timestamp calendar date is invalid' }
+  if (hour > 23 || minute > 59 || second > 59) return { ok: false, reason: 'timestamp clock components are invalid' }
+  if (zone !== 'Z' && (zoneHour > 23 || zoneMinute > 59)) return { ok: false, reason: 'timestamp timezone offset is invalid' }
+  const fraction = match[7] ?? ''
   const milliseconds = Date.parse(value)
-  if (!Number.isFinite(milliseconds)) return { ok: false, reason: 'timestamp is invalid' }
+  if (!Number.isFinite(milliseconds) || fraction.length > 9) return { ok: false, reason: 'timestamp is invalid' }
   return { ok: true, iso: new Date(milliseconds).toISOString(), milliseconds }
 }
 
@@ -228,6 +246,10 @@ function validHttpStatus(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 100 && value <= 599
 }
 
+function validSuccessHttpStatus(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 200 && value <= 299
+}
+
 function validRetryAfter(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= 86_400
 }
@@ -264,6 +286,7 @@ export function classifyDeliveryFailure(input: unknown): DeliveryFailureClassifi
     if (httpStatusInput !== undefined && !validHttpStatus(httpStatusInput)) return invalidFailure()
     if (retryAfterInput !== undefined && !validRetryAfter(retryAfterInput)) return invalidFailure()
     if (confirmedInput !== undefined && typeof confirmedInput !== 'boolean') return invalidFailure()
+    if (typeof httpStatusInput === 'number' && httpStatusInput >= 200 && httpStatusInput <= 299) return invalidFailure()
     const code = codeInput as string | undefined
     const httpStatus = typeof httpStatusInput === 'number' ? httpStatusInput : undefined
     const retryAfterSeconds = typeof retryAfterInput === 'number' ? retryAfterInput : undefined
@@ -301,6 +324,7 @@ function validateAttemptHistory(input: unknown, expectedKey: string, nowMillisec
       const failureCode = read(item, 'failureCode')
       const httpStatus = read(item, 'httpStatus')
       const retryAfterSeconds = read(item, 'retryAfterSeconds')
+      const confirmedSameIdempotentDelivery = read(item, 'confirmedSameIdempotentDelivery')
       const retryEligibleAt = read(item, 'retryEligibleAt')
       if (!isPositiveInteger(attemptNumber) || attemptNumber !== index + 1 || attemptNumber > MAX_DELIVERY_ATTEMPTS) return { ok: false, code: 'ATTEMPT_HISTORY_INVALID', reasons: ['attempt history has duplicate or out-of-order numbers'] }
       if (typeof state !== 'string' || !deliveryStates.has(state as DeliveryState)) return { ok: false, code: 'ATTEMPT_HISTORY_INVALID', reasons: ['attempt history contains an invalid state'] }
@@ -312,21 +336,23 @@ function validateAttemptHistory(input: unknown, expectedKey: string, nowMillisec
       if (failureCode !== undefined && !isFailureCode(failureCode)) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['attempt history failureCode is invalid'] }
       if (httpStatus !== undefined && !validHttpStatus(httpStatus)) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['attempt history httpStatus is invalid'] }
       if (retryAfterSeconds !== undefined && !validRetryAfter(retryAfterSeconds)) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['attempt history retryAfterSeconds is invalid'] }
+      if (confirmedSameIdempotentDelivery !== undefined && typeof confirmedSameIdempotentDelivery !== 'boolean') return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['attempt history confirmed idempotency evidence is invalid'] }
       const typedFailureCode = failureCode as string | undefined
       const typedHttpStatus = httpStatus as number | undefined
       const typedRetryAfter = retryAfterSeconds as number | undefined
+      const typedConfirmedSameIdempotentDelivery = confirmedSameIdempotentDelivery as boolean | undefined
       const canonicalRetryEligibleAt = retryEligibleAt === undefined ? undefined : safeTimestamp(retryEligibleAt)
       if (retryEligibleAt !== undefined && (!canonicalRetryEligibleAt || !canonicalRetryEligibleAt.ok || canonicalRetryEligibleAt.milliseconds < occurred.milliseconds)) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['attempt history retryEligibleAt is invalid'] }
       if (state === 'retry_wait') {
         if (typedFailureCode === undefined && typedHttpStatus === undefined) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['retry_wait requires failure evidence'] }
-        const classification = classifyDeliveryFailure({ attemptNumber, ...(typedFailureCode === undefined ? {} : { code: typedFailureCode }), ...(typedHttpStatus === undefined ? {} : { httpStatus: typedHttpStatus }), ...(typedRetryAfter === undefined ? {} : { retryAfterSeconds: typedRetryAfter }) })
+        const classification = classifyDeliveryFailure({ attemptNumber, ...(typedFailureCode === undefined ? {} : { code: typedFailureCode }), ...(typedHttpStatus === undefined ? {} : { httpStatus: typedHttpStatus }), ...(typedRetryAfter === undefined ? {} : { retryAfterSeconds: typedRetryAfter }), ...(typedConfirmedSameIdempotentDelivery === undefined ? {} : { confirmedSameIdempotentDelivery: typedConfirmedSameIdempotentDelivery }) })
         if (classification.status === 'blocked' || !classification.retryable || classification.nextState !== 'retry_wait') return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['retry_wait failure evidence is not retryable'] }
         const expectedRetryMilliseconds = occurred.milliseconds + classification.delaySeconds * 1000
         if (!canonicalRetryEligibleAt || !canonicalRetryEligibleAt.ok || canonicalRetryEligibleAt.iso !== new Date(expectedRetryMilliseconds).toISOString()) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['retryEligibleAt does not match the fixed retry policy'] }
-      } else if (retryEligibleAt !== undefined) {
-        return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['retryEligibleAt is only valid for retry_wait'] }
+      } else if (retryEligibleAt !== undefined || typedFailureCode !== undefined || typedHttpStatus !== undefined || typedRetryAfter !== undefined || typedConfirmedSameIdempotentDelivery !== undefined) {
+        return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['failure evidence is only valid for retry_wait'] }
       }
-      attempts.push({ attemptNumber, state: state as DeliveryState, occurredAt: occurred.iso, idempotencyKey: idempotencyKey.toLowerCase(), ...(typedFailureCode === undefined ? {} : { failureCode: typedFailureCode as DeliveryAttemptRecord['failureCode'] }), ...(typedHttpStatus === undefined ? {} : { httpStatus: typedHttpStatus }), ...(typedRetryAfter === undefined ? {} : { retryAfterSeconds: typedRetryAfter }), ...(canonicalRetryEligibleAt === undefined || !canonicalRetryEligibleAt.ok ? {} : { retryEligibleAt: canonicalRetryEligibleAt.iso }) })
+      attempts.push({ attemptNumber, state: state as DeliveryState, occurredAt: occurred.iso, idempotencyKey: idempotencyKey.toLowerCase(), ...(typedFailureCode === undefined ? {} : { failureCode: typedFailureCode as DeliveryAttemptRecord['failureCode'] }), ...(typedHttpStatus === undefined ? {} : { httpStatus: typedHttpStatus }), ...(typedRetryAfter === undefined ? {} : { retryAfterSeconds: typedRetryAfter }), ...(typedConfirmedSameIdempotentDelivery === undefined ? {} : { confirmedSameIdempotentDelivery: typedConfirmedSameIdempotentDelivery }), ...(canonicalRetryEligibleAt === undefined || !canonicalRetryEligibleAt.ok ? {} : { retryEligibleAt: canonicalRetryEligibleAt.iso }) })
     }
     return { ok: true, attempts }
   } catch {
@@ -388,7 +414,9 @@ function validatePriorDeliveries(input: unknown): { ok: true; records: DeliveryF
         state: read(item, 'state'),
       }
       if (!isCanonicalSha256(record.idempotencyKey) || !validateOpaque(record.targetId) || !validateOpaque(record.ownerScopeKey) || !adapters.has(record.adapter as DeliveryAdapter) || !validateOpaque(record.scheduleEntryId) || !validateOpaque(record.scheduleKey, 256) || !validateOpaque(record.productionPlanId) || !validateOpaque(record.jobId) || !validateOpaque(record.draftId) || !isPositiveInteger(record.draftVersion) || !validateOpaque(record.reviewId) || !isCanonicalSha256(record.evidenceSnapshotHash) || !isCanonicalSha256(record.contentHash) || typeof record.state !== 'string' || !deliveryStates.has(record.state as DeliveryState)) return { ok: false, code: 'INVALID_INPUT', reasons: ['prior deliveries contain an invalid complete identity record'] }
-      records.push({ idempotencyKey: record.idempotencyKey.toLowerCase(), targetId: record.targetId, ownerScopeKey: record.ownerScopeKey, adapter: record.adapter as DeliveryAdapter, scheduleEntryId: record.scheduleEntryId, scheduleKey: record.scheduleKey, productionPlanId: record.productionPlanId, jobId: record.jobId, draftId: record.draftId, draftVersion: record.draftVersion, reviewId: record.reviewId, evidenceSnapshotHash: record.evidenceSnapshotHash.toLowerCase(), contentHash: record.contentHash.toLowerCase(), state: record.state as DeliveryState })
+      const recomputed = computeDeliveryIdempotencyKey({ ownerScopeKey: record.ownerScopeKey, targetId: record.targetId, adapter: record.adapter, scheduleEntryId: record.scheduleEntryId, scheduleKey: record.scheduleKey, productionPlanId: record.productionPlanId, jobId: record.jobId, draftId: record.draftId, draftVersion: record.draftVersion, reviewId: record.reviewId, evidenceSnapshotHash: record.evidenceSnapshotHash, contentHash: record.contentHash })
+      if (recomputed.status === 'blocked' || recomputed.key !== record.idempotencyKey.toLowerCase()) return { ok: false, code: 'IDEMPOTENCY_COLLISION', reasons: ['prior delivery key does not match its complete identity'] }
+      records.push({ idempotencyKey: recomputed.key, targetId: record.targetId, ownerScopeKey: record.ownerScopeKey, adapter: record.adapter as DeliveryAdapter, scheduleEntryId: record.scheduleEntryId, scheduleKey: record.scheduleKey, productionPlanId: record.productionPlanId, jobId: record.jobId, draftId: record.draftId, draftVersion: record.draftVersion, reviewId: record.reviewId, evidenceSnapshotHash: record.evidenceSnapshotHash.toLowerCase(), contentHash: record.contentHash.toLowerCase(), state: record.state as DeliveryState })
     }
     return { ok: true, records }
   } catch {
@@ -408,9 +436,11 @@ export function planDeliveryAttempt(input: unknown): DeliveryPlanResult {
     if (!eligibility.target || !eligibility.publication || !eligibility.now) return planBlocked('INVALID_INPUT', 'eligible result is incomplete')
     const target = eligibility.target
     const publication = eligibility.publication
+    const plannedNow = safeTimestamp(eligibility.now)
+    if (!plannedNow.ok) return planBlocked('INVALID_INPUT', 'eligible now could not be canonicalized')
     const keyResult = computeDeliveryIdempotencyKey(identityInput(target, publication))
     if (keyResult.status === 'blocked') return planBlocked(keyResult.code, ...keyResult.reasons)
-    const attemptHistory = validateAttemptHistory(read(input, 'attempts'), keyResult.key, Date.parse(eligibility.now))
+    const attemptHistory = validateAttemptHistory(read(input, 'attempts'), keyResult.key, plannedNow.milliseconds)
     if (!attemptHistory.ok) return planBlocked(attemptHistory.code, ...attemptHistory.reasons)
     const attempts = attemptHistory.attempts
     if (attempts.length >= MAX_DELIVERY_ATTEMPTS) return planBlocked('ATTEMPT_CAP_REACHED', 'maximum delivery attempts reached')
@@ -424,7 +454,7 @@ export function planDeliveryAttempt(input: unknown): DeliveryPlanResult {
         if (!last.retryEligibleAt) return planBlocked('ATTEMPT_RETRY_EVIDENCE_INVALID', 'retry_wait is missing retryEligibleAt')
         const retryAt = safeTimestamp(last.retryEligibleAt)
         if (!retryAt.ok) return planBlocked('ATTEMPT_RETRY_EVIDENCE_INVALID', 'retryEligibleAt is invalid')
-        if (Date.parse(eligibility.now) < retryAt.milliseconds) return planBlocked('RETRY_NOT_DUE', 'retryEligibleAt has not been reached')
+        if (plannedNow.milliseconds < retryAt.milliseconds) return planBlocked('RETRY_NOT_DUE', 'retryEligibleAt has not been reached')
         attemptNumber = last.attemptNumber + 1
         eligibleAt = retryAt.iso
       } else if (isTerminalDeliveryState(last.state)) {
@@ -507,7 +537,7 @@ function normalizeRemoteUrl(value: unknown, targetOrigin: string): { ok: true; u
   }
 }
 
-function resultFingerprintPayload(result: DeliveryResultInput, targetOrigin: string): Record<string, string | boolean> {
+function resultFingerprintPayload(result: DeliveryResultInput, targetOrigin: string): Record<string, string | boolean | number> {
   return {
     idempotencyKey: result.idempotencyKey,
     remoteContentId: result.remoteContentId ?? '',
@@ -515,6 +545,7 @@ function resultFingerprintPayload(result: DeliveryResultInput, targetOrigin: str
     remoteUrl: result.remoteUrl ?? '',
     noPublicUrl: result.noPublicUrl === true,
     responseFingerprint: result.responseFingerprint ?? '',
+    httpStatus: result.httpStatus ?? 0,
     targetOrigin,
   }
 }
@@ -522,7 +553,7 @@ function resultFingerprintPayload(result: DeliveryResultInput, targetOrigin: str
 export function computeDeliveryResultFingerprint(result: unknown, targetOrigin: unknown): DeliveryResultFingerprintResult {
   try {
     if (!isRecord(result)) return { status: 'blocked', code: 'INVALID_INPUT', reasons: ['delivery result must be a plain object'] }
-    if (!isCanonicalSha256(read(result, 'idempotencyKey')) || !validateOpaque(read(result, 'remoteContentId')) || !stringValue(read(result, 'publishedAt')) || typeof read(result, 'noPublicUrl') !== 'boolean' || !isCanonicalSha256(read(result, 'responseFingerprint'))) return { status: 'blocked', code: 'INVALID_INPUT', reasons: ['delivery result identity is incomplete'] }
+    if (!isCanonicalSha256(read(result, 'idempotencyKey')) || !validateOpaque(read(result, 'remoteContentId')) || !stringValue(read(result, 'publishedAt')) || typeof read(result, 'noPublicUrl') !== 'boolean' || !isCanonicalSha256(read(result, 'responseFingerprint')) || !validSuccessHttpStatus(read(result, 'httpStatus'))) return { status: 'blocked', code: 'INVALID_INPUT', reasons: ['delivery result identity is incomplete or HTTP status is not successful'] }
     const origin = normalizedTargetOrigin(targetOrigin)
     if (!origin.ok) return { status: 'blocked', code: 'INVALID_INPUT', reasons: ['target origin is invalid'] }
     const noPublicUrl = read(result, 'noPublicUrl') as boolean
@@ -539,6 +570,7 @@ export function computeDeliveryResultFingerprint(result: unknown, targetOrigin: 
       ...(normalizedRemoteUrl === undefined || !normalizedRemoteUrl.ok ? {} : { remoteUrl: normalizedRemoteUrl.url }),
       noPublicUrl,
       responseFingerprint: (read(result, 'responseFingerprint') as string).toLowerCase(),
+      httpStatus: read(result, 'httpStatus') as number,
     }
     const payload = JSON.stringify(resultFingerprintPayload(canonical, origin.origin))
     return { status: 'ok', fingerprint: createHash('sha256').update(payload, 'utf8').digest('hex') }
@@ -561,7 +593,9 @@ function validateSuccessResult(result: unknown, expectedKey: unknown, targetOrig
     const remoteUrl = read(result, 'remoteUrl')
     const noPublicUrl = read(result, 'noPublicUrl')
     const responseFingerprint = read(result, 'responseFingerprint')
-    if (idempotencyKey !== expectedKey) return { ok: false, code: 'REMOTE_RESULT_INVALID', reason: 'idempotency key does not match' }
+    const httpStatus = read(result, 'httpStatus')
+    if (!isCanonicalSha256(idempotencyKey)) return { ok: false, code: 'REMOTE_RESULT_INVALID', reason: 'idempotency key is invalid' }
+    if (idempotencyKey.toLowerCase() !== expectedKey.toLowerCase()) return { ok: false, code: 'REMOTE_RESULT_INVALID', reason: 'idempotency key does not match' }
     if (!validateOpaque(remoteContentId)) return { ok: false, code: 'HTTP_SUCCESS_MISSING_REMOTE_ID', reason: 'successful result lacks an opaque remote content identity' }
     if (!stringValue(publishedAt)) return { ok: false, code: 'REMOTE_RESULT_INVALID', reason: 'publishedAt is required' }
     const published = safeTimestamp(publishedAt)
@@ -577,7 +611,8 @@ function validateSuccessResult(result: unknown, expectedKey: unknown, targetOrig
       normalizedUrl = normalized.url
     }
     if (!isCanonicalSha256(responseFingerprint)) return { ok: false, code: 'RESPONSE_FINGERPRINT_INVALID', reason: 'responseFingerprint must be a SHA-256 value' }
-    const canonicalResult: DeliveryResultInput = { idempotencyKey: idempotencyKey as string, remoteContentId, publishedAt: published.iso, ...(normalizedUrl === undefined ? {} : { remoteUrl: normalizedUrl }), noPublicUrl, responseFingerprint: responseFingerprint.toLowerCase() }
+    if (!validSuccessHttpStatus(httpStatus)) return { ok: false, code: 'REMOTE_RESULT_INVALID', reason: 'httpStatus must be a safe integer from 200 through 299' }
+    const canonicalResult: DeliveryResultInput = { idempotencyKey: idempotencyKey as string, remoteContentId, publishedAt: published.iso, ...(normalizedUrl === undefined ? {} : { remoteUrl: normalizedUrl }), noPublicUrl, responseFingerprint: responseFingerprint.toLowerCase(), httpStatus }
     const fingerprint = computeDeliveryResultFingerprint(canonicalResult, origin.origin)
     if (fingerprint.status === 'blocked') return { ok: false, code: 'REMOTE_RESULT_INVALID', reason: 'delivery result fingerprint could not be computed' }
     return { ok: true, value: { result: canonicalResult, targetOrigin: origin.origin, deliveryResultFingerprint: fingerprint.fingerprint } }
@@ -586,14 +621,58 @@ function validateSuccessResult(result: unknown, expectedKey: unknown, targetOrig
   }
 }
 
-function validateRetryDueEvent(event: Record<string, unknown>): { ok: true; retryEligibleAt: string } | { ok: false; code: StateBlockedCode; reason: string } {
+type PersistedAttemptProof =
+  | { ok: true; now: TimestampResult & { ok: true }; attempts: DeliveryAttemptRecord[]; last: DeliveryAttemptRecord }
+  | { ok: false; code: StateBlockedCode; reason: string }
+
+function validatePersistedAttemptProof(event: Record<string, unknown>, mode: 'current' | 'next' = 'current'): PersistedAttemptProof {
   const now = safeNow(read(event, 'now'))
-  const retryEligibleAt = safeTimestamp(read(event, 'retryEligibleAt'))
   const expectedIdempotencyKey = read(event, 'expectedIdempotencyKey')
   const attemptNumber = read(event, 'attemptNumber')
-  if (!now.ok || !retryEligibleAt.ok || !isCanonicalSha256(expectedIdempotencyKey) || !isPositiveInteger(attemptNumber) || attemptNumber < 2 || attemptNumber > MAX_DELIVERY_ATTEMPTS) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reason: 'retry_due requires valid now, retryEligibleAt, idempotency key, and attempt number' }
-  if (now.milliseconds < retryEligibleAt.milliseconds) return { ok: false, code: 'RETRY_NOT_DUE', reason: 'retryEligibleAt has not been reached' }
-  return { ok: true, retryEligibleAt: retryEligibleAt.iso }
+  if (!now.ok || !isCanonicalSha256(expectedIdempotencyKey) || !isPositiveInteger(attemptNumber) || attemptNumber > MAX_DELIVERY_ATTEMPTS) {
+    return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reason: 'transition requires injected now, expected key, and attempt number' }
+  }
+  const history = validateAttemptHistory(read(event, 'attempts'), expectedIdempotencyKey.toLowerCase(), now.milliseconds)
+  if (!history.ok) return { ok: false, code: history.code, reason: history.reasons.join('; ') }
+  const last = history.attempts[history.attempts.length - 1]
+  if (!last) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reason: 'transition requires a persisted attempt record' }
+  if (last.idempotencyKey !== expectedIdempotencyKey.toLowerCase()) return { ok: false, code: 'ATTEMPT_IDEMPOTENCY_MISMATCH', reason: 'event key does not match persisted attempt key' }
+  const expectedAttemptNumber = mode === 'next' ? last.attemptNumber + 1 : last.attemptNumber
+  if (attemptNumber !== expectedAttemptNumber || attemptNumber > MAX_DELIVERY_ATTEMPTS) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reason: 'event attempt number does not match persisted attempt proof' }
+  return { ok: true, now, attempts: history.attempts, last }
+}
+
+function failureInputFromAttempt(attempt: DeliveryAttemptRecord): DeliveryFailureInput {
+  return {
+    attemptNumber: attempt.attemptNumber,
+    ...(attempt.failureCode === undefined ? {} : { code: attempt.failureCode }),
+    ...(attempt.httpStatus === undefined ? {} : { httpStatus: attempt.httpStatus }),
+    ...(attempt.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: attempt.retryAfterSeconds }),
+    ...(attempt.confirmedSameIdempotentDelivery === undefined ? {} : { confirmedSameIdempotentDelivery: attempt.confirmedSameIdempotentDelivery }),
+  }
+}
+
+function validateRetryDueEvent(event: Record<string, unknown>): { ok: true; retryEligibleAt: string } | { ok: false; code: StateBlockedCode; reason: string } {
+  const proof = validatePersistedAttemptProof(event, 'next')
+  if (!proof.ok) return proof
+  if (proof.last.state !== 'retry_wait') return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reason: 'retry_due requires the persisted latest attempt to be retry_wait' }
+  const attemptNumber = read(event, 'attemptNumber')
+  const persistedRetryEligibleAt = proof.last.retryEligibleAt
+  const eventRetryEligibleAt = safeTimestamp(read(event, 'retryEligibleAt'))
+  if (!persistedRetryEligibleAt || !eventRetryEligibleAt.ok || eventRetryEligibleAt.iso !== persistedRetryEligibleAt) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reason: 'retry_due deadline does not match persisted retry evidence' }
+  const classification = classifyDeliveryFailure(failureInputFromAttempt(proof.last))
+  if (classification.status === 'blocked' || !classification.retryable || classification.nextState !== 'retry_wait') return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reason: 'persisted retry failure evidence is not retryable' }
+  const expectedRetryMilliseconds = safeTimestamp(proof.last.occurredAt)
+  if (!expectedRetryMilliseconds.ok || expectedRetryMilliseconds.milliseconds + classification.delaySeconds * 1000 !== eventRetryEligibleAt.milliseconds) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reason: 'persisted retry deadline cannot be recomputed from failure evidence' }
+  if (proof.now.milliseconds < eventRetryEligibleAt.milliseconds) return { ok: false, code: 'RETRY_NOT_DUE', reason: 'retryEligibleAt has not been reached' }
+  return { ok: true, retryEligibleAt: eventRetryEligibleAt.iso }
+}
+
+function validateLatestDispatchAttempt(event: Record<string, unknown>): PersistedAttemptProof | { ok: false; code: StateBlockedCode; reason: string } {
+  const proof = validatePersistedAttemptProof(event)
+  if (!proof.ok) return proof
+  if (proof.last.state !== 'dispatch_planned') return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reason: 'transition requires the persisted latest attempt to be dispatch_planned' }
+  return proof
 }
 
 export function reduceDeliveryAttemptState(currentState: unknown, eventInput: unknown): DeliveryStateResult {
@@ -628,10 +707,16 @@ export function reduceDeliveryAttemptState(currentState: unknown, eventInput: un
     else if (type === 'block') nextState = 'blocked'
     else if (type === 'cancel') nextState = 'cancelled'
     else if (type === 'failure') {
-      classification = classifyDeliveryFailure(read(event, 'failure'))
+      const proof = validateLatestDispatchAttempt(event)
+      if (!proof.ok) return blockedState(proof.code, state, proof.reason)
+      const failure = read(event, 'failure')
+      classification = classifyDeliveryFailure(failure)
       if (classification.status === 'blocked') return blockedState('INVALID_INPUT', state, classification.reason)
+      if (!isRecord(failure) || read(failure, 'attemptNumber') !== proof.last.attemptNumber) return blockedState('ATTEMPT_RETRY_EVIDENCE_INVALID', state, 'failure event attempt number does not match persisted attempt')
       nextState = classification.nextState
     } else if (type === 'success') {
+      const proof = validateLatestDispatchAttempt(event)
+      if (!proof.ok) return blockedState(proof.code, state, proof.reason)
       const success = validateSuccessResult(read(event, 'result'), read(event, 'expectedIdempotencyKey'), read(event, 'targetOrigin'), read(event, 'now'), read(event, 'attemptStartedAt'))
       if (!success.ok) return blockedState(success.code, state, success.reason)
       remoteContentId = success.value.result.remoteContentId

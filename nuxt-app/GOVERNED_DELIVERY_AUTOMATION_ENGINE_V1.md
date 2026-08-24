@@ -16,11 +16,11 @@ DiscoveryStack Governed Delivery Automation Engine V1 是一個 **純 server-sid
 | --- | --- | --- |
 | `validateDeliveryTarget` | 驗證 target origin、DNS/IP literal 與 endpoint path | 同步、純函式；拒絕不安全、超界或無法嚴格驗證的輸入 |
 | `computeDeliveryIdempotencyKey` | 建立 canonical publication identity 的 SHA-256 key | 只使用完整 identity、engine version 與 content/evidence hash |
-| `computeDeliveryResultFingerprint` | 建立 canonical success-result identity | 涵蓋 key、remote ID、published time、normalized URL/no-public-url、response fingerprint 與 target origin |
+| `computeDeliveryResultFingerprint` | 建立 canonical success-result identity | 涵蓋 key、remote ID、published time、normalized URL/no-public-url、response fingerprint、canonical HTTP 2xx status 與 target origin |
 | `evaluateDeliveryEligibility` | 評估 publication 是否可進入 delivery planning | 任一必要 gate 失敗即 blocked |
 | `planDeliveryAttempt` | 建立 metadata-only command | 只支援 `wordpress_rest` 與 `generic_http`；從不回傳 delivered |
 | `classifyDeliveryFailure` | 將已提供的結構化失敗資料分類 | 檢查 code/status 相容性，產生固定 retry/block 結果，不執行重試 |
-| `reduceDeliveryAttemptState` | 套用合法的狀態轉換事件 | 非法、終止狀態或不完整證據一律 blocked；`retry_due` 必須有時間證明 |
+| `reduceDeliveryAttemptState` | 套用合法的狀態轉換事件 | 非法、終止狀態或不完整證據一律 blocked；`retry_due`、failure 與 success 都必須綁定 persisted attempt proof |
 
 V1 支援三種 adapter：`wordpress_rest`、`generic_http` 與 `manual_export`。前兩者最多只會形成未發送的 metadata command；`manual_export` 明確要求人工處理，不得由 autonomous planning path 形成 dispatch command。
 
@@ -75,15 +75,15 @@ V1 固定最多五次 delivery attempts，沒有 jitter，沒有隨機因素。�
 
 空 history 只允許建立 attempt 1。非空 history 只有最後狀態為 `retry_wait` 才能建立下一次 command；最後狀態為 `scheduled`、`eligible`、`dispatch_planned`、任何 terminal state 或 `cancelled` 都不能直接建立下一次 command。`dispatch_planned` 明確回 `ATTEMPT_STILL_IN_FLIGHT`，terminal state 回 `TERMINAL_STATE`。
 
-對 retryable failure，核心會以 `classifyDeliveryFailure` 重新計算 policy delay，精確驗證 `retryEligibleAt = occurredAt + delaySeconds`，並保存 canonical UTC ISO。`now < retryEligibleAt` 回 `RETRY_NOT_DUE`；只有 `now >= retryEligibleAt` 才能產生下一次 command，而且 `command.eligibleAt` 是實際計算出的 retry eligibility time，不是無條件的 current now。history 的 retry evidence、key、時間順序或 retry deadline 不一致時，回 `ATTEMPT_RETRY_EVIDENCE_INVALID` 或 `ATTEMPT_IDEMPOTENCY_MISMATCH`，不會模糊成一般 input error。
+對 retryable failure，核心會以 `classifyDeliveryFailure` 重新計算 policy delay，精確驗證 `retryEligibleAt = occurredAt + delaySeconds`，並保存 canonical UTC ISO。`now < retryEligibleAt` 回 `RETRY_NOT_DUE`；只有 `now >= retryEligibleAt` 才能產生下一次 command，而且 `command.eligibleAt` 是實際計算出的 retry eligibility time，不是無條件的 current now。`retry_due` 不接受 caller 自行捏造的 deadline、key 或 attempt number；它必須重新驗證 bounded persisted history 的最後一筆 retry_wait、failure evidence、canonical key、連續 attempt number 與重新計算的 deadline。history 的 retry evidence、key、時間順序或 retry deadline 不一致時，回 `ATTEMPT_RETRY_EVIDENCE_INVALID` 或 `ATTEMPT_IDEMPOTENCY_MISMATCH`，不會模糊成一般 input error。
 
 ## Failure、retry 與狀態政策
 
-暫時性 timeout、connection reset、408、429 與明確允許的 5xx 可被分類為 `retry_wait`；HTTP 409 只有確認為相同 idempotent delivery 才可重試。有效的 429 `retryAfterSeconds` 必須為 1 至 86,400 秒，且只有 429 可以提供；最終 delay 是 `max(policy delay, remote delay)`。無效 retry-after、code/status 矛盾或型別不正確時，結果為 `status=blocked`、`code=INVALID_INPUT`、`nextState=blocked`、`retryable=false`。
+暫時性 timeout、connection reset、408、429 與明確允許的 5xx 可被分類為 `retry_wait`；HTTP 409 只有 `confirmedSameIdempotentDelivery: true` 且該證據被保存於 `DeliveryAttemptRecord` 時才可重試。有效的 429 `retryAfterSeconds` 必須為 1 至 86,400 秒，且只有 429 可以提供；最終 delay 是 `max(policy delay, remote delay)`。無效 retry-after、code/status 矛盾或型別不正確時，結果為 `status=blocked`、`code=INVALID_INPUT`、`nextState=blocked`、`retryable=false`。
 
-允許的 code/status 組合只有 timeout 或 connection reset 且沒有 HTTP status、`http_408 + 408`、`http_409 + 409`、`http_429 + 429`、`http_5xx + 500–599`、`http_400 + 400`、`http_401 + 401`、`http_403 + 403` 與 `http_404 + 404`。401、403、credential missing、revoked target、policy violation、invalid remote identity、content hash mismatch 與 evidence hash mismatch 永遠不得 retry，會進入 blocked；timeout 或 connection reset 不得覆蓋這些安全結果。
+允許的 code/status 組合只有 timeout 或 connection reset 且沒有 HTTP status、`http_408 + 408`、`http_409 + 409`、`http_429 + 429`、`http_5xx + 500–599`、`http_400 + 400`、`http_401 + 401`、`http_403 + 403` 與 `http_404 + 404`。401、403、credential missing、revoked target、policy violation、invalid remote identity、content hash mismatch 與 evidence hash mismatch 永遠不得 retry，會進入 blocked；timeout 或 connection reset 不得覆蓋這些安全結果。failure event 同樣必須綁定 persisted 最新 `dispatch_planned` attempt，不能只依賴 caller 的 current-state 字串。
 
-合法狀態集合是 `scheduled`、`eligible`、`dispatch_planned`、`retry_wait`、`delivered`、`permanent_failed`、`blocked` 與 `cancelled`。reducer 只接受 policy catalog 定義的 transition。`retry_wait -> dispatch_planned` 只能透過帶有 `now`、`retryEligibleAt`、`expectedIdempotencyKey` 與 2–5 safe integer `attemptNumber` 的 `retry_due` 事件；缺少任何欄位、時間尚未到或 key malformed 都 blocked。terminal state 不得再被一般事件改寫。
+合法狀態集合是 `scheduled`、`eligible`、`dispatch_planned`、`retry_wait`、`delivered`、`permanent_failed`、`blocked` 與 `cancelled`。reducer 只接受 policy catalog 定義的 transition。`retry_wait -> dispatch_planned` 只能透過帶有 persisted `attempts`、`now`、`retryEligibleAt`、`expectedIdempotencyKey` 與 2–5 safe integer `attemptNumber` 的 `retry_due` 事件；缺少任何欄位、時間尚未到、persisted latest attempt 不符或 key malformed 都 blocked。failure/success 也必須證明 persisted 最新 attempt 是同一 key、同一 attempt number 且狀態為 `dispatch_planned`；terminal state 不得再被一般事件改寫。
 
 ## Metadata-only planning
 
@@ -95,11 +95,11 @@ command 只包含下列可追溯 metadata：command version、target ID、adapte
 
 ## Success result 與完整 replay identity
 
-未來 executor 若在自身邊界取得外部結果，送回 V1 的只能是結構化、最小化的 result metadata。success event 必須同時提供 timezone-bearing `now`、`attemptStartedAt`、`expectedIdempotencyKey`、`targetOrigin` 與 `result`。result 必須有相同 idempotency key、opaque `remoteContentId`、有效 `publishedAt`、`noPublicUrl` 布林值與 64 字元 SHA-256 `responseFingerprint`；若 `noPublicUrl=false` 必須有 URL，若仍提供 URL 則即使 `noPublicUrl=true` 也必須合法。
+未來 executor 若在自身邊界取得外部結果，送回 V1 的只能是結構化、最小化的 result metadata。success event 必須同時提供 timezone-bearing `now`、`attemptStartedAt`、`expectedIdempotencyKey`、`targetOrigin`、persisted `attempts` 與 current `attemptNumber`。result 必須有相同 idempotency key、opaque `remoteContentId`、有效 `publishedAt`、`noPublicUrl` 布林值、64 字元 SHA-256 `responseFingerprint` 與唯一 canonical `httpStatus`；`httpStatus` 必須是 safe integer 200–299，不能由 event 另帶第二份 status。若 `noPublicUrl=false` 必須有 URL，若仍提供 URL 則即使 `noPublicUrl=true` 也必須合法。
 
-Success time gate 強制 `attemptStartedAt <= publishedAt <= now`，並回傳專用 `PUBLISHED_AT_BEFORE_ATTEMPT` 或 `PUBLISHED_AT_IN_FUTURE`。target origin 會重新經過 target validator；remote URL 必須是 HTTPS、無 userinfo/query/fragment、無不允許的 port、無 private/special-use host，且 normalized origin 必須與 target origin 完全相同。
+所有 timezone-bearing timestamps 都先經過 strict calendar parser：格式、month/day、leap year、hour/minute/second 與 offset component 必須逐項合法，不存在的日期、leap second 與 malformed offset 都拒絕；通過後才 canonicalize 成 UTC ISO。Success time gate 強制 `attemptStartedAt <= publishedAt <= now`，並回傳專用 `PUBLISHED_AT_BEFORE_ATTEMPT` 或 `PUBLISHED_AT_IN_FUTURE`。target origin 會重新經過 target validator；remote URL 必須是 HTTPS、無 userinfo/query/fragment、無不允許的 port、無 private/special-use host，且 normalized origin 必須與 target origin 完全相同。
 
-第一次成功 transition 會回傳 deterministic `deliveryResultFingerprint`。fingerprint 至少涵蓋 idempotency key、remote content ID、canonical UTC `publishedAt`、normalized remote URL 或 no-public-url state、response fingerprint 與 target origin。已是 `delivered` 時，replay event 必須攜帶 `priorDeliveryResultFingerprint`；只有新 fingerprint 完全相同才允許 `delivered -> delivered`。remoteContentId、remoteUrl、publishedAt、responseFingerprint、noPublicUrl、targetOrigin 或 prior fingerprint 任一不同或缺漏，都回 `REMOTE_IDENTITY_COLLISION`，不得只比較 remoteContentId。
+第一次成功 transition 會回傳 deterministic `deliveryResultFingerprint`。fingerprint 至少涵蓋 idempotency key、remote content ID、canonical UTC `publishedAt`、normalized remote URL 或 no-public-url state、response fingerprint、canonical HTTP status 與 target origin。已是 `delivered` 時，replay event 必須攜帶 `priorDeliveryResultFingerprint`；只有新 fingerprint 完全相同才允許 `delivered -> delivered`。remoteContentId、remoteUrl、publishedAt、responseFingerprint、noPublicUrl、targetOrigin 或 prior fingerprint 任一不同或缺漏，都回 `REMOTE_IDENTITY_COLLISION`，不得只比較 remoteContentId。
 
 ## Fail-closed 與純度保證
 
@@ -109,7 +109,7 @@ Success time gate 強制 `attemptStartedAt <= publishedAt <= now`，並回傳專
 
 ## 測試與驗證保證
 
-唯一正式 targeted suite 位於 `tests/governed-delivery-automation-engine.test.ts`，包含 305 項 deterministic offline tests，涵蓋 adapter、eligibility、target/path safety、完整 IPv4/IPv6 reserved range、exact policy version、opaque identity、idempotency、metadata-only command contents、duplicate/collision、attempt cap、retry deadline、invalid retry-after、conflicting failure evidence、401/403 non-retry、retry_due proof、state transitions、success time bounds、result fingerprint replay、malformed/proxy input 與 static forbidden-token scan。測試只使用 synthetic fixtures 與注入的 `now`，不建立外部 mock server，不發送任何真正 delivery request。
+唯一正式 targeted suite 位於 `tests/governed-delivery-automation-engine.test.ts`，包含 360 項 deterministic offline tests，涵蓋 adapter、eligibility、target/path safety、完整 IPv4/IPv6 reserved range、exact policy version、opaque identity、idempotency、metadata-only command contents、duplicate/collision、attempt cap、retry deadline、persisted retry_due proof、409 confirmation persistence、invalid retry-after、conflicting failure evidence、401/403 non-retry、state transitions、strict calendar timestamps、canonical HTTP 2xx success proof、success time bounds、result fingerprint replay、malformed/proxy input 與 static forbidden-token scan。測試只使用 synthetic fixtures 與注入的 `now`，不建立外部 mock server，不發送任何真正 delivery request。
 
 本版本交付前必須通過 frozen-lockfile install、typecheck、V1 targeted tests、既有 SEO/GEO regression tests、production build、diff whitespace check、restricted-path audit、implementation no-network scan、secret/artifact scan 與 symlink scan。Full Vitest 與 migration runtime validation 不屬於此引擎的 delivery proof；若本任務指令要求不執行，報告必須明確標示 `NOT RUN`，不可用 targeted pass 代稱全套通過。
 

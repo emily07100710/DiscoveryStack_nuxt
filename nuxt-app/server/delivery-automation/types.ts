@@ -207,6 +207,7 @@ export interface DeliveryAttemptRecord {
   readonly failureCode?: DeliveryFailureCode
   readonly httpStatus?: number
   readonly retryAfterSeconds?: number
+  readonly confirmedSameIdempotentDelivery?: boolean
   readonly retryEligibleAt?: string
 }
 
@@ -234,6 +235,7 @@ export interface DeliveryResultInput {
   readonly remoteUrl?: string
   readonly noPublicUrl?: boolean
   readonly responseFingerprint?: string
+  readonly httpStatus?: number
 }
 
 export interface DeliveryTransitionEvent {
@@ -247,7 +249,6 @@ export interface DeliveryTransitionEvent {
   readonly targetOrigin?: string
   readonly priorRemoteContentId?: string
   readonly priorDeliveryResultFingerprint?: string
-  readonly httpStatus?: number
   readonly retryEligibleAt?: string
   readonly attemptNumber?: number
 }
