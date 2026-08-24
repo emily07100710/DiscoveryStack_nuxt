@@ -721,6 +721,89 @@ export const seoGeoDeliveryAttempts = mysqlTable('seoGeoDeliveryAttempts', {
   index('seo_geo_delivery_attempts_job_idx').on(table.jobId, table.createdAt),
 ])
 
+/** Owner-only configuration for one bounded LLM observation workspace. It does not imply consumer-UI visibility. */
+export const llmVisibilityProjects = mysqlTable('llmVisibilityProjects', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  name: varchar('name', { length: 160 }).notNull(),
+  canonicalWebsiteUrl: varchar('canonicalWebsiteUrl', { length: 2048 }).notNull(),
+  canonicalDomain: varchar('canonicalDomain', { length: 253 }).notNull(),
+  locale: mysqlEnum('locale', ['en', 'zh-hant']).notNull(),
+  brandName: varchar('brandName', { length: 160 }).notNull(),
+  brandAliases: json('brandAliases').notNull(),
+  competitorBrands: json('competitorBrands').notNull(),
+  status: mysqlEnum('status', ['active', 'archived']).default('active').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  index('llm_visibility_projects_owner_idx').on(table.ownerUserId, table.status, table.createdAt),
+  index('llm_visibility_projects_domain_idx').on(table.ownerUserId, table.canonicalDomain),
+])
+
+/** Fixed, owner-scoped prompts. The hash prevents duplicate tracking prompts within one project. */
+export const llmVisibilityQueries = mysqlTable('llmVisibilityQueries', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => llmVisibilityProjects.id),
+  promptText: text('promptText').notNull(),
+  promptHash: varchar('promptHash', { length: 64 }).notNull(),
+  intent: varchar('intent', { length: 120 }).notNull(),
+  locale: mysqlEnum('locale', ['en', 'zh-hant']).notNull(),
+  active: boolean('active').default(true).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('llm_visibility_queries_project_prompt_unique').on(table.projectId, table.promptHash),
+  index('llm_visibility_queries_owner_idx').on(table.ownerUserId, table.active, table.createdAt),
+  index('llm_visibility_queries_project_idx').on(table.projectId, table.active),
+])
+
+/** One provider-labelled observation run; no provider executor or raw response is persisted. */
+export const llmVisibilityRuns = mysqlTable('llmVisibilityRuns', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => llmVisibilityProjects.id),
+  provider: mysqlEnum('provider', ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'manual_other']).notNull(),
+  modelLabel: varchar('modelLabel', { length: 160 }).notNull(),
+  observationMode: mysqlEnum('observationMode', ['manual_verified', 'provider_api_observation']).notNull(),
+  status: mysqlEnum('status', ['queued', 'completed', 'blocked', 'failed']).notNull(),
+  observedAt: timestamp('observedAt').notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(),
+  limitationCode: varchar('limitationCode', { length: 120 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('llm_visibility_runs_owner_fingerprint_unique').on(table.ownerUserId, table.requestFingerprint),
+  index('llm_visibility_runs_owner_idx').on(table.ownerUserId, table.observedAt),
+  index('llm_visibility_runs_project_idx').on(table.projectId, table.observedAt),
+])
+
+/** Bounded, structured evidence only. Full provider responses are intentionally excluded from this schema. */
+export const llmVisibilityObservations = mysqlTable('llmVisibilityObservations', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => llmVisibilityProjects.id),
+  runId: int('runId').notNull().references(() => llmVisibilityRuns.id),
+  queryId: int('queryId').notNull().references(() => llmVisibilityQueries.id),
+  brandMentioned: boolean('brandMentioned').notNull(),
+  exactMentionCount: int('exactMentionCount').notNull(),
+  firstMentionPosition: int('firstMentionPosition'),
+  citedDomain: varchar('citedDomain', { length: 253 }),
+  citationUrls: json('citationUrls').notNull(),
+  competitorMentions: json('competitorMentions').notNull(),
+  boundedExcerpt: text('boundedExcerpt').notNull(),
+  responseHash: varchar('responseHash', { length: 64 }).notNull(),
+  evidenceLocator: varchar('evidenceLocator', { length: 1000 }).notNull(),
+  reviewerNote: text('reviewerNote').notNull(),
+  verifiedByOwner: boolean('verifiedByOwner').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('llm_visibility_observations_run_query_unique').on(table.runId, table.queryId),
+  index('llm_visibility_observations_owner_idx').on(table.ownerUserId, table.createdAt),
+  index('llm_visibility_observations_project_idx').on(table.projectId, table.createdAt),
+  index('llm_visibility_observations_run_idx').on(table.runId),
+  index('llm_visibility_observations_query_idx').on(table.queryId),
+])
+
 export type User = typeof users.$inferSelect
 export type ProviderCredentials = typeof providerCredentials.$inferSelect
 export type Lead = typeof leads.$inferSelect
@@ -747,3 +830,7 @@ export type SeoGeoContentRiskGate = typeof seoGeoContentRiskGates.$inferSelect
 export type SeoGeoContentReview = typeof seoGeoContentReviews.$inferSelect
 export type SeoGeoDeliveryTarget = typeof seoGeoDeliveryTargets.$inferSelect
 export type SeoGeoDeliveryAttempt = typeof seoGeoDeliveryAttempts.$inferSelect
+export type LlmVisibilityProject = typeof llmVisibilityProjects.$inferSelect
+export type LlmVisibilityQuery = typeof llmVisibilityQueries.$inferSelect
+export type LlmVisibilityRun = typeof llmVisibilityRuns.$inferSelect
+export type LlmVisibilityObservation = typeof llmVisibilityObservations.$inferSelect
