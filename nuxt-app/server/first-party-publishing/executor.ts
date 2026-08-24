@@ -14,7 +14,7 @@ function preview(target: ValidatedFirstPartyTarget, artifactBytes: number, path:
   return {
     mode: 'dry_run',
     method: git ? 'PUT' : 'POST',
-    url: git ? `${target.targetOrigin}/repos/${target.repositoryOwner}/${target.repositoryName}/contents/${path}?ref=${encodeURIComponent(branch)}` : `${target.targetOrigin}${target.endpointPath ?? ''}`,
+    url: git ? `${target.targetOrigin}/repos/${target.repositoryOwner}/${target.repositoryName}/contents/${path}` : `${target.targetOrigin}${target.endpointPath ?? ''}`,
     targetOrigin: target.targetOrigin,
     path,
     branch,
@@ -69,6 +69,7 @@ export async function executeFirstPartyPublication(context: FirstPartyExecutionC
     if (!target.executionEnabled) return blocked('EXECUTION_DISABLED', 'target execution is disabled')
     if (typeof context.fetchImpl !== 'function') return blocked('EXECUTOR_NOT_CONFIGURED', 'fetch implementation is required')
     if (typeof context.serverCredentialResolver !== 'function') return blocked('CREDENTIAL_MISSING', 'server credential resolver is required')
+    if (target.transport === 'first_party_signed_api' && typeof context.nonceProvider !== 'function') return blocked('NONCE_INVALID', 'signed API execution requires an injected nonce provider')
     const adapterInput: FirstPartyAdapterInput = {
       target,
       publication,
@@ -81,7 +82,7 @@ export async function executeFirstPartyPublication(context: FirstPartyExecutionC
       const gitResult = await executeGitContentsPublish(adapterInput, { fetchImpl: context.fetchImpl, serverCredentialResolver: context.serverCredentialResolver })
       return mapAdapterResult(gitResult, adapterInput.command)
     }
-    const signedResult = await executeSignedApiPublish(adapterInput, { fetchImpl: context.fetchImpl, serverCredentialResolver: context.serverCredentialResolver, nonceProvider: context.nonceProvider ?? (() => 'executor-nonce'), serverNowProvider: () => serverNow.iso })
+    const signedResult = await executeSignedApiPublish(adapterInput, { fetchImpl: context.fetchImpl, serverCredentialResolver: context.serverCredentialResolver, nonceProvider: context.nonceProvider as NonNullable<typeof context.nonceProvider>, serverNowProvider: () => serverNow.iso })
     return mapAdapterResult(signedResult, adapterInput.command)
   } catch {
     return blocked('INVALID_INPUT', 'first-party execution input could not be safely read')

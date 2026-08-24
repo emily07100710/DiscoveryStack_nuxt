@@ -22,29 +22,31 @@ Artifact builder 會以固定順序產生 frontmatter：`title`、`slug`、`lang
 
 Target guard 只允許 HTTPS。Git transport 僅接受 exact origin `https://api.github.com`，不接受任意 Git provider 或 GitHub Enterprise；repository owner/name、branch、content root、endpoint field 會分別驗證。Signed API transport 的 origin 必須是 public HTTPS exact origin，endpoint path 固定為 `/api/first-party/content-ingest`，不可由 publication 或前端任意改寫。
 
-Guard 會拒絕 HTTP、localhost、private/loopback/link-local/reserved/special-use IPv4/IPv6、特殊 DNS suffix、malformed DNS labels、URL credentials、query、fragment、非允許 port、paused/revoked target、disabled execution、owner mismatch、missing credential reference、unknown framework/transport 與 unknown keys。此檢查是 deterministic syntax/policy guard，不執行 DNS lookup。
+Target guard 會拒絕 HTTP、localhost、private/loopback/link-local/reserved/special-use IPv4/IPv6、特殊 DNS suffix、malformed DNS labels、URL credentials、query、fragment、非允許 port、paused/revoked target、missing credential reference、unknown framework/transport 與 unknown keys；executor 另行拒絕 disabled execution 與 owner mismatch。此檢查是 deterministic syntax/policy guard，不執行 DNS lookup。
 
 ## Plan 與 execute
 
 `planFirstPartyPublication()` 是 pure metadata planner。它重新驗證 target、publication approval、owner scope、allowlists、strict timezone-bearing schedule timestamp、content/evidence hashes、artifact path、artifact size 與 identity key。輸出 command、artifact、完整 provenance、deterministic idempotency key 與限制標記；command 不包含 body、credential、token、secret、authorization header 或 raw response。
 
-`executeFirstPartyPublication()` 需要明確的 `mode: 'execute'`、active target、`executionEnabled === true`、approved optimized publication、passed risk gate、valid hashes、成功的 injected server credential resolver、injected fetch 與尚未被 terminal delivered 的 execution boundary。任何前置 gate 失敗時 fetch 呼叫次數必須為零。
+`executeFirstPartyPublication()` 需要明確的 `mode: 'execute'`、active target、`executionEnabled === true`、approved optimized publication、passed risk gate、valid hashes、成功的 injected server credential resolver、injected fetch 與尚未被 terminal delivered 的 execution boundary。Signed API 還必須明確注入 nonce provider；runtime 不提供固定或可預測的 fallback nonce。任何前置 gate 失敗時 fetch 呼叫次數必須為零。
 
 `mode: 'dry_run'` 只回傳 request preview metadata，不解析 credential、不呼叫 fetch、不包含完整 body、Authorization 或 secret。`dispatch_planned` 或 planned metadata 不能被宣稱為 delivered；只有 trusted adapter response 通過 identity validation 才會回傳 delivered。
 
 ## GitHub Contents adapter
 
-Git adapter 僅執行單一 canonical content path 的 GET 與 PUT。建立檔案時先確認 404 再 PUT；更新檔案時必須使用 GET 回傳的 remote blob SHA。branch 只能來自已驗證 target，commit message 僅使用 deterministic publication identifier 與 content hash prefix，不包含客戶全文。
+Git adapter 僅執行單一 canonical content path 的 GET 與 PUT。GET 以 `ref` query 選定 branch；PUT 依 GitHub Contents contract 將 branch 放在 request body，不在 write URL 加入 `ref` query。建立檔案時先確認 404 再 PUT；更新檔案時必須使用 GET 回傳的 remote blob SHA。branch 只能來自已驗證 target，commit message 僅使用 deterministic publication identifier 與 content hash prefix，不包含客戶全文。
 
-Authorization header 只在 adapter 最後 request boundary 建構。401/403 回傳 credential/policy failure；409/422 回傳 conflict，不盲目重試；429/5xx 可由既有 delivery automation 分類為 retryable。3xx redirect 永不跟隨。GET/PUT response 必須驗證 repository、path、branch、blob SHA 與 commit SHA；HTTP 2xx 本身不等於可信成功。
+Authorization header 只在 adapter 最後 request boundary 建構。401/403 回傳 credential/policy failure；409/422 回傳 conflict，不盲目重試；429/5xx 可由既有 delivery automation 分類為 retryable。3xx redirect 永不跟隨。GET/PUT response 必須以 canonical GitHub content URL 或完整 repository echo 綁定 repository/path，並驗證 blob SHA 與 commit SHA；branch 由 GET request query 與 PUT body 綁定，因 GitHub 的正式 response schema 不回傳 branch。HTTP 2xx 本身不等於可信成功。
 
-若既有內容同時具有相同 publication ID 與 content hash，回傳 idempotent replay；若 publication ID 相同但 content hash 不同，回傳 identity collision 並 fail closed。Malformed JSON、錯誤 repository/path/branch、無效 SHA、timeout 與 network exception 都不會產生 delivered。
+只有 leading canonical frontmatter 的 publication ID/content hash 相同，且 remote artifact bytes 與本次 deterministic artifact 完全一致時，才回傳 idempotent replay。正文內偽造的 metadata、重複或 malformed frontmatter、相同 publication ID 但不同 hash/bytes 都會回傳 identity collision 並 fail closed。Malformed JSON/base64/UTF-8、錯誤 repository/path、無效 SHA、timeout 與 network exception 都不會產生 delivered。
 
 ## Signed API adapter
 
 Signed API 使用 HMAC-SHA256。canonical signature input 依固定 newline 順序綁定 command version、target ID、publication ID、idempotency key、content hash、evidence hash、artifact fingerprint、injected timestamp 與 injected nonce。request body 同樣包含 artifact 與 identity binding；header 只包含版本、publication、idempotency、timestamp、nonce 與 signature metadata，不含 Authorization header。
 
-secret 只能由 injected server credential resolver 取得；nonce 只能由 injected nonce provider 產生。timestamp 與可選的 serverNow 都先通過 strict timezone-bearing ISO parser，並以固定 bounded tolerance policy 比較；本 runtime 不讀取 system clock，receiver 仍必須在其端重新驗證時間窗、nonce、signature、body 與 replay policy。response 必須回傳並精確匹配 publication ID、content hash 與 opaque remote revision，任何 mismatch 都是 blocked 而不是 delivered。
+secret 只能由 injected server credential resolver 取得；nonce 只能由必要的 injected nonce provider 產生。timestamp 與可選的 serverNow 都先通過 strict timezone-bearing ISO parser，並以固定 bounded tolerance policy 比較；本 runtime 不讀取 system clock，receiver 仍必須在其端重新驗證時間窗、nonce、signature、body 與 replay policy。response 必須回傳並精確匹配 publication ID、content hash 與 opaque remote revision，任何 mismatch 都是 blocked 而不是 delivered。
+
+兩個 adapter 在解析 credential 或發出 request 前，都會重新建立 canonical publication plan，並逐一比對 supplied command 與 artifact；direct adapter call 不能繞過 owner、approval、risk gate、schedule、target、hash、idempotency、artifact fingerprint 或 execution-enabled 邊界。
 
 ## Existing delivery automation compatibility
 

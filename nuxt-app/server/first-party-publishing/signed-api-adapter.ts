@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto'
 import { isOpaqueReference, isValidSha256, strictTimestamp } from './normalization'
 import { SIGNED_API_ENDPOINT_PATH } from './target-guard'
 import { type FirstPartyAdapterInput, type FirstPartyAdapterResult, type FirstPartyDecisionCode, type SignedApiAdapterDependencies, type SignedApiResponsePayload } from './types'
+import { validateFirstPartyAdapterBindings } from './adapter-validation'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_TOLERANCE_SECONDS = 300
@@ -63,6 +64,10 @@ async function readJson(response: { text: () => Promise<string> }): Promise<Sign
 
 export async function executeSignedApiPublish(input: FirstPartyAdapterInput, dependencies: SignedApiAdapterDependencies): Promise<FirstPartyAdapterResult> {
   try {
+    const bindings = validateFirstPartyAdapterBindings(input, 'first_party_signed_api')
+    if (bindings.status === 'blocked') return bindings
+    input = { ...input, target: bindings.target, publication: bindings.publication, artifact: bindings.artifact, command: bindings.command, now: bindings.now, fetchImpl: dependencies.fetchImpl }
+    if (!input.target.executionEnabled) return blocked('EXECUTION_DISABLED', 'target execution is disabled')
     if (input.target.transport !== 'first_party_signed_api') return blocked('UNSUPPORTED_ROUTE', 'signed API adapter requires first_party_signed_api')
     if (input.target.endpointPath !== SIGNED_API_ENDPOINT_PATH || input.command.transport !== 'first_party_signed_api') return blocked('UNSUPPORTED_ROUTE', 'signed API endpoint is not the fixed approved path')
     if (!isValidSha256(input.command.idempotencyKey) || !isValidSha256(input.publication.contentHash) || !isValidSha256(input.publication.evidenceSnapshotHash) || !isValidSha256(input.artifact.artifactFingerprint)) return blocked('IDEMPOTENCY_INVALID', 'signed API identity hashes are invalid')

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildSignedApiSignature, executeFirstPartyPublication, executeSignedApiPublish, planFirstPartyPublication } from '../server/first-party-publishing'
+import { buildSignedApiSignature, executeFirstPartyPublication, executeGitContentsPublish, executeSignedApiPublish, planFirstPartyPublication } from '../server/first-party-publishing'
 import { validateFirstPartyPublishTarget } from '../server/first-party-publishing/target-guard'
 import { makePublication, makeSignedTarget, makeTarget, response, signedResponse, textResponse, gitCreateResponse, gitFileResponse, gitUpdateResponse, FIXTURE_NOW, sha256 } from './fixtures/first-party-publishing/fixtures'
 import type { FirstPartyFetch, FirstPartyPublishTarget } from '../server/first-party-publishing'
@@ -41,6 +41,7 @@ describe('first-party executor boundaries', () => {
       expect(result.preview.includesAuthorization).toBe(false)
       expect(result.preview.includesSecret).toBe(false)
       expect(result.preview.headerNames).not.toContain('authorization')
+      expect(result.preview.url).not.toContain('?ref=')
     }
   })
 
@@ -82,6 +83,15 @@ describe('first-party executor boundaries', () => {
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
+  it('requires an injected nonce for signed execution before credential resolution or fetch', async () => {
+    const fetchImpl = vi.fn()
+    const resolver = credentialResolver()
+    const result = await executeFirstPartyPublication({ target: makeSignedTarget(), publication: makePublication({ language: 'en', slug: 'signed-release' }), now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: resolver })
+    expect(result).toMatchObject({ status: 'blocked', code: 'NONCE_INVALID' })
+    expect(resolver).not.toHaveBeenCalled()
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
   it('owner mismatch is blocked before fetch', async () => {
     const fetchImpl = vi.fn()
     const result = await executeFirstPartyPublication({ target: makeTarget(), publication: makePublication({ ownerScopeKey: 'other-owner' }), now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: credentialResolver() })
@@ -105,10 +115,14 @@ describe('GitHub Contents adapter', () => {
     const result = await executeFirstPartyPublication({ target: makeTarget(), publication: makePublication(), now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: credentialResolver() })
     expect(result).toMatchObject({ status: 'delivered', remoteState: 'created', publicationId: 'deliverable-001', contentHash: plannedResult.artifact.contentHash })
     expect(fetchImpl).toHaveBeenCalledTimes(2)
-    const put = calls[1] as { init: { method: string; body: string; redirect: string; headers: Record<string, string> } }
+    const get = calls[0] as { url: string }
+    const put = calls[1] as { url: string; init: { method: string; body: string; redirect: string; headers: Record<string, string> } }
+    expect(get.url).toBe('https://api.github.com/repos/example-owner/example-site/contents/content/zh-hant/articles/first-party-release.md?ref=main')
+    expect(put.url).toBe('https://api.github.com/repos/example-owner/example-site/contents/content/zh-hant/articles/first-party-release.md')
     expect(put.init.method).toBe('PUT')
     expect(put.init.redirect).toBe('manual')
     expect(put.init.headers.authorization).toBe(`Bearer ${MOCK_CREDENTIAL}`)
+    expect(put.init.headers['x-github-api-version']).toBe('2026-03-10')
     const body = JSON.parse(put.init.body) as Record<string, unknown>
     expect(body.branch).toBe('main')
     expect(body.message).toBe('publish:deliverable-001:' + makePublication().contentHash.slice(0, 12))
@@ -142,6 +156,43 @@ describe('GitHub Contents adapter', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
+  it('does not trust matching frontmatter hashes when the remote artifact bytes were altered', async () => {
+    const plan = planned()
+    const altered = `${plan.artifact.frontmatter}\nbody altered after publication`
+    const fetchImpl = fetchMock(response(200, { type: 'file', path: PATH, sha: 'abcdef1234567', encoding: 'base64', content: Buffer.from(altered, 'utf8').toString('base64'), repository: { owner: 'example-owner', name: 'example-site' }, branch: 'main' }))
+    const result = await executeFirstPartyPublication({ target: makeTarget(), publication: makePublication(), now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: credentialResolver() })
+    expect(result).toMatchObject({ status: 'blocked', code: 'REMOTE_IDENTITY_COLLISION' })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads replay identity only from the leading frontmatter block', async () => {
+    const publication = makePublication()
+    const bodySpoof = `---\ntitle: "legacy"\n---\npublicationId: ${JSON.stringify(publication.productionDeliverableId)}\ncontentHash: ${JSON.stringify(publication.contentHash)}`
+    const fetchImpl = fetchMock(
+      response(200, { type: 'file', path: PATH, sha: 'abcdef1234567', encoding: 'base64', content: Buffer.from(bodySpoof, 'utf8').toString('base64'), repository: { owner: 'example-owner', name: 'example-site' }, branch: 'main' }),
+      gitUpdateResponse(),
+    )
+    const result = await executeFirstPartyPublication({ target: makeTarget(), publication, now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: credentialResolver() })
+    expect(result).toMatchObject({ status: 'delivered', remoteState: 'updated' })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('blocks malformed or duplicate remote frontmatter identity', async () => {
+    const publication = makePublication()
+    const malformed = `---\npublicationId: ${JSON.stringify(publication.productionDeliverableId)}\npublicationId: ${JSON.stringify(publication.productionDeliverableId)}\ncontentHash: ${JSON.stringify(publication.contentHash)}\n---\nbody`
+    const fetchImpl = fetchMock(response(200, { type: 'file', path: PATH, sha: 'abcdef1234567', encoding: 'base64', content: Buffer.from(malformed, 'utf8').toString('base64'), repository: { owner: 'example-owner', name: 'example-site' }, branch: 'main' }))
+    const result = await executeFirstPartyPublication({ target: makeTarget(), publication, now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: credentialResolver() })
+    expect(result).toMatchObject({ status: 'blocked', code: 'REMOTE_IDENTITY_COLLISION' })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects non-canonical base64 in an existing GitHub file response', async () => {
+    const fetchImpl = fetchMock(response(200, { type: 'file', path: PATH, sha: 'abcdef1234567', encoding: 'base64', content: 'YWJj===', repository: { owner: 'example-owner', name: 'example-site' }, branch: 'main' }))
+    const result = await executeFirstPartyPublication({ target: makeTarget(), publication: makePublication(), now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: credentialResolver() })
+    expect(result).toMatchObject({ status: 'blocked', code: 'RESPONSE_INVALID' })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
   it('validates response repository, path, and branch identity', async () => {
     const wrongRepository = fetchMock(response(200, { content: { sha: 'abcdef1234567', content: Buffer.from('old').toString('base64'), encoding: 'base64' }, path: PATH, repository: { owner: 'other-owner', name: 'example-site' }, branch: 'main' }))
     const wrongPath = fetchMock(response(200, { content: { sha: 'abcdef1234567', content: Buffer.from('old').toString('base64'), encoding: 'base64' }, path: 'content/other.md', repository: { owner: 'example-owner', name: 'example-site' }, branch: 'main' }))
@@ -150,6 +201,44 @@ describe('GitHub Contents adapter', () => {
       const result = await executeFirstPartyPublication({ target: makeTarget(), publication: makePublication(), now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: credentialResolver() })
       expect(result).toMatchObject({ status: 'blocked', code: 'RESPONSE_INVALID' })
     }
+  })
+
+  it('rejects permissive or partial repository echoes', async () => {
+    for (const repository of ['example-owner', 'example-site', 'main', { owner: 'example-owner' }, { name: 'example-site' }]) {
+      const fetchImpl = fetchMock(response(200, { content: { sha: 'abcdef1234567', content: Buffer.from('old').toString('base64'), encoding: 'base64' }, path: PATH, repository, branch: 'main' }))
+      const result = await executeFirstPartyPublication({ target: makeTarget(), publication: makePublication(), now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: credentialResolver() })
+      expect(result).toMatchObject({ status: 'blocked', code: 'RESPONSE_INVALID' })
+    }
+  })
+
+  it('accepts the real GitHub response shape when the canonical content URL binds repository and path', async () => {
+    const canonicalUrl = `https://api.github.com/repos/example-owner/example-site/contents/${PATH}`
+    const fetchImpl = fetchMock(
+      response(404, {}),
+      response(201, { content: { path: PATH, url: canonicalUrl, sha: 'abcdef1234567' }, commit: { sha: '1234567890abcdef1234567890abcdef12345678' } }),
+    )
+    const result = await executeFirstPartyPublication({ target: makeTarget(), publication: makePublication(), now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: credentialResolver() })
+    expect(result).toMatchObject({ status: 'delivered', remoteState: 'created' })
+  })
+
+  it('rejects a GitHub response that omits every repository binding', async () => {
+    const fetchImpl = fetchMock(response(404, {}), response(201, { content: { path: PATH, sha: 'abcdef1234567' }, commit: { sha: '1234567890abcdef1234567890abcdef12345678' } }))
+    const result = await executeFirstPartyPublication({ target: makeTarget(), publication: makePublication(), now: FIXTURE_NOW, mode: 'execute', fetchImpl, serverCredentialResolver: credentialResolver() })
+    expect(result).toMatchObject({ status: 'blocked', code: 'RESPONSE_INVALID' })
+  })
+
+  it('revalidates direct Git adapter command and artifact bindings before resolving credentials or fetching', async () => {
+    const targetResult = validateFirstPartyPublishTarget(makeTarget())
+    expect(targetResult.status).toBe('valid')
+    if (targetResult.status !== 'valid') throw new Error('fixture target is invalid')
+    const publication = makePublication()
+    const plan = planned(makeTarget(), publication)
+    const fetchImpl = vi.fn() as unknown as FirstPartyFetch
+    const resolver = credentialResolver()
+    const result = await executeGitContentsPublish({ target: targetResult.target, publication, artifact: { ...plan.artifact, body: 'tampered body' }, command: plan.command, now: FIXTURE_NOW, fetchImpl }, { fetchImpl, serverCredentialResolver: resolver })
+    expect(result).toMatchObject({ status: 'blocked', code: 'ARTIFACT_FINGERPRINT_INVALID' })
+    expect(resolver).not.toHaveBeenCalled()
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('rejects malformed GitHub JSON without exposing raw response', async () => {

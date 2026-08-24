@@ -1,5 +1,5 @@
 import { GITHUB_CONTENTS_ORIGIN, type FirstPartyDecisionCode, type FirstPartyPublishTarget, type FirstPartyTargetValidationResult, type FirstPartyTransport, type ValidatedFirstPartyTarget } from './types'
-import { isOpaqueReference, isValidBranch, isValidContentRoot, isValidRepositoryPart, normalizeAllowlist, readValue } from './normalization'
+import { isOpaqueReference, isValidBranch, isValidContentRoot, isValidRepositoryPart, normalizeContentTypeAllowlist, normalizeLanguageAllowlist, readValue } from './normalization'
 
 export const SIGNED_API_ENDPOINT_PATH = '/api/first-party/content-ingest' as const
 const MAX_HOSTNAME_LENGTH = 253
@@ -183,9 +183,9 @@ export function validateFirstPartyPublishTarget(input: unknown): FirstPartyTarge
     if (!isValidContentRoot(root)) return blocked('INVALID_CONTENT_ROOT', 'contentRoot must be a safe relative path')
     const branch = readValue(target, 'defaultBranch')
     if (!isValidBranch(branch)) return blocked('INVALID_BRANCH', 'defaultBranch is invalid')
-    const contentTypes = normalizeAllowlist(readValue(target, 'allowedContentTypes'), 'allowedContentTypes')
+    const contentTypes = normalizeContentTypeAllowlist(readValue(target, 'allowedContentTypes'))
     if (!contentTypes.ok) return blocked('INVALID_INPUT', contentTypes.reason)
-    const languages = normalizeAllowlist(readValue(target, 'allowedLanguages'), 'allowedLanguages')
+    const languages = normalizeLanguageAllowlist(readValue(target, 'allowedLanguages'))
     if (!languages.ok) return blocked('INVALID_INPUT', languages.reason)
     const transportFields = invalidTransportFields(target, typedTransport)
     if (transportFields) return blocked(typedTransport === 'first_party_git' ? 'INVALID_REPOSITORY' : 'INVALID_ENDPOINT_PATH', transportFields)

@@ -69,16 +69,24 @@ export function isValidLanguage(value: unknown): value is string {
   return typeof value === 'string' && /^[a-z]{2,3}(?:-[a-z]{2,4})?$/.test(value) && value === value.toLowerCase()
 }
 
-export function normalizeAllowlist(value: unknown, field: string): { readonly ok: true; readonly values: string[] } | { readonly ok: false; readonly reason: string } {
+function normalizeAllowlist(value: unknown, field: string, validator: (item: unknown) => item is string): { readonly ok: true; readonly values: string[] } | { readonly ok: false; readonly reason: string } {
   if (!Array.isArray(value) || value.length < 1 || value.length > 32) return { ok: false, reason: `${field} must contain 1-32 values` }
   const values: string[] = []
   for (const item of value) {
-    if (!isValidContentType(item) && !isValidLanguage(item)) return { ok: false, reason: `${field} contains an invalid value` }
+    if (!validator(item)) return { ok: false, reason: `${field} contains an invalid value` }
     const normalized = item.toLowerCase()
     if (values.includes(normalized)) return { ok: false, reason: `${field} contains a duplicate value` }
     values.push(normalized)
   }
   return { ok: true, values }
+}
+
+export function normalizeContentTypeAllowlist(value: unknown): ReturnType<typeof normalizeAllowlist> {
+  return normalizeAllowlist(value, 'allowedContentTypes', isValidContentType)
+}
+
+export function normalizeLanguageAllowlist(value: unknown): ReturnType<typeof normalizeAllowlist> {
+  return normalizeAllowlist(value, 'allowedLanguages', isValidLanguage)
 }
 
 export function normalizeOpaqueList(value: unknown, field: string, maximum = 64): { readonly ok: true; readonly values: string[] } | { readonly ok: false; readonly reason: string } {
@@ -163,7 +171,7 @@ export function normalizeApprovedPublication(input: unknown): { readonly ok: tru
   if (!isValidSha256(evidenceSnapshotHash) || !isValidSha256(contentHash)) return { ok: false, reason: 'publication hashes must be SHA-256' }
   if (typeof title !== 'string' || title.length < 1 || title.length > 512 || CONTROL.test(title)) return { ok: false, reason: 'title is invalid' }
   if (typeof body !== 'string' || body.length < 1 || body.length > 5_000_000 || CONTROL.test(body.replace(/\n/g, '').replace(/\r/g, ''))) return { ok: false, reason: 'body is invalid' }
-  if (!isValidSlug(slug) || !isValidContentType(contentType) || !isValidLanguage(language) || !isValidLanguage(language)) return { ok: false, reason: 'slug, contentType, or language is invalid' }
+  if (!isValidSlug(slug) || !isValidContentType(contentType) || !isValidLanguage(language)) return { ok: false, reason: 'slug, contentType, or language is invalid' }
   if (!timestamp.ok) return { ok: false, reason: timestamp.reason }
   if (!authoritySourceIds.ok) return { ok: false, reason: authoritySourceIds.reason }
   if (!ruleIds.ok) return { ok: false, reason: ruleIds.reason }

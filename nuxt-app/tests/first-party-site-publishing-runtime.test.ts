@@ -161,6 +161,10 @@ describe('first-party target guard', () => {
     expectBlocked(validateFirstPartyPublishTarget({ ...makeTarget(), ignored: true }), 'INVALID_INPUT')
   })
 
+  it('does not accept a content type token as an allowed language', () => {
+    expectBlocked(validateFirstPartyPublishTarget(makeTarget({ allowedLanguages: ['article'] })), 'INVALID_INPUT')
+  })
+
   it('rejects null, arrays, and getter failures', () => {
     expectBlocked(validateFirstPartyPublishTarget(null), 'INVALID_INPUT')
     expectBlocked(validateFirstPartyPublishTarget([]), 'INVALID_INPUT')
