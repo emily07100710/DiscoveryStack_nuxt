@@ -45,6 +45,7 @@ describe('LLM visibility private API and projection contracts', () => {
 
   it('keeps the private page owner-layout, noindex and free of mock metrics', () => {
     const page = read('pages/audit-lab/llm-visibility.vue')
+    const ownerLayout = read('layouts/owner.vue')
     expect(page).toContain("definePageMeta({ i18n: false, layout: 'owner' })")
     expect(page).toContain("content: 'noindex, nofollow, noarchive'")
     expect(page).toContain("$fetch<Workspace>('/api/llm-visibility/workspace')")
@@ -55,5 +56,7 @@ describe('LLM visibility private API and projection contracts', () => {
     expect(page).toContain('seen.has(canonicalKey)')
     expect(page).toContain('請只保留一筆，避免覆蓋計數')
     expect(page).not.toContain('mockData')
+    expect(ownerLayout).toContain('to="/audit-lab/llm-visibility"')
+    expect(ownerLayout).toContain("activeSection === 'visibility'")
   })
 })

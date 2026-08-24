@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const route = useRoute()
-const activeSection = computed(() => route.path === '/audit-lab/geo' ? 'geo' : route.path === '/audit-lab/seo-geo' ? 'core' : 'audit')
+const activeSection = computed(() => route.path === '/audit-lab/geo' ? 'geo' : route.path === '/audit-lab/seo-geo' ? 'core' : route.path === '/audit-lab/llm-visibility' ? 'visibility' : 'audit')
 useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
 </script>
 
@@ -12,6 +12,7 @@ useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
         <NuxtLink to="/audit-lab" :aria-current="activeSection === 'audit' ? 'page' : undefined">Audit Lab</NuxtLink>
         <NuxtLink to="/audit-lab/geo" :aria-current="activeSection === 'geo' ? 'page' : undefined">GEO Workbench</NuxtLink>
         <NuxtLink to="/audit-lab/seo-geo" :aria-current="activeSection === 'core' ? 'page' : undefined">SEO / GEO Core</NuxtLink>
+        <NuxtLink to="/audit-lab/llm-visibility" :aria-current="activeSection === 'visibility' ? 'page' : undefined">LLM Visibility</NuxtLink>
       </nav>
       <NuxtLink class="owner-layout__exit" to="/zh-hant">返回公開網站 <span aria-hidden="true">↗</span></NuxtLink>
     </header>
