@@ -55,8 +55,21 @@ describe('DiscoveryStack Outcome Learning Loop Engine V1', () => {
     expect(normalizeOutcomeTimestamp('2025-01-01T00:00:00')).toBeNull()
   })
 
-  it('rejects invalid calendar timestamps', () => {
-    expect(normalizeOutcomeTimestamp('2025-99-99T00:00:00Z')).toBeNull()
+  it.each([
+    '2025-99-99T00:00:00Z',
+    '2026-02-30T00:00:00Z',
+    '2025-04-31T23:59:59+00:00',
+    '2025-01-01T24:00:00Z',
+    '2025-01-01T00:60:00Z',
+    '2025-01-01T00:00:60Z',
+    '2025-01-01T00:00:00+24:00',
+    '2025-01-01T00:00:00+08:60',
+  ])('rejects invalid calendar timestamp %s', (timestamp) => {
+    expect(normalizeOutcomeTimestamp(timestamp)).toBeNull()
+  })
+
+  it('accepts a valid leap-day timestamp', () => {
+    expect(normalizeOutcomeTimestamp('2024-02-29T23:59:59Z')).toBe('2024-02-29T23:59:59.000Z')
   })
 
   it('rejects an unknown measurement source', () => {

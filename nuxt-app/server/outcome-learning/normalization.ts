@@ -151,7 +151,20 @@ function normalizeOutcomeIdentifierList(value: unknown, allowEmpty: boolean): st
 export function normalizeOutcomeTimestamp(value: unknown): string | null {
   if (typeof value !== 'string' || hasMalformedUnicode(value)) return null
   const text = value.normalize('NFKC').trim()
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(text)) return null
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/u.exec(text)
+  if (!match) return null
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, offsetSign, offsetHourText, offsetMinuteText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  const second = Number(secondText)
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return null
+  const isLeapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const daysInMonth = month === 2 ? (isLeapYear ? 29 : 28) : [4, 6, 9, 11].includes(month) ? 30 : 31
+  if (day < 1 || day > daysInMonth) return null
+  if (offsetSign && (Number(offsetHourText) > 23 || Number(offsetMinuteText) > 59)) return null
   const date = new Date(text)
   return Number.isFinite(date.getTime()) ? date.toISOString() : null
 }
