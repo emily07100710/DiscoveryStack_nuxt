@@ -23,6 +23,7 @@ import {
   OUTCOME_POLICY_LIMITATIONS_FOR_DATASET,
   OUTCOME_POLICY_LIMITATIONS_FOR_RELEASE,
   OUTCOME_SOURCE_ORDER,
+  OUTCOME_SOURCE_HASHES_PER_SOURCE,
   OUTCOME_SPLIT_TEST_RATIO,
   OUTCOME_SPLIT_TRAIN_RATIO,
   OUTCOME_SPLIT_VALIDATION_RATIO,
@@ -32,9 +33,12 @@ import {
   domainSeparatedOutcomeSha256,
   isOutcomeSha256,
   normalizeModelReleaseGateRequest,
+  normalizeOutcomeFeatureRecord,
   normalizeOutcomeLearningCandidate,
   normalizeOutcomeMeasurement,
+  normalizeOutcomeReferenceIdentifier,
   normalizeOutcomeReferenceText,
+  outcomeHashValidationReason,
   normalizeOutcomeText,
   normalizeOutcomeTimestamp,
   normalizePublicationIdentity,
@@ -261,7 +265,7 @@ function blockedCandidate(reasonCodes: readonly string[], fingerprintSeed: unkno
 function normalizeConsent(value: unknown): ConsentLineage | null {
   if (!isRecord(value) || containsForbiddenOutcomeKey(value)) return null
   const consentStatus = value.consentStatus
-  const consentVersion = normalizeOutcomeReferenceText(value.consentVersion) ?? ''
+  const consentVersion = normalizeOutcomeReferenceIdentifier(value.consentVersion) ?? ''
   const consentedAt = value.consentedAt === null ? null : normalizeOutcomeTimestamp(value.consentedAt)
   const consentAllowedUses = Array.isArray(value.consentAllowedUses) ? uniqueSorted(value.consentAllowedUses.filter((item): item is string => typeof item === 'string').map((item) => item.normalize('NFKC').trim().toLocaleLowerCase('en-US')).filter(Boolean)) : []
   const consentRevokedAt = value.consentRevokedAt === null ? null : normalizeOutcomeTimestamp(value.consentRevokedAt)
@@ -375,11 +379,33 @@ function candidateValidationReasons(raw: Record<string, unknown>): string[] {
   if (raw.candidateStatus !== 'eligible') reasons.push('CANDIDATE_NOT_ELIGIBLE')
   const consentLineage = raw.consentLineage
   if (isRecord(consentLineage) && consentLineage.consentRevokedAt !== null) reasons.push('CONSENT_REVOKED')
-  if (Array.isArray(raw.sourceHashes) && raw.sourceHashes.some((hash) => !isOutcomeSha256(hash))) reasons.push('INVALID_HASH')
-  if (Array.isArray(raw.publicationIdentityHashes) && raw.publicationIdentityHashes.some((hash) => !isOutcomeSha256(hash))) reasons.push('INVALID_HASH')
-  if (Array.isArray(raw.appliedRuleHashes) && raw.appliedRuleHashes.some((hash) => !isOutcomeSha256(hash))) reasons.push('INVALID_HASH')
-  if (typeof raw.topicClusterHash === 'string' && !isOutcomeSha256(raw.topicClusterHash)) reasons.push('INVALID_HASH')
-  if (typeof raw.candidateFingerprint === 'string' && isOutcomeSha256(raw.candidateFingerprint)) reasons.push('CANDIDATE_FINGERPRINT_MISMATCH')
+  for (const field of ['sourceHashes', 'publicationIdentityHashes', 'appliedRuleHashes'] as const) {
+    const values = raw[field]
+    if (!Array.isArray(values)) continue
+    for (const hash of values) {
+      const reason = outcomeHashValidationReason(hash)
+      if (reason) reasons.push(reason)
+    }
+  }
+  for (const field of ['deidentifiedSubjectKey', 'topicClusterHash', 'candidateFingerprint'] as const) {
+    const reason = outcomeHashValidationReason(raw[field])
+    if (reason) reasons.push(reason)
+  }
+  const declaredSources = Array.isArray(raw.measurementSources) && raw.measurementSources.every((source) => outcomeMeasurementSources.includes(source as never)) ? [...new Set(raw.measurementSources as OutcomeLearningCandidate['measurementSources'])].sort() : []
+  const featureRecord = normalizeOutcomeFeatureRecord(raw.aggregateNumericFeatures, declaredSources)
+  let featureSchemaValid = false
+  try {
+    if (isRecord(raw.aggregateNumericFeatures)) {
+      const schemaProbe = Object.fromEntries(Object.keys(raw.aggregateNumericFeatures).map((key) => [key, 0]))
+      featureSchemaValid = normalizeOutcomeFeatureRecord(schemaProbe, declaredSources) !== null
+    }
+  } catch {
+    featureSchemaValid = false
+  }
+  const featureSources = featureRecord ? [...new Set(Object.keys(featureRecord).map((key) => key.split('.')[0]))].sort() : []
+  if (!featureSchemaValid || (featureRecord && featureSources.join('|') !== declaredSources.join('|'))) reasons.push('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  if (Array.isArray(raw.sourceHashes) && raw.sourceHashes.length !== declaredSources.length * OUTCOME_SOURCE_HASHES_PER_SOURCE) reasons.push('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  if (typeof raw.candidateFingerprint === 'string' && isOutcomeSha256(raw.candidateFingerprint) && reasons.length === 0) reasons.push('CANDIDATE_FINGERPRINT_MISMATCH')
   return safeReasonCodes(reasons.length > 0 ? reasons : ['INVALID_CANDIDATE_SHAPE'])
 }
 
@@ -405,11 +431,29 @@ function deterministicSplit(candidates: readonly OutcomeLearningCandidate[]): { 
 
 export function buildOutcomeDatasetManifest(input: unknown): OutcomeDatasetManifest {
   try {
-    if (!isRecord(input) || !Array.isArray(input.candidates)) return blockedManifest(['INVALID_INPUT'])
-    const rawCandidates = input.candidates
-    if (rawCandidates.length > OUTCOME_MAX_DATASET_CANDIDATES) return blockedManifest(['TOO_MANY_DATASET_CANDIDATES'])
-    const envelopeWithoutCandidates = { ...input, candidates: [] }
-    if (containsForbiddenOutcomeKey(envelopeWithoutCandidates)) return blockedManifest(['INVALID_INPUT', 'FORBIDDEN_PAYLOAD_KEY'])
+    if (!isRecord(input)) return blockedManifest(['INVALID_MANIFEST_SHAPE'])
+    let topLevelKeys: string[]
+    try {
+      topLevelKeys = Object.keys(input)
+      if (Object.getOwnPropertySymbols(input).length > 0) return blockedManifest(['INVALID_MANIFEST_SHAPE'])
+    } catch {
+      return blockedManifest(['INVALID_MANIFEST_SHAPE'])
+    }
+    if (topLevelKeys.length !== 1 || topLevelKeys[0] !== 'candidates') return blockedManifest(['INVALID_MANIFEST_SHAPE'])
+    let rawCandidates: unknown
+    try {
+      rawCandidates = input.candidates
+    } catch {
+      return blockedManifest(['INVALID_MANIFEST_SHAPE'])
+    }
+    if (!Array.isArray(rawCandidates)) return blockedManifest(['INVALID_MANIFEST_SHAPE'])
+    let candidateCount: number
+    try {
+      candidateCount = rawCandidates.length
+    } catch {
+      return blockedManifest(['INVALID_MANIFEST_SHAPE'])
+    }
+    if (candidateCount > OUTCOME_MAX_DATASET_CANDIDATES) return blockedManifest(['TOO_MANY_DATASET_CANDIDATES'])
     const candidates: OutcomeLearningCandidate[] = []
     const seenFingerprints = new Set<string>()
     const seenLineages = new Set<string>()
@@ -419,7 +463,7 @@ export function buildOutcomeDatasetManifest(input: unknown): OutcomeDatasetManif
       if (!candidate) {
         if (isRecord(raw)) {
           reasons.push(...candidateValidationReasons(raw))
-          const rawPublicationHashes = Array.isArray(raw.publicationIdentityHashes) && raw.publicationIdentityHashes.every((hash) => isOutcomeSha256(hash)) ? raw.publicationIdentityHashes.map((hash) => String(hash).toLowerCase()).sort().join('|') : null
+          const rawPublicationHashes = Array.isArray(raw.publicationIdentityHashes) && raw.publicationIdentityHashes.every((hash) => isOutcomeSha256(hash)) ? raw.publicationIdentityHashes.map((hash) => String(hash)).sort().join('|') : null
           if (rawPublicationHashes && seenLineages.has(rawPublicationHashes)) reasons.push('DUPLICATE_PUBLICATION_LINEAGE')
         } else reasons.push('INVALID_CANDIDATE_SHAPE')
         continue
@@ -477,13 +521,19 @@ function releaseShapeReasons(input: Record<string, unknown>): string[] {
   const expectedKeys = [...RELEASE_REQUEST_KEYS].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
   if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) reasons.push('INVALID_RELEASE_SHAPE')
   if (input.evaluationContractVersion !== OUTCOME_EVALUATION_CONTRACT_VERSION) reasons.push('EVALUATION_CONTRACT_MISMATCH')
-  if (isOutcomeSha256(input.baselineModelArtifactHash) && isOutcomeSha256(input.candidateModelArtifactHash) && String(input.baselineModelArtifactHash).toLowerCase() === String(input.candidateModelArtifactHash).toLowerCase()) reasons.push('MODEL_ARTIFACTS_NOT_DISTINCT')
+  const baselineHashReason = outcomeHashValidationReason(input.baselineModelArtifactHash)
+  const candidateHashReason = outcomeHashValidationReason(input.candidateModelArtifactHash)
+  const datasetHashReason = outcomeHashValidationReason(input.datasetManifestHash)
+  if (baselineHashReason) reasons.push(baselineHashReason)
+  if (candidateHashReason) reasons.push(candidateHashReason)
+  if (datasetHashReason) reasons.push(datasetHashReason)
+  if (!baselineHashReason && !candidateHashReason && isOutcomeSha256(input.baselineModelArtifactHash) && isOutcomeSha256(input.candidateModelArtifactHash) && input.baselineModelArtifactHash === input.candidateModelArtifactHash) reasons.push('MODEL_ARTIFACTS_NOT_DISTINCT')
   if (typeof input.evaluationCaseCount !== 'number' || !Number.isSafeInteger(input.evaluationCaseCount) || input.evaluationCaseCount > OUTCOME_MAX_EVALUATION_CASES || input.evaluationCaseCount < 0) reasons.push('EVALUATION_CASES_INVALID')
   else if (input.evaluationCaseCount < OUTCOME_MIN_EVALUATION_CASES) reasons.push('EVALUATION_CASES_INSUFFICIENT')
   if (!validEvaluationMetrics(input.baselineMetrics) || !validEvaluationMetrics(input.candidateMetrics)) reasons.push('INVALID_MODEL_EVIDENCE')
   if (input.shadowRunStatus === 'pending' && input.canaryRunStatus === 'passed') reasons.push('SHADOW_CANARY_ORDER_INVALID')
   if (input.shadowRunStatus === 'failed' || input.canaryRunStatus === 'failed') reasons.push('SAFETY_REGRESSION')
-  if (!isRecord(input.baselineMetrics) || !isRecord(input.candidateMetrics) || !isOutcomeSha256(input.baselineModelArtifactHash) || !isOutcomeSha256(input.candidateModelArtifactHash) || !isOutcomeSha256(input.datasetManifestHash) || !normalizeOutcomeTimestamp(input.evaluatedAt) || !['pending', 'passed', 'failed'].includes(input.shadowRunStatus as string) || !['pending', 'passed', 'failed'].includes(input.canaryRunStatus as string) || typeof input.rollbackArtifactAvailable !== 'boolean' || typeof input.safetyIncidents !== 'number' || !Number.isSafeInteger(input.safetyIncidents) || input.safetyIncidents < 0) reasons.push('INVALID_MODEL_EVIDENCE')
+  if (!isRecord(input.baselineMetrics) || !isRecord(input.candidateMetrics) || baselineHashReason || candidateHashReason || datasetHashReason || !normalizeOutcomeTimestamp(input.evaluatedAt) || !['pending', 'passed', 'failed'].includes(input.shadowRunStatus as string) || !['pending', 'passed', 'failed'].includes(input.canaryRunStatus as string) || typeof input.rollbackArtifactAvailable !== 'boolean' || typeof input.safetyIncidents !== 'number' || !Number.isSafeInteger(input.safetyIncidents) || input.safetyIncidents < 0) reasons.push('INVALID_MODEL_EVIDENCE')
   return safeReasonCodes(reasons)
 }
 

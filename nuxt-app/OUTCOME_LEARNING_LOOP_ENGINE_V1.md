@@ -18,7 +18,7 @@ Public API 包含 `normalizeOutcomeMeasurement`、`assessPublishedContentOutcome
 
 每個 outcome 必須綁定 `deidentifiedSubjectKey`、schedule entry/key、production plan、job、draft/version、`contentHash`、`evidenceSnapshotHash`、`publishedAt`、content type、language、applied rule IDs 與 topic cluster code。subject key、content hash 與 evidence snapshot hash 都必須是 64 字元 lowercase SHA-256 hex；任一 identity 或 hash 不合法時，assessment fail closed 為 `blocked`。
 
-呼叫者提供的 `topicClusterCode` 與 `appliedRuleIds` 不會直接進入 learning candidate output。它們先經 bounded deterministic value validation，拒絕 Email-like 值、`http://`／`https://`、`www.`、明顯電話格式、換行、control characters、空字串、純空白、過長字串、非 string 與 malformed Unicode；通過後才以 domain-separated hash 保存：`outcomeSha256({ kind: 'topic_cluster', value })` 與 `outcomeSha256({ kind: 'applied_rule', value })`。即使最後會 hash，偵測到 Email、URL、電話或 control character 仍會拒絕。
+呼叫者提供的 `topicClusterCode`、`appliedRuleIds`、`consentVersion`、schedule/draft/job identifiers 都先經 `normalizeOutcomeReferenceIdentifier()`：NFKC、trim 後長度 1–256，且只允許 `A-Z a-z 0-9 . _ : | -`；不允許空格、`@`、斜線、query／fragment／URL、括號、引號、control characters、malformed Unicode 或明顯電話序列。Email-like value 即使藏在較長文字內也會 blocked。`topicClusterCode` 與 `appliedRuleIds` 通過 validator 後才以 domain-separated hash 保存：`outcomeSha256({ kind: 'topic_cluster', value })` 與 `outcomeSha256({ kind: 'applied_rule', value })`。即使最後會 hash，偵測到 PII-like value 時不會先 hash 再放行。
 
 SHA/pseudonymous reference 不等於匿名資料；系統只能治理明確的結構化欄位，不宣稱能從任意文字可靠辨認所有人名，也不宣稱 forbidden-key scanner 能證明資料沒有 PII。Production admission 仍需可信的上游 PII scanner 與人工治理。
 
@@ -60,11 +60,15 @@ baseline 的 window end 必須不晚於 publication time；follow-up 必須從 p
 
 Eligible candidate 只保存 deidentified subject reference、publication identity hashes、content type、language、`appliedRuleHashes`、`topicClusterHash`、aggregate numeric features、directional labels、source hashes、policy/engine versions、consent lineage、固定 data contract、limitations 與 candidate fingerprint。runtime 會遞迴拒絕大小寫或 snake/camel 變體的 forbidden keys，並執行 value-level validation；不依賴 TypeScript type 來提供安全性。
 
-## Dataset manifest 與 candidate revalidation
+## Dataset manifest envelope 與 candidate revalidation
 
-`buildOutcomeDatasetManifest` 先檢查 `candidates.length`；上限為 `OUTCOME_MAX_DATASET_CANDIDATES = 10000`，超過上限時在 sort、hash 或讀取 nested candidate fields 前立即回 `gate_blocked` 與 `TOO_MANY_DATASET_CANDIDATES`。
+`buildOutcomeDatasetManifest` 的 top-level envelope 必須是 object shape，且只能有一個 enumerable string key：`candidates`。missing key、extra key、symbol key、singular `candidate`、null、array、primitive、Object.keys exception 與 candidates getter exception 都回 `gate_blocked` 與 `INVALID_MANIFEST_SHAPE`；它不以 `{ ...input, candidates: [] }` 作為主要 shape validation。
 
-每個 raw candidate 都會經過 `normalizeOutcomeLearningCandidate` 的 exact-shape runtime validation，不再直接 cast 成 `OutcomeLearningCandidate`。Validator 會拒絕未知 extra keys，驗證 fixed enums、bounded finite features、consent、policy/engine/data contract、hash lineage、source/label 一致性與 canonical limitations；排除 candidateFingerprint 後重新建立 canonical body，計算 expected fingerprint，不一致即回 `CANDIDATE_FINGERPRINT_MISMATCH` 並阻擋 manifest。rights、consent、allowed uses、contract、policy、engine、enum、hash、features 或 publication lineage 的 tampering 都不能保留舊 fingerprint 通過。
+完成 exact envelope validation 後才讀取 candidates；它必須是 array。上限為 `OUTCOME_MAX_DATASET_CANDIDATES = 10000`，超過時在 sort、hash 或讀取 nested candidate fields 前立即回 `gate_blocked` 與 `TOO_MANY_DATASET_CANDIDATES`。
+
+每個 raw candidate 都會經過 `normalizeOutcomeLearningCandidate` 的 exact-shape runtime validation，不再直接 cast 成 `OutcomeLearningCandidate`。Validator 會拒絕未知 extra keys，驗證 fixed enums、bounded finite features、consent、rights、policy/engine/data contract、精確 lowercase 64-hex hash lineage、source/label 一致性與 canonical limitations；排除 candidateFingerprint 後重新建立 canonical body，計算 expected fingerprint，不一致即回 `CANDIDATE_FINGERPRINT_MISMATCH` 並阻擋 manifest。前後空白、uppercase、newline、tab、`0x` prefix、wrong length 或 Unicode lookalike hash 不會被 trim/lowercase 靜默修正；可辨認的非 canonical hash 會回 `NON_CANONICAL_HASH`。rights、consent、allowed uses、contract、policy、engine、enum、hash、features 或 publication lineage 的 tampering 都不能保留舊 fingerprint 通過。
+
+`aggregateNumericFeatures` 使用 source-specific `OUTCOME_FEATURE_FIELDS[source]` 與固定 phase `baseline`／`follow_up`／`delta` 驗證。其 key set 必須精確等於每個 `measurementSources` 的 catalog fields × 三個 phases；不得有 missing、extra、wrong source、wrong field 或 wrong phase。Feature source set、directional label source set 與 `measurementSources` set 必須完全相等；每個 source 必須有兩個 measurement source hashes，且 `sourceHashes.length === measurementSources.length * 2`。這些 semantic checks 獨立於 candidate fingerprint。
 
 Admission 後先以 lineage 與 candidateFingerprint 建立 deterministic stable score，再以 score 與 fingerprint tie-break sorting。Split ratios 使用固定 `OUTCOME_SPLIT_TRAIN_RATIO`、`OUTCOME_SPLIT_VALIDATION_RATIO`、`OUTCOME_SPLIT_TEST_RATIO`，並驗證總和為 1；對 N 筆候選使用 floor(0.8N)、floor(0.1N)、N 減前兩者。150 筆精確得到 train 120、validation 15、test 15；arrays 無交集且 union 等於 candidate set。不使用 random、現在時間、locale-dependent sort 或 object insertion order。
 
@@ -90,7 +94,11 @@ Admission 後先以 lineage 與 candidateFingerprint 建立 deterministic stable
 
 ## Determinism 與 privacy constraints
 
+所有 hash 欄位都只接受精確 canonical lowercase SHA-256：`typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)`；runtime 不在 hash validator 內 trim，也不把 non-canonical hash 靜默 lower/trim 後保存。此規則套用於 subject/scope/content/evidence/source hashes、publication/rule/topic/candidate/assessment/manifest/release fingerprints，以及 model/dataset artifact hashes。`NON_CANONICAL_HASH` 與 `INVALID_HASH` 保留明確區分。
+
 Canonical fingerprint 會排序 object keys、normalize 去重排序 set-like arrays、canonicalize timestamps、拒絕 undefined 與非有限數字，並使用 locale-independent ordering。assessment、candidate、manifest 與 release fingerprint 都會隨其 hash lineage 或 aggregate evidence 改變而改變。所有 fixtures 僅使用 synthetic metadata；V1 沒有 real provider/API/DB integration。
+
+`candidateFingerprint` 是 deterministic canonical checksum。它不是 signature、MAC、authorization proof，也不是 builder provenance proof；呼叫者可以自行重新計算 SHA。因此 runtime semantic validation 必須獨立檢查 feature/source schema、consent、contract、enums、hashes、lineage 與 exact keys，不能把 fingerprint 相符單獨描述成可信來源證明。
 
 Value-level validation 只能治理明確的結構化欄位；SHA/pseudonymous reference 不等於匿名資料。系統不宣稱能從任意文字可靠辨認所有人名，forbidden-key scanner 也不能單獨證明沒有 PII；production admission 仍需可信上游 PII scanner 與人工治理。
 

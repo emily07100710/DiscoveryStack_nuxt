@@ -1006,3 +1006,272 @@ describe('Outcome Learning Loop Engine V1 blocker repairs', () => {
     expect(equivalent.releaseFingerprint).toBe(canonical.releaseFingerprint)
   })
 })
+
+function withCandidatePatch(candidate: ReturnType<typeof makeEligibleCandidate>, patch: Record<string, unknown>): ReturnType<typeof makeEligibleCandidate> {
+  const { candidateFingerprint: _candidateFingerprint, ...body } = candidate
+  const patched = { ...body, ...patch }
+  return { ...patched, candidateFingerprint: outcomeSha256(patched) } as ReturnType<typeof makeEligibleCandidate>
+}
+
+describe('Outcome Learning Loop Engine V1 second repair', () => {
+  it('blocks whitespace-padded deidentifiedSubjectKey', () => {
+    const measurement = makeMeasurement({ deidentifiedSubjectKey: ` ${SUBJECT_KEY} ` })
+    expect(normalizeOutcomeMeasurement(measurement)).toBeNull()
+  })
+
+  it('blocks whitespace-padded publicationIdentityHash with a specific reason', () => {
+    const candidate = makeEligibleCandidate(800)
+    const patched = withCandidatePatch(candidate, { publicationIdentityHashes: [` ${candidate.publicationIdentityHashes[0]} `] })
+    const result = buildOutcomeDatasetManifest({ candidates: [patched] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('NON_CANONICAL_HASH')
+  })
+
+  it('blocks whitespace-padded sourceHash with a specific reason', () => {
+    const candidate = makeEligibleCandidate(801)
+    const patched = withCandidatePatch(candidate, { sourceHashes: [` ${candidate.sourceHashes[0]} `, candidate.sourceHashes[1]] })
+    const result = buildOutcomeDatasetManifest({ candidates: [patched] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('NON_CANONICAL_HASH')
+  })
+
+  it('blocks whitespace-padded candidateFingerprint with a specific reason', () => {
+    const candidate = makeEligibleCandidate(802)
+    const result = buildOutcomeDatasetManifest({ candidates: [{ ...candidate, candidateFingerprint: ` ${candidate.candidateFingerprint} ` }] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('NON_CANONICAL_HASH')
+  })
+
+  it('blocks whitespace-padded baseline artifact hash', () => {
+    const request = makePassingReleaseGate()
+    const result = evaluateModelReleaseGate({ ...request, baselineModelArtifactHash: ` ${request.baselineModelArtifactHash} ` })
+    expect(result.decision).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('NON_CANONICAL_HASH')
+  })
+
+  it('blocks whitespace-padded candidate artifact hash', () => {
+    const request = makePassingReleaseGate()
+    const result = evaluateModelReleaseGate({ ...request, candidateModelArtifactHash: ` ${request.candidateModelArtifactHash} ` })
+    expect(result.decision).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('NON_CANONICAL_HASH')
+  })
+
+  it('blocks whitespace-padded dataset manifest hash', () => {
+    const request = makePassingReleaseGate()
+    const result = evaluateModelReleaseGate({ ...request, datasetManifestHash: ` ${request.datasetManifestHash} ` })
+    expect(result.decision).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('NON_CANONICAL_HASH')
+  })
+
+  it('blocks uppercase SHA input', () => {
+    const measurement = makeMeasurement({ deidentifiedSubjectKey: SUBJECT_KEY.toUpperCase() })
+    expect(normalizeOutcomeMeasurement(measurement)).toBeNull()
+  })
+
+  it('blocks newline and tab in SHA input', () => {
+    const measurement = makeMeasurement({ deidentifiedSubjectKey: `\n${SUBJECT_KEY}\t` })
+    expect(normalizeOutcomeMeasurement(measurement)).toBeNull()
+  })
+
+  it('accepts a canonical lowercase 64-character SHA', () => {
+    expect(normalizeOutcomeMeasurement(makeMeasurement())).not.toBeNull()
+  })
+
+  it('blocks embedded Email in topicClusterCode', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ topicClusterCode: 'topic customer@example.com reference' }) }))
+    expect(result.candidateStatus).toBe('blocked')
+  })
+
+  it('blocks embedded Email in appliedRuleIds', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ appliedRuleIds: ['rule customer@example.com'] }) }))
+    expect(result.candidateStatus).toBe('blocked')
+  })
+
+  it('blocks embedded Email in consentVersion', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ consent: makeGrantedConsent({ consentVersion: 'consent customer@example.com' }) }))
+    expect(result.candidateStatus).toBe('blocked')
+  })
+
+  it('blocks an embedded URL in a structured identifier', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ draftId: 'https://example.com/draft' }) }))
+    expect(result.candidateStatus).toBe('blocked')
+  })
+
+  it('blocks a phone-like structured identifier', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ topicClusterCode: '123-456-7890' }) }))
+    expect(result.candidateStatus).toBe('blocked')
+  })
+
+  it('blocks control characters in consentVersion', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ consent: makeGrantedConsent({ consentVersion: 'consent\u0000v1' }) }))
+    expect(result.candidateStatus).toBe('blocked')
+  })
+
+  it('accepts a valid opaque structured identifier', () => {
+    const publication = makePublication({ topicClusterCode: 'topic.cluster|v1', appliedRuleIds: ['rule.alpha', 'rule_beta'] })
+    expect(normalizePublicationIdentity(publication)).not.toBeNull()
+    expect(buildOutcomeLearningCandidate(makeCandidateInput({ publication })).candidateStatus).toBe('eligible')
+  })
+
+  it('does not expose raw embedded topic or rule values in candidate output', () => {
+    const publication = makePublication({ topicClusterCode: 'topic.cluster|v1', appliedRuleIds: ['rule.alpha'] })
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication }))
+    expect(result.candidateStatus).toBe('eligible')
+    expect(JSON.stringify(result)).not.toContain('topic.cluster|v1')
+    expect(JSON.stringify(result)).not.toContain('rule.alpha')
+  })
+
+  it('blocks an envelope with an unrelated extra field', () => {
+    const result = buildOutcomeDatasetManifest({ candidates: [], unrelated: 'x' })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('INVALID_MANIFEST_SHAPE')
+  })
+
+  it('blocks an envelope with an extra version field', () => {
+    const result = buildOutcomeDatasetManifest({ candidates: [], version: 'v1' })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('INVALID_MANIFEST_SHAPE')
+  })
+
+  it('blocks a manifest with missing candidates', () => {
+    const result = buildOutcomeDatasetManifest({})
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('INVALID_MANIFEST_SHAPE')
+  })
+
+  it('blocks a singular candidate key', () => {
+    const result = buildOutcomeDatasetManifest({ candidate: [] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('INVALID_MANIFEST_SHAPE')
+  })
+
+  it('blocks a manifest when Object.keys throws', () => {
+    const input = new Proxy({ candidates: [] }, { ownKeys: () => { throw new Error('keys unavailable') } })
+    const result = buildOutcomeDatasetManifest(input)
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('INVALID_MANIFEST_SHAPE')
+  })
+
+  it('keeps oversized candidates early-rejected before nested access', () => {
+    let nestedReads = 0
+    const candidates = new Proxy([], {
+      get(target, property, receiver) {
+        if (property !== 'length' && property !== Symbol.iterator) nestedReads += 1
+        if (property === 'length') return OUTCOME_MAX_DATASET_CANDIDATES + 1
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    const result = buildOutcomeDatasetManifest({ candidates })
+    expect(result.reasonCodes).toContain('TOO_MANY_DATASET_CANDIDATES')
+    expect(nestedReads).toBe(0)
+  })
+
+  it('blocks llm_visibility.impressionsPerDay', () => {
+    const candidate = makeEligibleCandidate(810)
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'llm_visibility.impressionsPerDay.baseline': 1 } })
+    const result = buildOutcomeDatasetManifest({ candidates: [patched] })
+    expect(result.reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks crm_aggregate.mentionRate', () => {
+    const candidate = makeEligibleCandidate(811)
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'crm_aggregate.mentionRate.delta': 1 } })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks google_search_console.conversionRate', () => {
+    const candidate = makeEligibleCandidate(812)
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'google_search_console.conversionRate.follow_up': 1 } })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks an unknown feature source', () => {
+    const candidate = makeEligibleCandidate(813)
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'unknown_source.impressions.baseline': 1 } })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks an unknown feature field', () => {
+    const candidate = makeEligibleCandidate(814)
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'google_search_console.unknownField.baseline': 1 } })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks an unknown feature phase', () => {
+    const candidate = makeEligibleCandidate(815)
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'google_search_console.impressions.latest': 1 } })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks a GSC-only candidate with a CRM feature', () => {
+    const candidate = makeEligibleCandidate(816, 'article', 'en', ['google_search_console'])
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'crm_aggregate.qualifiedLeadsPerDay.baseline': 1, 'crm_aggregate.qualifiedLeadsPerDay.follow_up': 1, 'crm_aggregate.qualifiedLeadsPerDay.delta': 0 } })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks an LLM-declared candidate with no LLM features', () => {
+    const candidate = makeEligibleCandidate(817, 'article', 'en', ['google_search_console'])
+    const patched = withCandidatePatch(candidate, { measurementSources: ['llm_visibility'], directionalLabels: [{ source: 'llm_visibility', signal: 'positive_signal' }] })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks a candidate missing a baseline feature', () => {
+    const candidate = makeEligibleCandidate(818)
+    const features = { ...candidate.aggregateNumericFeatures }
+    delete features['google_search_console.impressions.baseline']
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: features })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks a candidate missing a follow_up feature', () => {
+    const candidate = makeEligibleCandidate(819)
+    const features = { ...candidate.aggregateNumericFeatures }
+    delete features['google_search_console.impressions.follow_up']
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: features })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks a candidate missing a delta feature', () => {
+    const candidate = makeEligibleCandidate(820)
+    const features = { ...candidate.aggregateNumericFeatures }
+    delete features['google_search_console.impressions.delta']
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: features })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks an arbitrary feature key', () => {
+    const candidate = makeEligibleCandidate(821)
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'google_search_console.impressions.baseline.extra': 1 } })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('blocks a sourceHashes count mismatch', () => {
+    const candidate = makeEligibleCandidate(822)
+    const patched = withCandidatePatch(candidate, { sourceHashes: [candidate.sourceHashes[0]] })
+    expect(buildOutcomeDatasetManifest({ candidates: [patched] }).reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+  })
+
+  it('accepts a correct untampered candidate after runtime revalidation', () => {
+    const candidate = makeEligibleCandidate(823)
+    expect(normalizeOutcomeLearningCandidate(candidate)).toEqual(candidate)
+  })
+
+  it('blocks a re-fingerprinted but semantically invalid candidate', () => {
+    const candidate = makeEligibleCandidate(824)
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'llm_visibility.impressionsPerDay.baseline': 1 } })
+    const result = buildOutcomeDatasetManifest({ candidates: [patched] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('CANDIDATE_FEATURE_LINEAGE_INVALID')
+    expect(result.reasonCodes).not.toContain('CANDIDATE_FINGERPRINT_MISMATCH')
+  })
+
+  it('reports feature lineage rather than fingerprint mismatch for correct re-fingerprints', () => {
+    const candidate = makeEligibleCandidate(825)
+    const features = { ...candidate.aggregateNumericFeatures }
+    delete features['google_search_console.clicks.delta']
+    const patched = withCandidatePatch(candidate, { aggregateNumericFeatures: features })
+    const result = buildOutcomeDatasetManifest({ candidates: [patched] })
+    expect(result.reasonCodes).toEqual(expect.arrayContaining(['CANDIDATE_FEATURE_LINEAGE_INVALID']))
+    expect(result.reasonCodes).not.toContain('CANDIDATE_FINGERPRINT_MISMATCH')
+  })
+})

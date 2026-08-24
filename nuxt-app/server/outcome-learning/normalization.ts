@@ -12,6 +12,8 @@ import {
   OUTCOME_MAX_CANDIDATE_PUBLICATION_HASHES,
   OUTCOME_MAX_CANDIDATE_SOURCE_HASHES,
   OUTCOME_MAX_REFERENCE_TEXT_LENGTH,
+  OUTCOME_FEATURE_PHASES,
+  OUTCOME_SOURCE_HASHES_PER_SOURCE,
   OUTCOME_MAX_EVALUATION_CASES,
   OUTCOME_POLICY_LIMITATIONS,
   OUTCOME_POLICY_LIMITATIONS_FOR_CANDIDATE,
@@ -101,7 +103,49 @@ export function normalizeOutcomeReferenceText(value: unknown): string | null {
 }
 
 export function isOutcomeSha256(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value.trim())
+  return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)
+}
+
+export function isNonCanonicalOutcomeSha256(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (trimmed !== value && /^[A-Fa-f0-9]{64}$/u.test(trimmed)) return true
+  if (/^[A-Fa-f0-9]{64}$/u.test(value) && value !== value.toLocaleLowerCase('en-US')) return true
+  if (/^0x[A-Fa-f0-9]{64}$/u.test(value)) return true
+  return false
+}
+
+export function outcomeHashValidationReason(value: unknown): 'NON_CANONICAL_HASH' | 'INVALID_HASH' | null {
+  if (isOutcomeSha256(value)) return null
+  return isNonCanonicalOutcomeSha256(value) ? 'NON_CANONICAL_HASH' : 'INVALID_HASH'
+}
+
+export function normalizeOutcomeReferenceIdentifier(value: unknown): string | null {
+  if (typeof value !== 'string' || hasMalformedUnicode(value)) return null
+  let normalized: string
+  try {
+    normalized = value.normalize('NFKC').trim()
+  } catch {
+    return null
+  }
+  if (!normalized || normalized.length > OUTCOME_MAX_REFERENCE_TEXT_LENGTH) return null
+  if (/(?:https?:\/\/|www\.)/iu.test(normalized) || /@/u.test(normalized)) return null
+  if (!/^[A-Za-z0-9._:|\-]+$/u.test(normalized)) return null
+  const digits = (normalized.match(/\d/gu) ?? []).length
+  if (digits >= 7 && /^[\d().\-]+$/u.test(normalized)) return null
+  return normalized
+}
+
+function normalizeOutcomeIdentifierList(value: unknown, allowEmpty: boolean): string[] | null {
+  if (!Array.isArray(value)) return null
+  const normalized: string[] = []
+  for (const item of value) {
+    const text = normalizeOutcomeReferenceIdentifier(item)
+    if (!text) return null
+    normalized.push(text)
+  }
+  if (!allowEmpty && normalized.length === 0) return null
+  return [...new Set(normalized)].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
 }
 
 export function normalizeOutcomeTimestamp(value: unknown): string | null {
@@ -235,22 +279,22 @@ function normalizeMetrics(source: OutcomeMeasurementSource, value: unknown): { m
 export function normalizePublicationIdentity(value: unknown): PublicationIdentity | null {
   if (!isRecord(value) || containsForbiddenOutcomeKey(value)) return null
   try {
-    const sourceKey = normalizeOutcomeText(value.deidentifiedSubjectKey)
-    const scheduleEntryId = normalizeOutcomeText(value.scheduleEntryId)
-    const scheduleKey = normalizeOutcomeText(value.scheduleKey)
-    const productionPlanId = normalizeOutcomeText(value.productionPlanId)
-    const jobId = normalizeOutcomeText(value.jobId)
-    const draftId = normalizeOutcomeText(value.draftId)
-    const draftVersion = normalizeOutcomeText(value.draftVersion)
-    const contentHash = typeof value.contentHash === 'string' && isOutcomeSha256(value.contentHash) ? value.contentHash.trim().toLocaleLowerCase('en-US') : null
-    const evidenceSnapshotHash = typeof value.evidenceSnapshotHash === 'string' && isOutcomeSha256(value.evidenceSnapshotHash) ? value.evidenceSnapshotHash.trim().toLocaleLowerCase('en-US') : null
+    const sourceKey = typeof value.deidentifiedSubjectKey === 'string' && isOutcomeSha256(value.deidentifiedSubjectKey) ? value.deidentifiedSubjectKey : null
+    const scheduleEntryId = normalizeOutcomeReferenceIdentifier(value.scheduleEntryId)
+    const scheduleKey = normalizeOutcomeReferenceIdentifier(value.scheduleKey)
+    const productionPlanId = normalizeOutcomeReferenceIdentifier(value.productionPlanId)
+    const jobId = normalizeOutcomeReferenceIdentifier(value.jobId)
+    const draftId = normalizeOutcomeReferenceIdentifier(value.draftId)
+    const draftVersion = normalizeOutcomeReferenceIdentifier(value.draftVersion)
+    const contentHash = isOutcomeSha256(value.contentHash) ? value.contentHash : null
+    const evidenceSnapshotHash = isOutcomeSha256(value.evidenceSnapshotHash) ? value.evidenceSnapshotHash : null
     const publishedAt = normalizeOutcomeTimestamp(value.publishedAt)
     const contentType = value.contentType
     const language = value.language
-    const appliedRuleIds = normalizeStringList(value.appliedRuleIds, true)
-    const topicClusterCode = normalizeOutcomeText(value.topicClusterCode)
-    if (!sourceKey || !isOutcomeSha256(sourceKey) || !scheduleEntryId || !scheduleKey || !productionPlanId || !jobId || !draftId || !draftVersion || !contentHash || !evidenceSnapshotHash || !publishedAt || !outcomeContentTypes.includes(contentType as never) || !outcomeLanguages.includes(language as never) || !appliedRuleIds || !topicClusterCode) return null
-    return { deidentifiedSubjectKey: sourceKey.toLocaleLowerCase('en-US'), scheduleEntryId, scheduleKey, productionPlanId, jobId, draftId, draftVersion, contentHash, evidenceSnapshotHash, publishedAt, contentType: contentType as PublicationIdentity['contentType'], language: language as PublicationIdentity['language'], appliedRuleIds, topicClusterCode }
+    const appliedRuleIds = normalizeOutcomeIdentifierList(value.appliedRuleIds, true)
+    const topicClusterCode = normalizeOutcomeReferenceIdentifier(value.topicClusterCode)
+    if (!sourceKey || !scheduleEntryId || !scheduleKey || !productionPlanId || !jobId || !draftId || !draftVersion || !contentHash || !evidenceSnapshotHash || !publishedAt || !outcomeContentTypes.includes(contentType as never) || !outcomeLanguages.includes(language as never) || !appliedRuleIds || !topicClusterCode) return null
+    return { deidentifiedSubjectKey: sourceKey, scheduleEntryId, scheduleKey, productionPlanId, jobId, draftId, draftVersion, contentHash, evidenceSnapshotHash, publishedAt, contentType: contentType as PublicationIdentity['contentType'], language: language as PublicationIdentity['language'], appliedRuleIds, topicClusterCode }
   } catch {
     return null
   }
@@ -260,13 +304,13 @@ export function normalizeOutcomeMeasurement(value: unknown): NormalizedOutcomeMe
   if (!isRecord(value) || containsForbiddenOutcomeKey(value)) return null
   try {
     const source = value.source
-    const deidentifiedSubjectKey = typeof value.deidentifiedSubjectKey === 'string' && isOutcomeSha256(value.deidentifiedSubjectKey) ? value.deidentifiedSubjectKey.trim().toLocaleLowerCase('en-US') : null
-    const scopeFingerprint = typeof value.scopeFingerprint === 'string' && isOutcomeSha256(value.scopeFingerprint) ? value.scopeFingerprint.trim().toLocaleLowerCase('en-US') : null
+    const deidentifiedSubjectKey = isOutcomeSha256(value.deidentifiedSubjectKey) ? value.deidentifiedSubjectKey : null
+    const scopeFingerprint = isOutcomeSha256(value.scopeFingerprint) ? value.scopeFingerprint : null
     const phase = value.phase
     const windowStart = normalizeOutcomeTimestamp(value.windowStart)
     const windowEnd = normalizeOutcomeTimestamp(value.windowEnd)
     const capturedAt = normalizeOutcomeTimestamp(value.capturedAt)
-    const sourceHash = typeof value.sourceHash === 'string' && isOutcomeSha256(value.sourceHash) ? value.sourceHash.trim().toLocaleLowerCase('en-US') : null
+    const sourceHash = isOutcomeSha256(value.sourceHash) ? value.sourceHash : null
     if (!outcomeMeasurementSources.includes(source as never) || !deidentifiedSubjectKey || !scopeFingerprint || !sourceHash || (phase !== 'baseline' && phase !== 'follow_up') || !windowStart || !windowEnd || !capturedAt) return null
     const days = durationDays(windowStart, windowEnd)
     if (!days || Date.parse(capturedAt) < Date.parse(windowEnd)) return null
@@ -289,7 +333,7 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
 function boundedHashList(value: unknown, max: number, nonEmpty: boolean): string[] | null {
   if (!Array.isArray(value) || value.length > max || (nonEmpty && value.length === 0)) return null
   if (value.some((item) => !isOutcomeSha256(item))) return null
-  const hashes = value.map((item) => (item as string).toLowerCase())
+  const hashes = value.map((item) => item as string)
   if (new Set(hashes).size !== hashes.length) return null
   return [...hashes].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
 }
@@ -320,7 +364,7 @@ function isFixedEnum(value: unknown, values: readonly string[]): boolean {
 function normalizeConsentLineage(value: unknown): ConsentLineage | null {
   if (!isRecord(value) || containsForbiddenOutcomeKey(value) || !exactKeys(value, ['consentStatus', 'consentVersion', 'consentedAt', 'consentAllowedUses', 'consentRevokedAt', 'rightsConfirmed'])) return null
   const consentStatus = value.consentStatus
-  const consentVersion = normalizeOutcomeReferenceText(value.consentVersion)
+  const consentVersion = normalizeOutcomeReferenceIdentifier(value.consentVersion)
   const consentedAt = value.consentedAt === null ? null : normalizeOutcomeTimestamp(value.consentedAt)
   const consentAllowedUses = normalizeComparableList(value.consentAllowedUses, false)
   const consentRevokedAt = value.consentRevokedAt === null ? null : normalizeOutcomeTimestamp(value.consentRevokedAt)
@@ -330,19 +374,29 @@ function normalizeConsentLineage(value: unknown): ConsentLineage | null {
   return { consentStatus, consentVersion, consentedAt, consentAllowedUses, consentRevokedAt, rightsConfirmed: value.rightsConfirmed }
 }
 
-function normalizeFeatureRecord(value: unknown): Record<string, number> | null {
+export function normalizeOutcomeFeatureRecord(value: unknown, expectedSources?: readonly OutcomeMeasurementSource[]): Record<string, number> | null {
   if (!isRecord(value)) return null
-  const keys = Object.keys(value)
+  let keys: string[]
+  try {
+    keys = Object.keys(value)
+  } catch {
+    return null
+  }
   if (keys.length === 0 || keys.length > OUTCOME_MAX_CANDIDATE_FEATURES) return null
-  const allowed = new Set(Object.values(OUTCOME_FEATURE_FIELDS).flat().map((field) => `${field}`))
   const features: Record<string, number> = {}
   for (const key of keys) {
-    if (!/^(?:google_search_console|llm_visibility|first_party_analytics|crm_aggregate)\.[A-Za-z]+\.(?:baseline|follow_up|delta)$/u.test(key)) return null
-    const featureName = key.split('.')[1]
-    if (!featureName || !allowed.has(featureName)) return null
+    const parts = key.split('.')
+    if (parts.length !== 3) return null
+    const [source, field, phase] = parts
+    if (!source || !field || !phase || !outcomeMeasurementSources.includes(source as OutcomeMeasurementSource) || !OUTCOME_FEATURE_FIELDS[source as OutcomeMeasurementSource].includes(field) || !OUTCOME_FEATURE_PHASES.includes(phase as never)) return null
     const numeric = value[key]
     if (typeof numeric !== 'number' || !Number.isFinite(numeric)) return null
     features[key] = numeric
+  }
+  if (expectedSources) {
+    const expectedKeys = expectedSources.flatMap((source) => OUTCOME_FEATURE_FIELDS[source].flatMap((field) => OUTCOME_FEATURE_PHASES.map((phase) => `${source}.${field}.${phase}`))).sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+    const actualKeys = [...keys].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+    if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) return null
   }
   return Object.fromEntries(Object.entries(features).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0))
 }
@@ -383,18 +437,19 @@ export function normalizeOutcomeLearningCandidate(value: unknown): OutcomeLearni
   if (!isRecord(value) || containsForbiddenOutcomeKey(value)) return null
   const required = ['candidateStatus', 'deidentifiedSubjectKey', 'publicationIdentityHashes', 'contentType', 'language', 'appliedRuleHashes', 'topicClusterHash', 'aggregateNumericFeatures', 'directionalLabels', 'sourceHashes', 'measurementSources', 'policyVersion', 'engineVersion', 'consentLineage', 'dataContractVersion', 'limitations', 'candidateFingerprint']
   if (!exactKeys(value, required) || value.candidateStatus !== 'eligible') return null
-  const deidentifiedSubjectKey = isOutcomeSha256(value.deidentifiedSubjectKey) ? value.deidentifiedSubjectKey.toLowerCase() : null
+  const deidentifiedSubjectKey = isOutcomeSha256(value.deidentifiedSubjectKey) ? value.deidentifiedSubjectKey : null
   const publicationIdentityHashes = boundedHashList(value.publicationIdentityHashes, OUTCOME_MAX_CANDIDATE_PUBLICATION_HASHES, true)
   const appliedRuleHashes = boundedHashList(value.appliedRuleHashes, OUTCOME_MAX_CANDIDATE_APPLIED_RULE_HASHES, false)
-  const topicClusterHash = isOutcomeSha256(value.topicClusterHash) ? value.topicClusterHash.toLowerCase() : null
-  const aggregateNumericFeatures = normalizeFeatureRecord(value.aggregateNumericFeatures)
+  const topicClusterHash = isOutcomeSha256(value.topicClusterHash) ? value.topicClusterHash : null
   const directionalLabels = normalizeDirectionalLabels(value.directionalLabels)
   const sourceHashes = boundedHashList(value.sourceHashes, OUTCOME_MAX_CANDIDATE_SOURCE_HASHES, true)
   const measurementSourceValues = Array.isArray(value.measurementSources) ? value.measurementSources : []
   const measurementSources = measurementSourceValues.length > 0 && measurementSourceValues.length <= OUTCOME_MAX_CANDIDATE_MEASUREMENT_SOURCES && measurementSourceValues.every((source) => isFixedEnum(source, outcomeMeasurementSources)) && new Set(measurementSourceValues).size === measurementSourceValues.length ? [...new Set(measurementSourceValues as OutcomeMeasurementSource[])].sort((left, right) => left < right ? -1 : left > right ? 1 : 0) : null
+  const aggregateNumericFeatures = normalizeOutcomeFeatureRecord(value.aggregateNumericFeatures, measurementSources ?? undefined)
   const consentLineage = normalizeConsentLineage(value.consentLineage)
   const limitations = boundedCanonicalLimitations(value.limitations)
   if (!deidentifiedSubjectKey || !publicationIdentityHashes || !appliedRuleHashes || !topicClusterHash || !aggregateNumericFeatures || !directionalLabels || !sourceHashes || !measurementSources || !consentLineage || !limitations) return null
+  if (sourceHashes.length !== measurementSources.length * OUTCOME_SOURCE_HASHES_PER_SOURCE) return null
   if (!isFixedEnum(value.contentType, outcomeContentTypes) || !isFixedEnum(value.language, outcomeLanguages)) return null
   if (value.policyVersion !== OUTCOME_LEARNING_POLICY_VERSION || value.engineVersion !== OUTCOME_LEARNING_ENGINE_VERSION || value.dataContractVersion !== OUTCOME_DATA_CONTRACT_VERSION) return null
   if (consentLineage.consentStatus !== 'granted' || !consentLineage.consentAllowedUses.includes('model_improvement') || consentLineage.consentRevokedAt !== null || consentLineage.rightsConfirmed !== true) return null
@@ -403,17 +458,17 @@ export function normalizeOutcomeLearningCandidate(value: unknown): OutcomeLearni
   if (labelSources.length !== sourceList.length || labelSources.some((source, index) => source !== sourceList[index])) return null
   const canonical = candidateBody({ candidateStatus: 'eligible', deidentifiedSubjectKey, publicationIdentityHashes, contentType: value.contentType as OutcomeContentType, language: value.language as OutcomeLanguage,
  appliedRuleHashes, topicClusterHash, aggregateNumericFeatures, directionalLabels, sourceHashes, measurementSources, policyVersion: OUTCOME_LEARNING_POLICY_VERSION, engineVersion: OUTCOME_LEARNING_ENGINE_VERSION, consentLineage, dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION, limitations }) as Omit<OutcomeLearningCandidate, 'candidateFingerprint'>
-  if (typeof value.candidateFingerprint !== 'string' || !isOutcomeSha256(value.candidateFingerprint) || outcomeSha256(canonical) !== value.candidateFingerprint.toLowerCase()) return null
-  return { ...canonical, candidateFingerprint: value.candidateFingerprint.toLowerCase() }
+  if (!isOutcomeSha256(value.candidateFingerprint) || outcomeSha256(canonical) !== value.candidateFingerprint) return null
+  return { ...canonical, candidateFingerprint: value.candidateFingerprint }
 }
 
 export function normalizeModelReleaseGateRequest(value: unknown): ModelReleaseGateRequest | null {
   const required = ['baselineModelArtifactHash', 'candidateModelArtifactHash', 'datasetManifestHash', 'evaluationContractVersion', 'evaluationCaseCount', 'baselineMetrics', 'candidateMetrics', 'shadowRunStatus', 'canaryRunStatus', 'rollbackArtifactAvailable', 'safetyIncidents', 'evaluatedAt']
   if (!isRecord(value) || containsForbiddenOutcomeKey(value) || !exactKeys(value, required)) return null
   if (!isOutcomeSha256(value.baselineModelArtifactHash) || !isOutcomeSha256(value.candidateModelArtifactHash) || !isOutcomeSha256(value.datasetManifestHash)) return null
-  const baselineModelArtifactHash = (value.baselineModelArtifactHash as string).toLowerCase()
-  const candidateModelArtifactHash = (value.candidateModelArtifactHash as string).toLowerCase()
-  const datasetManifestHash = (value.datasetManifestHash as string).toLowerCase()
+  const baselineModelArtifactHash = value.baselineModelArtifactHash as string
+  const candidateModelArtifactHash = value.candidateModelArtifactHash as string
+  const datasetManifestHash = value.datasetManifestHash as string
   if (baselineModelArtifactHash === candidateModelArtifactHash) return null
   if (value.evaluationContractVersion !== OUTCOME_EVALUATION_CONTRACT_VERSION) return null
   if (typeof value.evaluationCaseCount !== 'number' || !Number.isSafeInteger(value.evaluationCaseCount) || value.evaluationCaseCount < 0 || value.evaluationCaseCount < 100 || value.evaluationCaseCount > OUTCOME_MAX_EVALUATION_CASES) return null
