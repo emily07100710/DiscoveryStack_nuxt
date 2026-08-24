@@ -14,7 +14,7 @@ const MAX_ALLOWLIST_ITEM_LENGTH = 64
 const MAX_PAYLOAD_BYTES = 10_000_000
 const MAX_HOSTNAME_LENGTH = 253
 
-const adapters = new Set<DeliveryAdapter>(['wordpress_rest', 'generic_http', 'manual_export'])
+const adapters = new Set<DeliveryAdapter>(['wordpress_rest', 'generic_http', 'manual_export', 'first_party_git', 'first_party_signed_api'])
 const statuses = new Set<DeliveryTargetStatus>(['active', 'paused', 'revoked'])
 const blockedDnsSuffixes = ['.local', '.internal', '.localhost', '.onion'] as const
 const controlPattern = /[\u0000-\u001f\u007f-\u009f]/

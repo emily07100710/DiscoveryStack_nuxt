@@ -51,7 +51,7 @@ const deliveryStates = new Set<DeliveryState>([
   'blocked',
   'cancelled',
 ])
-const adapters = new Set<DeliveryAdapter>(['wordpress_rest', 'generic_http', 'manual_export'])
+const adapters = new Set<DeliveryAdapter>(['wordpress_rest', 'generic_http', 'manual_export', 'first_party_git', 'first_party_signed_api'])
 const failureCodes = new Set<string>([
   'timeout',
   'connection_reset',

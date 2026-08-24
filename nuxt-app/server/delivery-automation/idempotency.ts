@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { DELIVERY_AUTOMATION_ENGINE_VERSION } from './types'
 import type { DeliveryAdapter, IdempotencyPayload, IdempotencyResult } from './types'
 
-const adapters = new Set<DeliveryAdapter>(['wordpress_rest', 'generic_http', 'manual_export'])
+const adapters = new Set<DeliveryAdapter>(['wordpress_rest', 'generic_http', 'manual_export', 'first_party_git', 'first_party_signed_api'])
 const sha256Pattern = /^[a-f0-9]{64}$/i
 const opaquePattern = /^[A-Za-z0-9_.:-]+$/
 const forbiddenIdentityWordPattern = /(bearer|token|secret|password|credential)/i
