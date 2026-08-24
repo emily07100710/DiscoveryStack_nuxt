@@ -44,7 +44,7 @@ function successEvent(overrides: Record<string, unknown> = {}) {
   return {
     type: 'success',
     now: FIXTURE_NOW,
-    attemptStartedAt: '2026-08-23T23:59:00.000Z',
+    attemptStartedAt: FIXTURE_NOW,
     expectedIdempotencyKey: FIXTURE_KEY,
     attemptNumber: 1,
     attempts: [makeAttempt()],
@@ -60,6 +60,16 @@ function successEvent(overrides: Record<string, unknown> = {}) {
     },
     ...overrides,
   }
+}
+
+function makeCompleteFiveAttemptHistory() {
+  return [
+    makeRetryWaitAttempt({ occurredAt: '2026-08-23T20:00:00.000Z', retryEligibleAt: '2026-08-23T20:01:00.000Z' }),
+    makeRetryWaitAttempt({ attemptNumber: 2, occurredAt: '2026-08-23T20:01:00.000Z', failureCode: 'connection_reset', retryEligibleAt: '2026-08-23T20:06:00.000Z' }),
+    makeRetryWaitAttempt({ attemptNumber: 3, occurredAt: '2026-08-23T20:06:00.000Z', failureCode: 'connection_reset', retryEligibleAt: '2026-08-23T20:36:00.000Z' }),
+    makeRetryWaitAttempt({ attemptNumber: 4, occurredAt: '2026-08-23T20:36:00.000Z', failureCode: 'connection_reset', retryEligibleAt: '2026-08-23T22:36:00.000Z' }),
+    makeAttempt({ attemptNumber: 5, state: 'permanent_failed', occurredAt: '2026-08-23T22:36:00.000Z' }),
+  ]
 }
 
 function resultFingerprint(event: ReturnType<typeof successEvent> = successEvent()): string {
@@ -384,7 +394,7 @@ describe('metadata-only delivery planning', () => {
   })
 
   it('blocks after the fifth attempt', () => {
-    const attempts = Array.from({ length: 5 }, (_, index) => makeAttempt({ attemptNumber: index + 1, state: 'permanent_failed', occurredAt: `2026-08-23T23:5${index}:00.000Z` }))
+    const attempts = makeCompleteFiveAttemptHistory()
     const result = planDeliveryAttempt(makePlanInput({ attempts }))
     expect(result.status).toBe('blocked')
     if (result.status === 'blocked') expect(result.code).toBe('ATTEMPT_CAP_REACHED')
@@ -703,6 +713,26 @@ describe('retry timing and attempt evidence hardening', () => {
     if (result.status === 'blocked') expect(result.code).toBe('ATTEMPT_HISTORY_INVALID')
   })
 
+  it.each(['delivered', 'permanent_failed', 'blocked', 'cancelled', 'dispatch_planned'] as const)('rejects a later attempt after persisted %s history', (state) => {
+    const result = planDeliveryAttempt(makePlanInput({
+      attempts: [
+        makeAttempt({ state, occurredAt: '2026-08-23T23:58:00.000Z' }),
+        makeRetryWaitAttempt({ attemptNumber: 2, occurredAt: '2026-08-23T23:59:00.000Z' }),
+      ],
+    }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_HISTORY_INVALID' })
+  })
+
+  it('rejects a subsequent attempt recorded before the persisted retry deadline', () => {
+    const result = planDeliveryAttempt(makePlanInput({
+      attempts: [
+        makeRetryWaitAttempt({ occurredAt: '2026-08-23T23:58:00.000Z', retryEligibleAt: '2026-08-23T23:59:00.000Z' }),
+        makeRetryWaitAttempt({ attemptNumber: 2, occurredAt: '2026-08-23T23:58:59.000Z', failureCode: 'connection_reset', retryEligibleAt: '2026-08-24T00:03:59.000Z' }),
+      ],
+    }))
+    expect(result).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
   it('blocks retry history with a different idempotency key', () => {
     const result = planDeliveryAttempt(makePlanInput({ attempts: [makeRetryWaitAttempt({ idempotencyKey: 'e'.repeat(64) })] }))
     expect(result.status).toBe('blocked')
@@ -728,7 +758,7 @@ describe('retry timing and attempt evidence hardening', () => {
   })
 
   it('stops a five-attempt terminal history', () => {
-    const attempts = Array.from({ length: 5 }, (_, index) => makeAttempt({ attemptNumber: index + 1, state: 'permanent_failed', occurredAt: `2026-08-23T23:0${index}:00.000Z` }))
+    const attempts = makeCompleteFiveAttemptHistory()
     const result = planDeliveryAttempt(makePlanInput({ attempts }))
     expect(result.status).toBe('blocked')
     if (result.status === 'blocked') expect(result.code).toBe('ATTEMPT_CAP_REACHED')
@@ -1057,6 +1087,11 @@ describe('success result time and fingerprint hardening', () => {
     expect(reduceDeliveryAttemptState('dispatch_planned', event)).toMatchObject({ status: 'blocked', code: 'PUBLISHED_AT_BEFORE_ATTEMPT' })
   })
 
+  it('blocks attemptStartedAt before the persisted dispatch attempt', () => {
+    const event = successEvent({ attemptStartedAt: '2026-08-23T23:59:59.000Z' })
+    expect(reduceDeliveryAttemptState('dispatch_planned', event)).toMatchObject({ status: 'blocked', code: 'ATTEMPT_RETRY_EVIDENCE_INVALID' })
+  })
+
   it('accepts an equivalent timezone-bearing publishedAt and canonicalizes it', () => {
     const event = successEvent({ result: { ...successEvent().result, publishedAt: '2026-08-24T08:00:00.000+08:00' } })
     expect(reduceDeliveryAttemptState('dispatch_planned', event)).toMatchObject({ status: 'ok', state: 'delivered' })
@@ -1121,7 +1156,11 @@ describe('complete delivery result replay identity', () => {
     ['noPublicUrl', { noPublicUrl: true }],
   ])('blocks replay when %s changes', (_field, resultOverride) => {
     const original = successEvent()
-    const event = successEvent({ result: { ...original.result, ...resultOverride }, priorDeliveryResultFingerprint: resultFingerprint(original) })
+    const event = successEvent({
+      ...(_field === 'publishedAt' ? { attemptStartedAt: '2026-08-23T23:59:00.000Z' } : {}),
+      result: { ...original.result, ...resultOverride },
+      priorDeliveryResultFingerprint: resultFingerprint(original),
+    })
     expect(reduceDeliveryAttemptState('delivered', event)).toMatchObject({ status: 'blocked', code: 'REMOTE_IDENTITY_COLLISION' })
   })
 

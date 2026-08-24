@@ -314,6 +314,8 @@ function validateAttemptHistory(input: unknown, expectedKey: string, nowMillisec
     if (input.length > MAX_ATTEMPT_HISTORY) return { ok: false, code: 'ATTEMPT_HISTORY_INVALID', reasons: ['attempt history exceeds the bounded history limit'] }
     const attempts: DeliveryAttemptRecord[] = []
     let previousMilliseconds: number | undefined
+    let previousState: DeliveryState | undefined
+    let previousRetryEligibleMilliseconds: number | undefined
     for (let index = 0; index < input.length; index += 1) {
       const item = input[index]
       if (!isRecord(item)) return { ok: false, code: 'ATTEMPT_HISTORY_INVALID', reasons: ['attempt history contains a malformed record'] }
@@ -330,6 +332,8 @@ function validateAttemptHistory(input: unknown, expectedKey: string, nowMillisec
       if (typeof state !== 'string' || !deliveryStates.has(state as DeliveryState)) return { ok: false, code: 'ATTEMPT_HISTORY_INVALID', reasons: ['attempt history contains an invalid state'] }
       const occurred = safeTimestamp(occurredAt)
       if (!occurred.ok || occurred.milliseconds > nowMilliseconds || (previousMilliseconds !== undefined && occurred.milliseconds < previousMilliseconds)) return { ok: false, code: 'ATTEMPT_HISTORY_INVALID', reasons: ['attempt history timestamps are invalid, future, or out of order'] }
+      if (index > 0 && previousState !== 'retry_wait') return { ok: false, code: 'ATTEMPT_HISTORY_INVALID', reasons: ['only retry_wait may be followed by another attempt'] }
+      if (index > 0 && (previousRetryEligibleMilliseconds === undefined || occurred.milliseconds < previousRetryEligibleMilliseconds)) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['a subsequent attempt cannot precede the persisted retry deadline'] }
       previousMilliseconds = occurred.milliseconds
       if (!isCanonicalSha256(idempotencyKey)) return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['attempt history idempotency key is malformed'] }
       if (idempotencyKey.toLowerCase() !== expectedKey.toLowerCase()) return { ok: false, code: 'ATTEMPT_IDEMPOTENCY_MISMATCH', reasons: ['attempt history belongs to a different publication identity'] }
@@ -353,6 +357,8 @@ function validateAttemptHistory(input: unknown, expectedKey: string, nowMillisec
         return { ok: false, code: 'ATTEMPT_RETRY_EVIDENCE_INVALID', reasons: ['failure evidence is only valid for retry_wait'] }
       }
       attempts.push({ attemptNumber, state: state as DeliveryState, occurredAt: occurred.iso, idempotencyKey: idempotencyKey.toLowerCase(), ...(typedFailureCode === undefined ? {} : { failureCode: typedFailureCode as DeliveryAttemptRecord['failureCode'] }), ...(typedHttpStatus === undefined ? {} : { httpStatus: typedHttpStatus }), ...(typedRetryAfter === undefined ? {} : { retryAfterSeconds: typedRetryAfter }), ...(typedConfirmedSameIdempotentDelivery === undefined ? {} : { confirmedSameIdempotentDelivery: typedConfirmedSameIdempotentDelivery }), ...(canonicalRetryEligibleAt === undefined || !canonicalRetryEligibleAt.ok ? {} : { retryEligibleAt: canonicalRetryEligibleAt.iso }) })
+      previousState = state as DeliveryState
+      previousRetryEligibleMilliseconds = state === 'retry_wait' && canonicalRetryEligibleAt?.ok ? canonicalRetryEligibleAt.milliseconds : undefined
     }
     return { ok: true, attempts }
   } catch {
@@ -719,6 +725,9 @@ export function reduceDeliveryAttemptState(currentState: unknown, eventInput: un
       if (!proof.ok) return blockedState(proof.code, state, proof.reason)
       const success = validateSuccessResult(read(event, 'result'), read(event, 'expectedIdempotencyKey'), read(event, 'targetOrigin'), read(event, 'now'), read(event, 'attemptStartedAt'))
       if (!success.ok) return blockedState(success.code, state, success.reason)
+      const attemptStarted = safeTimestamp(read(event, 'attemptStartedAt'))
+      const persistedDispatch = safeTimestamp(proof.last.occurredAt)
+      if (!attemptStarted.ok || !persistedDispatch.ok || attemptStarted.milliseconds < persistedDispatch.milliseconds) return blockedState('ATTEMPT_RETRY_EVIDENCE_INVALID', state, 'attemptStartedAt precedes the persisted dispatch attempt')
       remoteContentId = success.value.result.remoteContentId
       deliveryResultFingerprint = success.value.deliveryResultFingerprint
       nextState = 'delivered'
