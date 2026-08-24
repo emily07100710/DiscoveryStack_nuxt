@@ -377,7 +377,7 @@ function materializeWork(entry: ContentCalendarEntry): DueContentWork {
 export function materializeDueContentWork(input: unknown): MaterializeDueContentWorkResult {
   try {
     if (!isRecordSafe(input)) throw new Error('materialize input must be an object')
-    assertRequiredAndOptionalKeys(input, ['calendar', 'expectedPlanFingerprint', 'nowLocalDate'], ['completedEntryIds', 'cancelledEntryIds'], 'materialize input')
+    assertRequiredAndOptionalKeys(input, ['calendar', 'expectedPlanFingerprint', 'nowLocalDate'], ['completedEntryIds', 'cancelledEntryIds', 'eligibleEntryIds'], 'materialize input')
     const request = input as unknown as MaterializeDueContentWorkInput
     assertTrustedExpectedPlanFingerprint(request.expectedPlanFingerprint)
     if (!isRecordSafe(request.calendar) || request.expectedPlanFingerprint !== request.calendar.planFingerprint) throw new Error('expectedPlanFingerprint does not match calendar.planFingerprint')
@@ -387,11 +387,13 @@ export function materializeDueContentWork(input: unknown): MaterializeDueContent
     if (!isDateOnly(request.nowLocalDate)) throw new Error('nowLocalDate must be a real YYYY-MM-DD')
     const completed = validateIdArray(request.completedEntryIds, 'completedEntryIds', calendar.entries)
     const cancelled = validateIdArray(request.cancelledEntryIds, 'cancelledEntryIds', calendar.entries)
+    const eligible = validateIdArray(request.eligibleEntryIds, 'eligibleEntryIds', calendar.entries)
     if (completed.some(id => cancelled.includes(id))) throw new Error('completedEntryIds and cancelledEntryIds must not overlap')
     const completedSet = new Set(completed)
     const cancelledSet = new Set(cancelled)
+    const eligibleSet = request.eligibleEntryIds === undefined ? null : new Set(eligible)
     const entries = calendar.entries.map(entry => completedSet.has(entry.entryId) ? transitionEntry(entry, 'completed') : cancelledSet.has(entry.entryId) ? transitionEntry(entry, 'cancelled') : entry)
-    const planned = entries.filter(entry => entry.status === 'planned')
+    const planned = entries.filter(entry => entry.status === 'planned' && (eligibleSet === null || eligibleSet.has(entry.entryId)))
     const missedEntries = planned.filter(entry => entry.plannedLocalDate < request.nowLocalDate).sort(compareEntries)
     const todayEntries = planned.filter(entry => entry.plannedLocalDate === request.nowLocalDate).sort(compareEntries)
     const dueWork: DueContentWork[] = []

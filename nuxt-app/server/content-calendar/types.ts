@@ -102,6 +102,7 @@ export type MaterializeDueContentWorkInput = {
   nowLocalDate: string
   completedEntryIds?: string[]
   cancelledEntryIds?: string[]
+  eligibleEntryIds?: string[]
 }
 
 export type MaterializeDueContentWorkResult = {
