@@ -41,12 +41,16 @@ describe('Owner Content Operations Workbench V1 contract', () => {
     const source = page()
     expect(source).toContain("post('/api/content-operations/calendars'")
     for (const field of ['clientId', 'productionPlanId', 'planStartDate', 'planEndDate', 'publishLocalTime', 'cadenceDays', 'monthlyBudgetUnits', 'defaultCostUnits', 'maxItemsPerCalendarMonth', 'maximumTotalItems', 'catchUpPolicy', 'idempotencyKey']) expect(source).toContain(`${field}:`)
+    expect(source).toContain('clientId: Number(calendarForm.clientId)')
+    expect(source).toContain('productionPlanId: Number(calendarForm.productionPlanId)')
   })
 
   it('uses the fixed replan endpoint with an expected fingerprint', () => {
     const source = page()
     expect(source).toContain('/api/content-operations/calendars/${calendar.id}/replan')
     expect(source).toContain('expectedPlanFingerprint: calendar.planFingerprint')
+    expect(source).toContain('replanFormFor(calendar)')
+    expect(source).toContain('套用重新規劃')
   })
 
   it('uses the fixed materialize endpoint with an expected fingerprint', () => {
@@ -63,10 +67,21 @@ describe('Owner Content Operations Workbench V1 contract', () => {
     expect(source).toContain("actionState.value = 'success'")
   })
 
+  it('retains idempotency keys across uncertain failures and rotates them only after success', () => {
+    const source = page()
+    expect(source).toContain('const clientRequestKey = ref')
+    expect(source).toContain('const calendarRequestKey = ref')
+    expect(source).toContain('retainedRequestKey(replanRequestKeys')
+    expect(source).toContain('retainedRequestKey(materializeRequestKeys')
+    expect(source).toContain("if (result !== undefined) clientRequestKey.value = ''")
+    expect(source).toContain("if (result !== undefined) calendarRequestKey.value = ''")
+    expect(source).not.toContain('Math.random()')
+  })
+
   it('limits framework options to Astro and Nuxt', () => {
     const source = page()
-    expect(source).toContain('<option value="Astro">Astro</option>')
-    expect(source).toContain('<option value="Nuxt">Nuxt</option>')
+    expect(source).toContain('<option value="astro">Astro</option>')
+    expect(source).toContain('<option value="nuxt">Nuxt</option>')
     expect(source).not.toContain('WordPress')
   })
 
@@ -127,8 +142,24 @@ describe('Owner Content Operations Workbench V1 contract', () => {
   it('keeps blocked, failed and retry_wait as independent text statuses', () => {
     const source = page()
     for (const status of ['blocked', 'failed', 'retry_wait']) expect(source).toContain(status)
-    for (const label of ['已阻擋', '發布失敗', '等待重試']) expect(source).toContain(label)
+    for (const label of ['已阻擋', '執行失敗', '等待重試']) expect(source).toContain(label)
     expect(source).toContain('blocked、failed、retry_wait 會獨立顯示')
+  })
+
+  it('uses the durable runtime entry, run and outcome field names', () => {
+    const source = page()
+    for (const status of ['materialized', 'awaiting_generation', 'awaiting_review', 'ready_to_publish', 'publishing', 'delivered', 'completed', 'cancelled', 'skipped', 'blocked']) expect(source).toContain(status)
+    expect(source).toContain('runForEntry(entry.id)!.state')
+    expect(source).toContain('assessmentForEntry(entry.id)!.assessmentStatus')
+    expect(source).toContain('entry.evidenceSnapshotHash')
+    expect(source).not.toContain('entry.evidenceHash')
+  })
+
+  it('does not count paused clients as active or past terminal entries as the next publication', () => {
+    const source = page()
+    expect(source).toContain("client.status === 'active'")
+    expect(source).toContain('entry.plannedLocalDate >= todayLocalDate')
+    expect(source).toContain('!terminalEntryStatuses.has(entry.status)')
   })
 
   it('renders the plain-language content pipeline and status text', () => {
@@ -142,7 +173,7 @@ describe('Owner Content Operations Workbench V1 contract', () => {
     const source = page()
     for (const field of ['plannedLocalDate', 'title', 'topic', 'contentType', 'language', 'status', 'framework', 'target', 'hasApprovedDraft', 'hasPassedRiskGate']) expect(source).toContain(field)
     expect(source).toContain('plannedLocalDate')
-    expect(source).toContain('framework || \'Framework 未提供\'')
+    expect(source).toContain('frameworkLabel(entry.framework)')
   })
 
   it('uses text plus classes for status accessibility instead of color alone', () => {

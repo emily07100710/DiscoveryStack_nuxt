@@ -41,7 +41,7 @@ type Workspace = {
 
 建立客戶使用完整 body：`displayName`、`canonicalSiteOrigin`、`framework`、`publicationTransport`、`timeZone`、`defaultCadenceDays`、`defaultPublishLocalTime`、`monthlyBudgetUnits` 與 `idempotencyKey`。建立月曆使用 `clientId`、`productionPlanId`、計畫期間、發布時間、`cadenceDays`、每月預算、單篇成本、每月及全計畫數量上限、`catchUpPolicy` 與 `idempotencyKey`。Replan 額外帶 `expectedPlanFingerprint`；materialize 帶 `expectedPlanFingerprint` 與 `idempotencyKey`。
 
-所有 mutation 都經由單一 `post()` wrapper，使用 `$fetch`，成功後 `refresh()` workspace。wrapper 在 `saving` 期間直接拒絕重複送出；每次操作都帶新的 idempotency key。這些 request 只在使用者明確送出表單或按鈕時發生，測試不呼叫真實 route。
+所有 mutation 都經由單一 `post()` wrapper，使用 `$fetch`，成功後 `refresh()` workspace。wrapper 在 `saving` 期間直接拒絕重複送出。每項操作使用 secure random idempotency key；遇到不確定的 request failure 時保留原 key供重試，只有成功取得 response 後才輪替，避免「server 已寫入但 response 遺失」時因新 key 建立重複資料。這些 request 只在使用者明確送出表單或按鈕時發生，測試不呼叫真實 route。
 
 ## UI sections
 
@@ -53,7 +53,7 @@ Overview 顯示啟用中的客戶、本月 `plannedLocalDate` 內容數、下一
 
 ### 客戶網站設定
 
-客戶表單只允許 Astro／Nuxt 兩種 framework，以及 First-party Git／First-party Signed API 兩種 publication transport。沒有 WordPress 選項。頻率只允許每 3、7、15、30 天；網站欄位要求 HTTPS origin，發布時間使用 local time。
+客戶表單只允許 Astro／Nuxt 兩種 framework，送給 API 的 canonical value 分別為 `astro`／`nuxt`；publication transport 只允許 First-party Git／First-party Signed API。沒有 WordPress 選項。頻率只允許每 3、7、15、30 天；網站欄位要求 HTTPS origin，發布時間使用 local time。資料庫 ID 會在送出前轉為 number，不以表單字串冒充數字 contract。
 
 建立後會 refresh workspace，並在 client card 顯示 API 回傳的 status 與 publisher capability。若 first-party publisher 尚未設定，畫面明確顯示「第一方網站發布器尚未設定」。
 
@@ -61,7 +61,7 @@ Overview 顯示啟用中的客戶、本月 `plannedLocalDate` 內容數、下一
 
 內容月曆表單包含客戶、Production Plan ID、計畫開始／結束日、發布時間、3／7／15／30 天頻率、每月預算、單篇預設成本、每月最多篇數、全計畫最多篇數，以及 Skip missed／One catch-up。沒有客戶資料時，月曆提交按鈕停用並顯示先建立客戶的提示。
 
-已建立的月曆提供重新規劃與建立內容項目兩個動作，分別對應固定 replan 與 materialize endpoint；兩者均帶 `expectedPlanFingerprint`，避免以過時計畫無條件覆蓋。
+已建立的月曆提供可編輯的重新規劃表單，以及建立到期內容工作兩個動作，分別對應固定 replan 與 materialize endpoint；兩者均帶 `expectedPlanFingerprint`，避免以過時計畫無條件覆蓋。沒有 fingerprint 或 calendar 已 blocked／paused／archived 時，不允許 materialize。
 
 ### Calendar 與 content pipeline
 
@@ -73,7 +73,7 @@ Pipeline 以文字顯示：
 已排程 → 等待產生 → 等待人工審核 → 可以發布 → 發布中 → 已發布 → 成效觀察 → 學習候選
 ```
 
-`blocked`、`failed` 與 `retry_wait` 是獨立狀態，分別顯示「已阻擋」、「發布失敗」與「等待重試」，不會透過綠色樣式或正向文案偽裝成成功。Status 同時使用文字與 class，不能只靠顏色辨識。錯誤、retry 與能力不足都保留白話提示；技術欄位只放在 collapsed Advanced details。
+UI 使用 durable runtime 的 canonical entry states：`planned`、`materialized`、`awaiting_generation`、`awaiting_review`、`ready_to_publish`、`publishing`、`delivered`、`completed`、`cancelled`、`skipped`、`blocked`。Run 使用 `state`，Outcome 使用 `assessmentStatus`。`blocked`、`failed` 與 `retry_wait` 是獨立狀態，不會透過綠色樣式或正向文案偽裝成成功。Status 同時使用文字與 class，不能只靠顏色辨識。錯誤、retry 與能力不足都保留白話提示；技術欄位只放在 collapsed Advanced details。
 
 ### 能力與限制
 
