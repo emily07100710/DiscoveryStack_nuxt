@@ -37,6 +37,22 @@ describe('first-party artifact runtime', () => {
     if (result.status === 'ok') expect(result.artifact.path).toBe('content/en/articles/english-release.md')
   })
 
+  it.each([
+    ['en', 'article', 'content/en/articles/english-article.md'],
+    ['zh-hant', 'article', 'content/zh-hant/articles/zh-article.md'],
+    ['en', 'faq', 'content/en/faq/english-faq.md'],
+    ['zh-hant', 'service_page', 'content/zh-hant/services/zh-service.md'],
+  ] as const)('maps %s %s to the formal artifact path', (language, contentType, expectedPath) => {
+    const result = buildFirstPartyMarkdownArtifact('content', makePublication({ language, contentType, slug: expectedPath.split('/').at(-1)?.replace(/\.md$/, '') ?? 'release' }))
+    expect(result.status).toBe('ok')
+    if (result.status === 'ok') expect(result.artifact.path).toBe(expectedPath)
+  })
+
+  it('blocks unsupported language or content type instead of choosing a default folder', () => {
+    expectBlocked(buildFirstPartyMarkdownArtifact('content', makePublication({ language: 'fr' })), 'ARTIFACT_PATH_INVALID')
+    expectBlocked(buildFirstPartyMarkdownArtifact('content', makePublication({ contentType: 'landing' })), 'ARTIFACT_PATH_INVALID')
+  })
+
   it('keeps frontmatter key ordering deterministic', () => {
     const publication = makePublication()
     const first = buildFirstPartyMarkdownArtifact('content', publication)

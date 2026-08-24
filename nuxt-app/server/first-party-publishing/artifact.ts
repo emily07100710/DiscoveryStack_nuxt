@@ -29,9 +29,15 @@ function publicationIdentity(publication: ApprovedFirstPartyPublication): FirstP
   }
 }
 
-function safeFinalPath(contentRoot: string, language: string, slug: string): string | undefined {
-  const languagePart = language === 'zh-hant' ? 'zh-hant' : language
-  const path = `${contentRoot}/${languagePart}/articles/${slug}.md`
+function routeSegment(contentType: ApprovedFirstPartyPublication['contentType']): 'articles' | 'faq' | 'services' | undefined {
+  return contentType === 'article' ? 'articles' : contentType === 'faq' ? 'faq' : contentType === 'service_page' ? 'services' : undefined
+}
+
+function safeFinalPath(contentRoot: string, language: ApprovedFirstPartyPublication['language'], contentType: ApprovedFirstPartyPublication['contentType'], slug: string): string | undefined {
+  const segment = routeSegment(contentType)
+  if (language !== 'en' && language !== 'zh-hant') return undefined
+  if (segment === undefined) return undefined
+  const path = `${contentRoot}/${language}/${segment}/${slug}.md`
   const segments = path.split('/')
   if (!isValidContentRoot(contentRoot) || !isValidSlug(slug) || segments.some(segment => segment.length === 0 || segment === '.' || segment === '..' || segment.includes('\\') || segment.includes('%'))) return undefined
   if (!path.startsWith(`${contentRoot}/`) || path.includes('//') || path.includes('..')) return undefined
@@ -72,7 +78,7 @@ export function buildFirstPartyMarkdownArtifact(contentRoot: unknown, input: unk
     }
     const publication = normalized.publication
     if (!isValidSha256(publication.evidenceSnapshotHash) || !isValidSha256(publication.contentHash)) return blocked('INVALID_SHA256', 'publication hash is invalid')
-    const path = safeFinalPath(contentRoot, publication.language, publication.slug)
+    const path = safeFinalPath(contentRoot, publication.language, publication.contentType, publication.slug)
     if (!path) return blocked('ARTIFACT_PATH_INVALID', 'artifact path is outside the content root or contains traversal')
     const frontmatter = buildFrontmatter(publication)
     const bodyBytes = utf8ByteLength(publication.body)
