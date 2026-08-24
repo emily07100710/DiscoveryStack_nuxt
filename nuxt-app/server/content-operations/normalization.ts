@@ -106,8 +106,6 @@ export function normalizePublicHttpsOrigin(value: string): string {
   const hostname = url.hostname.toLowerCase()
   if (!isPublicDnsHostname(hostname)) throw createError({ statusCode: 422, statusMessage: 'Private, local, special-use, or malformed site origins are not allowed.' })
   url.hostname = hostname
-  url.username = ''
-  url.password = ''
   url.pathname = '/'
   url.search = ''
   url.hash = ''
