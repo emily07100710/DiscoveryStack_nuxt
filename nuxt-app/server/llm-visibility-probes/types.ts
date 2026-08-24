@@ -66,7 +66,7 @@ export type VisibilityProbe = {
   observationWindowKey: string
   limitationCode: typeof PROBE_LIMITATION_CODE
   provenance: {
-    engineVersion: string
+    engineVersion: typeof PROBE_ENGINE_VERSION
     observationMode: 'provider_api_observation'
     consumerSurfaceEquivalent: false
   }
@@ -75,7 +75,7 @@ export type VisibilityProbe = {
 
 export type VisibilityProbePlan = {
   status: 'planned'
-  engineVersion: string
+  engineVersion: typeof PROBE_ENGINE_VERSION
   ownerScopeKey: string
   project: ProjectIdentity
   observationWindowKey: string
@@ -159,10 +159,13 @@ export interface VisibilityProbeAdapter {
 export type ObservationCandidate = {
   probeId: string
   requestFingerprint: string
+  planFingerprint: string
+  ownerScopeKey: string
   projectId: string
   queryId: string
   provider: ProbeProvider
   modelLabel: string
+  observationWindowKey: string
   observationMode: 'provider_api_observation'
   verifiedByOwner: false
   status: 'completed'
@@ -183,9 +186,15 @@ export type ObservationCandidate = {
   observedAt: string
   provenance: {
     adapterKey: string
-    engineVersion: string
+    engineVersion: typeof PROBE_ENGINE_VERSION
     responseMetadata?: AdapterResponseMetadata
   }
+}
+
+export type ProbeAnalysisInput = {
+  plan: unknown
+  probeId: unknown
+  response: unknown
 }
 
 export type ProbeAnalysisResult =
@@ -213,17 +222,24 @@ export type IdempotencyRecord = {
   result: ProbeExecutionResult
 }
 
+export type IdempotencyClaimResult =
+  | { status: 'acquired', claimToken: string }
+  | { status: 'replay', record: IdempotencyRecord }
+  | { status: 'in_progress' }
+  | { status: 'collision' }
+
 export interface VisibilityProbeIdempotencyRegistry {
-  get(requestFingerprint: string): Promise<IdempotencyRecord | null>
-  record(record: IdempotencyRecord): Promise<void>
+  claim(input: { requestFingerprint: string, identityKey: string }): Promise<IdempotencyClaimResult>
+  complete(input: { requestFingerprint: string, identityKey: string, claimToken: string, result: ProbeExecutionResult }): Promise<void>
+  release(input: { requestFingerprint: string, identityKey: string, claimToken: string }): Promise<void>
 }
 
 export type ExecuteVisibilityProbeBatchInput = {
-  plan: VisibilityProbePlan
-  adapters: Record<string, VisibilityProbeAdapter>
-  concurrency?: number
-  idempotencyRegistry: VisibilityProbeIdempotencyRegistry
-  abortSignal?: AbortSignal
+  plan: unknown
+  adapters: unknown
+  idempotencyRegistry: unknown
+  concurrency?: unknown
+  abortSignal?: unknown
 }
 
 export type ProbeBatchResult = {

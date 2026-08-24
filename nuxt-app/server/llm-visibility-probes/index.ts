@@ -1,20 +1,54 @@
-export * from './types'
 export { buildVisibilityProbePlan } from './planner'
 export { analyzeProviderObservation } from './analyzer'
-export { executeVisibilityProbeBatch } from './runner'
+export { executeVisibilityProbeBatch, isSupportedProbeProvider } from './runner'
 export { classifyVisibilityProbeFailure, retryDecisionFromFailure } from './retry-policy'
 export {
+  MAX_EXCERPT_BYTES,
   MAX_EXCERPT_CHARS,
   MAX_PROBES,
   MAX_PROVIDER_TARGETS,
   MAX_QUERY_SNAPSHOTS,
+  buildBoundedExcerpt,
+  buildCanonicalPlanBody,
+  buildEvidenceLocator,
   canonicalFingerprint,
   canonicalProbeIdentity,
+  compareCanonicalStrings,
   hashText,
   normalizeCanonicalHash,
   normalizeCitationUrls,
   normalizeOpaqueIdentifier,
-  normalizeObservationCandidate,
   normalizeProbe,
   normalizeProbePlanInput,
+  normalizeVisibilityProbePlan,
 } from './normalization'
+export type {
+  AdapterFailure,
+  AdapterInput,
+  AdapterResponseMetadata,
+  AdapterResult,
+  AdapterSuccess,
+  ExecuteVisibilityProbeBatchInput,
+  IdempotencyClaimResult,
+  IdempotencyRecord,
+  ObservationCandidate,
+  ProbeAnalysisInput,
+  ProbeAnalysisResult,
+  ProbeBatchBlockedResult,
+  ProbeBatchResult,
+  ProbeExecutionResult,
+  ProbeFailureKind,
+  ProbeLocale,
+  ProbePlanInput,
+  ProbePlanResult,
+  ProbeProvider,
+  ProjectIdentity,
+  ProviderTarget,
+  QuerySnapshot,
+  RetryDecision,
+  VisibilityProbe,
+  VisibilityProbeAdapter,
+  VisibilityProbeIdempotencyRegistry,
+  VisibilityProbePlan,
+} from './types'
+export type { CandidateValidationContext } from './normalization'

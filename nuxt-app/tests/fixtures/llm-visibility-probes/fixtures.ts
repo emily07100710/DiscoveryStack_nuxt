@@ -2,12 +2,14 @@ import { normalizedPromptHash } from '../../../server/llm-visibility/guards'
 import type {
   AdapterResult,
   AdapterSuccess,
+  IdempotencyClaimResult,
   IdempotencyRecord,
   ProbePlanInput,
   ProbeProvider,
   ProjectIdentity,
   ProviderTarget,
   QuerySnapshot,
+  ProbeExecutionResult,
   VisibilityProbeAdapter,
   VisibilityProbeIdempotencyRegistry,
 } from '../../../server/llm-visibility-probes'
@@ -76,19 +78,49 @@ export function syntheticSuccess(overrides: Partial<AdapterSuccess> = {}): Adapt
   }
 }
 
+type ClaimState =
+  | { identityKey: string, status: 'in_progress', claimToken: string }
+  | { identityKey: string, status: 'completed', record: IdempotencyRecord }
+
 export class SyntheticRegistry implements VisibilityProbeIdempotencyRegistry {
   readonly records = new Map<string, IdempotencyRecord>()
-  async get(requestFingerprint: string): Promise<IdempotencyRecord | null> { return this.records.get(requestFingerprint) ?? null }
-  async record(record: IdempotencyRecord): Promise<void> { this.records.set(record.requestFingerprint, record) }
+  readonly states = new Map<string, ClaimState>()
+  private nextToken = 0
+
+  async claim(input: { requestFingerprint: string, identityKey: string }): Promise<IdempotencyClaimResult> {
+    const state = this.states.get(input.requestFingerprint)
+    if (!state) {
+      const claimToken = `claim-${++this.nextToken}`
+      this.states.set(input.requestFingerprint, { identityKey: input.identityKey, status: 'in_progress', claimToken })
+      return { status: 'acquired', claimToken }
+    }
+    if (state.identityKey !== input.identityKey) return { status: 'collision' }
+    if (state.status === 'completed') return { status: 'replay', record: state.record }
+    return { status: 'in_progress' }
+  }
+
+  async complete(input: { requestFingerprint: string, identityKey: string, claimToken: string, result: ProbeExecutionResult }): Promise<void> {
+    const state = this.states.get(input.requestFingerprint)
+    if (!state || state.status !== 'in_progress' || state.identityKey !== input.identityKey || state.claimToken !== input.claimToken) throw new Error('synthetic complete rejected')
+    const record: IdempotencyRecord = { requestFingerprint: input.requestFingerprint, identityKey: input.identityKey, result: { ...input.result, replayed: false } }
+    this.states.set(input.requestFingerprint, { identityKey: input.identityKey, status: 'completed', record })
+    this.records.set(input.requestFingerprint, record)
+  }
+
+  async release(input: { requestFingerprint: string, identityKey: string, claimToken: string }): Promise<void> {
+    const state = this.states.get(input.requestFingerprint)
+    if (!state || state.status !== 'in_progress' || state.identityKey !== input.identityKey || state.claimToken !== input.claimToken) throw new Error('synthetic release rejected')
+    this.states.delete(input.requestFingerprint)
+  }
 }
 
-export function syntheticAdapter(overrides: { adapterKey?: string, provider?: ProbeProvider, modelLabel?: string, result?: AdapterResult, onCall?: (input: unknown) => void } = {}): VisibilityProbeAdapter {
+export function syntheticAdapter(overrides: { adapterKey?: string, provider?: ProbeProvider, modelLabel?: string, result?: AdapterResult, onCall?: (input: unknown) => unknown | Promise<unknown> } = {}): VisibilityProbeAdapter {
   return {
     adapterKey: overrides.adapterKey ?? 'synthetic-adapter-1',
     provider: overrides.provider ?? 'chatgpt',
     modelLabel: overrides.modelLabel ?? 'synthetic-model-1',
     async execute(input) {
-      overrides.onCall?.(input)
+      await overrides.onCall?.(input)
       return overrides.result ?? syntheticSuccess()
     },
   }

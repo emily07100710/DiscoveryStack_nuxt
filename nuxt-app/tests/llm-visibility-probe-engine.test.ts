@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   analyzeProviderObservation,
+  buildEvidenceLocator,
   buildVisibilityProbePlan,
   classifyVisibilityProbeFailure,
   executeVisibilityProbeBatch,
+  normalizeVisibilityProbePlan,
   type AdapterFailure,
   type ObservationCandidate,
   type ProbeFailureKind,
@@ -30,9 +32,7 @@ function firstProbe(overrides: Parameters<typeof syntheticPlanInput>[0] = {}): {
 
 function responseInput(overrides: Parameters<typeof syntheticPlanInput>[0] = {}, response: unknown = syntheticSuccess()) {
   const { plan, probe } = firstProbe(overrides)
-  const target = plan.providerTargets.find(item => item.provider === probe.provider && item.modelLabel === probe.modelLabel && item.adapterKey === probe.adapterKey)
-  if (!target) throw new Error('expected target')
-  return { plan, probe, target, project: plan.project, response }
+  return { plan, probeId: probe.probeId, response }
 }
 
 function completedCandidate(input = responseInput()) {
@@ -150,7 +150,8 @@ describe('LLM Visibility Probe Engine V1 planning', () => {
   it('blocks duplicate provider/model/query combinations', () => {
     const target = syntheticTarget()
     const result = buildVisibilityProbePlan(syntheticPlanInput({ providerTargets: [target, { ...target }] }))
-    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['DUPLICATE_PROVIDER_MODEL_QUERY'] })
+    expect(result.status).toBe('blocked')
+    if (result.status === 'blocked') expect(result.reasonCodes).toContain('DUPLICATE_PROVIDER_TARGET')
   })
 
   it.each([[0, 'INVALID_MAXIMUM_PROBES'], [51, 'INVALID_MAXIMUM_PROBES'], [1.5, 'INVALID_MAXIMUM_PROBES']])('blocks maximumProbes %s', (maximumProbes, reasonCode) => {
@@ -453,15 +454,24 @@ describe('LLM Visibility Probe Engine V1 bounded runner', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
-  it('blocks an idempotency fingerprint collision with a different identity', async () => {
+  it('blocks an idempotency fingerprint collision before adapter execution', async () => {
     const plan = planned()
-    const registry = new SyntheticRegistry()
-    await executeVisibilityProbeBatch({ plan, adapters: { 'synthetic-adapter-1': syntheticAdapter() }, idempotencyRegistry: registry })
-    const probe = plan.probes[0]!
-    const collisionPlan = { ...plan, probes: [{ ...probe, identityKey: 'different-identity' }] }
-    const result = await executeVisibilityProbeBatch({ plan: collisionPlan, adapters: { 'synthetic-adapter-1': syntheticAdapter() }, idempotencyRegistry: registry })
+    const execute = vi.fn(async () => syntheticSuccess())
+    const registry = { claim: vi.fn(async () => ({ status: 'collision' as const })), complete: vi.fn(async () => undefined), release: vi.fn(async () => undefined) }
+    const result = await executeVisibilityProbeBatch({ plan, adapters: { 'synthetic-adapter-1': { ...syntheticAdapter(), execute } }, idempotencyRegistry: registry })
     expect(result).toMatchObject({ counts: { blocked: 1 } })
     expect(candidateResult(result).failure?.reasonCode).toBe('IDENTITY_COLLISION')
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('blocks a tampered identity key before the atomic claim', async () => {
+    const plan = planned()
+    const execute = vi.fn(async () => syntheticSuccess())
+    const tamperedPlan = { ...plan, probes: [{ ...plan.probes[0]!, identityKey: 'different-identity' }] }
+    const registry = new SyntheticRegistry()
+    const result = await executeVisibilityProbeBatch({ plan: tamperedPlan, adapters: { 'synthetic-adapter-1': { ...syntheticAdapter(), execute } }, idempotencyRegistry: registry })
+    expect(result.status).toBe('blocked')
+    expect(execute).not.toHaveBeenCalled()
   })
 
   it('blocks duplicate request fingerprints inside a validated plan', async () => {
@@ -500,18 +510,20 @@ describe('LLM Visibility Probe Engine V1 bounded runner', () => {
     expect(receivedSignal).toBe(controller.signal)
   })
 
-  it('fails closed when the registry get operation throws', async () => {
-    const registry = { get: vi.fn(async () => { throw new Error('synthetic registry failure') }), record: vi.fn(async () => undefined) }
+  it('fails closed when the registry claim operation throws', async () => {
+    const registry = { claim: vi.fn(async () => { throw new Error('synthetic registry failure') }), complete: vi.fn(async () => undefined), release: vi.fn(async () => undefined) }
     const result = await executeVisibilityProbeBatch({ plan: planned(), adapters: { 'synthetic-adapter-1': syntheticAdapter() }, idempotencyRegistry: registry })
     expect(result).toMatchObject({ counts: { blocked: 1 } })
     expect(candidateResult(result).failure?.reasonCode).toBe('IDEMPOTENCY_REGISTRY_FAILURE')
   })
 
-  it('fails closed when recording a completed result throws', async () => {
-    const registry = { get: vi.fn(async () => null), record: vi.fn(async () => { throw new Error('synthetic registry write failure') }) }
+  it('fails closed when completing a result throws and releases the claim', async () => {
+    const release = vi.fn(async () => undefined)
+    const registry = { claim: vi.fn(async () => ({ status: 'acquired' as const, claimToken: 'claim-test' })), complete: vi.fn(async () => { throw new Error('synthetic registry write failure') }), release }
     const result = await executeVisibilityProbeBatch({ plan: planned(), adapters: { 'synthetic-adapter-1': syntheticAdapter() }, idempotencyRegistry: registry })
     expect(result).toMatchObject({ counts: { blocked: 1 } })
     expect(candidateResult(result).failure?.reasonCode).toBe('IDEMPOTENCY_REGISTRY_FAILURE')
+    expect(release).toHaveBeenCalledTimes(1)
   })
 
   it('converts an adapter thrown error into bounded retry metadata without raw error', async () => {
@@ -631,5 +643,295 @@ describe('LLM Visibility Probe Engine V1 contract safety', () => {
     expect(candidate).not.toHaveProperty('conversion')
     expect(candidate).not.toHaveProperty('revenue')
     expect(candidate).not.toHaveProperty('roi')
+  })
+})
+
+
+describe('LLM Visibility Probe Engine V1 trust-boundary hardening', () => {
+  async function runWithPlan(plan: unknown, execute: ReturnType<typeof vi.fn> = vi.fn(async () => syntheticSuccess()), registry: unknown = new SyntheticRegistry()) {
+    return executeVisibilityProbeBatch({ plan, adapters: { 'synthetic-adapter-1': { ...syntheticAdapter(), execute } }, idempotencyRegistry: registry })
+  }
+
+  function replayRecord(plan: VisibilityProbePlan, candidateOverrides: Record<string, unknown> = {}, resultOverrides: Record<string, unknown> = {}, recordOverrides: Record<string, unknown> = {}) {
+    const probe = plan.probes[0]!
+    const candidate = { ...completedCandidate({ plan, probeId: probe.probeId, response: syntheticSuccess() }), ...candidateOverrides }
+    return {
+      requestFingerprint: plan.probes[0]!.requestFingerprint,
+      identityKey: plan.probes[0]!.identityKey,
+      result: { probeId: probe.probeId, requestFingerprint: probe.requestFingerprint, status: 'completed', replayed: false, candidate, ...resultOverrides },
+      ...recordOverrides,
+    }
+  }
+
+  function replayRegistry(record: unknown) {
+    return { claim: vi.fn(async () => ({ status: 'replay' as const, record })), complete: vi.fn(async () => undefined), release: vi.fn(async () => undefined) }
+  }
+
+  it('blocks a normalizedPrompt tamper while preserving old fingerprints', async () => {
+    const plan = planned()
+    const execute = vi.fn(async () => syntheticSuccess())
+    const tampered = { ...plan, probes: [{ ...plan.probes[0]!, normalizedPrompt: 'tampered prompt' }] }
+    const result = await runWithPlan(tampered, execute)
+    expect(result.status).toBe('blocked')
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('blocks a non-SHA planFingerprint before adapter execution', async () => {
+    const execute = vi.fn(async () => syntheticSuccess())
+    const result = await runWithPlan({ ...planned(), planFingerprint: 'not-a-sha' }, execute)
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['INVALID_PLAN_FINGERPRINT'] })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['requestFingerprint', { requestFingerprint: 'b'.repeat(64) }],
+    ['probeId', { probeId: 'c'.repeat(64) }],
+    ['identityKey', { identityKey: 'tampered-identity' }],
+    ['ownerScopeKey', { ownerScopeKey: 'tampered-scope' }],
+    ['projectId', { projectId: 'tampered-project' }],
+    ['queryId', { queryId: 'tampered-query' }],
+    ['provider', { provider: 'gemini' }],
+    ['modelLabel', { modelLabel: 'tampered-model' }],
+    ['adapterKey', { adapterKey: 'tampered-adapter' }],
+    ['locale', { locale: 'zh-hant' }],
+    ['observationWindowKey', { observationWindowKey: 'tampered-window' }],
+    ['engineVersion', { provenance: { engineVersion: 'tampered-engine', observationMode: 'provider_api_observation', consumerSurfaceEquivalent: false } }],
+  ])('blocks tampered probe lineage: %s', async (_label, patch) => {
+    const plan = planned()
+    const execute = vi.fn(async () => syntheticSuccess())
+    const tampered = { ...plan, probes: [{ ...plan.probes[0]!, ...patch }] }
+    const result = await runWithPlan(tampered, execute)
+    expect(result.status).toBe('blocked')
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('blocks changed project brand data while retaining the old plan fingerprint', async () => {
+    const plan = planned()
+    const result = await runWithPlan({ ...plan, project: { ...plan.project, brandName: 'Other Brand' } })
+    expect(result.status).toBe('blocked')
+  })
+
+  it.each([
+    ['timeoutMs', { timeoutMs: 1 }],
+    ['maximumResponseBytes', { maximumResponseBytes: 1 }],
+  ])('blocks changed target %s while retaining the old plan fingerprint', async (_label, patch) => {
+    const plan = planned()
+    const target = plan.providerTargets[0]!
+    const result = await runWithPlan({ ...plan, providerTargets: [{ ...target, ...patch }] })
+    expect(result.status).toBe('blocked')
+  })
+
+  it('blocks a paused target in a supplied plan', async () => {
+    const plan = planned()
+    const result = await runWithPlan({ ...plan, providerTargets: [{ ...plan.providerTargets[0]!, status: 'paused' }] })
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['PAUSED_PROVIDER_TARGET'] })
+  })
+
+  it('blocks a target whose locale no longer allows the probe', async () => {
+    const plan = planned()
+    const result = await runWithPlan({ ...plan, providerTargets: [{ ...plan.providerTargets[0]!, allowedLocales: ['zh-hant'] }] })
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['PROBE_TARGET_NOT_ELIGIBLE'] })
+  })
+
+  it('blocks an empty probes array and never returns completed with zero counts', async () => {
+    const plan = planned()
+    const result = await runWithPlan({ ...plan, probes: [] })
+    expect(result).toMatchObject({ status: 'blocked', counts: { completed: 0, blocked: 0, failed: 0, retryable: 0 }, results: [] })
+  })
+
+  it('blocks an unknown plan key', async () => {
+    const result = await runWithPlan({ ...planned(), credential: 'unexpected' })
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_PLAN'] })
+  })
+
+  it('blocks an enumerable symbol on a plan', async () => {
+    const plan = { ...planned() }
+    Object.defineProperty(plan, Symbol('unexpected'), { enumerable: true, value: 'unexpected' })
+    const result = await runWithPlan(plan)
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_PLAN'] })
+  })
+
+  it('returns bounded blocked output for a throwing plan getter', async () => {
+    const plan = { ...planned() }
+    Object.defineProperty(plan, 'planFingerprint', { enumerable: true, get() { throw new Error('secret getter stack') } })
+    const result = await runWithPlan(plan)
+    expect(result.status).toBe('blocked')
+    expect(JSON.stringify(result)).not.toContain('secret getter stack')
+  })
+
+  it('rejects direct analyzer input that tries to inject project or target', () => {
+    const { plan, probe } = firstProbe()
+    const result = analyzeProviderObservation({ plan, probeId: probe.probeId, project: syntheticProject(), target: syntheticTarget(), response: syntheticSuccess() })
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_ANALYSIS_INPUT'] })
+  })
+
+  it.each([
+    '2026-08-24',
+    '2026-08-24T00:00:00',
+    '2026-02-30T00:00:00Z',
+    '',
+    42,
+  ])('blocks strict timestamp violation %s', observedAt => {
+    const result = analyzeProviderObservation(responseInput({}, syntheticSuccess({ observedAt: observedAt as string })))
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_RESPONSE'] })
+  })
+
+  it('canonicalizes a timezone-bearing timestamp to UTC', () => {
+    const candidate = completedCandidate(responseInput({}, syntheticSuccess({ observedAt: '2026-08-24T08:00:00+08:00' })))
+    expect(candidate.observedAt).toBe('2026-08-24T00:00:00.000Z')
+  })
+
+  it.each([
+    ['verifiedByOwner', { verifiedByOwner: true }],
+    ['metricEligibility', { metricEligibility: 'primary' }],
+    ['persistenceStatus', { persistenceStatus: 'persisted' }],
+  ])('rejects forged candidate governance field %s during replay', async (_label, patch) => {
+    const plan = planned()
+    const result = await runWithPlan(plan, vi.fn(async () => syntheticSuccess()), replayRegistry(replayRecord(plan, patch)))
+    expect(result).toMatchObject({ status: 'completed', counts: { blocked: 1 } })
+    expect(candidateResult(result).failure?.reasonCode).toBe('IDEMPOTENCY_REPLAY_INVALID')
+  })
+
+  it.each([
+    ['probeId', { probeId: 'd'.repeat(64) }],
+    ['requestFingerprint', { requestFingerprint: 'e'.repeat(64) }],
+    ['projectId', { projectId: 'wrong-project' }],
+    ['provider', { provider: 'gemini' }],
+    ['modelLabel', { modelLabel: 'wrong-model' }],
+  ])('rejects replay candidate lineage tamper %s', async (_label, patch) => {
+    const plan = planned()
+    const result = await runWithPlan(plan, vi.fn(async () => syntheticSuccess()), replayRegistry(replayRecord(plan, patch)))
+    expect(result).toMatchObject({ counts: { blocked: 1 } })
+    expect(candidateResult(result).replayed).toBe(false)
+    expect(candidateResult(result).failure?.reasonCode).toBe('IDEMPOTENCY_REPLAY_INVALID')
+  })
+
+  it('validates a complete replay and does not call the adapter', async () => {
+    const plan = planned()
+    const execute = vi.fn(async () => syntheticSuccess())
+    const result = await runWithPlan(plan, execute, replayRegistry(replayRecord(plan)))
+    expect(candidateResult(result).replayed).toBe(true)
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('returns bounded retryable output for an in-progress atomic claim', async () => {
+    const execute = vi.fn(async () => syntheticSuccess())
+    const registry = { claim: vi.fn(async () => ({ status: 'in_progress' as const })), complete: vi.fn(async () => undefined), release: vi.fn(async () => undefined) }
+    const result = await runWithPlan(planned(), execute, registry)
+    expect(result).toMatchObject({ counts: { retryable: 1 } })
+    expect(candidateResult(result).failure).toEqual({ retryable: true, nextDelayCategory: 'short', reasonCode: 'IDEMPOTENCY_IN_PROGRESS_RETRYABLE' })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('uses an atomic claim so concurrent duplicate batches call the adapter exactly once', async () => {
+    const plan = planned()
+    const registry = new SyntheticRegistry()
+    let callCount = 0
+    let releaseAdapter!: () => void
+    const gate = new Promise<void>(resolve => { releaseAdapter = resolve })
+    const adapter = syntheticAdapter({ onCall: async () => { callCount += 1; await gate } })
+    const input = { plan, adapters: { [adapter.adapterKey]: adapter }, idempotencyRegistry: registry, concurrency: 1 }
+    const first = executeVisibilityProbeBatch(input)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const second = executeVisibilityProbeBatch(input)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(callCount).toBe(1)
+    releaseAdapter()
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    expect(callCount).toBe(1)
+    expect([firstResult, secondResult].some(result => result.status === 'completed' && result.results[0]?.status === 'completed' && result.results[0]?.replayed === false)).toBe(true)
+    expect([firstResult, secondResult].some(result => result.status === 'completed' && result.results[0]?.status === 'retryable' && result.results[0]?.failure?.reasonCode === 'IDEMPOTENCY_IN_PROGRESS_RETRYABLE')).toBe(true)
+  })
+
+  it('does not call the adapter for a claim collision', async () => {
+    const execute = vi.fn(async () => syntheticSuccess())
+    const registry = { claim: vi.fn(async () => ({ status: 'collision' as const })), complete: vi.fn(async () => undefined), release: vi.fn(async () => undefined) }
+    const result = await runWithPlan(planned(), execute, registry)
+    expect(result).toMatchObject({ counts: { blocked: 1 } })
+    expect(candidateResult(result).failure?.reasonCode).toBe('IDENTITY_COLLISION')
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('converts release exceptions to bounded registry failure without raw error', async () => {
+    const adapter = syntheticAdapter({ result: { ok: false, failureKind: 'timeout', retryable: true, code: 'TIMEOUT' } })
+    const registry = { claim: vi.fn(async () => ({ status: 'acquired' as const, claimToken: 'claim-test' })), complete: vi.fn(async () => undefined), release: vi.fn(async () => { throw new Error('secret release stack') }) }
+    const result = await executeVisibilityProbeBatch({ plan: planned(), adapters: { [adapter.adapterKey]: adapter }, idempotencyRegistry: registry })
+    expect(result).toMatchObject({ counts: { blocked: 1 } })
+    expect(candidateResult(result).failure?.reasonCode).toBe('IDEMPOTENCY_REGISTRY_FAILURE')
+    expect(JSON.stringify(result)).not.toContain('secret release stack')
+  })
+
+  it('blocks response extra keys before analysis', () => {
+    const response = { ...syntheticSuccess(), credential: 'unexpected' }
+    const result = analyzeProviderObservation(responseInput({}, response))
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_RESPONSE'] })
+  })
+
+  it('blocks inconsistent response token metadata', () => {
+    const result = analyzeProviderObservation(responseInput({}, syntheticSuccess({ responseMetadata: { inputTokens: 1, outputTokens: 2, totalTokens: 99 } })))
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_RESPONSE_METADATA'] })
+  })
+
+  it('blocks a response metadata enumerable symbol', () => {
+    const metadata = { inputTokens: 1 }
+    Object.defineProperty(metadata, Symbol('metadata'), { enumerable: true, value: 2 })
+    const result = analyzeProviderObservation(responseInput({}, syntheticSuccess({ responseMetadata: metadata as never })))
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_RESPONSE_METADATA'] })
+  })
+
+  it('bounds a throwing response metadata getter', () => {
+    const metadata = {}
+    Object.defineProperty(metadata, 'inputTokens', { enumerable: true, get() { throw new Error('secret metadata stack') } })
+    const result = analyzeProviderObservation(responseInput({}, syntheticSuccess({ responseMetadata: metadata as never })))
+    expect(result).toMatchObject({ status: 'blocked' })
+    expect(JSON.stringify(result)).not.toContain('secret metadata stack')
+  })
+
+  it('uses the complete response hash in the evidence locator', () => {
+    const candidate = completedCandidate()
+    expect(candidate.evidenceLocator).toBe(buildEvidenceLocator(planned().probes[0]!, candidate.responseHash))
+    expect(candidate.evidenceLocator.endsWith(candidate.responseHash)).toBe(true)
+  })
+
+  it('keeps evidence locators distinct when only the hash suffix differs', () => {
+    const probe = planned().probes[0]!
+    const left = buildEvidenceLocator(probe, `${'a'.repeat(16)}${'b'.repeat(48)}`)
+    const right = buildEvidenceLocator(probe, `${'a'.repeat(16)}${'c'.repeat(48)}`)
+    expect(left).not.toBe(right)
+  })
+
+  it('uses a code-point position and excerpt around a brand after 400 emoji', () => {
+    const responseText = `${'🙂'.repeat(400)} Acme appears after emoji.`
+    const candidate = completedCandidate(responseInput({}, syntheticSuccess({ responseText })))
+    expect(candidate.brandMentioned).toBe(true)
+    expect(candidate.firstMentionPosition).toBe(402)
+    expect(candidate.boundedExcerpt).toContain('Acme')
+    expect(Array.from(candidate.boundedExcerpt).length).toBeLessThanOrEqual(1000)
+  })
+
+  it('produces identical plan fingerprints and ordering for canonical input array reorder', () => {
+    const project = { ...syntheticProject(), brandAliases: ['Acme Inc', 'Acme Corporation'], competitorBrands: ['RivalCo', 'OtherBrand'] }
+    const reversedProject = { ...project, brandAliases: [...project.brandAliases].reverse(), competitorBrands: [...project.competitorBrands].reverse() }
+    const queries = [syntheticQuery({ queryId: 'query-1', promptText: 'First question?' }), syntheticQuery({ queryId: 'query-2', promptText: 'Second question?' })]
+    const reversedQueries = [...queries].reverse()
+    const targetOne = syntheticTarget({ allowedLocales: ['en', 'zh-hant'] })
+    const targetTwo = syntheticTarget({ provider: 'gemini', modelLabel: 'gemini-model', adapterKey: 'gemini-adapter', allowedLocales: ['zh-hant', 'en'] })
+    const first = planned({ project, activeQuerySnapshots: queries, providerTargets: [targetOne, targetTwo], maximumProbes: 10 })
+    const second = planned({ project: reversedProject, activeQuerySnapshots: reversedQueries, providerTargets: [targetTwo, targetOne], maximumProbes: 10 })
+    expect(second.planFingerprint).toBe(first.planFingerprint)
+    expect(second.probes.map(probe => probe.probeId)).toEqual(first.probes.map(probe => probe.probeId))
+  })
+
+  it('blocks a runner top-level credential-like extra key', async () => {
+    const plan = planned()
+    const execute = vi.fn(async () => syntheticSuccess())
+    const result = await executeVisibilityProbeBatch({ plan, adapters: { 'synthetic-adapter-1': syntheticAdapter({ execute } as never) }, idempotencyRegistry: new SyntheticRegistry(), authorization: 'unexpected' } as unknown)
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_RUNNER_INPUT'] })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('keeps completed candidates unable to pass the owner manual import schema after hardening', () => {
+    const candidate = completedCandidate()
+    expect(ownerManualObservationImportSchema.safeParse(candidate).success).toBe(false)
   })
 })

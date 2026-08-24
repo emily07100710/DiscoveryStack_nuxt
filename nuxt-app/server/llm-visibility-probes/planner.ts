@@ -1,28 +1,45 @@
 import {
+  buildCanonicalPlanBody,
   canonicalFingerprint,
   canonicalProbeIdentity,
+  compareCanonicalStrings,
   normalizeProbePlanInput,
   normalizePrompt,
+  normalizeVisibilityProbePlan,
+  MAX_PROBES,
+  PROBE_ENGINE_VERSION_DEFAULT,
 } from './normalization'
 import {
+  PROBE_LIMITATION_CODE,
   type ProbePlanResult,
   type ProviderTarget,
   type QuerySnapshot,
-  PROBE_LIMITATION_CODE,
+  type VisibilityProbe,
+  type VisibilityProbePlan,
 } from './types'
-import { MAX_PROBES, PROBE_ENGINE_VERSION_DEFAULT } from './normalization'
-import type { VisibilityProbe, VisibilityProbePlan } from './types'
 
 function blocked(reasonCodes: string[]): ProbePlanResult {
-  return { status: 'blocked', reasonCodes: [...new Set(reasonCodes)].sort(), limitationCode: 'probe_plan_invalid' }
+  return { status: 'blocked', reasonCodes: [...new Set(reasonCodes)].sort(compareCanonicalStrings), limitationCode: 'probe_plan_invalid' }
 }
 
 function stableTargetOrder(left: ProviderTarget, right: ProviderTarget): number {
-  return left.provider.localeCompare(right.provider) || left.modelLabel.localeCompare(right.modelLabel) || left.adapterKey.localeCompare(right.adapterKey)
+  return compareCanonicalStrings(left.provider, right.provider)
+    || compareCanonicalStrings(left.modelLabel, right.modelLabel)
+    || compareCanonicalStrings(left.adapterKey, right.adapterKey)
 }
 
 function stableQueryOrder(left: QuerySnapshot, right: QuerySnapshot): number {
-  return left.locale.localeCompare(right.locale) || left.queryId.localeCompare(right.queryId) || left.promptHash.localeCompare(right.promptHash)
+  return compareCanonicalStrings(left.locale, right.locale)
+    || compareCanonicalStrings(left.queryId, right.queryId)
+    || compareCanonicalStrings(left.promptHash, right.promptHash)
+}
+
+function stableProbeOrder(left: VisibilityProbe, right: VisibilityProbe): number {
+  return compareCanonicalStrings(left.provider, right.provider)
+    || compareCanonicalStrings(left.modelLabel, right.modelLabel)
+    || compareCanonicalStrings(left.locale, right.locale)
+    || compareCanonicalStrings(left.queryId, right.queryId)
+    || compareCanonicalStrings(left.requestFingerprint, right.requestFingerprint)
 }
 
 export function buildVisibilityProbePlan(input: unknown): ProbePlanResult {
@@ -45,6 +62,12 @@ export function buildVisibilityProbePlan(input: unknown): ProbePlanResult {
   }
   const eligibleTargets = activeTargets.filter(target => target.allowedLocales.includes(normalized.project.locale))
   if (eligibleTargets.length !== activeTargets.length) reasons.push('PROVIDER_LOCALE_MISMATCH')
+  const seenTargetIdentities = new Set<string>()
+  for (const target of eligibleTargets) {
+    const targetIdentity = `${target.provider}|${target.modelLabel}|${target.adapterKey}`
+    if (seenTargetIdentities.has(targetIdentity)) reasons.push('DUPLICATE_PROVIDER_TARGET')
+    seenTargetIdentities.add(targetIdentity)
+  }
   if (reasons.length) return blocked(reasons)
 
   const probes: VisibilityProbe[] = []
@@ -55,7 +78,15 @@ export function buildVisibilityProbePlan(input: unknown): ProbePlanResult {
       const identityKey = `${target.provider}|${target.modelLabel}|${query.queryId}|${query.locale}`
       if (seenCombinations.has(identityKey)) return blocked(['DUPLICATE_PROVIDER_MODEL_QUERY'])
       seenCombinations.add(identityKey)
-      const probeBase = { ownerScopeKey: normalized.ownerScopeKey, projectId: normalized.project.projectId, queryId: query.queryId, provider: target.provider, modelLabel: target.modelLabel, locale: query.locale, observationWindowKey: normalized.observationWindowKey }
+      const probeBase = {
+        ownerScopeKey: normalized.ownerScopeKey,
+        projectId: normalized.project.projectId,
+        queryId: query.queryId,
+        provider: target.provider,
+        modelLabel: target.modelLabel,
+        locale: query.locale,
+        observationWindowKey: normalized.observationWindowKey,
+      }
       const requestFingerprint = canonicalProbeIdentity(probeBase, query.promptHash, normalized.engineVersion)
       const probeId = canonicalFingerprint({ identityKey, requestFingerprint })
       probes.push({
@@ -72,15 +103,33 @@ export function buildVisibilityProbePlan(input: unknown): ProbePlanResult {
         normalizedPrompt,
         observationWindowKey: normalized.observationWindowKey,
         limitationCode: PROBE_LIMITATION_CODE,
-        provenance: { engineVersion: normalized.engineVersion, observationMode: 'provider_api_observation', consumerSurfaceEquivalent: false },
+        provenance: { engineVersion: normalized.engineVersion as typeof PROBE_ENGINE_VERSION_DEFAULT, observationMode: 'provider_api_observation', consumerSurfaceEquivalent: false },
         status: 'planned',
       })
     }
   }
-  probes.sort((left, right) => left.provider.localeCompare(right.provider) || left.modelLabel.localeCompare(right.modelLabel) || left.locale.localeCompare(right.locale) || left.queryId.localeCompare(right.queryId) || left.requestFingerprint.localeCompare(right.requestFingerprint))
+  probes.sort(stableProbeOrder)
   if (!probes.length) return blocked(['NO_VALID_PROBES'])
   if (probes.length > MAX_PROBES || probes.length > normalized.maximumProbes) return blocked(['MAXIMUM_PROBES_EXCEEDED'])
-  const planBody = { engineVersion: normalized.engineVersion, ownerScopeKey: normalized.ownerScopeKey, project: normalized.project, observationWindowKey: normalized.observationWindowKey, maximumProbes: normalized.maximumProbes, providerTargets: activeTargets, probes, limitationCode: PROBE_LIMITATION_CODE }
-  const plan: VisibilityProbePlan = { status: 'planned', ...planBody, planFingerprint: canonicalFingerprint(planBody) }
-  return { status: 'planned', plan }
+  const planBody = buildCanonicalPlanBody({
+    engineVersion: normalized.engineVersion as typeof PROBE_ENGINE_VERSION_DEFAULT,
+    ownerScopeKey: normalized.ownerScopeKey,
+    project: normalized.project,
+    observationWindowKey: normalized.observationWindowKey,
+    maximumProbes: normalized.maximumProbes,
+    providerTargets: activeTargets,
+    probes,
+    limitationCode: PROBE_LIMITATION_CODE,
+  })
+  const plan: VisibilityProbePlan = {
+    status: 'planned',
+    ...planBody,
+    planFingerprint: canonicalFingerprint(planBody),
+  }
+  try {
+    return { status: 'planned', plan: normalizeVisibilityProbePlan(plan) }
+  } catch (error: unknown) {
+    const reasonCode = error instanceof Error && error.message ? error.message : 'MALFORMED_PLAN'
+    return blocked([reasonCode])
+  }
 }
