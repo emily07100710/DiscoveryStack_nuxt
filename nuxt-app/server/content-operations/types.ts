@@ -96,6 +96,7 @@ export type OutcomeResult = {
 }
 
 export type WorkspaceEntryProjection = ContentOperationCalendarEntryRow & {
+  topic: string
   framework: 'astro' | 'nuxt' | null
   target: string | null
   hasApprovedDraft: boolean

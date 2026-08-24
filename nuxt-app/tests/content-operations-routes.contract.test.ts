@@ -43,6 +43,14 @@ describe('Content Operations owner-only route contract', () => {
     expect(() => parseMaterializeInput({ expectedPlanFingerprint: fingerprint, idempotencyKey: 'materialize-03', clock: {} })).toThrow()
   })
 
+  it('passes the original flat replan body to the service instead of reparsing the transformed shape', () => {
+    const source = readFileSync(join(root, 'calendars/[id]/replan.post.ts'), 'utf8')
+    expect(source).toContain('const body = await readBody(event)')
+    expect(source).toContain('parseReplanInput(body)')
+    expect(source).toContain('replanOwnerContentCalendar(ownerUserId, calendarId(event), body)')
+    expect(source).not.toContain('replanOwnerContentCalendar(ownerUserId, calendarId(event), parsed)')
+  })
+
   it('keeps the materialize route server-clock-only and keeps calendar opportunity construction server-side', () => {
     const materialize = readFileSync(join(root, 'calendars/[id]/materialize.post.ts'), 'utf8')
     const calendars = readFileSync(join(root, 'calendars.post.ts'), 'utf8')

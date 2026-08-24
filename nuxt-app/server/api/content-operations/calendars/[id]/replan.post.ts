@@ -13,8 +13,9 @@ export default defineEventHandler(async (event) => {
   try {
     const owner = await requireOwner(event)
     const ownerUserId = await getOwnerDatabaseUserId(owner.openId)
-    const parsed = parseReplanInput(await readBody(event))
-    return await replanOwnerContentCalendar(ownerUserId, calendarId(event), parsed)
+    const body = await readBody(event)
+    parseReplanInput(body)
+    return await replanOwnerContentCalendar(ownerUserId, calendarId(event), body)
   } catch (error) {
     throw toPublicContentOperationsError(error, 'Calendar replan is temporarily unavailable.')
   }

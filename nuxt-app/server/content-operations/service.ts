@@ -219,9 +219,11 @@ function assertCalendarState(calendar: ContentOperationCalendarRow, rows: Conten
   const snapshot = calendar.resultSnapshot as unknown as ContentCalendarResult
   if (!isRecord(calendar.normalizedRequestSnapshot) || !isRecord(snapshot.normalizedRequest)) collision('Calendar snapshot normalized request is malformed.')
   const check = materializeDueContentWork({ calendar: snapshot, expectedPlanFingerprint: calendar.planFingerprint, nowLocalDate: calendar.planStartDate, eligibleEntryIds: [] })
-  if (!check.calendar || check.calendar.planFingerprint !== calendar.planFingerprint || check.calendar.revision !== calendar.revision || stableFingerprint(calendar.normalizedRequestSnapshot) !== stableFingerprint(snapshot.normalizedRequest) || check.calendar.entries.length !== rows.length) collision('Calendar snapshot and durable entries are inconsistent.')
+  if (!check.calendar || check.calendar.planFingerprint !== calendar.planFingerprint || check.calendar.revision !== calendar.revision || stableFingerprint(calendar.normalizedRequestSnapshot) !== stableFingerprint(snapshot.normalizedRequest) || check.calendar.entries.length > rows.length) collision('Calendar snapshot and durable entries are inconsistent.')
   const byEngineId = new Map(rows.map(row => [row.engineEntryId, row]))
   if (byEngineId.size !== rows.length || snapshot.entries.some(entry => !byEngineId.has(entry.entryId) || engineStatusForDatabase(byEngineId.get(entry.entryId)!.status) !== entry.status)) collision('Calendar snapshot and durable entry lifecycle are inconsistent.')
+  const activeEntryIds = new Set(snapshot.entries.map(entry => entry.entryId))
+  if (rows.some(row => !activeEntryIds.has(row.engineEntryId) && row.status !== 'cancelled')) collision('Calendar has a non-cancelled durable entry outside its active snapshot.')
   return snapshot
 }
 
@@ -231,6 +233,14 @@ function operationClaimFingerprint(ownerUserId: number, calendarId: number, oper
 
 function operationRequestFingerprint(value: unknown): string {
   return stableFingerprint(value)
+}
+
+function durableEntryIdempotencyKey(calendarId: number, entry: ContentCalendarResult['entries'][number]): string {
+  return `content-operation-entry:${stableFingerprint({
+    calendarId,
+    engineEntryId: entry.entryId,
+    engineIdempotencyKey: entry.idempotencyKey,
+  })}`
 }
 
 function entryInsert(ownerUserId: number, calendarId: number, deliverableId: number, entry: ContentCalendarResult['entries'][number]): EntryInsert {
@@ -253,7 +263,7 @@ function entryInsert(ownerUserId: number, calendarId: number, deliverableId: num
     contentHash: null,
     status: entryStatusForDatabase(entry.status),
     engineEntryId: entry.entryId,
-    idempotencyKey: entry.idempotencyKey,
+    idempotencyKey: durableEntryIdempotencyKey(calendarId, entry),
   }
 }
 
@@ -290,6 +300,11 @@ function runInsert(ownerUserId: number, entry: ContentOperationCalendarEntryRow,
     startedAt: null,
     completedAt: null,
   }
+}
+
+function assertRunIdentity(run: ContentOperationRunRow, expected: RunInsert): void {
+  if (run.ownerUserId !== expected.ownerUserId || run.entryId !== expected.entryId || run.stage !== expected.stage || run.idempotencyKey !== expected.idempotencyKey || run.inputFingerprint !== expected.inputFingerprint) collision('Content operation run identity does not match the current calendar entry and plan fingerprint.')
+  if (run.state === 'succeeded' || run.state === 'failed' || run.state === 'blocked' || run.state === 'cancelled') collision('A terminal content operation run cannot be reused for a planned calendar entry.')
 }
 
 async function getRepository(repository?: ContentOperationsRepository) {
@@ -395,29 +410,49 @@ export async function replanOwnerContentCalendar(ownerUserId: number, calendarId
     if (result.status === 'blocked') invalid(`Content calendar replan was blocked by the pure calendar engine: ${result.reasonCodes.join(',') || 'INVALID_INPUT'}.`)
     const updatedCalendar = await transaction.updateCalendarIfFingerprint(ownerUserId, calendar.id, parsed.expectedPlanFingerprint, calendarPatchFromResult(result))
     if (!updatedCalendar) collision('Calendar plan fingerprint is stale.')
-    const byEngineId = new Map(persistedEntries.map(entry => [entry.engineEntryId, entry]))
-    const byOpportunity = new Map(persistedEntries.filter(entry => entry.status === 'planned').map(entry => [entry.engineEntryId, entry]))
+    const currentEntryIds = new Set(current.entries.map(entry => entry.entryId))
+    const currentRows = persistedEntries.filter(entry => currentEntryIds.has(entry.engineEntryId))
+    const historicalRows = persistedEntries.filter(entry => !currentEntryIds.has(entry.engineEntryId))
+    if (historicalRows.some(entry => entry.status !== 'cancelled')) invalid('Only cancelled durable history may exist outside the active calendar snapshot.')
+    const byEngineId = new Map(currentRows.map(entry => [entry.engineEntryId, entry]))
+    const historicalByEngineId = new Map(historicalRows.map(entry => [entry.engineEntryId, entry]))
+    const byOpportunity = new Map(currentRows.filter(entry => entry.status === 'planned').map(entry => [entry.engineEntryId, entry]))
     const usedRows = new Set<number>()
+    const reactivatedHistoricalRows = new Set<number>()
     const entries: ContentOperationCalendarEntryRow[] = []
     for (const entry of result.entries) {
-      const old = byEngineId.get(entry.entryId) || [...byOpportunity.values()].find(candidate => !usedRows.has(candidate.id) && candidate.productionDeliverableId === Number(entry.opportunityId.replace('deliverable-', '')))
+      const deliverableId = contexts.find(context => `deliverable-${context.deliverable.id}` === entry.opportunityId)?.deliverable.id
+      if (!deliverableId) invalid('Replanned opportunity does not map to a persisted Production Deliverable.')
+      const historical = historicalByEngineId.get(entry.entryId)
+      const old = byEngineId.get(entry.entryId) || (!historical ? [...byOpportunity.values()].find(candidate => !usedRows.has(candidate.id) && candidate.productionDeliverableId === deliverableId) : undefined)
       if (old) {
         usedRows.add(old.id)
         const expectedStatus = engineStatusForDatabase(old.status)
         if (old.status !== 'planned' && expectedStatus !== entry.status) invalid('Replan attempted to move a durable entry backwards or across an invalid lifecycle.')
-        const patch = old.status === 'planned' ? { engineEntryId: entry.entryId, idempotencyKey: entry.idempotencyKey, scheduleKey: entry.scheduleKey, plannedLocalDate: entry.plannedLocalDate, publishLocalTime: entry.publishLocalTime, timeZone: entry.timeZone, topicCluster: entry.topicCluster, evidenceSnapshotHash: entry.evidenceSnapshotHash, status: entryStatusForDatabase(entry.status) } : { status: old.status }
+        const patch = old.status === 'planned' ? { engineEntryId: entry.entryId, idempotencyKey: durableEntryIdempotencyKey(calendar.id, entry), scheduleKey: entry.scheduleKey, plannedLocalDate: entry.plannedLocalDate, publishLocalTime: entry.publishLocalTime, timeZone: entry.timeZone, topicCluster: entry.topicCluster, evidenceSnapshotHash: entry.evidenceSnapshotHash, status: entryStatusForDatabase(entry.status) } : { status: old.status }
         entries.push(await transaction.updateEntry(ownerUserId, old.id, patch))
-      } else {
-        const deliverableId = contexts.find(context => `deliverable-${context.deliverable.id}` === entry.opportunityId)?.deliverable.id
-        if (!deliverableId) invalid('Replanned opportunity does not map to a persisted Production Deliverable.')
-        entries.push(await transaction.insertEntry(entryInsert(ownerUserId, calendar.id, deliverableId, entry)))
+        continue
       }
+      if (historical) {
+        if (entry.status !== 'planned' || historical.productionDeliverableId !== deliverableId || historical.strategyRecommendationId !== entry.strategyRecommendationId || historical.evidenceSnapshotHash !== entry.evidenceSnapshotHash || historical.jobId !== null || historical.draftId !== null || historical.reviewId !== null || historical.contentHash !== null) invalid('A cancelled historical entry with execution lineage cannot be reactivated by replan.')
+        reactivatedHistoricalRows.add(historical.id)
+        entries.push(await transaction.updateEntry(ownerUserId, historical.id, { idempotencyKey: durableEntryIdempotencyKey(calendar.id, entry), scheduleKey: entry.scheduleKey, plannedLocalDate: entry.plannedLocalDate, publishLocalTime: entry.publishLocalTime, timeZone: entry.timeZone, topicCluster: entry.topicCluster, status: 'planned' }))
+        await transaction.appendEvent(eventInput(ownerUserId, { clientId: client.id, calendarId: calendar.id, entryId: historical.id, eventType: 'entry_reactivated_by_replan', fromStatus: 'cancelled', toStatus: 'planned', metadata: { previousPlanFingerprint: calendar.planFingerprint, nextPlanFingerprint: updatedCalendar.planFingerprint }, key: { calendarId: calendar.id, entryId: historical.id, event: 'entry_reactivated_by_replan', planFingerprint: updatedCalendar.planFingerprint } }))
+        continue
+      }
+      entries.push(await transaction.insertEntry(entryInsert(ownerUserId, calendar.id, deliverableId, entry)))
     }
-    for (const old of persistedEntries) {
+    for (const old of currentRows) {
       if (usedRows.has(old.id)) continue
-      if (old.status === 'planned') invalid('Replan would orphan a planned durable entry; refusing partial lifecycle mutation.')
+      if (old.status === 'planned') {
+        const cancelled = await transaction.updateEntry(ownerUserId, old.id, { status: 'cancelled' })
+        entries.push(cancelled)
+        await transaction.appendEvent(eventInput(ownerUserId, { clientId: client.id, calendarId: calendar.id, entryId: old.id, eventType: 'entry_cancelled_by_replan', fromStatus: 'planned', toStatus: 'cancelled', metadata: { previousPlanFingerprint: calendar.planFingerprint, nextPlanFingerprint: updatedCalendar.planFingerprint }, key: { calendarId: calendar.id, entryId: old.id, event: 'entry_cancelled_by_replan', planFingerprint: updatedCalendar.planFingerprint } }))
+        continue
+      }
       invalid('Replan result omitted a non-planned durable entry.')
     }
+    entries.push(...historicalRows.filter(entry => !reactivatedHistoricalRows.has(entry.id)))
     await transaction.appendEvent(eventInput(ownerUserId, { clientId: client.id, calendarId: calendar.id, eventType: 'calendar_replanned', fromStatus: calendar.status, toStatus: updatedCalendar.status, metadata: { revision: updatedCalendar.revision, previousPlanFingerprint: updatedCalendar.previousPlanFingerprint, planFingerprint: updatedCalendar.planFingerprint }, key: { calendarId: calendar.id, event: 'calendar_replanned', planFingerprint: updatedCalendar.planFingerprint } }))
     return { calendar: updatedCalendar, entries, replayed: false }
   })
@@ -475,6 +510,7 @@ export async function materializeOwnerDueContent(ownerUserId: number, input: Mat
       const runPayload = runInsert(ownerUserId, fresh, stage, currentCalendar.planFingerprint)
       let run = await transaction.findRunByIdempotency(ownerUserId, runPayload.idempotencyKey)
       if (!run) run = await transaction.insertRun(runPayload)
+      assertRunIdentity(run, runPayload)
       const leased = await transaction.acquireRunLease(ownerUserId, run.id, leaseToken, now, materializeLeaseMs(options.leaseMs))
       if (leased) leasedByEngineId.set(work.entryId, { run: leased, row: fresh, work })
     }
@@ -482,6 +518,7 @@ export async function materializeOwnerDueContent(ownerUserId: number, input: Mat
     const normalizedRequest = current.normalizedRequest
     if (!normalizedRequest) invalid('Calendar normalized request is missing.')
     const safeSkipped = normalizedRequest.catchUpPolicy === 'one_catch_up' && leaseConflict ? [] : initial.skippedEntryIds
+    if (initial.dueWork.length > 0 && leasedByEngineId.size === 0 && safeSkipped.length === 0) collision('Due content work is currently held by another materialization lease.')
     const finalEligibleIds = [...leasedByEngineId.keys(), ...safeSkipped]
     const engineResult = materializeDueContentWork({ calendar: current, expectedPlanFingerprint: currentCalendar.planFingerprint, nowLocalDate, eligibleEntryIds: finalEligibleIds })
     if (!engineResult.calendar) invalid('Due content materialization was blocked by the pure calendar engine.')
@@ -626,7 +663,7 @@ export async function getOwnerContentOperationsWorkspace(ownerUserId: number, re
     const hasApprovedDraft = Boolean(lineage?.draft && lineage.review && ['approved_for_preview', 'approved_for_delivery'].includes(lineage.review.decision) && lineage.review.evidenceSnapshotHash === entry.evidenceSnapshotHash && lineage.draft.jobId === lineage.job?.id)
     const hasPassedRiskGate = Boolean(lineage?.riskGate && lineage.riskGate.status === 'passed' && lineage.riskGate.evidenceSnapshotHash === entry.evidenceSnapshotHash && lineage.riskGate.draftId === lineage.draft?.id)
     const hasOutcome = outcomeAssessments.some(outcome => outcome.entryId === entry.id)
-    return { ...entry, framework: lineage?.client.framework || null, target: lineage?.client.canonicalSiteOrigin || null, hasApprovedDraft, hasPassedRiskGate, nextAction: nextActionForEntry(entry, hasApprovedDraft, hasPassedRiskGate, hasOutcome) }
+    return { ...entry, topic: entry.topicCluster, framework: lineage?.client.framework || null, target: lineage?.client.canonicalSiteOrigin || null, hasApprovedDraft, hasPassedRiskGate, nextAction: nextActionForEntry(entry, hasApprovedDraft, hasPassedRiskGate, hasOutcome) }
   })
   return { clients: clients.map(publicClient), calendars, entries: projections, runs, outcomeAssessments: outcomeAssessments.map(outcome => ({ ...outcome, validPairCount: outcomeValidPairCount(outcome.assessmentSnapshot) })), capabilities: { schedulerAvailable: true, generationExecutorConfigured: false, firstPartyPublisherConfigured: false, outcomeCollectionConfigured: false }, limitations: [...CONTENT_OPERATIONS_LIMITATIONS] }
 }

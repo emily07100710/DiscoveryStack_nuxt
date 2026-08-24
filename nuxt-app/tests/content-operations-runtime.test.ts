@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { OUTCOME_DATA_CONTRACT_VERSION } from '../server/outcome-learning'
 import { createContentOperationsRepository, createOwnerContentClient, createCalendarFromProductionPlan, getOwnerContentOperationsWorkspace, materializeOwnerDueContent, recordOwnerOutcomeAssessment, replanOwnerContentCalendar, runContentOperationsTick } from '../server/content-operations'
 import { createContentOperationsRepositoryFromDatabase } from '../server/content-operations/repository'
-import { normalizePublicHttpsOrigin } from '../server/content-operations/normalization'
+import { normalizePublicHttpsOrigin, stableFingerprint } from '../server/content-operations/normalization'
 import { ContentOperationsFixture, HASH, fixtureClient } from './fixtures/content-operations/repository'
 
 const clock = { now: () => new Date('2026-01-01T12:00:00.000Z'), localDate: () => '2026-01-01' }
@@ -88,6 +88,33 @@ describe('Content Operations Persistence & Scheduler Core V1', () => {
     await expect(replanOwnerContentCalendar(1, created.calendar.id, validReplanInput(initialFingerprint, 'replan-stale'), fixture.repository)).rejects.toMatchObject({ statusCode: 409 })
   })
 
+  it('cancels planned rows removed by a smaller replan while keeping the active snapshot valid', async () => {
+    const fixture = new ContentOperationsFixture()
+    const client = fixture.addClient(1)
+    fixture.addPlan(1, 3)
+    const created = await createCalendarFromProductionPlan(1, validCalendarInput(client.id), fixture.repository)
+    const replanned = await replanOwnerContentCalendar(1, created.calendar.id, { ...validReplanInput(created.calendar.planFingerprint, 'replan-smaller'), maximumTotalItems: 1 }, fixture.repository)
+    expect((replanned.calendar.resultSnapshot as { entries: unknown[] }).entries).toHaveLength(1)
+    expect(replanned.entries.filter(entry => entry.status === 'planned')).toHaveLength(1)
+    expect(replanned.entries.filter(entry => entry.status === 'cancelled')).toHaveLength(2)
+    expect(fixture.events.filter(event => event.eventType === 'entry_cancelled_by_replan')).toHaveLength(2)
+    const materialized = await materializeOwnerDueContent(1, { calendarId: created.calendar.id, expectedPlanFingerprint: replanned.calendar.planFingerprint, idempotencyKey: 'materialize-after-smaller-replan' }, fixture.repository, { clock: { now: () => new Date('2026-02-01T12:00:00Z'), localDate: () => '2026-02-01' } })
+    expect(materialized.entries.filter(entry => entry.status === 'cancelled')).toHaveLength(2)
+  })
+
+  it('can expand after a smaller replan without losing cancelled audit history', async () => {
+    const fixture = new ContentOperationsFixture()
+    const client = fixture.addClient(1)
+    fixture.addPlan(1, 3)
+    const created = await createCalendarFromProductionPlan(1, validCalendarInput(client.id), fixture.repository)
+    const smaller = await replanOwnerContentCalendar(1, created.calendar.id, { ...validReplanInput(created.calendar.planFingerprint, 'replan-down'), maximumTotalItems: 1 }, fixture.repository)
+    const cancelledIds = smaller.entries.filter(entry => entry.status === 'cancelled').map(entry => entry.id).sort((left, right) => left - right)
+    const expanded = await replanOwnerContentCalendar(1, created.calendar.id, { ...validReplanInput(smaller.calendar.planFingerprint, 'replan-up'), maximumTotalItems: 3 }, fixture.repository)
+    expect(expanded.entries.filter(entry => entry.status === 'planned')).toHaveLength(3)
+    expect(expanded.entries.filter(entry => entry.status === 'cancelled').map(entry => entry.id).sort((left, right) => left - right)).toEqual(cancelledIds)
+    expect(new Set(expanded.entries.map(entry => entry.id)).size).toBe(expanded.entries.length)
+  })
+
   it('materializes due work once, creates a staged run/event, and never calls a provider', async () => {
     const fixture = new ContentOperationsFixture()
     const calendar = await fixture.addCalendar(1, '2026-01-01', 2)
@@ -116,6 +143,7 @@ describe('Content Operations Persistence & Scheduler Core V1', () => {
     const fixture = new ContentOperationsFixture()
     let calendar = await fixture.addCalendar(1, '2026-01-01', 1)
     for (let index = 1; index < 60; index += 1) calendar = await fixture.addCalendar(1, '2026-01-01', 1)
+    expect(new Set(fixture.entries.map(entry => entry.idempotencyKey)).size).toBe(60)
     const result = await runContentOperationsTick({ ownerUserId: 1, repository: fixture.repository, clock, maxEntries: 500 })
     expect(result.selected).toBe(50)
     expect(result.materialized).toBe(50)
@@ -198,5 +226,34 @@ describe('Content Operations repair concurrency and integrity regressions', () =
       const terminal = await fixture.repository.insertRun({ ownerUserId: 1, entryId: entry.id, stage: 'generation', state, attemptNumber: 1, idempotencyKey: `terminal-${state}`, inputFingerprint: HASH, outputFingerprint: HASH, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, errorCode: null, errorSummary: null, startedAt: clock.now(), completedAt: clock.now() })
       expect(await fixture.repository.acquireRunLease(1, terminal.id, 'worker-terminal', clock.now(), 300000)).toBeNull()
     }
+  })
+
+  it('rejects a stale run identity and rolls back a fully conflicted materialization claim', async () => {
+    const stale = new ContentOperationsFixture()
+    const staleCalendar = await stale.addCalendar(1, '2026-01-01', 1)
+    const staleEntry = stale.entries.find(entry => entry.calendarId === staleCalendar.id)!
+    await stale.repository.insertRun({ ownerUserId: 1, entryId: staleEntry.id, stage: 'generation', state: 'queued', attemptNumber: 0, idempotencyKey: `content-operation-run:${staleEntry.idempotencyKey}:generation`.slice(0, 128), inputFingerprint: 'b'.repeat(64), outputFingerprint: null, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, errorCode: null, errorSummary: null, startedAt: null, completedAt: null })
+    await expect(materializeOwnerDueContent(1, validMaterializeInput(staleCalendar, 'stale-run'), stale.repository, { clock })).rejects.toMatchObject({ statusCode: 409 })
+    expect(stale.entries.find(entry => entry.id === staleEntry.id)?.status).toBe('planned')
+    expect(stale.events).toHaveLength(0)
+
+    const conflicted = new ContentOperationsFixture()
+    const conflictedCalendar = await conflicted.addCalendar(1, '2026-01-01', 1)
+    const conflictedEntry = conflicted.entries.find(entry => entry.calendarId === conflictedCalendar.id)!
+    const inputFingerprint = stableFingerprint({ entryId: conflictedEntry.engineEntryId, stage: 'generation', evidenceSnapshotHash: conflictedEntry.evidenceSnapshotHash, planFingerprint: conflictedCalendar.planFingerprint })
+    const run = await conflicted.repository.insertRun({ ownerUserId: 1, entryId: conflictedEntry.id, stage: 'generation', state: 'queued', attemptNumber: 0, idempotencyKey: `content-operation-run:${conflictedEntry.idempotencyKey}:generation`.slice(0, 128), inputFingerprint, outputFingerprint: null, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, errorCode: null, errorSummary: null, startedAt: null, completedAt: null })
+    await conflicted.repository.acquireRunLease(1, run.id, 'other-worker', clock.now(), 300000)
+    await expect(materializeOwnerDueContent(1, validMaterializeInput(conflictedCalendar, 'lease-conflict'), conflicted.repository, { clock, leaseToken: 'this-worker' })).rejects.toMatchObject({ statusCode: 409 })
+    expect(conflicted.entries.find(entry => entry.id === conflictedEntry.id)?.status).toBe('planned')
+    expect(conflicted.events).toHaveLength(0)
+  })
+
+  it('projects the canonical topic cluster for the owner workbench', async () => {
+    const fixture = new ContentOperationsFixture()
+    const calendar = await fixture.addCalendar(1, '2026-01-01', 1)
+    const workspace = await getOwnerContentOperationsWorkspace(1, fixture.repository)
+    const entry = workspace.entries.find(candidate => candidate.calendarId === calendar.id)
+    expect(entry?.topic).toBe(entry?.topicCluster)
+    expect(entry?.topic).toBe('opportunity-1')
   })
 })
