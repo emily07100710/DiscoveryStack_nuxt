@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  OUTCOME_DATA_CONTRACT_VERSION,
+  OUTCOME_EVALUATION_CONTRACT_VERSION,
   OUTCOME_LEARNING_ENGINE_VERSION,
+  OUTCOME_MAX_DATASET_CANDIDATES,
   assessPublishedContentOutcome,
   buildOutcomeDatasetManifest,
   buildOutcomeLearningCandidate,
   evaluateModelReleaseGate,
+  normalizeOutcomeLearningCandidate,
   normalizeOutcomeMeasurement,
   normalizeOutcomeTimestamp,
   normalizePublicationIdentity,
@@ -563,7 +567,7 @@ describe('DiscoveryStack Outcome Learning Loop Engine V1', () => {
   })
 
   it('returns shadow_ready before a passed shadow run', () => {
-    const result = evaluateModelReleaseGate(makePassingReleaseGate({ shadowRunStatus: 'pending' }))
+    const result = evaluateModelReleaseGate(makePassingReleaseGate({ shadowRunStatus: 'pending', canaryRunStatus: 'pending' }))
     expect(result.decision).toBe('shadow_ready')
     expect(result.reasonCodes).toContain('SHADOW_RUN_REQUIRED')
   })
@@ -687,5 +691,318 @@ describe('DiscoveryStack Outcome Learning Loop Engine V1', () => {
   it('keeps the fixed data contract version in eligible candidates', () => {
     const result = buildOutcomeLearningCandidate(makeCandidateInput())
     expect(result.candidateStatus === 'eligible' && result.dataContractVersion).toBe(DATA_CONTRACT_VERSION)
+  })
+})
+
+function makeCompleteDatasetCandidates() {
+  return [
+    ...Array.from({ length: 40 }, (_, index) => makeEligibleCandidate(index + 500, 'article', 'en', ['google_search_console', 'llm_visibility'])),
+    ...Array.from({ length: 20 }, (_, index) => makeEligibleCandidate(index + 540, 'article', 'zh-hant', ['google_search_console', 'llm_visibility'])),
+    ...Array.from({ length: 25 }, (_, index) => makeEligibleCandidate(index + 560, 'faq', 'en', ['google_search_console', 'llm_visibility'])),
+    ...Array.from({ length: 20 }, (_, index) => makeEligibleCandidate(index + 585, 'faq', 'zh-hant', ['google_search_console'])),
+    ...Array.from({ length: 25 }, (_, index) => makeEligibleCandidate(index + 605, 'service_page', 'en', ['google_search_console'])),
+    ...Array.from({ length: 20 }, (_, index) => makeEligibleCandidate(index + 630, 'service_page', 'zh-hant', ['google_search_console'])),
+  ]
+}
+
+describe('Outcome Learning Loop Engine V1 blocker repairs', () => {
+  it('changes assessment fingerprint when data contract changes and blocks the mismatch', () => {
+    const valid = assessPublishedContentOutcome(makeOutcomeRequest({ dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION }))
+    const attacker = assessPublishedContentOutcome(makeOutcomeRequest({ dataContractVersion: 'attacker-contract' }))
+    expect(valid.dataContractVersion).toBe(OUTCOME_DATA_CONTRACT_VERSION)
+    expect(attacker.status).toBe('blocked')
+    expect(attacker.reasonCodes).toContain('DATA_CONTRACT_MISMATCH')
+    expect(attacker.assessmentFingerprint).not.toBe(valid.assessmentFingerprint)
+  })
+
+  it.each(['latest', 'v2', '', '  ', 'arbitrary-contract'])('blocks non-fixed assessment data contract %s', (dataContractVersion) => {
+    const result = assessPublishedContentOutcome(makeOutcomeRequest({ dataContractVersion }))
+    expect(result.status).toBe('blocked')
+    expect(result.reasonCodes).toContain(dataContractVersion.trim() ? 'DATA_CONTRACT_MISMATCH' : 'DATA_CONTRACT_MISSING')
+  })
+
+  it('requires a supplied assessment object', () => {
+    const input = makeCandidateInput()
+    const { assessment: _assessment, ...withoutAssessment } = input
+    expectBlocked(buildOutcomeLearningCandidate(withoutAssessment), 'ASSESSMENT_REQUIRED')
+  })
+
+  it('blocks a null supplied assessment', () => {
+    expectBlocked(buildOutcomeLearningCandidate({ ...makeCandidateInput(), assessment: null }), 'ASSESSMENT_REQUIRED')
+  })
+
+  it('blocks a primitive supplied assessment', () => {
+    expectBlocked(buildOutcomeLearningCandidate({ ...makeCandidateInput(), assessment: 'assessment' }), 'ASSESSMENT_INVALID')
+  })
+
+  it('blocks a malformed supplied assessment object', () => {
+    expect(buildOutcomeLearningCandidate({ ...makeCandidateInput(), assessment: { status: 'partial' } }).candidateStatus).toBe('blocked')
+  })
+
+  it('blocks a supplied assessment without fingerprint', () => {
+    const input = makeCandidateInput()
+    const malformed = { ...input.assessment } as Record<string, unknown>
+    delete malformed.assessmentFingerprint
+    expectBlocked(buildOutcomeLearningCandidate({ ...input, assessment: malformed }), 'ASSESSMENT_FINGERPRINT_MISMATCH')
+  })
+
+  it('blocks outcome, assessment, and candidate contract disagreement', () => {
+    const outcomeMismatch = makeOutcomeRequest({ dataContractVersion: 'attacker-contract' })
+    expectBlocked(buildOutcomeLearningCandidate(makeCandidateInput({ outcomeRequest: outcomeMismatch })), 'DATA_CONTRACT_MISMATCH')
+    expectBlocked(buildOutcomeLearningCandidate(makeCandidateInput({ dataContractVersion: 'attacker-contract' })), 'DATA_CONTRACT_MISMATCH')
+    const input = makeCandidateInput()
+    expectBlocked(buildOutcomeLearningCandidate({ ...input, assessment: { ...input.assessment, dataContractVersion: 'attacker-contract' } }), 'DATA_CONTRACT_MISMATCH')
+  })
+
+  it('includes fixed data contract in eligible assessment and candidate fingerprints', () => {
+    const input = makeCandidateInput()
+    const candidate = buildOutcomeLearningCandidate(input)
+    expect(input.assessment.dataContractVersion).toBe(OUTCOME_DATA_CONTRACT_VERSION)
+    expect(candidate.candidateStatus).toBe('eligible')
+    if (candidate.candidateStatus === 'eligible') expect(candidate.dataContractVersion).toBe(OUTCOME_DATA_CONTRACT_VERSION)
+  })
+
+  it('blocks an email hidden in topicClusterCode', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ topicClusterCode: 'customer@example.com' }) }))
+    expectBlocked(result, 'VALUE_POLICY_VIOLATION')
+  })
+
+  it('blocks a URL hidden in topicClusterCode', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ topicClusterCode: 'https://customer.example' }) }))
+    expectBlocked(result, 'VALUE_POLICY_VIOLATION')
+  })
+
+  it('blocks a phone-like topicClusterCode', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ topicClusterCode: '+1 (555) 123-4567' }) }))
+    expectBlocked(result, 'VALUE_POLICY_VIOLATION')
+  })
+
+  it('blocks an email hidden in appliedRuleIds', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ appliedRuleIds: ['customer@example.com'] }) }))
+    expectBlocked(result, 'VALUE_POLICY_VIOLATION')
+  })
+
+  it('does not preserve raw topic or rule values in candidate output', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput())
+    expect(result.candidateStatus).toBe('eligible')
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('topic-cluster-001')
+    expect(serialized).not.toContain('rule-a')
+    expect(serialized).not.toContain('rule-b')
+    if (result.candidateStatus === 'eligible') {
+      expect(result.topicClusterHash).toMatch(/^[a-f0-9]{64}$/)
+      expect(result.appliedRuleHashes.every((hash) => /^[a-f0-9]{64}$/.test(hash))).toBe(true)
+    }
+  })
+
+  it('blocks an oversized learning reference', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ topicClusterCode: 'x'.repeat(257) }) }))
+    expectBlocked(result, 'VALUE_POLICY_VIOLATION')
+  })
+
+  it('blocks control characters in a learning reference', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ topicClusterCode: 'topic\u0000cluster' }) }))
+    expectBlocked(result, 'VALUE_POLICY_VIOLATION')
+  })
+
+  it('blocks malformed Unicode in a learning reference', () => {
+    const result = buildOutcomeLearningCandidate(makeCandidateInput({ publication: makePublication({ topicClusterCode: '\ud800' }) }))
+    expectBlocked(result, 'VALUE_POLICY_VIOLATION')
+  })
+
+  it('blocks a candidate when rightsConfirmed changes but the old fingerprint remains', () => {
+    const candidate = makeEligibleCandidate(700)
+    const result = buildOutcomeDatasetManifest({ candidates: [{ ...candidate, consentLineage: { ...candidate.consentLineage, rightsConfirmed: false } }] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('CANDIDATE_FINGERPRINT_MISMATCH')
+  })
+
+  it('blocks a candidate when consentStatus changes but the old fingerprint remains', () => {
+    const candidate = makeEligibleCandidate(701)
+    const result = buildOutcomeDatasetManifest({ candidates: [{ ...candidate, consentLineage: { ...candidate.consentLineage, consentStatus: 'not_granted' } }] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('CANDIDATE_FINGERPRINT_MISMATCH')
+  })
+
+  it('blocks a candidate when model_improvement use is removed', () => {
+    const candidate = makeEligibleCandidate(702)
+    const result = buildOutcomeDatasetManifest({ candidates: [{ ...candidate, consentLineage: { ...candidate.consentLineage, consentAllowedUses: ['evaluation'] } }] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('CANDIDATE_FINGERPRINT_MISMATCH')
+  })
+
+  it('blocks a candidate when data contract is modified', () => {
+    const candidate = makeEligibleCandidate(703)
+    const result = buildOutcomeDatasetManifest({ candidates: [{ ...candidate, dataContractVersion: 'v2' as never }] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('CANDIDATE_FINGERPRINT_MISMATCH')
+  })
+
+  it('blocks a candidate when aggregate feature is modified', () => {
+    const candidate = makeEligibleCandidate(704)
+    const result = buildOutcomeDatasetManifest({ candidates: [{ ...candidate, aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'google_search_console.impressionsPerDay.baseline': 999 } }] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('CANDIDATE_FINGERPRINT_MISMATCH')
+  })
+
+  it('blocks NaN and Infinity aggregate features during candidate normalization', () => {
+    const candidate = makeEligibleCandidate(705)
+    for (const numeric of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const result = buildOutcomeDatasetManifest({ candidates: [{ ...candidate, aggregateNumericFeatures: { ...candidate.aggregateNumericFeatures, 'google_search_console.impressionsPerDay.baseline': numeric } }] })
+      expect(result.status).toBe('gate_blocked')
+      expect(result.reasonCodes).toContain('CANDIDATE_FINGERPRINT_MISMATCH')
+    }
+  })
+
+  it('blocks invalid candidate enums', () => {
+    const candidate = makeEligibleCandidate(706)
+    const result = buildOutcomeDatasetManifest({ candidates: [{ ...candidate, language: 'fr' as never }] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('CANDIDATE_FINGERPRINT_MISMATCH')
+  })
+
+  it('blocks an invalid candidate source hash', () => {
+    const candidate = makeEligibleCandidate(707)
+    const result = buildOutcomeDatasetManifest({ candidates: [{ ...candidate, sourceHashes: ['not-a-sha'] }] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('INVALID_HASH')
+  })
+
+  it('blocks an unknown extra candidate key', () => {
+    const candidate = makeEligibleCandidate(708)
+    const result = buildOutcomeDatasetManifest({ candidates: [{ ...candidate, attackerField: 'ignored' }] })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('CANDIDATE_FINGERPRINT_MISMATCH')
+  })
+
+  it('recomputes and accepts an untampered candidate fingerprint', () => {
+    const candidate = makeEligibleCandidate(709)
+    const normalized = normalizeOutcomeLearningCandidate(candidate)
+    expect(normalized).toEqual(candidate)
+  })
+
+  it('rejects dataset candidates over the upper bound before reading nested fields', () => {
+    let nestedReads = 0
+    const candidates = new Proxy([], {
+      get(target, property, receiver) {
+        if (property !== 'length' && property !== Symbol.iterator) nestedReads += 1
+        if (property === 'length') return OUTCOME_MAX_DATASET_CANDIDATES + 1
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    const result = buildOutcomeDatasetManifest({ candidates })
+    expect(result.status).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('TOO_MANY_DATASET_CANDIDATES')
+    expect(nestedReads).toBe(0)
+  })
+
+  it('allocates exactly 120/15/15 for 150 admitted candidates', () => {
+    const result = buildOutcomeDatasetManifest({ candidates: makeCompleteDatasetCandidates() })
+    expect(result.status).toBe('ready_for_dataset_review')
+    expect(result.trainCandidateFingerprints).toHaveLength(120)
+    expect(result.validationCandidateFingerprints).toHaveLength(15)
+    expect(result.testCandidateFingerprints).toHaveLength(15)
+  })
+
+  it('keeps the exact split stable when input rows are reversed', () => {
+    const candidates = makeCompleteDatasetCandidates()
+    const first = buildOutcomeDatasetManifest({ candidates })
+    const reversed = buildOutcomeDatasetManifest({ candidates: [...candidates].reverse() })
+    expect(reversed).toEqual(first)
+  })
+
+  it('keeps repeated manifest fingerprints identical', () => {
+    const candidates = makeCompleteDatasetCandidates()
+    expect(buildOutcomeDatasetManifest({ candidates }).manifestFingerprint).toBe(buildOutcomeDatasetManifest({ candidates }).manifestFingerprint)
+  })
+
+  it('keeps train validation and test arrays disjoint', () => {
+    const result = buildOutcomeDatasetManifest({ candidates: makeCompleteDatasetCandidates() })
+    const train = new Set(result.trainCandidateFingerprints)
+    const validation = new Set(result.validationCandidateFingerprints)
+    const test = new Set(result.testCandidateFingerprints)
+    expect([...train].some((fingerprint) => validation.has(fingerprint) || test.has(fingerprint))).toBe(false)
+    expect([...validation].some((fingerprint) => test.has(fingerprint))).toBe(false)
+  })
+
+  it('makes split union exactly equal to the admitted fingerprint set', () => {
+    const result = buildOutcomeDatasetManifest({ candidates: makeCompleteDatasetCandidates() })
+    expect(new Set([...result.trainCandidateFingerprints, ...result.validationCandidateFingerprints, ...result.testCandidateFingerprints])).toEqual(new Set(result.candidateFingerprints))
+  })
+
+  it('blocks identical baseline and candidate model artifact hashes', () => {
+    const request = makePassingReleaseGate()
+    const result = evaluateModelReleaseGate({ ...request, candidateModelArtifactHash: request.baselineModelArtifactHash })
+    expect(result.decision).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('MODEL_ARTIFACTS_NOT_DISTINCT')
+  })
+
+  it.each(['latest', 'v2', '', '  ', 'arbitrary-evaluation-contract'])('blocks non-fixed evaluation contract %s', (evaluationContractVersion) => {
+    const result = evaluateModelReleaseGate(makePassingReleaseGate({ evaluationContractVersion: evaluationContractVersion as never }))
+    expect(result.decision).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('EVALUATION_CONTRACT_MISMATCH')
+  })
+
+  it('blocks a release request with missing evaluation contract', () => {
+    const request = makePassingReleaseGate()
+    const { evaluationContractVersion: _evaluationContractVersion, ...withoutContract } = request
+    const result = evaluateModelReleaseGate(withoutContract)
+    expect(result.decision).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('EVALUATION_CONTRACT_MISMATCH')
+  })
+
+  it('blocks unknown release request keys', () => {
+    const result = evaluateModelReleaseGate({ ...makePassingReleaseGate(), attackerField: 'ignored' })
+    expect(result.decision).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('INVALID_RELEASE_SHAPE')
+  })
+
+  it('blocks extra and missing evaluation metric keys', () => {
+    const request = makePassingReleaseGate()
+    const extra = evaluateModelReleaseGate({ ...request, candidateMetrics: { ...request.candidateMetrics, extraMetric: 0 } })
+    const { taskQuality: _taskQuality, ...withoutTaskQuality } = request.candidateMetrics
+    const missing = evaluateModelReleaseGate({ ...request, candidateMetrics: withoutTaskQuality })
+    expect(extra.decision).toBe('gate_blocked')
+    expect(extra.reasonCodes).toContain('INVALID_MODEL_EVIDENCE')
+    expect(missing.decision).toBe('gate_blocked')
+    expect(missing.reasonCodes).toContain('INVALID_MODEL_EVIDENCE')
+  })
+
+  it('blocks unsafe evaluation case counts', () => {
+    for (const evaluationCaseCount of [Number.MAX_SAFE_INTEGER + 1, 1.5, Number.POSITIVE_INFINITY]) {
+      const result = evaluateModelReleaseGate(makePassingReleaseGate({ evaluationCaseCount }))
+      expect(result.decision).toBe('gate_blocked')
+      expect(result.reasonCodes).toContain('EVALUATION_CASES_INVALID')
+    }
+  })
+
+  it('blocks pending shadow with passed canary', () => {
+    const result = evaluateModelReleaseGate(makePassingReleaseGate({ shadowRunStatus: 'pending', canaryRunStatus: 'passed' }))
+    expect(result.decision).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('SHADOW_CANARY_ORDER_INVALID')
+  })
+
+  it('blocks a failed shadow run', () => {
+    const result = evaluateModelReleaseGate(makePassingReleaseGate({ shadowRunStatus: 'failed', canaryRunStatus: 'pending' }))
+    expect(result.decision).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('SAFETY_REGRESSION')
+  })
+
+  it('blocks a failed canary run', () => {
+    const result = evaluateModelReleaseGate(makePassingReleaseGate({ canaryRunStatus: 'failed' }))
+    expect(result.decision).toBe('gate_blocked')
+    expect(result.reasonCodes).toContain('SAFETY_REGRESSION')
+  })
+
+  it('returns promotion_ready only for complete valid evidence', () => {
+    const result = evaluateModelReleaseGate(makePassingReleaseGate())
+    expect(result.decision).toBe('promotion_ready')
+    expect(result.reasonCodes).toEqual([])
+  })
+
+  it('produces the same release fingerprint for canonical equivalent timestamps', () => {
+    const canonical = evaluateModelReleaseGate(makePassingReleaseGate())
+    const equivalent = evaluateModelReleaseGate(makePassingReleaseGate({ evaluatedAt: '2025-02-01T08:00:00+08:00' }))
+    expect(equivalent.releaseFingerprint).toBe(canonical.releaseFingerprint)
   })
 })

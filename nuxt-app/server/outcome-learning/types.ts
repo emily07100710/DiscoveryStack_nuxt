@@ -1,3 +1,5 @@
+import type { OUTCOME_DATA_CONTRACT_VERSION, OUTCOME_EVALUATION_CONTRACT_VERSION } from './policy-catalog'
+
 export const OUTCOME_LEARNING_ENGINE_VERSION = 'outcome-learning-loop-engine-v1' as const
 
 export const outcomeMeasurementSources = [
@@ -64,7 +66,7 @@ export interface OutcomeAssessmentRequest {
   publication: PublicationIdentity
   baselineMeasurements: unknown[]
   followUpMeasurements: unknown[]
-  dataContractVersion: string
+  dataContractVersion: typeof OUTCOME_DATA_CONTRACT_VERSION
 }
 
 export interface OutcomeMetricComparison {
@@ -90,6 +92,7 @@ export interface PublishedContentOutcomeAssessment {
   limitations: string[]
   policyVersion: 'outcome-learning-loop-policy-v1'
   engineVersion: typeof OUTCOME_LEARNING_ENGINE_VERSION
+  dataContractVersion: typeof OUTCOME_DATA_CONTRACT_VERSION
   assessmentFingerprint: string
 }
 
@@ -119,8 +122,8 @@ export interface OutcomeLearningCandidate {
   publicationIdentityHashes: string[]
   contentType: OutcomeContentType
   language: OutcomeLanguage
-  appliedRuleIds: string[]
-  topicClusterCode: string
+  appliedRuleHashes: string[]
+  topicClusterHash: string
   aggregateNumericFeatures: Record<string, number>
   directionalLabels: Array<{ source: OutcomeMeasurementSource; signal: OutcomeSignal }>
   sourceHashes: string[]
@@ -128,7 +131,7 @@ export interface OutcomeLearningCandidate {
   policyVersion: 'outcome-learning-loop-policy-v1'
   engineVersion: typeof OUTCOME_LEARNING_ENGINE_VERSION
   consentLineage: ConsentLineage
-  dataContractVersion: string
+  dataContractVersion: typeof OUTCOME_DATA_CONTRACT_VERSION
   limitations: string[]
   candidateFingerprint: string
 }
@@ -138,7 +141,7 @@ export interface OutcomeLearningInput {
   assessment: unknown
   consent: unknown
   piiScanStatus: 'none_detected' | 'detected' | 'unknown'
-  dataContractVersion: string
+  dataContractVersion: typeof OUTCOME_DATA_CONTRACT_VERSION
 }
 
 export interface OutcomeDatasetManifest {
@@ -173,7 +176,7 @@ export interface ModelReleaseGateRequest {
   baselineModelArtifactHash: string
   candidateModelArtifactHash: string
   datasetManifestHash: string
-  evaluationContractVersion: string
+  evaluationContractVersion: typeof OUTCOME_EVALUATION_CONTRACT_VERSION
   evaluationCaseCount: number
   baselineMetrics: ModelEvaluationMetrics
   candidateMetrics: ModelEvaluationMetrics

@@ -1,6 +1,12 @@
 import {
+  OUTCOME_ALLOWED_CONSENT_USES,
+  OUTCOME_DATA_CONTRACT_VERSION,
+  OUTCOME_EVALUATION_CONTRACT_VERSION,
   OUTCOME_FORBIDDEN_REASON_CODES,
   OUTCOME_LEARNING_POLICY_VERSION,
+  OUTCOME_MAX_CANDIDATE_LIMITATIONS,
+  OUTCOME_MAX_DATASET_CANDIDATES,
+  OUTCOME_MAX_EVALUATION_CASES,
   OUTCOME_MAX_MEASUREMENTS,
   OUTCOME_MAX_METRIC_FIELDS,
   OUTCOME_MAX_PUBLICATIONS,
@@ -13,23 +19,26 @@ import {
   OUTCOME_MIN_READY_SOURCES,
   OUTCOME_MIN_TASK_QUALITY_IMPROVEMENT,
   OUTCOME_POLICY_LIMITATIONS,
+  OUTCOME_POLICY_LIMITATIONS_FOR_CANDIDATE,
   OUTCOME_POLICY_LIMITATIONS_FOR_DATASET,
   OUTCOME_POLICY_LIMITATIONS_FOR_RELEASE,
   OUTCOME_SOURCE_ORDER,
   OUTCOME_SPLIT_TEST_RATIO,
   OUTCOME_SPLIT_TRAIN_RATIO,
+  OUTCOME_SPLIT_VALIDATION_RATIO,
 } from './policy-catalog'
 import {
   containsForbiddenOutcomeKey,
+  domainSeparatedOutcomeSha256,
   isOutcomeSha256,
-  normalizeOutcomeComparable,
+  normalizeModelReleaseGateRequest,
+  normalizeOutcomeLearningCandidate,
   normalizeOutcomeMeasurement,
+  normalizeOutcomeReferenceText,
   normalizeOutcomeText,
   normalizeOutcomeTimestamp,
   normalizePublicationIdentity,
   outcomeSha256,
-  outcomeSourceCombinationKey,
-  stableOutcomeStringify,
 } from './normalization'
 import { buildOutcomeMetricComparison, combineSignals } from './metrics'
 import {
@@ -45,11 +54,9 @@ import {
   type OutcomeDatasetManifest,
   type OutcomeLearningCandidate,
   type OutcomeLearningCandidateResult,
-  type OutcomeLearningInput,
-  type OutcomeMeasurementSource,
-  type OutcomeMetricComparison,
   type OutcomeSignal,
   type OutcomeStatus,
+  type OutcomeLanguage,
   type PublishedContentOutcomeAssessment,
   type PublicationIdentity,
 } from './types'
@@ -92,13 +99,14 @@ function baseAssessment(publication: PublicationIdentity | null, reasons: readon
     status,
     signal: 'insufficient_data' as const,
     publication: safePublication,
-    comparisons: [] as OutcomeMetricComparison[],
+    comparisons: [] as PublishedContentOutcomeAssessment['comparisons'],
     validPairCount: 0,
     validSourceCount: 0,
     reasonCodes: safeReasonCodes(reasons),
     limitations: [...OUTCOME_POLICY_LIMITATIONS],
     policyVersion: OUTCOME_LEARNING_POLICY_VERSION,
     engineVersion: OUTCOME_LEARNING_ENGINE_VERSION,
+    dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION,
   }
   return { ...result, assessmentFingerprint: outcomeSha256(result) }
 }
@@ -149,9 +157,9 @@ function validatePairWindow(baseline: NormalizedOutcomeMeasurement, followUp: No
   return reasons
 }
 
-function comparableMeasurementPair(baselines: readonly NormalizedOutcomeMeasurement[], followUps: readonly NormalizedOutcomeMeasurement[], publication: PublicationIdentity): { comparisons: OutcomeMetricComparison[]; reasons: string[] } {
+function comparableMeasurementPair(baselines: readonly NormalizedOutcomeMeasurement[], followUps: readonly NormalizedOutcomeMeasurement[], publication: PublicationIdentity): { comparisons: PublishedContentOutcomeAssessment['comparisons']; reasons: string[] } {
   const reasons: string[] = []
-  const comparisons: OutcomeMetricComparison[] = []
+  const comparisons: PublishedContentOutcomeAssessment['comparisons'] = []
   const seenSourceHash = new Set<string>()
   const seenWindows = new Set<string>()
   const publishedAt = Date.parse(publication.publishedAt)
@@ -179,13 +187,13 @@ function comparableMeasurementPair(baselines: readonly NormalizedOutcomeMeasurem
   return { comparisons, reasons: safeReasonCodes(reasons) }
 }
 
-function normalizeAssessmentRequest(input: unknown): { publication: PublicationIdentity | null; baselineInputs: unknown[]; followUpInputs: unknown[]; dataContractVersion: string; reasons: string[] } {
-  if (!isRecord(input) || containsForbiddenOutcomeKey(input)) return { publication: null, baselineInputs: [], followUpInputs: [], dataContractVersion: '', reasons: ['INVALID_INPUT', 'FORBIDDEN_PAYLOAD_KEY'] }
+function normalizeAssessmentRequest(input: unknown): { publication: PublicationIdentity | null; baselineInputs: unknown[]; followUpInputs: unknown[]; reasons: string[] } {
+  if (!isRecord(input) || containsForbiddenOutcomeKey(input)) return { publication: null, baselineInputs: [], followUpInputs: [], reasons: ['INVALID_INPUT', 'FORBIDDEN_PAYLOAD_KEY'] }
   try {
     const publication = normalizePublicationIdentity(input.publication)
     const baselineInputs = asMeasurementArray(input.baselineMeasurements)
     const followUpInputs = asMeasurementArray(input.followUpMeasurements)
-    const dataContractVersion = normalizeOutcomeText(input.dataContractVersion) ?? ''
+    const dataContractVersion = normalizeOutcomeText(input.dataContractVersion)
     const reasons: string[] = []
     if (!publication) reasons.push('INVALID_PUBLICATION_IDENTITY')
     if (!baselineInputs || !followUpInputs) reasons.push('INVALID_INPUT')
@@ -193,6 +201,7 @@ function normalizeAssessmentRequest(input: unknown): { publication: PublicationI
     if (publicationCount === null) reasons.push('INVALID_INPUT')
     else if (publicationCount > OUTCOME_MAX_PUBLICATIONS) reasons.push('TOO_MANY_PUBLICATIONS')
     if (!dataContractVersion) reasons.push('DATA_CONTRACT_MISSING')
+    else if (dataContractVersion !== OUTCOME_DATA_CONTRACT_VERSION) reasons.push('DATA_CONTRACT_MISMATCH')
     const all = [...(baselineInputs ?? []), ...(followUpInputs ?? [])]
     if (all.length > OUTCOME_MAX_MEASUREMENTS) reasons.push('TOO_MANY_MEASUREMENTS')
     const rawSourceHashes = all.filter(isRecord).map((measurement) => measurement.sourceHash).filter((hash): hash is string => typeof hash === 'string')
@@ -201,9 +210,9 @@ function normalizeAssessmentRequest(input: unknown): { publication: PublicationI
     if (fieldCount === null) reasons.push('INVALID_METRIC')
     else if (fieldCount > OUTCOME_MAX_METRIC_FIELDS) reasons.push('TOO_MANY_METRIC_FIELDS')
     reasons.push(...pairMismatchReasons(baselineInputs ?? [], followUpInputs ?? []))
-    return { publication, baselineInputs: baselineInputs ?? [], followUpInputs: followUpInputs ?? [], dataContractVersion, reasons: safeReasonCodes(reasons) }
+    return { publication, baselineInputs: baselineInputs ?? [], followUpInputs: followUpInputs ?? [], reasons: safeReasonCodes(reasons) }
   } catch {
-    return { publication: null, baselineInputs: [], followUpInputs: [], dataContractVersion: '', reasons: ['INVALID_INPUT'] }
+    return { publication: null, baselineInputs: [], followUpInputs: [], reasons: ['INVALID_INPUT'] }
   }
 }
 
@@ -230,17 +239,14 @@ export function assessPublishedContentOutcome(input: unknown): PublishedContentO
     const pairing = comparableMeasurementPair(baselineMeasurements, followUpMeasurements, normalized.publication)
     if (pairing.reasons.length > 0) {
       const blocked = baseAssessment(normalized.publication, pairing.reasons)
-      return { ...blocked, comparisons: pairing.comparisons, validPairCount: pairing.comparisons.length, validSourceCount: new Set(pairing.comparisons.map((comparison) => comparison.source)).size, assessmentFingerprint: outcomeSha256({ ...blocked, comparisons: pairing.comparisons }) }
+      const result = { ...blocked, comparisons: pairing.comparisons, validPairCount: pairing.comparisons.length, validSourceCount: new Set(pairing.comparisons.map((comparison) => comparison.source)).size }
+      return { ...result, assessmentFingerprint: outcomeSha256(result) }
     }
-    if (pairing.comparisons.length === 0) {
-      const insufficient = baseAssessment(normalized.publication, ['NO_VALID_PAIR'], 'insufficient_data')
-      return insufficient
-    }
-    const signals = pairing.comparisons.map((comparison) => comparison.signal)
-    const signal = combineSignals(signals)
+    if (pairing.comparisons.length === 0) return baseAssessment(normalized.publication, ['NO_VALID_PAIR'], 'insufficient_data')
+    const signal = combineSignals(pairing.comparisons.map((comparison) => comparison.signal))
     const validSourceCount = new Set(pairing.comparisons.map((comparison) => comparison.source)).size
     const status: OutcomeStatus = validSourceCount >= OUTCOME_MIN_READY_SOURCES ? 'ready' : 'partial'
-    const result = { status, signal, publication: normalized.publication, comparisons: pairing.comparisons, validPairCount: pairing.comparisons.length, validSourceCount, reasonCodes: [], limitations: [...OUTCOME_POLICY_LIMITATIONS], policyVersion: OUTCOME_LEARNING_POLICY_VERSION, engineVersion: OUTCOME_LEARNING_ENGINE_VERSION }
+    const result = { status, signal, publication: normalized.publication, comparisons: pairing.comparisons, validPairCount: pairing.comparisons.length, validSourceCount, reasonCodes: [], limitations: [...OUTCOME_POLICY_LIMITATIONS], policyVersion: OUTCOME_LEARNING_POLICY_VERSION, engineVersion: OUTCOME_LEARNING_ENGINE_VERSION, dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION }
     return { ...result, assessmentFingerprint: outcomeSha256(result) }
   } catch {
     return baseAssessment(null, ['INVALID_INPUT'])
@@ -249,80 +255,114 @@ export function assessPublishedContentOutcome(input: unknown): PublishedContentO
 
 function blockedCandidate(reasonCodes: readonly string[], fingerprintSeed: unknown = null): OutcomeLearningCandidateResult {
   const normalizedReasons = safeReasonCodes(reasonCodes)
-  return { candidateStatus: 'blocked', reasonCodes: normalizedReasons, limitations: safeLimitations([...OUTCOME_POLICY_LIMITATIONS, 'Learning candidate was not admitted.']), policyVersion: OUTCOME_LEARNING_POLICY_VERSION, engineVersion: OUTCOME_LEARNING_ENGINE_VERSION, candidateFingerprint: outcomeSha256({ status: 'blocked', reasonCodes: normalizedReasons, seed: fingerprintSeed }) }
+  return { candidateStatus: 'blocked', reasonCodes: normalizedReasons, limitations: safeLimitations([...OUTCOME_POLICY_LIMITATIONS, 'Learning candidate was not admitted.']), policyVersion: OUTCOME_LEARNING_POLICY_VERSION, engineVersion: OUTCOME_LEARNING_ENGINE_VERSION, candidateFingerprint: outcomeSha256({ status: 'blocked', reasonCodes: normalizedReasons, seed: typeof fingerprintSeed === 'string' ? fingerprintSeed : null }) }
 }
 
 function normalizeConsent(value: unknown): ConsentLineage | null {
   if (!isRecord(value) || containsForbiddenOutcomeKey(value)) return null
   const consentStatus = value.consentStatus
-  const consentVersion = normalizeOutcomeText(value.consentVersion) ?? ''
+  const consentVersion = normalizeOutcomeReferenceText(value.consentVersion) ?? ''
   const consentedAt = value.consentedAt === null ? null : normalizeOutcomeTimestamp(value.consentedAt)
   const consentAllowedUses = Array.isArray(value.consentAllowedUses) ? uniqueSorted(value.consentAllowedUses.filter((item): item is string => typeof item === 'string').map((item) => item.normalize('NFKC').trim().toLocaleLowerCase('en-US')).filter(Boolean)) : []
   const consentRevokedAt = value.consentRevokedAt === null ? null : normalizeOutcomeTimestamp(value.consentRevokedAt)
   const rightsConfirmed = value.rightsConfirmed === true
   if ((consentStatus !== 'granted' && consentStatus !== 'not_granted' && consentStatus !== 'unknown') || !consentVersion || !consentedAt || !consentAllowedUses.length || value.consentRevokedAt !== null && !consentRevokedAt) return null
+  if (consentAllowedUses.some((item) => !OUTCOME_ALLOWED_CONSENT_USES.includes(item as never))) return null
   return { consentStatus, consentVersion, consentedAt, consentAllowedUses, consentRevokedAt, rightsConfirmed }
 }
 
-function aggregateFeatures(comparisons: readonly OutcomeMetricComparison[]): Record<string, number> {
+function aggregateFeatures(comparisons: readonly PublishedContentOutcomeAssessment['comparisons'][number][]): Record<string, number> {
   const features: Record<string, number> = {}
   for (const comparison of comparisons) {
-    for (const [key, value] of Object.entries(comparison.baselineDailyMetrics)) {
-      features[`${comparison.source}.${key}.baseline`] = value
+    for (const [key, numeric] of Object.entries(comparison.baselineDailyMetrics)) {
+      features[`${comparison.source}.${key}.baseline`] = numeric
       const followUpValue = comparison.followUpDailyMetrics[key]
-      if (typeof followUpValue === 'number') features[`${comparison.source}.${key}.delta`] = followUpValue - value
+      if (typeof followUpValue === 'number') features[`${comparison.source}.${key}.delta`] = followUpValue - numeric
     }
-    for (const [key, value] of Object.entries(comparison.followUpDailyMetrics)) features[`${comparison.source}.${key}.follow_up`] = value
+    for (const [key, numeric] of Object.entries(comparison.followUpDailyMetrics)) features[`${comparison.source}.${key}.follow_up`] = numeric
   }
   return Object.fromEntries(Object.entries(features).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0))
+}
+
+function assessmentShapeKeys(value: Record<string, unknown>): string[] {
+  return Object.keys(value).sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+}
+
+function assessmentIsSuppliedAndExact(supplied: unknown, expected: PublishedContentOutcomeAssessment): 'missing' | 'invalid' | 'mismatch' | 'valid' {
+  if (supplied === undefined || supplied === null) return 'missing'
+  if (!isRecord(supplied)) return 'invalid'
+  const expectedRecord = expected as unknown as Record<string, unknown>
+  if (typeof supplied.assessmentFingerprint !== 'string' || supplied.assessmentFingerprint !== expected.assessmentFingerprint) return 'mismatch'
+  if (assessmentShapeKeys(supplied).join('|') !== assessmentShapeKeys(expectedRecord).join('|')) return 'invalid'
+  try {
+    const { assessmentFingerprint: _ignored, ...suppliedBody } = supplied
+    if (outcomeSha256(suppliedBody) !== expected.assessmentFingerprint) return 'mismatch'
+  } catch {
+    return 'invalid'
+  }
+  return 'valid'
+}
+
+function candidateReferenceHashes(publication: PublicationIdentity): { topicClusterHash: string; appliedRuleHashes: string[] } | null {
+  const topic = normalizeOutcomeReferenceText(publication.topicClusterCode)
+  const rules = publication.appliedRuleIds.map((rule) => normalizeOutcomeReferenceText(rule))
+  if (!topic || rules.some((rule): rule is null => rule === null)) return null
+  const normalizedRules = rules.filter((rule): rule is string => rule !== null)
+  return { topicClusterHash: domainSeparatedOutcomeSha256('topic_cluster', topic), appliedRuleHashes: uniqueSorted(normalizedRules.map((rule) => domainSeparatedOutcomeSha256('applied_rule', rule))) }
 }
 
 export function buildOutcomeLearningCandidate(input: unknown): OutcomeLearningCandidateResult {
   try {
     if (!isRecord(input) || containsForbiddenOutcomeKey(input)) return blockedCandidate(['INVALID_INPUT', 'FORBIDDEN_PAYLOAD_KEY'])
     const outcomeRequest = input.outcomeRequest
+    const suppliedAssessment = input.assessment
     const assessment = assessPublishedContentOutcome(outcomeRequest)
     const consent = normalizeConsent(input.consent)
     const reasons: string[] = []
+    if (!isRecord(outcomeRequest) || outcomeRequest.dataContractVersion !== OUTCOME_DATA_CONTRACT_VERSION) reasons.push('DATA_CONTRACT_MISMATCH')
+    if (input.dataContractVersion !== OUTCOME_DATA_CONTRACT_VERSION) reasons.push(typeof input.dataContractVersion === 'string' && input.dataContractVersion.trim() ? 'DATA_CONTRACT_MISMATCH' : 'DATA_CONTRACT_MISSING')
+    if (isRecord(suppliedAssessment) && suppliedAssessment.dataContractVersion !== OUTCOME_DATA_CONTRACT_VERSION) reasons.push('DATA_CONTRACT_MISMATCH')
+    const assessmentState = assessmentIsSuppliedAndExact(suppliedAssessment, assessment)
+    if (assessmentState === 'missing') reasons.push('ASSESSMENT_REQUIRED')
+    else if (assessmentState === 'invalid') reasons.push('ASSESSMENT_INVALID', 'CANDIDATE_NOT_ELIGIBLE')
+    else if (assessmentState === 'mismatch') reasons.push('ASSESSMENT_FINGERPRINT_MISMATCH', 'CANDIDATE_NOT_ELIGIBLE')
     if (!consent || consent.consentStatus !== 'granted') reasons.push('CONSENT_REQUIRED')
     if (consent?.consentRevokedAt) reasons.push('CONSENT_REVOKED')
     if (!consent?.consentAllowedUses.includes('model_improvement')) reasons.push('CONSENT_USE_NOT_ALLOWED')
     if (!consent?.rightsConfirmed) reasons.push('RIGHTS_NOT_CONFIRMED')
     if (input.piiScanStatus !== 'none_detected') reasons.push('PII_DETECTED')
-    const dataContractVersion = normalizeOutcomeText(input.dataContractVersion) ?? ''
-    if (!dataContractVersion) reasons.push('DATA_CONTRACT_MISSING')
     if (assessment.status !== 'ready' && assessment.status !== 'partial') reasons.push('CANDIDATE_NOT_ELIGIBLE')
     if (assessment.validPairCount < 1) reasons.push('NO_VALID_PAIR')
-    const suppliedAssessment = input.assessment
-    if (isRecord(suppliedAssessment) && suppliedAssessment.assessmentFingerprint !== assessment.assessmentFingerprint) reasons.push('CANDIDATE_NOT_ELIGIBLE')
-    if (reasons.length > 0 || !consent) return blockedCandidate(reasons.length > 0 ? reasons : ['INVALID_INPUT'], assessment.assessmentFingerprint)
+    const references = assessment.publication ? candidateReferenceHashes(assessment.publication) : null
+    if (!references) reasons.push('VALUE_POLICY_VIOLATION')
+    if (reasons.length > 0 || !consent || !references) return blockedCandidate(reasons.length > 0 ? reasons : ['INVALID_INPUT'], assessment.assessmentFingerprint)
     const publication = assessment.publication
-    const candidate: Omit<OutcomeLearningCandidate, 'candidateFingerprint'> = {
+    const candidateBase: Omit<OutcomeLearningCandidate, 'candidateFingerprint'> = {
       candidateStatus: 'eligible',
       deidentifiedSubjectKey: publication.deidentifiedSubjectKey,
       publicationIdentityHashes: [publicationIdentityHash(publication)],
       contentType: publication.contentType,
       language: publication.language,
-      appliedRuleIds: [...publication.appliedRuleIds].sort((left, right) => left < right ? -1 : left > right ? 1 : 0),
-      topicClusterCode: publication.topicClusterCode,
+      appliedRuleHashes: references.appliedRuleHashes,
+      topicClusterHash: references.topicClusterHash,
       aggregateNumericFeatures: aggregateFeatures(assessment.comparisons),
       directionalLabels: assessment.comparisons.map((comparison) => ({ source: comparison.source, signal: comparison.signal })).sort((left, right) => left.source < right.source ? -1 : left.source > right.source ? 1 : 0),
       sourceHashes: uniqueSorted(assessment.comparisons.flatMap((comparison) => comparison.sourceHashes)),
-      measurementSources: [...new Set(assessment.comparisons.map((comparison) => comparison.source))].sort((left, right) => left < right ? -1 : left > right ? 1 : 0),
+      measurementSources: uniqueSorted(assessment.comparisons.map((comparison) => comparison.source)) as OutcomeLearningCandidate['measurementSources'],
       policyVersion: OUTCOME_LEARNING_POLICY_VERSION,
       engineVersion: OUTCOME_LEARNING_ENGINE_VERSION,
       consentLineage: consent,
-      dataContractVersion,
-      limitations: safeLimitations([...OUTCOME_POLICY_LIMITATIONS, 'Learning candidate stores aggregate numeric features and deidentified references only.']),
+      dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION,
+      limitations: safeLimitations([...OUTCOME_POLICY_LIMITATIONS, ...OUTCOME_POLICY_LIMITATIONS_FOR_CANDIDATE]),
     }
-    return { ...candidate, candidateFingerprint: outcomeSha256(candidate) }
+    return { ...candidateBase, candidateFingerprint: outcomeSha256(candidateBase) }
   } catch {
     return blockedCandidate(['INVALID_INPUT'])
   }
 }
 
 function blockedManifest(reasons: readonly string[]): OutcomeDatasetManifest {
-  const result = { status: 'gate_blocked' as const, eligibleCandidateCount: 0, trainCandidateFingerprints: [] as string[], validationCandidateFingerprints: [] as string[], testCandidateFingerprints: [] as string[], candidateFingerprints: [] as string[], sourceCombinationCount: 0, contentTypeCounts: {}, languageCounts: {}, policyVersion: OUTCOME_LEARNING_POLICY_VERSION, engineVersion: OUTCOME_LEARNING_ENGINE_VERSION, reasonCodes: safeReasonCodes(reasons), limitations: safeLimitations([...OUTCOME_POLICY_LIMITATIONS, ...OUTCOME_POLICY_LIMITATIONS_FOR_DATASET]), }
+  const result = { status: 'gate_blocked' as const, eligibleCandidateCount: 0, trainCandidateFingerprints: [] as string[], validationCandidateFingerprints: [] as string[], testCandidateFingerprints: [] as string[], candidateFingerprints: [] as string[], sourceCombinationCount: 0, contentTypeCounts: {}, languageCounts: {}, policyVersion: OUTCOME_LEARNING_POLICY_VERSION, engineVersion: OUTCOME_LEARNING_ENGINE_VERSION, reasonCodes: safeReasonCodes(reasons), limitations: safeLimitations([...OUTCOME_POLICY_LIMITATIONS, ...OUTCOME_POLICY_LIMITATIONS_FOR_DATASET]) }
   return { ...result, manifestFingerprint: outcomeSha256(result) }
 }
 
@@ -330,42 +370,60 @@ function candidateLineage(candidate: OutcomeLearningCandidate): string {
   return candidate.publicationIdentityHashes.slice().sort((left, right) => left < right ? -1 : left > right ? 1 : 0).join('|')
 }
 
+function candidateValidationReasons(raw: Record<string, unknown>): string[] {
+  const reasons: string[] = []
+  if (raw.candidateStatus !== 'eligible') reasons.push('CANDIDATE_NOT_ELIGIBLE')
+  const consentLineage = raw.consentLineage
+  if (isRecord(consentLineage) && consentLineage.consentRevokedAt !== null) reasons.push('CONSENT_REVOKED')
+  if (Array.isArray(raw.sourceHashes) && raw.sourceHashes.some((hash) => !isOutcomeSha256(hash))) reasons.push('INVALID_HASH')
+  if (Array.isArray(raw.publicationIdentityHashes) && raw.publicationIdentityHashes.some((hash) => !isOutcomeSha256(hash))) reasons.push('INVALID_HASH')
+  if (Array.isArray(raw.appliedRuleHashes) && raw.appliedRuleHashes.some((hash) => !isOutcomeSha256(hash))) reasons.push('INVALID_HASH')
+  if (typeof raw.topicClusterHash === 'string' && !isOutcomeSha256(raw.topicClusterHash)) reasons.push('INVALID_HASH')
+  if (typeof raw.candidateFingerprint === 'string' && isOutcomeSha256(raw.candidateFingerprint)) reasons.push('CANDIDATE_FINGERPRINT_MISMATCH')
+  return safeReasonCodes(reasons.length > 0 ? reasons : ['INVALID_CANDIDATE_SHAPE'])
+}
+
+function splitRatiosValid(): boolean {
+  return Math.abs(OUTCOME_SPLIT_TRAIN_RATIO + OUTCOME_SPLIT_VALIDATION_RATIO + OUTCOME_SPLIT_TEST_RATIO - 1) < Number.EPSILON
+}
+
 function deterministicSplit(candidates: readonly OutcomeLearningCandidate[]): { train: string[]; validation: string[]; test: string[] } {
-  const groups = new Map<string, OutcomeLearningCandidate[]>()
-  for (const candidate of candidates) {
-    const lineage = candidateLineage(candidate)
-    const group = groups.get(lineage) ?? []
-    group.push(candidate)
-    groups.set(lineage, group)
+  const ordered = candidates.slice().sort((left, right) => {
+    const leftScore = outcomeSha256({ kind: 'outcome_split_score', lineage: candidateLineage(left), candidateFingerprint: left.candidateFingerprint })
+    const rightScore = outcomeSha256({ kind: 'outcome_split_score', lineage: candidateLineage(right), candidateFingerprint: right.candidateFingerprint })
+    if (leftScore !== rightScore) return leftScore < rightScore ? -1 : 1
+    return left.candidateFingerprint < right.candidateFingerprint ? -1 : left.candidateFingerprint > right.candidateFingerprint ? 1 : 0
+  })
+  const trainCount = Math.floor(ordered.length * OUTCOME_SPLIT_TRAIN_RATIO)
+  const validationCount = Math.floor(ordered.length * OUTCOME_SPLIT_VALIDATION_RATIO)
+  return {
+    train: ordered.slice(0, trainCount).map((candidate) => candidate.candidateFingerprint),
+    validation: ordered.slice(trainCount, trainCount + validationCount).map((candidate) => candidate.candidateFingerprint),
+    test: ordered.slice(trainCount + validationCount).map((candidate) => candidate.candidateFingerprint),
   }
-  const train: string[] = []
-  const validation: string[] = []
-  const test: string[] = []
-  for (const [lineage, group] of [...groups.entries()].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
-    const bucketHash = outcomeSha256({ lineage, candidateFingerprints: group.map((candidate) => candidate.candidateFingerprint).sort() })
-    const bucket = Number.parseInt(bucketHash.slice(0, 8), 16) / 0xffffffff
-    const target = bucket < OUTCOME_SPLIT_TRAIN_RATIO ? train : bucket < OUTCOME_SPLIT_TRAIN_RATIO + 0.1 ? validation : test
-    target.push(...group.map((candidate) => candidate.candidateFingerprint).sort((left, right) => left < right ? -1 : left > right ? 1 : 0))
-  }
-  return { train: train.sort(), validation: validation.sort(), test: test.sort() }
 }
 
 export function buildOutcomeDatasetManifest(input: unknown): OutcomeDatasetManifest {
   try {
-    if (!isRecord(input) || containsForbiddenOutcomeKey(input) || !Array.isArray(input.candidates)) return blockedManifest(['INVALID_INPUT'])
+    if (!isRecord(input) || !Array.isArray(input.candidates)) return blockedManifest(['INVALID_INPUT'])
     const rawCandidates = input.candidates
+    if (rawCandidates.length > OUTCOME_MAX_DATASET_CANDIDATES) return blockedManifest(['TOO_MANY_DATASET_CANDIDATES'])
+    const envelopeWithoutCandidates = { ...input, candidates: [] }
+    if (containsForbiddenOutcomeKey(envelopeWithoutCandidates)) return blockedManifest(['INVALID_INPUT', 'FORBIDDEN_PAYLOAD_KEY'])
     const candidates: OutcomeLearningCandidate[] = []
     const seenFingerprints = new Set<string>()
     const seenLineages = new Set<string>()
     const reasons: string[] = []
     for (const raw of rawCandidates) {
-      if (!isRecord(raw) || raw.candidateStatus !== 'eligible' || containsForbiddenOutcomeKey(raw) || typeof raw.candidateFingerprint !== 'string' || !isOutcomeSha256(raw.candidateFingerprint)) {
-        reasons.push('CANDIDATE_NOT_ELIGIBLE')
+      const candidate = normalizeOutcomeLearningCandidate(raw)
+      if (!candidate) {
+        if (isRecord(raw)) {
+          reasons.push(...candidateValidationReasons(raw))
+          const rawPublicationHashes = Array.isArray(raw.publicationIdentityHashes) && raw.publicationIdentityHashes.every((hash) => isOutcomeSha256(hash)) ? raw.publicationIdentityHashes.map((hash) => String(hash).toLowerCase()).sort().join('|') : null
+          if (rawPublicationHashes && seenLineages.has(rawPublicationHashes)) reasons.push('DUPLICATE_PUBLICATION_LINEAGE')
+        } else reasons.push('INVALID_CANDIDATE_SHAPE')
         continue
       }
-      const candidate = raw as unknown as OutcomeLearningCandidate
-      if (candidate.consentLineage.consentRevokedAt !== null) reasons.push('CONSENT_REVOKED')
-      if (!candidate.sourceHashes.length || candidate.sourceHashes.some((hash) => !isOutcomeSha256(hash))) reasons.push('INVALID_HASH')
       if (seenFingerprints.has(candidate.candidateFingerprint)) reasons.push('DUPLICATE_CANDIDATE')
       const lineage = candidateLineage(candidate)
       if (seenLineages.has(lineage)) reasons.push('DUPLICATE_PUBLICATION_LINEAGE')
@@ -381,13 +439,14 @@ export function buildOutcomeDatasetManifest(input: unknown): OutcomeDatasetManif
     for (const candidate of sorted) {
       contentTypeCounts[candidate.contentType] = (contentTypeCounts[candidate.contentType] ?? 0) + 1
       languageCounts[candidate.language] = (languageCounts[candidate.language] ?? 0) + 1
-      combinations.add(outcomeSourceCombinationKey(candidate.measurementSources))
+      combinations.add([...candidate.measurementSources].sort().join('+'))
     }
     const missingGate: string[] = []
     if (sorted.length < OUTCOME_MIN_DATASET_CANDIDATES) missingGate.push('DATASET_ADMISSION_GATE_BLOCKED')
     for (const contentType of ['article', 'faq', 'service_page']) if ((contentTypeCounts[contentType] ?? 0) < OUTCOME_MIN_CONTENT_TYPE_COUNT) missingGate.push('DATASET_ADMISSION_GATE_BLOCKED')
     for (const language of ['zh-hant', 'en']) if ((languageCounts[language] ?? 0) < OUTCOME_MIN_LANGUAGE_COUNT) missingGate.push('DATASET_ADMISSION_GATE_BLOCKED')
     if (combinations.size < 2) missingGate.push('DATASET_ADMISSION_GATE_BLOCKED')
+    if (!splitRatiosValid()) missingGate.push('INVALID_INPUT')
     if (missingGate.length > 0) return blockedManifest(missingGate)
     const split = deterministicSplit(sorted)
     const result = { status: 'ready_for_dataset_review' as const, eligibleCandidateCount: sorted.length, trainCandidateFingerprints: split.train, validationCandidateFingerprints: split.validation, testCandidateFingerprints: split.test, candidateFingerprints: sorted.map((candidate) => candidate.candidateFingerprint), sourceCombinationCount: combinations.size, contentTypeCounts: Object.fromEntries(Object.entries(contentTypeCounts).sort()), languageCounts: Object.fromEntries(Object.entries(languageCounts).sort()), policyVersion: OUTCOME_LEARNING_POLICY_VERSION, engineVersion: OUTCOME_LEARNING_ENGINE_VERSION, reasonCodes: [], limitations: safeLimitations([...OUTCOME_POLICY_LIMITATIONS, ...OUTCOME_POLICY_LIMITATIONS_FOR_DATASET]) }
@@ -399,34 +458,48 @@ export function buildOutcomeDatasetManifest(input: unknown): OutcomeDatasetManif
 
 function validEvaluationMetrics(value: unknown): value is ModelEvaluationMetrics {
   if (!isRecord(value)) return false
-  return ['factualErrorRate', 'blockedContentEscapeRate', 'citationReadiness', 'taskQuality'].every((key) => typeof value[key] === 'number' && Number.isFinite(value[key]) && value[key] >= 0 && value[key] <= 1)
+  const keys = ['factualErrorRate', 'blockedContentEscapeRate', 'citationReadiness', 'taskQuality']
+  const actual = Object.keys(value).sort()
+  if (actual.length !== keys.length || actual.some((key, index) => key !== [...keys].sort()[index])) return false
+  return keys.every((key) => typeof value[key] === 'number' && Number.isFinite(value[key]) && value[key] >= 0 && value[key] <= 1)
 }
 
-function releaseResult(decision: ModelReleaseGateResult['decision'], reasons: readonly string[], evidence: unknown = null): ModelReleaseGateResult {
+function releaseResult(decision: ModelReleaseGateResult['decision'], reasons: readonly string[], canonicalRequest: ModelReleaseGateRequest | null = null): ModelReleaseGateResult {
   const result = { decision, reasonCodes: safeReasonCodes(reasons), limitations: safeLimitations([...OUTCOME_POLICY_LIMITATIONS, ...OUTCOME_POLICY_LIMITATIONS_FOR_RELEASE]), policyVersion: OUTCOME_LEARNING_POLICY_VERSION, engineVersion: OUTCOME_LEARNING_ENGINE_VERSION }
-  return { ...result, releaseFingerprint: outcomeSha256({ ...result, evidence }) }
+  return { ...result, releaseFingerprint: outcomeSha256({ result, canonicalRequest }) }
+}
+
+const RELEASE_REQUEST_KEYS = ['baselineModelArtifactHash', 'candidateModelArtifactHash', 'datasetManifestHash', 'evaluationContractVersion', 'evaluationCaseCount', 'baselineMetrics', 'candidateMetrics', 'shadowRunStatus', 'canaryRunStatus', 'rollbackArtifactAvailable', 'safetyIncidents', 'evaluatedAt'] as const
+
+function releaseShapeReasons(input: Record<string, unknown>): string[] {
+  const reasons: string[] = []
+  const actualKeys = Object.keys(input).sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+  const expectedKeys = [...RELEASE_REQUEST_KEYS].sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+  if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) reasons.push('INVALID_RELEASE_SHAPE')
+  if (input.evaluationContractVersion !== OUTCOME_EVALUATION_CONTRACT_VERSION) reasons.push('EVALUATION_CONTRACT_MISMATCH')
+  if (isOutcomeSha256(input.baselineModelArtifactHash) && isOutcomeSha256(input.candidateModelArtifactHash) && String(input.baselineModelArtifactHash).toLowerCase() === String(input.candidateModelArtifactHash).toLowerCase()) reasons.push('MODEL_ARTIFACTS_NOT_DISTINCT')
+  if (typeof input.evaluationCaseCount !== 'number' || !Number.isSafeInteger(input.evaluationCaseCount) || input.evaluationCaseCount > OUTCOME_MAX_EVALUATION_CASES || input.evaluationCaseCount < 0) reasons.push('EVALUATION_CASES_INVALID')
+  else if (input.evaluationCaseCount < OUTCOME_MIN_EVALUATION_CASES) reasons.push('EVALUATION_CASES_INSUFFICIENT')
+  if (!validEvaluationMetrics(input.baselineMetrics) || !validEvaluationMetrics(input.candidateMetrics)) reasons.push('INVALID_MODEL_EVIDENCE')
+  if (input.shadowRunStatus === 'pending' && input.canaryRunStatus === 'passed') reasons.push('SHADOW_CANARY_ORDER_INVALID')
+  if (input.shadowRunStatus === 'failed' || input.canaryRunStatus === 'failed') reasons.push('SAFETY_REGRESSION')
+  if (!isRecord(input.baselineMetrics) || !isRecord(input.candidateMetrics) || !isOutcomeSha256(input.baselineModelArtifactHash) || !isOutcomeSha256(input.candidateModelArtifactHash) || !isOutcomeSha256(input.datasetManifestHash) || !normalizeOutcomeTimestamp(input.evaluatedAt) || !['pending', 'passed', 'failed'].includes(input.shadowRunStatus as string) || !['pending', 'passed', 'failed'].includes(input.canaryRunStatus as string) || typeof input.rollbackArtifactAvailable !== 'boolean' || typeof input.safetyIncidents !== 'number' || !Number.isSafeInteger(input.safetyIncidents) || input.safetyIncidents < 0) reasons.push('INVALID_MODEL_EVIDENCE')
+  return safeReasonCodes(reasons)
 }
 
 export function evaluateModelReleaseGate(input: unknown): ModelReleaseGateResult {
   try {
-    if (!isRecord(input) || containsForbiddenOutcomeKey(input)) return releaseResult('gate_blocked', ['INVALID_MODEL_EVIDENCE'], input)
-    const request = input as unknown as ModelReleaseGateRequest
-    const hashes = [request.baselineModelArtifactHash, request.candidateModelArtifactHash, request.datasetManifestHash]
+    if (!isRecord(input) || containsForbiddenOutcomeKey(input)) return releaseResult('gate_blocked', ['INVALID_MODEL_EVIDENCE'])
+    const request = normalizeModelReleaseGateRequest(input)
+    if (!request) return releaseResult('gate_blocked', releaseShapeReasons(input))
     const reasons: string[] = []
-    if (hashes.some((hash) => !isOutcomeSha256(hash))) reasons.push('INVALID_MODEL_EVIDENCE')
-    if (!normalizeOutcomeText(request.evaluationContractVersion) || !normalizeOutcomeTimestamp(request.evaluatedAt)) reasons.push('INVALID_MODEL_EVIDENCE')
-    if (!Number.isInteger(request.evaluationCaseCount) || request.evaluationCaseCount < OUTCOME_MIN_EVALUATION_CASES) reasons.push('EVALUATION_CASES_INSUFFICIENT')
-    if (!validEvaluationMetrics(request.baselineMetrics) || !validEvaluationMetrics(request.candidateMetrics)) reasons.push('INVALID_MODEL_EVIDENCE')
-    if (!['pending', 'passed', 'failed'].includes(request.shadowRunStatus) || !['pending', 'passed', 'failed'].includes(request.canaryRunStatus) || typeof request.rollbackArtifactAvailable !== 'boolean' || !Number.isInteger(request.safetyIncidents) || request.safetyIncidents < 0) reasons.push('INVALID_MODEL_EVIDENCE')
-    if (reasons.length > 0) return releaseResult('gate_blocked', reasons, request)
-    const baseline = request.baselineMetrics
-    const candidate = request.candidateMetrics
-    if (candidate.factualErrorRate > baseline.factualErrorRate) reasons.push('FACTUAL_ERROR_REGRESSION')
-    if (candidate.blockedContentEscapeRate > baseline.blockedContentEscapeRate) reasons.push('BLOCKED_CONTENT_ESCAPE_REGRESSION')
-    if (candidate.citationReadiness < baseline.citationReadiness) reasons.push('CITATION_READINESS_REGRESSION')
-    if (candidate.taskQuality < baseline.taskQuality + OUTCOME_MIN_TASK_QUALITY_IMPROVEMENT) reasons.push('TASK_QUALITY_NOT_IMPROVED')
+    if (request.candidateMetrics.factualErrorRate > request.baselineMetrics.factualErrorRate) reasons.push('FACTUAL_ERROR_REGRESSION')
+    if (request.candidateMetrics.blockedContentEscapeRate > request.baselineMetrics.blockedContentEscapeRate) reasons.push('BLOCKED_CONTENT_ESCAPE_REGRESSION')
+    if (request.candidateMetrics.citationReadiness < request.baselineMetrics.citationReadiness) reasons.push('CITATION_READINESS_REGRESSION')
+    if (request.candidateMetrics.taskQuality < request.baselineMetrics.taskQuality + OUTCOME_MIN_TASK_QUALITY_IMPROVEMENT) reasons.push('TASK_QUALITY_NOT_IMPROVED')
     if (request.safetyIncidents !== 0) reasons.push('SAFETY_REGRESSION')
     if (!request.rollbackArtifactAvailable) reasons.push('ROLLBACK_ARTIFACT_REQUIRED')
+    if (request.shadowRunStatus === 'pending' && request.canaryRunStatus === 'passed') reasons.push('SHADOW_CANARY_ORDER_INVALID')
     if (request.shadowRunStatus === 'failed' || request.canaryRunStatus === 'failed') reasons.push('SAFETY_REGRESSION')
     if (reasons.length > 0) return releaseResult('gate_blocked', reasons, request)
     if (request.shadowRunStatus !== 'passed') return releaseResult('shadow_ready', ['SHADOW_RUN_REQUIRED'], request)
@@ -438,5 +511,5 @@ export function evaluateModelReleaseGate(input: unknown): ModelReleaseGateResult
 }
 
 export function isOutcomeLearningEnginePure(): boolean {
-  return outcomeMeasurementSources.length === 4 && outcomeContentTypes.length === 5 && outcomeLanguages.length === 2 && OUTCOME_FORBIDDEN_REASON_CODES.length > 0
+  return outcomeMeasurementSources.length === 4 && outcomeContentTypes.length === 5 && outcomeLanguages.length === 2 && OUTCOME_FORBIDDEN_REASON_CODES.length > 0 && OUTCOME_MAX_CANDIDATE_LIMITATIONS > 0
 }

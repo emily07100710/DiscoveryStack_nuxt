@@ -8,13 +8,19 @@
 
 > deidentifiedSubjectKey 是由上游提供的 pseudonymous/deidentified reference，不是完全匿名識別。V1 不接收公司名稱、Email、網域或 URL 以自行 hash。
 
-## Public API 與版本
+## Public API 與固定版本
 
-`server/outcome-learning/index.ts` 匯出固定版本 `OUTCOME_LEARNING_ENGINE_VERSION = outcome-learning-loop-engine-v1`，以及 `normalizeOutcomeMeasurement`、`assessPublishedContentOutcome`、`buildOutcomeLearningCandidate`、`buildOutcomeDatasetManifest` 與 `evaluateModelReleaseGate`。所有 fingerprint 使用 Node `crypto` 的 SHA-256；canonical object keys、set-like arrays、UTC timestamps 與 finite numbers 都以 deterministic 規則處理。
+`server/outcome-learning/index.ts` 匯出固定版本 `OUTCOME_LEARNING_ENGINE_VERSION = outcome-learning-loop-engine-v1`，以及 `OUTCOME_DATA_CONTRACT_VERSION = outcome-contract-v1` 與 `OUTCOME_EVALUATION_CONTRACT_VERSION = evaluation-contract-v1`。Assessment、candidate 與 candidate fingerprint 必須使用固定 data contract；model release gate 必須使用固定 evaluation contract。`latest`、`v2`、空白、undefined、null 或其他任意字串都會 fail closed。
 
-## Publication identity
+Public API 包含 `normalizeOutcomeMeasurement`、`assessPublishedContentOutcome`、`buildOutcomeLearningCandidate`、`buildOutcomeDatasetManifest` 與 `evaluateModelReleaseGate`。所有 fingerprint 使用 Node `crypto` 的 SHA-256；canonical object keys、set-like arrays、UTC timestamps 與 finite numbers 都以 deterministic 規則處理。
+
+## Publication identity 與 value boundary
 
 每個 outcome 必須綁定 `deidentifiedSubjectKey`、schedule entry/key、production plan、job、draft/version、`contentHash`、`evidenceSnapshotHash`、`publishedAt`、content type、language、applied rule IDs 與 topic cluster code。subject key、content hash 與 evidence snapshot hash 都必須是 64 字元 lowercase SHA-256 hex；任一 identity 或 hash 不合法時，assessment fail closed 為 `blocked`。
+
+呼叫者提供的 `topicClusterCode` 與 `appliedRuleIds` 不會直接進入 learning candidate output。它們先經 bounded deterministic value validation，拒絕 Email-like 值、`http://`／`https://`、`www.`、明顯電話格式、換行、control characters、空字串、純空白、過長字串、非 string 與 malformed Unicode；通過後才以 domain-separated hash 保存：`outcomeSha256({ kind: 'topic_cluster', value })` 與 `outcomeSha256({ kind: 'applied_rule', value })`。即使最後會 hash，偵測到 Email、URL、電話或 control character 仍會拒絕。
+
+SHA/pseudonymous reference 不等於匿名資料；系統只能治理明確的結構化欄位，不宣稱能從任意文字可靠辨認所有人名，也不宣稱 forbidden-key scanner 能證明資料沒有 PII。Production admission 仍需可信的上游 PII scanner 與人工治理。
 
 ## Measurement contract
 
@@ -33,6 +39,8 @@ Counts 必須是非負有限整數；rate 必須落在 0–1；average position 
 
 ## Outcome assessment
 
+Assessment input 的 `dataContractVersion` 必須精確等於 `outcome-contract-v1`；assessment output 保存 canonical contract，且 contract version 會納入 assessment fingerprint。因此 valid contract 與 attacker contract 會產生不同 fingerprint，attacker contract 會 blocked。
+
 baseline 的 window end 必須不晚於 publication time；follow-up 必須從 publication time 起算，長度至少 7 天、最多 90 天，且不可與 baseline overlap。比較時 source、deidentified subject、scope fingerprint 與 measurement window 必須可比較；不同 query set、site scope、品牌範圍或模型集合不得合併。baseline/follow-up 先轉 daily rate，再產生每個 source 的 directional observational signal。
 
 | Status | Policy meaning |
@@ -46,13 +54,19 @@ baseline 的 window end 必須不晚於 publication time；follow-up 必須從 p
 
 ## Learning candidate governance
 
+`buildOutcomeLearningCandidate` 必須收到 supplied `assessment`；undefined、null、primitive、malformed object、missing assessmentFingerprint 或 fingerprint mismatch 都會 blocked，不會在缺少 supplied assessment 時靜默重建並繼續建立 eligible candidate。`outcomeRequest.dataContractVersion`、`assessment.dataContractVersion` 與 candidate input `dataContractVersion` 三者都必須精確等於 `outcome-contract-v1` 且彼此一致；candidate fingerprint 也包含固定 contract。
+
 只有在 `consentStatus === granted`、consent version 與 consentedAt 完整、allowed uses 明確包含 `model_improvement`、consent 未撤回、rights confirmed、assessment 為 `ready` 或 `partial`、存在合法 pair、PII scan 為 `none_detected` 且 data contract version 完整時，才會建立 eligible learning candidate。其餘狀況一律 `blocked`。
 
-Eligible candidate 只保存 deidentified subject reference、publication identity hashes、content type、language、normalized applied rule IDs、topic cluster code、aggregate numeric features、directional labels、source hashes、policy/engine versions、consent lineage、data contract version、limitations 與 candidate fingerprint。runtime 會遞迴拒絕大小寫或 snake/camel 變體的 forbidden keys，並不依賴 TypeScript type 來提供安全性。
+Eligible candidate 只保存 deidentified subject reference、publication identity hashes、content type、language、`appliedRuleHashes`、`topicClusterHash`、aggregate numeric features、directional labels、source hashes、policy/engine versions、consent lineage、固定 data contract、limitations 與 candidate fingerprint。runtime 會遞迴拒絕大小寫或 snake/camel 變體的 forbidden keys，並執行 value-level validation；不依賴 TypeScript type 來提供安全性。
 
-## Dataset manifest
+## Dataset manifest 與 candidate revalidation
 
-`buildOutcomeDatasetManifest` 只接收 eligible candidates。candidate fingerprint 必須唯一，publication identity lineage 不得重複，consent 不得 revoked，source hash lineage 必須完整，候選會依 fingerprint 與 lineage 進行 stable ordering。train/validation/test split 使用 fingerprint-derived deterministic bucket，比例為 80%/10%/10%，不使用 random 或現在時間；相同 publication lineage 不會跨 split。
+`buildOutcomeDatasetManifest` 先檢查 `candidates.length`；上限為 `OUTCOME_MAX_DATASET_CANDIDATES = 10000`，超過上限時在 sort、hash 或讀取 nested candidate fields 前立即回 `gate_blocked` 與 `TOO_MANY_DATASET_CANDIDATES`。
+
+每個 raw candidate 都會經過 `normalizeOutcomeLearningCandidate` 的 exact-shape runtime validation，不再直接 cast 成 `OutcomeLearningCandidate`。Validator 會拒絕未知 extra keys，驗證 fixed enums、bounded finite features、consent、policy/engine/data contract、hash lineage、source/label 一致性與 canonical limitations；排除 candidateFingerprint 後重新建立 canonical body，計算 expected fingerprint，不一致即回 `CANDIDATE_FINGERPRINT_MISMATCH` 並阻擋 manifest。rights、consent、allowed uses、contract、policy、engine、enum、hash、features 或 publication lineage 的 tampering 都不能保留舊 fingerprint 通過。
+
+Admission 後先以 lineage 與 candidateFingerprint 建立 deterministic stable score，再以 score 與 fingerprint tie-break sorting。Split ratios 使用固定 `OUTCOME_SPLIT_TRAIN_RATIO`、`OUTCOME_SPLIT_VALIDATION_RATIO`、`OUTCOME_SPLIT_TEST_RATIO`，並驗證總和為 1；對 N 筆候選使用 floor(0.8N)、floor(0.1N)、N 減前兩者。150 筆精確得到 train 120、validation 15、test 15；arrays 無交集且 union 等於 candidate set。不使用 random、現在時間、locale-dependent sort 或 object insertion order。
 
 | Admission requirement | V1 fixed minimum |
 |---|---:|
@@ -68,13 +82,17 @@ Eligible candidate 只保存 deidentified subject reference、publication identi
 
 ## Model release gate
 
-`evaluateModelReleaseGate` 只評估已存在的 aggregate evaluation evidence。輸入需包含 baseline/candidate model artifact hash、dataset manifest hash、evaluation contract version、case count、baseline/candidate factual error、blocked-content escape、citation readiness、task quality、shadow/canary status、rollback availability、safety incidents 與 evaluatedAt。
+`evaluateModelReleaseGate` 只評估已存在的 aggregate evaluation evidence，且先做 exact-shape runtime normalization。未知 extra keys、missing keys、非固定 evaluation contract、非 canonical hash、baseline/candidate model artifact hash 相同、metric extra/missing/non-finite/string number、unsafe case count 或 invalid safety incidents 都會 blocked。`evaluationContractVersion` 必須精確等於 `evaluation-contract-v1`；release fingerprint 只根據 normalized canonical request 產生，不直接 hash raw input。
 
-固定決策為 `gate_blocked`、`shadow_ready`、`canary_ready` 與 `promotion_ready`。最少 evaluation cases 為 100；candidate factual error 與 blocked-content escape 不得高於 baseline，citation readiness 不得下降，task quality 必須至少改善 0.01，safety incidents 必須為 0，shadow/canary 必須 passed，rollback artifact 必須可用。`promotion_ready` 只代表 evidence gate 通過，**不等於 deployed**，也不會修改 production configuration。
+輸入需包含 baseline/candidate model artifact hash、dataset manifest hash、evaluation contract version、case count、baseline/candidate factual error、blocked-content escape、citation readiness、task quality、shadow/canary status、rollback availability、safety incidents 與 evaluatedAt。metrics 必須且只能有四個固定 keys，case count 為 safe integer 且介於 100 與 1,000,000，safety incidents 為 safe non-negative integer。shadow pending 時 canary 不得 passed；shadow/canary failed 一律 blocked；只有 shadow passed 且 canary passed、沒有品質 regression、rollback artifact 可用且 safety incidents 為 0，才能 `promotion_ready`。
+
+固定決策為 `gate_blocked`、`shadow_ready`、`canary_ready` 與 `promotion_ready`。`promotion_ready` 只代表 evidence gate 通過，**不等於 deployed**，也不會修改 production configuration。
 
 ## Determinism 與 privacy constraints
 
 Canonical fingerprint 會排序 object keys、normalize 去重排序 set-like arrays、canonicalize timestamps、拒絕 undefined 與非有限數字，並使用 locale-independent ordering。assessment、candidate、manifest 與 release fingerprint 都會隨其 hash lineage 或 aggregate evidence 改變而改變。所有 fixtures 僅使用 synthetic metadata；V1 沒有 real provider/API/DB integration。
+
+Value-level validation 只能治理明確的結構化欄位；SHA/pseudonymous reference 不等於匿名資料。系統不宣稱能從任意文字可靠辨認所有人名，forbidden-key scanner 也不能單獨證明沒有 PII；production admission 仍需可信上游 PII scanner 與人工治理。
 
 ## V1 limitations
 
