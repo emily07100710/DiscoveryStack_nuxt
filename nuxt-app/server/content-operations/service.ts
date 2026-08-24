@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createError } from 'h3'
 import {
   assessPublishedContentOutcome,
@@ -16,9 +16,9 @@ import {
   type DueContentWork,
 } from '../content-calendar'
 import type { CalendarEntryStatus } from '../content-calendar/policy-catalog'
-import { getProductionPlanBundle } from '../seo-geo-core/repository'
 import type {
   CalendarInsert,
+  CanonicalContext,
   ContentOperationsRepository,
   EntryInsert,
   OutcomeInsert,
@@ -42,10 +42,12 @@ import type {
   Clock,
   ContentOperationCalendarEntryRow,
   ContentOperationCalendarRow,
+  ContentOperationEventRow,
   ContentOperationClientInput,
   ContentOperationClientRow,
   ContentOperationRunRow,
   CreateCalendarInput,
+  MaterializeExecutionOptions,
   MaterializeInput,
   MaterializeResult,
   OutcomeAssessmentInput,
@@ -92,6 +94,11 @@ function ownerMismatch(message = 'Content operation ownership validation failed.
   throw createError({ statusCode: 404, statusMessage: message })
 }
 
+function isDuplicateConstraint(error: unknown): boolean {
+  const candidate = error as { code?: string; errno?: number; message?: string }
+  return candidate?.code === 'ER_DUP_ENTRY' || candidate?.errno === 1062 || /duplicate entry|unique constraint/i.test(candidate?.message || '')
+}
+
 function defaultClock(): Clock {
   return {
     now: () => new Date(),
@@ -108,98 +115,58 @@ function asPlanBundle(value: unknown): PlanBundle {
   return value as unknown as PlanBundle
 }
 
-function strategyFor(bundle: PlanBundle, selectionId: number) {
-  const selection = bundle.selections.find(item => item.id === selectionId && item.planId === bundle.plan.id && item.ownerUserId === bundle.plan.ownerUserId && item.status === 'selected')
-  if (!selection) invalid('Production Deliverable selection is not an active persisted selection.')
-  const strategy = bundle.strategies.find(item => item.id === selection.strategyRecommendationId && item.ownerUserId === bundle.plan.ownerUserId && item.status !== 'rejected' && item.status !== 'superseded')
-  if (!strategy) invalid('Production Strategy recommendation is not active for this owner and plan.')
-  return { selection, strategy }
+function canonicalRuleIds(context: CanonicalContext): string[] {
+  const ids = context.rules.map(rule => typeof rule.id === 'string' ? rule.id.trim() : '').filter(Boolean)
+  if (!ids.length || new Set(ids).size !== ids.length) invalid('Canonical strategy rule set is missing or malformed.')
+  return [...ids].sort((left, right) => left.localeCompare(right))
 }
 
-function opportunityProvenance(deliverable: PlanBundle['deliverables'][number], strategy: PlanBundle['strategies'][number]) {
-  const deliverableProvenance = isRecord(deliverable.provenance) ? deliverable.provenance : null
-  const strategyProvenance = isRecord(strategy.provenance) ? strategy.provenance : null
-  const ruleIds = arrayOfStrings(deliverableProvenance?.ruleIds)
-  const authoritySourceIds = arrayOfStrings(deliverableProvenance?.authoritySourceIds)
-  const topicCluster = readString(deliverableProvenance || {}, ['topicCluster', 'topicClusterCode'])
-  if (!ruleIds || !authoritySourceIds || !topicCluster) invalid('Production Plan provenance is incomplete for calendar planning.')
-  return { ruleIds, authoritySourceIds, topicCluster }
-}
-
-function buildOpportunities(bundle: PlanBundle, input: CreateCalendarInput, client: ContentOperationClientRow): ContentCalendarOpportunity[] {
-  if (bundle.plan.ownerUserId !== client.ownerUserId || bundle.plan.status === 'blocked' || bundle.plan.status === 'archived') invalid('Production Plan is not available for this owner calendar.')
-  assertSha256(bundle.plan.evidenceSnapshotHash, 'Production Plan evidence snapshot')
-  const selectedDeliverables = bundle.deliverables.filter(deliverable => deliverable.ownerUserId === bundle.plan.ownerUserId && deliverable.planId === bundle.plan.id)
-  if (selectedDeliverables.length === 0) invalid('Production Plan has no persisted deliverables.')
-  const hashes = new Set<string>([bundle.plan.evidenceSnapshotHash])
-  const opportunities = selectedDeliverables.map((deliverable) => {
-    if (deliverable.contentType !== 'article' && deliverable.contentType !== 'faq' && deliverable.contentType !== 'service_page') invalid('Production Deliverable content type is not supported by the calendar engine.')
-    if (deliverable.language !== 'en' && deliverable.language !== 'zh-hant') invalid('Production Deliverable language is not supported by the calendar engine.')
-    if (deliverable.evidenceSnapshotHash !== bundle.plan.evidenceSnapshotHash) collision('Production Plan and Deliverable evidence snapshots are inconsistent.')
-    const { strategy } = strategyFor(bundle, deliverable.selectionId)
-    if (strategy.evidenceSnapshotHash !== bundle.plan.evidenceSnapshotHash) collision('Production Strategy evidence snapshot is stale.')
-    const provenance = opportunityProvenance(deliverable, strategy)
-    hashes.add(deliverable.evidenceSnapshotHash)
-    const opportunityId = `deliverable-${deliverable.id}`
-    return {
-      id: opportunityId,
-      strategyRecommendationId: strategy.id,
-      title: deliverable.title,
-      contentType: deliverable.contentType as 'article' | 'faq' | 'service_page',
-      language: deliverable.language as 'en' | 'zh-hant',
-      priority: strategy.priority as 'high' | 'medium' | 'low',
-      status: 'selected' as const,
-      topicCluster: provenance.topicCluster,
-      evidenceSnapshotHash: bundle.plan.evidenceSnapshotHash,
-      estimatedCostUnits: input.defaultCostUnits,
-      ruleIds: provenance.ruleIds,
-      authoritySourceIds: provenance.authoritySourceIds,
-    }
+function canonicalAuthoritySourceIds(context: CanonicalContext): string[] {
+  const identities = context.evidenceSnapshot.refs.flatMap(ref => {
+    const sourceId = ref.sourceId
+    const artifactId = ref.artifactId
+    if (typeof sourceId === 'number' && Number.isSafeInteger(sourceId) && sourceId > 0) return [`source:${sourceId}`]
+    if (typeof artifactId === 'number' && Number.isSafeInteger(artifactId) && artifactId > 0) return [`artifact:${artifactId}`]
+    return []
   })
-  if (hashes.size !== 1) collision('All Production Plan provenance must share one evidence snapshot.')
-  const request: ContentCalendarRequest = {
-    clientScopeKey: `client-${client.id}`,
-    planStartDate: input.planStartDate,
-    planEndDate: input.planEndDate,
-    timeZone: normalizeTimeZone(client.timeZone),
-    publishLocalTime: input.publishLocalTime,
-    cadenceDays: input.cadenceDays,
-    monthlyBudgetUnits: input.monthlyBudgetUnits,
-    defaultCostUnits: input.defaultCostUnits,
-    maxItemsPerCalendarMonth: input.maxItemsPerCalendarMonth,
-    maximumTotalItems: input.maximumTotalItems,
-    catchUpPolicy: input.catchUpPolicy,
-    evidenceSnapshotHash: bundle.plan.evidenceSnapshotHash,
-    opportunities,
-  }
-  return request.opportunities
+  const unique = [...new Set(identities)].sort((left, right) => left.localeCompare(right))
+  if (!unique.length) invalid('Canonical evidence snapshot has no usable source or artifact identity.')
+  return unique
 }
 
-async function verifyCanonicalContexts(repository: ContentOperationsRepository, ownerUserId: number, bundle: PlanBundle): Promise<void> {
+async function resolveCanonicalContexts(repository: ContentOperationsRepository, ownerUserId: number, bundle: PlanBundle): Promise<CanonicalContext[]> {
+  if (bundle.plan.ownerUserId !== ownerUserId || bundle.plan.status === 'blocked' || bundle.plan.status === 'archived' || !Number.isSafeInteger(bundle.plan.diagnosisId)) invalid('Production Plan is not available for this owner calendar.')
+  assertSha256(bundle.plan.evidenceSnapshotHash, 'Production Plan evidence snapshot')
+  if (!bundle.deliverables.length) invalid('Production Plan has no persisted deliverables.')
+  const contexts: CanonicalContext[] = []
   for (const deliverable of bundle.deliverables) {
     const context = await repository.resolveCanonicalContext(ownerUserId, bundle.plan.id, deliverable.id)
-    if (context.plan.ownerUserId !== ownerUserId || context.deliverable.id !== deliverable.id || context.evidenceSnapshot.hash !== bundle.plan.evidenceSnapshotHash || context.deliverable.evidenceSnapshotHash !== bundle.plan.evidenceSnapshotHash || context.strategy.evidenceSnapshotHash !== bundle.plan.evidenceSnapshotHash) collision('Persisted Production Plan context is stale or inconsistent.')
-    if (!context.opportunity || context.opportunity.deliverableType !== deliverable.contentType || context.opportunity.title !== deliverable.title || context.opportunity.audience !== deliverable.audience) collision('Persisted Production Deliverable opportunity is not canonical.')
+    const plan = context.plan
+    const selection = context.selection
+    const strategy = context.strategy
+    if (plan.ownerUserId !== ownerUserId || plan.id !== bundle.plan.id || plan.id !== deliverable.planId || deliverable.ownerUserId !== ownerUserId || deliverable.id !== context.deliverable.id || context.deliverable.planId !== plan.id || context.deliverable.selectionId !== selection.id || selection.ownerUserId !== ownerUserId || selection.planId !== plan.id || selection.status !== 'selected' || strategy.ownerUserId !== ownerUserId || strategy.id !== selection.strategyRecommendationId || strategy.diagnosisId !== plan.diagnosisId || ['rejected', 'superseded'].includes(strategy.status) || context.diagnosis.id !== plan.diagnosisId) invalid('Canonical Production Plan linkage is invalid.')
+    if (deliverable.contentType !== context.opportunity.deliverableType || deliverable.title !== context.opportunity.title || deliverable.audience !== context.opportunity.audience || deliverable.opportunityKey !== `${strategy.id}:${context.opportunity.key}`) invalid('Persisted Production Deliverable opportunity is not canonical.')
+    if (context.evidenceSnapshot.hash !== bundle.plan.evidenceSnapshotHash || deliverable.evidenceSnapshotHash !== bundle.plan.evidenceSnapshotHash || selection.evidenceSnapshotHash !== bundle.plan.evidenceSnapshotHash || strategy.evidenceSnapshotHash !== bundle.plan.evidenceSnapshotHash) collision('All Production Plan provenance must share one evidence snapshot.')
+    canonicalRuleIds(context)
+    canonicalAuthoritySourceIds(context)
+    contexts.push(context)
   }
+  return contexts
 }
 
-function buildRequest(bundle: PlanBundle, input: CreateCalendarInput, client: ContentOperationClientRow): ContentCalendarRequest {
-  const opportunities = buildOpportunities(bundle, input, client)
-  return {
-    clientScopeKey: `client-${client.id}`,
-    planStartDate: input.planStartDate,
-    planEndDate: input.planEndDate,
-    timeZone: normalizeTimeZone(client.timeZone),
-    publishLocalTime: input.publishLocalTime,
-    cadenceDays: input.cadenceDays,
-    monthlyBudgetUnits: input.monthlyBudgetUnits,
-    defaultCostUnits: input.defaultCostUnits,
-    maxItemsPerCalendarMonth: input.maxItemsPerCalendarMonth,
-    maximumTotalItems: input.maximumTotalItems,
-    catchUpPolicy: input.catchUpPolicy,
-    evidenceSnapshotHash: bundle.plan.evidenceSnapshotHash,
-    opportunities,
-  }
+function buildOpportunities(contexts: CanonicalContext[], input: CreateCalendarInput, client: ContentOperationClientRow): ContentCalendarOpportunity[] {
+  return contexts.map(context => {
+    const deliverable = context.deliverable
+    if (deliverable.contentType !== 'article' && deliverable.contentType !== 'faq' && deliverable.contentType !== 'service_page') invalid('Production Deliverable content type is not supported by the calendar engine.')
+    if (deliverable.language !== 'en' && deliverable.language !== 'zh-hant') invalid('Production Deliverable language is not supported by the calendar engine.')
+    return { id: `deliverable-${deliverable.id}`, strategyRecommendationId: context.strategy.id, title: context.opportunity.title, contentType: context.opportunity.deliverableType, language: deliverable.language, priority: context.strategy.priority, status: 'selected' as const, topicCluster: context.opportunity.key, evidenceSnapshotHash: context.evidenceSnapshot.hash, estimatedCostUnits: input.defaultCostUnits, ruleIds: canonicalRuleIds(context), authoritySourceIds: canonicalAuthoritySourceIds(context) }
+  })
+}
+
+function buildRequest(contexts: CanonicalContext[], input: CreateCalendarInput, client: ContentOperationClientRow): ContentCalendarRequest {
+  const evidenceSnapshotHash = contexts[0]?.evidenceSnapshot.hash
+  if (!evidenceSnapshotHash) invalid('Canonical evidence snapshot is missing.')
+  return { clientScopeKey: `client-${client.id}`, planStartDate: input.planStartDate, planEndDate: input.planEndDate, timeZone: normalizeTimeZone(client.timeZone), publishLocalTime: input.publishLocalTime, cadenceDays: input.cadenceDays, monthlyBudgetUnits: input.monthlyBudgetUnits, defaultCostUnits: input.defaultCostUnits, maxItemsPerCalendarMonth: input.maxItemsPerCalendarMonth, maximumTotalItems: input.maximumTotalItems, catchUpPolicy: input.catchUpPolicy, evidenceSnapshotHash, opportunities: buildOpportunities(contexts, input, client) }
 }
 
 function entryStatusForDatabase(status: string): ContentOperationCalendarEntryRow['status'] {
@@ -240,6 +207,30 @@ function calendarInsert(ownerUserId: number, clientId: number, productionPlanId:
     resultSnapshot: result,
     idempotencyKey: input.idempotencyKey,
   }
+}
+
+function calendarPatchFromResult(result: ContentCalendarResult): Partial<CalendarInsert> {
+  if (!result.normalizedRequest) invalid('Calendar result is missing its normalized request.')
+  return { engineVersion: result.engineVersion, status: result.status, planStartDate: result.normalizedRequest.planStartDate, planEndDate: result.normalizedRequest.planEndDate, timeZone: result.normalizedRequest.timeZone, publishLocalTime: result.normalizedRequest.publishLocalTime, cadenceDays: result.normalizedRequest.cadenceDays, monthlyBudgetUnits: result.normalizedRequest.monthlyBudgetUnits, defaultCostUnits: result.normalizedRequest.defaultCostUnits, maxItemsPerCalendarMonth: result.normalizedRequest.maxItemsPerCalendarMonth, maximumTotalItems: result.normalizedRequest.maximumTotalItems, catchUpPolicy: result.normalizedRequest.catchUpPolicy, evidenceSnapshotHash: result.normalizedRequest.evidenceSnapshotHash, revision: result.revision, previousPlanFingerprint: result.previousPlanFingerprint, planFingerprint: result.planFingerprint, normalizedRequestSnapshot: result.normalizedRequest, resultSnapshot: result }
+}
+
+function assertCalendarState(calendar: ContentOperationCalendarRow, rows: ContentOperationCalendarEntryRow[]): ContentCalendarResult {
+  if (calendar.resultSnapshot === null || !isRecord(calendar.resultSnapshot) || calendar.planFingerprint !== (calendar.resultSnapshot as { planFingerprint?: unknown }).planFingerprint) collision('Calendar snapshot is stale or malformed.')
+  const snapshot = calendar.resultSnapshot as unknown as ContentCalendarResult
+  if (!isRecord(calendar.normalizedRequestSnapshot) || !isRecord(snapshot.normalizedRequest)) collision('Calendar snapshot normalized request is malformed.')
+  const check = materializeDueContentWork({ calendar: snapshot, expectedPlanFingerprint: calendar.planFingerprint, nowLocalDate: calendar.planStartDate, eligibleEntryIds: [] })
+  if (!check.calendar || check.calendar.planFingerprint !== calendar.planFingerprint || check.calendar.revision !== calendar.revision || stableFingerprint(calendar.normalizedRequestSnapshot) !== stableFingerprint(snapshot.normalizedRequest) || check.calendar.entries.length !== rows.length) collision('Calendar snapshot and durable entries are inconsistent.')
+  const byEngineId = new Map(rows.map(row => [row.engineEntryId, row]))
+  if (byEngineId.size !== rows.length || snapshot.entries.some(entry => !byEngineId.has(entry.entryId) || engineStatusForDatabase(byEngineId.get(entry.entryId)!.status) !== entry.status)) collision('Calendar snapshot and durable entry lifecycle are inconsistent.')
+  return snapshot
+}
+
+function operationClaimFingerprint(ownerUserId: number, calendarId: number, operation: 'replan' | 'materialize', idempotencyKey: string): string {
+  return stableFingerprint({ ownerUserId, calendarId, operation, idempotencyKey })
+}
+
+function operationRequestFingerprint(value: unknown): string {
+  return stableFingerprint(value)
 }
 
 function entryInsert(ownerUserId: number, calendarId: number, deliverableId: number, entry: ContentCalendarResult['entries'][number]): EntryInsert {
@@ -318,7 +309,22 @@ export async function createOwnerContentClient(ownerUserId: number, input: unkno
   }
   const byOrigin = await db.findClientByOrigin(ownerUserId, canonicalSiteOrigin)
   if (byOrigin) collision('Client origin is already registered for this owner.')
-  return db.insertClient({ ownerUserId, status: 'active', ...normalized })
+  return db.transaction(async transaction => {
+    try {
+      return await transaction.insertClient({ ownerUserId, status: 'active', ...normalized })
+    } catch (error) {
+      if (!isDuplicateConstraint(error)) throw error
+      const replay = await transaction.findClientByIdempotency(ownerUserId, normalized.idempotencyKey)
+      if (replay) {
+        const samePayload = replay.ownerUserId === ownerUserId && replay.status === 'active' && replay.displayName === normalized.displayName && replay.canonicalSiteOrigin === normalized.canonicalSiteOrigin && replay.framework === normalized.framework && replay.publicationTransport === normalized.publicationTransport && replay.timeZone === normalized.timeZone && replay.defaultCadenceDays === normalized.defaultCadenceDays && replay.defaultPublishLocalTime === normalized.defaultPublishLocalTime && replay.monthlyBudgetUnits === normalized.monthlyBudgetUnits && replay.idempotencyKey === normalized.idempotencyKey
+        if (!samePayload) collision('Client idempotency key is already associated with a different payload.')
+        return publicClient(replay)
+      }
+      const origin = await transaction.findClientByOrigin(ownerUserId, normalized.canonicalSiteOrigin)
+      if (origin) collision('Client origin is already registered for this owner.')
+      throw error
+    }
+  })
 }
 
 export async function createCalendarFromProductionPlan(ownerUserId: number, input: unknown, repository?: ContentOperationsRepository) {
@@ -333,14 +339,23 @@ export async function createCalendarFromProductionPlan(ownerUserId: number, inpu
     return { calendar: existing, entries: await db.listEntries(ownerUserId, existing.id), replayed: true }
   }
   const bundle = asPlanBundle(await db.getPlanBundle(ownerUserId, parsed.productionPlanId))
-  if (bundle.plan.ownerUserId !== ownerUserId) ownerMismatch('Production Plan was not found for this owner.')
-  await verifyCanonicalContexts(db, ownerUserId, bundle)
-  const request = buildRequest(bundle, parsed, client)
+  const contexts = await resolveCanonicalContexts(db, ownerUserId, bundle)
+  const request = buildRequest(contexts, parsed, client)
   const result = buildContentCalendar(request)
   if (!result.normalizedRequest || result.status === 'blocked') invalid('Production Plan could not produce a valid content calendar.')
   return db.transaction(async transaction => {
-    const calendar = await transaction.insertCalendar(calendarInsert(ownerUserId, client.id, parsed.productionPlanId, parsed, request, result))
-    const deliverableByOpportunity = new Map(bundle.deliverables.map(deliverable => [`deliverable-${deliverable.id}`, deliverable.id]))
+    let calendar: ContentOperationCalendarRow
+    try {
+      calendar = await transaction.insertCalendar(calendarInsert(ownerUserId, client.id, parsed.productionPlanId, parsed, request, result))
+    } catch (error) {
+      if (!isDuplicateConstraint(error)) throw error
+      const replay = await transaction.findCalendarByIdempotency(ownerUserId, parsed.idempotencyKey)
+      if (!replay) throw error
+      const samePayload = replay.clientId === parsed.clientId && replay.productionPlanId === parsed.productionPlanId && replay.planStartDate === parsed.planStartDate && replay.planEndDate === parsed.planEndDate && replay.publishLocalTime === parsed.publishLocalTime && replay.cadenceDays === parsed.cadenceDays && replay.monthlyBudgetUnits === parsed.monthlyBudgetUnits && replay.defaultCostUnits === parsed.defaultCostUnits && replay.maxItemsPerCalendarMonth === parsed.maxItemsPerCalendarMonth && replay.maximumTotalItems === parsed.maximumTotalItems && replay.catchUpPolicy === parsed.catchUpPolicy
+      if (!samePayload) collision('Calendar idempotency key is already associated with a different payload.')
+      return { calendar: replay, entries: await transaction.listEntries(ownerUserId, replay.id), replayed: true }
+    }
+    const deliverableByOpportunity = new Map(contexts.map(context => [`deliverable-${context.deliverable.id}`, context.deliverable.id]))
     const entries: ContentOperationCalendarEntryRow[] = []
     for (const entry of result.entries) {
       const deliverableId = deliverableByOpportunity.get(entry.opportunityId)
@@ -357,138 +372,154 @@ export async function replanOwnerContentCalendar(ownerUserId: number, calendarId
   const parsed = parseReplanInput(input)
   const calendar = await db.findCalendar(ownerUserId, calendarId)
   if (!calendar) notFound('Content operation calendar was not found.')
-  assertSha256(parsed.expectedPlanFingerprint, 'Expected plan fingerprint')
-  if (calendar.planFingerprint !== parsed.expectedPlanFingerprint) collision('Calendar plan fingerprint is stale.')
   const client = await db.findClient(ownerUserId, calendar.clientId)
   if (!client || client.status === 'archived') ownerMismatch('Content operation client was not found for this owner.')
   const bundle = asPlanBundle(await db.getPlanBundle(ownerUserId, calendar.productionPlanId))
-  await verifyCanonicalContexts(db, ownerUserId, bundle)
+  const contexts = await resolveCanonicalContexts(db, ownerUserId, bundle)
   const replanInput: CreateCalendarInput = { ...parsed.request, clientId: client.id, productionPlanId: calendar.productionPlanId, idempotencyKey: calendar.idempotencyKey }
-  const request = buildRequest(bundle, replanInput, client)
+  const request = buildRequest(contexts, replanInput, client)
+  const requestFingerprint = operationRequestFingerprint({ expectedPlanFingerprint: parsed.expectedPlanFingerprint, request })
+  const claimFingerprint = operationClaimFingerprint(ownerUserId, calendar.id, 'replan', parsed.idempotencyKey)
   const persistedEntries = await db.listEntries(ownerUserId, calendar.id)
-  const current = calendar.resultSnapshot as unknown as ContentCalendarResult
-  const result = replanContentCalendar({ calendar: current, expectedPlanFingerprint: parsed.expectedPlanFingerprint, request })
-  if (result.status === 'blocked') invalid(`Content calendar replan was blocked by the pure calendar engine: ${result.reasonCodes.join(',') || 'INVALID_INPUT'}.`)
+  const current = assertCalendarState(calendar, persistedEntries)
   return db.transaction(async transaction => {
-    const updatedCalendar = await transaction.updateCalendar(ownerUserId, calendar.id, {
-      status: result.status,
-      planStartDate: replanInput.planStartDate,
-      planEndDate: replanInput.planEndDate,
-      timeZone: request.timeZone,
-      publishLocalTime: replanInput.publishLocalTime,
-      cadenceDays: replanInput.cadenceDays,
-      monthlyBudgetUnits: replanInput.monthlyBudgetUnits,
-      defaultCostUnits: replanInput.defaultCostUnits,
-      maxItemsPerCalendarMonth: replanInput.maxItemsPerCalendarMonth,
-      maximumTotalItems: replanInput.maximumTotalItems,
-      catchUpPolicy: replanInput.catchUpPolicy,
-      evidenceSnapshotHash: request.evidenceSnapshotHash,
-      revision: result.revision,
-      previousPlanFingerprint: result.previousPlanFingerprint,
-      planFingerprint: result.planFingerprint,
-      normalizedRequestSnapshot: result.normalizedRequest,
-      resultSnapshot: result,
-    })
+    const claim = await transaction.claimOperation({ ownerUserId, calendarId: calendar.id, operation: 'replan', idempotencyKey: parsed.idempotencyKey, requestFingerprint, eventFingerprint: claimFingerprint })
+    if (!claim.claimed) {
+      if (claim.requestFingerprint !== requestFingerprint) collision('Replan idempotency key is already associated with a different payload.')
+      const replayCalendar = await transaction.findCalendar(ownerUserId, calendar.id)
+      if (!replayCalendar) notFound('Content operation calendar was not found.')
+      return { calendar: replayCalendar, entries: await transaction.listEntries(ownerUserId, calendar.id), replayed: true }
+    }
+    if (calendar.planFingerprint !== parsed.expectedPlanFingerprint) collision('Calendar plan fingerprint is stale.')
+    const result = replanContentCalendar({ calendar: current, expectedPlanFingerprint: parsed.expectedPlanFingerprint, request })
+    if (result.status === 'blocked') invalid(`Content calendar replan was blocked by the pure calendar engine: ${result.reasonCodes.join(',') || 'INVALID_INPUT'}.`)
+    const updatedCalendar = await transaction.updateCalendarIfFingerprint(ownerUserId, calendar.id, parsed.expectedPlanFingerprint, calendarPatchFromResult(result))
+    if (!updatedCalendar) collision('Calendar plan fingerprint is stale.')
     const byEngineId = new Map(persistedEntries.map(entry => [entry.engineEntryId, entry]))
-    const activeEngineIds = new Set(result.entries.map(entry => entry.entryId))
+    const byOpportunity = new Map(persistedEntries.filter(entry => entry.status === 'planned').map(entry => [entry.engineEntryId, entry]))
+    const usedRows = new Set<number>()
     const entries: ContentOperationCalendarEntryRow[] = []
     for (const entry of result.entries) {
-      const old = byEngineId.get(entry.entryId)
+      const old = byEngineId.get(entry.entryId) || [...byOpportunity.values()].find(candidate => !usedRows.has(candidate.id) && candidate.productionDeliverableId === Number(entry.opportunityId.replace('deliverable-', '')))
       if (old) {
-        const durableStatus = old.status === 'delivered' || old.status === 'completed' ? old.status : entryStatusForDatabase(entry.status)
-        entries.push(await transaction.updateEntry(ownerUserId, old.id, { scheduleKey: entry.scheduleKey, plannedLocalDate: entry.plannedLocalDate, publishLocalTime: entry.publishLocalTime, timeZone: entry.timeZone, topicCluster: entry.topicCluster, evidenceSnapshotHash: entry.evidenceSnapshotHash, status: durableStatus }))
+        usedRows.add(old.id)
+        const expectedStatus = engineStatusForDatabase(old.status)
+        if (old.status !== 'planned' && expectedStatus !== entry.status) invalid('Replan attempted to move a durable entry backwards or across an invalid lifecycle.')
+        const patch = old.status === 'planned' ? { engineEntryId: entry.entryId, idempotencyKey: entry.idempotencyKey, scheduleKey: entry.scheduleKey, plannedLocalDate: entry.plannedLocalDate, publishLocalTime: entry.publishLocalTime, timeZone: entry.timeZone, topicCluster: entry.topicCluster, evidenceSnapshotHash: entry.evidenceSnapshotHash, status: entryStatusForDatabase(entry.status) } : { status: old.status }
+        entries.push(await transaction.updateEntry(ownerUserId, old.id, patch))
       } else {
-        const deliverableId = bundle.deliverables.find(deliverable => `deliverable-${deliverable.id}` === entry.opportunityId)?.id
+        const deliverableId = contexts.find(context => `deliverable-${context.deliverable.id}` === entry.opportunityId)?.deliverable.id
         if (!deliverableId) invalid('Replanned opportunity does not map to a persisted Production Deliverable.')
         entries.push(await transaction.insertEntry(entryInsert(ownerUserId, calendar.id, deliverableId, entry)))
       }
     }
     for (const old of persistedEntries) {
-      if (old.status === 'planned' && !activeEngineIds.has(old.engineEntryId)) entries.push(await transaction.updateEntry(ownerUserId, old.id, { status: 'cancelled' }))
+      if (usedRows.has(old.id)) continue
+      if (old.status === 'planned') invalid('Replan would orphan a planned durable entry; refusing partial lifecycle mutation.')
+      invalid('Replan result omitted a non-planned durable entry.')
     }
     await transaction.appendEvent(eventInput(ownerUserId, { clientId: client.id, calendarId: calendar.id, eventType: 'calendar_replanned', fromStatus: calendar.status, toStatus: updatedCalendar.status, metadata: { revision: updatedCalendar.revision, previousPlanFingerprint: updatedCalendar.previousPlanFingerprint, planFingerprint: updatedCalendar.planFingerprint }, key: { calendarId: calendar.id, event: 'calendar_replanned', planFingerprint: updatedCalendar.planFingerprint } }))
     return { calendar: updatedCalendar, entries, replayed: false }
   })
 }
 
-function limitMaterializeResult(result: ReturnType<typeof materializeDueContentWork>, maxEntries: number, allowedEntryIds?: Set<number>, persistedEntries: ContentOperationCalendarEntryRow[] = []) {
-  const durableByEngineId = new Map(persistedEntries.map(entry => [entry.engineEntryId, entry]))
-  const selected = result.dueWork.filter(work => {
-    const row = durableByEngineId.get(work.entryId)
-    return row && (!allowedEntryIds || allowedEntryIds.has(row.id))
-  }).slice(0, maxEntries)
-  const selectedIds = new Set(selected.map(work => work.entryId))
-  const skipped = result.skippedEntryIds.filter(engineEntryId => {
-    const row = durableByEngineId.get(engineEntryId)
-    return row && (!allowedEntryIds || allowedEntryIds.has(row.id))
-  }).slice(0, Math.max(0, maxEntries - selected.length))
-  const processedIds = new Set([...selectedIds, ...skipped])
-  const durableStatuses = new Map(persistedEntries.map(entry => [entry.engineEntryId, entry.status]))
-  const calendar = result.calendar
-    ? { ...result.calendar, entries: result.calendar.entries.map(entry => processedIds.has(entry.entryId) ? entry : { ...entry, status: engineStatusForDatabase(durableStatuses.get(entry.entryId) || entry.status) }) }
-    : null
-  return { calendar, dueWork: selected, skippedEntryIds: skipped }
+function stableDueCandidates(calendar: ContentCalendarResult, entries: ContentOperationCalendarEntryRow[], nowLocalDate: string, allowedEntryIds?: Set<number>): ContentOperationCalendarEntryRow[] {
+  return entries.filter(entry => entry.status === 'planned' && (!allowedEntryIds || allowedEntryIds.has(entry.id)) && entry.plannedLocalDate <= nowLocalDate && calendar.entries.some(engineEntry => engineEntry.entryId === entry.engineEntryId)).sort((left, right) => left.plannedLocalDate.localeCompare(right.plannedLocalDate) || left.scheduleKey.localeCompare(right.scheduleKey) || left.id - right.id)
 }
 
-export async function materializeOwnerDueContent(ownerUserId: number, input: MaterializeInput, repository?: ContentOperationsRepository) {
+function materializeLeaseMs(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(1, Math.min(Math.trunc(value as number), 15 * 60 * 1000)) : DEFAULT_LEASE_MS
+}
+
+export async function materializeOwnerDueContent(ownerUserId: number, input: MaterializeInput, repository?: ContentOperationsRepository, options: MaterializeExecutionOptions = {}) {
   const db = await getRepository(repository)
+  assertSha256(input.expectedPlanFingerprint, 'Expected plan fingerprint')
   const calendar = await db.findCalendar(ownerUserId, input.calendarId)
   if (!calendar) notFound('Content operation calendar was not found.')
   const client = await db.findClient(ownerUserId, calendar.clientId)
   if (!client || client.status !== 'active' || calendar.status === 'archived' || calendar.status === 'paused') invalid('Calendar is not active for materialization.')
-  const persistedEntries = await db.listEntries(ownerUserId, calendar.id)
-  const clock = input.clock || defaultClock()
+  const clock = options.clock || defaultClock()
   const now = clock.now()
   const nowLocalDate = clock.localDate(now, calendar.timeZone)
   assertDateOnly(nowLocalDate)
-  const current = calendar.resultSnapshot as unknown as ContentCalendarResult
-  const engineResult = materializeDueContentWork({ calendar: current, expectedPlanFingerprint: calendar.planFingerprint, nowLocalDate })
-  const maxEntries = Math.max(1, Math.min(input.maxEntries || MAX_TICK_ENTRIES, MAX_TICK_ENTRIES))
-  const limited = limitMaterializeResult(engineResult, maxEntries, input.onlyEntryIds ? new Set(input.onlyEntryIds) : undefined, persistedEntries)
-  if (!limited.calendar) invalid('Due content materialization was blocked by the pure calendar engine.')
+  const requestFingerprint = operationRequestFingerprint({ expectedPlanFingerprint: input.expectedPlanFingerprint, idempotencyKey: input.idempotencyKey })
+  const claimFingerprint = operationClaimFingerprint(ownerUserId, calendar.id, 'materialize', input.idempotencyKey)
   return db.transaction(async transaction => {
-    const updatedCalendar = calendar
+    const claim = await transaction.claimOperation({ ownerUserId, calendarId: calendar.id, operation: 'materialize', idempotencyKey: input.idempotencyKey, requestFingerprint, eventFingerprint: claimFingerprint })
+    if (!claim.claimed) {
+      if (claim.requestFingerprint !== requestFingerprint) collision('Materialize idempotency key is already associated with a different payload.')
+      const replayCalendar = await transaction.findCalendar(ownerUserId, calendar.id)
+      if (!replayCalendar) notFound('Content operation calendar was not found.')
+      return { calendar: replayCalendar, dueWork: [], entries: await transaction.listEntries(ownerUserId, calendar.id), runs: [], events: [], replayed: true } satisfies MaterializeResult
+    }
+    const currentCalendar = await transaction.findCalendar(ownerUserId, calendar.id)
+    if (!currentCalendar) notFound('Content operation calendar was not found.')
+    if (currentCalendar.planFingerprint !== input.expectedPlanFingerprint) collision('Calendar plan fingerprint is stale.')
+    const persistedEntries = await transaction.listEntries(ownerUserId, calendar.id)
+    const current = assertCalendarState(currentCalendar, persistedEntries)
+    const allowedEntryIds = options.eligibleEntryIds ? new Set(options.eligibleEntryIds) : undefined
+    const candidates = stableDueCandidates(current, persistedEntries, nowLocalDate, allowedEntryIds).slice(0, MAX_TICK_ENTRIES)
+    const initial = materializeDueContentWork({ calendar: current, expectedPlanFingerprint: currentCalendar.planFingerprint, nowLocalDate, eligibleEntryIds: candidates.map(entry => entry.engineEntryId) })
+    if (!initial.calendar) invalid('Due content materialization was blocked by the pure calendar engine.')
     const runs: ContentOperationRunRow[] = []
-    const events = []
-    const entryRows = new Map(persistedEntries.map(entry => [entry.engineEntryId, entry]))
-    const leaseOwner = input.leaseOwner
-    for (const work of limited.dueWork) {
-      const candidate = entryRows.get(work.entryId)
-      if (!candidate) continue
-      const row = await transaction.findEntry(ownerUserId, candidate.id)
+    const events: ContentOperationEventRow[] = []
+    const rowsByEngineId = new Map(persistedEntries.map(entry => [entry.engineEntryId, entry]))
+    const leaseToken = options.leaseToken || randomUUID()
+    const leasedByEngineId = new Map<string, { run: ContentOperationRunRow; row: ContentOperationCalendarEntryRow; work: DueContentWork }>()
+    for (const work of initial.dueWork) {
+      const row = rowsByEngineId.get(work.entryId)
       if (!row || row.status !== 'planned') continue
-      const stage: RunInsert['stage'] = row.draftId ? 'review_wait' : 'generation'
-      const runPayload = runInsert(ownerUserId, row, stage, calendar.planFingerprint)
+      const fresh = await transaction.findEntry(ownerUserId, row.id)
+      if (!fresh || fresh.status !== 'planned') continue
+      const stage: RunInsert['stage'] = fresh.draftId ? 'review_wait' : 'generation'
+      const runPayload = runInsert(ownerUserId, fresh, stage, currentCalendar.planFingerprint)
       let run = await transaction.findRunByIdempotency(ownerUserId, runPayload.idempotencyKey)
       if (!run) run = await transaction.insertRun(runPayload)
-      if (leaseOwner) {
-        const leased = await transaction.acquireRunLease(ownerUserId, run.id, leaseOwner, now, input.leaseMs || DEFAULT_LEASE_MS)
-        if (!leased) continue
-        run = leased
-      }
-      const updatedEntry = await transaction.updateEntry(ownerUserId, row.id, { status: 'materialized' })
-      if (run.state === 'processing' && leaseOwner) run = await transaction.releaseRunLease(ownerUserId, run.id, 'queued', now)
-      runs.push(run)
-      events.push(await transaction.appendEvent(eventInput(ownerUserId, { clientId: client.id, calendarId: calendar.id, entryId: updatedEntry.id, runId: run.id, eventType: 'entry_materialized', fromStatus: row.status, toStatus: updatedEntry.status, metadata: { stage, workId: work.workId, engineEntryId: work.entryId, providerExecution: false }, key: { runId: run.id, event: 'entry_materialized' } })))
+      const leased = await transaction.acquireRunLease(ownerUserId, run.id, leaseToken, now, materializeLeaseMs(options.leaseMs))
+      if (leased) leasedByEngineId.set(work.entryId, { run: leased, row: fresh, work })
     }
-    for (const skippedId of limited.skippedEntryIds) {
-      const row = entryRows.get(skippedId)
+    const leaseConflict = initial.dueWork.some(work => !leasedByEngineId.has(work.entryId))
+    const normalizedRequest = current.normalizedRequest
+    if (!normalizedRequest) invalid('Calendar normalized request is missing.')
+    const safeSkipped = normalizedRequest.catchUpPolicy === 'one_catch_up' && leaseConflict ? [] : initial.skippedEntryIds
+    const finalEligibleIds = [...leasedByEngineId.keys(), ...safeSkipped]
+    const engineResult = materializeDueContentWork({ calendar: current, expectedPlanFingerprint: currentCalendar.planFingerprint, nowLocalDate, eligibleEntryIds: finalEligibleIds })
+    if (!engineResult.calendar) invalid('Due content materialization was blocked by the pure calendar engine.')
+    let updatedCalendar = currentCalendar
+    if (engineResult.calendar.planFingerprint !== currentCalendar.planFingerprint) {
+      const conditional = await transaction.updateCalendarIfFingerprint(ownerUserId, currentCalendar.id, currentCalendar.planFingerprint, calendarPatchFromResult(engineResult.calendar))
+      if (!conditional) collision('Calendar plan fingerprint is stale.')
+      updatedCalendar = conditional
+    }
+    for (const work of engineResult.dueWork) {
+      const leased = leasedByEngineId.get(work.entryId)
+      if (!leased) continue
+      const updatedEntry = await transaction.updateEntry(ownerUserId, leased.row.id, { status: 'materialized' })
+      const released = await transaction.releaseRunLease(ownerUserId, leased.run.id, 'queued', leaseToken, now)
+      if (!released) collision('Materialization lease release was rejected.')
+      runs.push(released)
+      events.push(await transaction.appendEvent(eventInput(ownerUserId, { clientId: client.id, calendarId: currentCalendar.id, entryId: updatedEntry.id, runId: released.id, eventType: 'entry_materialized', fromStatus: leased.row.status, toStatus: updatedEntry.status, metadata: { stage: leased.run.stage, workId: work.workId, engineEntryId: work.entryId, providerExecution: false }, key: { runId: released.id, event: 'entry_materialized' } })))
+    }
+    for (const skippedId of engineResult.skippedEntryIds) {
+      const row = rowsByEngineId.get(skippedId)
       if (!row || row.status !== 'planned') continue
-      const updatedEntry = await transaction.updateEntry(ownerUserId, row.id, { status: 'skipped' })
-      events.push(await transaction.appendEvent(eventInput(ownerUserId, { clientId: client.id, calendarId: calendar.id, entryId: updatedEntry.id, eventType: 'entry_skipped', fromStatus: row.status, toStatus: updatedEntry.status, metadata: { providerExecution: false }, key: { entryId: row.id, event: 'entry_skipped', fingerprint: calendar.planFingerprint } })))
+      const fresh = await transaction.findEntry(ownerUserId, row.id)
+      if (!fresh || fresh.status !== 'planned') continue
+      const updatedEntry = await transaction.updateEntry(ownerUserId, fresh.id, { status: 'skipped' })
+      events.push(await transaction.appendEvent(eventInput(ownerUserId, { clientId: client.id, calendarId: currentCalendar.id, entryId: updatedEntry.id, eventType: 'entry_skipped', fromStatus: fresh.status, toStatus: updatedEntry.status, metadata: { providerExecution: false }, key: { entryId: fresh.id, event: 'entry_skipped', fingerprint: currentCalendar.planFingerprint } })))
     }
-    return { calendar: updatedCalendar, dueWork: limited.dueWork, entries: await transaction.listEntries(ownerUserId, calendar.id), runs, events } satisfies MaterializeResult
+    return { calendar: updatedCalendar, dueWork: engineResult.dueWork, entries: await transaction.listEntries(ownerUserId, currentCalendar.id), runs, events, replayed: false } satisfies MaterializeResult
   })
 }
 
 async function deliveredPublication(repository: ContentOperationsRepository, ownerUserId: number, entryId: number) {
   const resolved = await repository.resolveDeliveredPublication(ownerUserId, entryId)
-  if (!resolved || (resolved.entry.status !== 'delivered' && resolved.entry.status !== 'completed') || !resolved.entry.contentHash || !resolved.job || !resolved.draft || !resolved.review || resolved.review.decision !== 'approved_for_delivery' || !resolved.publicationRun || resolved.publicationRun.state !== 'succeeded') invalid('Outcome assessment requires a delivered publication identity.')
-  if (resolved.draft.contentHash !== resolved.entry.contentHash || resolved.review.evidenceSnapshotHash !== resolved.entry.evidenceSnapshotHash) invalid('Delivered publication content/evidence lineage is inconsistent.')
-  const provenance = isRecord(resolved.deliverable.provenance) ? resolved.deliverable.provenance : {}
-  const ruleIds = arrayOfStrings(provenance.ruleIds)
-  const topicCluster = readString(provenance, ['topicCluster', 'topicClusterCode'])
-  if (!ruleIds || !topicCluster) invalid('Delivered publication provenance is incomplete for outcome learning.')
+  if (!resolved || (resolved.entry.status !== 'delivered' && resolved.entry.status !== 'completed') || !resolved.entry.contentHash || !resolved.job || !resolved.draft || !resolved.review || resolved.review.decision !== 'approved_for_delivery' || !resolved.riskGate || resolved.riskGate.status !== 'passed' || !resolved.publicationRun || resolved.publicationRun.ownerUserId !== ownerUserId || resolved.publicationRun.entryId !== resolved.entry.id || resolved.publicationRun.stage !== 'publication' || resolved.publicationRun.state !== 'succeeded') invalid('Outcome assessment requires a delivered publication identity.')
+  if (resolved.calendar.ownerUserId !== ownerUserId || resolved.entry.ownerUserId !== ownerUserId || resolved.deliverable.ownerUserId !== ownerUserId || resolved.job.ownerUserId !== ownerUserId || resolved.draft.jobId !== resolved.job.id || resolved.review.jobId !== resolved.job.id || resolved.review.draftId !== resolved.draft.id || resolved.review.reviewerUserId !== ownerUserId || resolved.job.productionPlanId !== resolved.calendar.productionPlanId || resolved.job.productionDeliverableId !== resolved.entry.productionDeliverableId || resolved.job.strategyRecommendationId !== resolved.entry.strategyRecommendationId || resolved.job.evidenceSnapshotHash !== resolved.entry.evidenceSnapshotHash || resolved.draft.contentHash !== resolved.entry.contentHash || resolved.review.evidenceSnapshotHash !== resolved.entry.evidenceSnapshotHash || resolved.riskGate.draftId !== resolved.draft.id || resolved.riskGate.evidenceSnapshotHash !== resolved.entry.evidenceSnapshotHash) invalid('Delivered publication content/evidence lineage is inconsistent.')
+  const context = await repository.resolveCanonicalContext(ownerUserId, resolved.calendar.productionPlanId, resolved.entry.productionDeliverableId)
+  if (context.evidenceSnapshot.hash !== resolved.entry.evidenceSnapshotHash || context.deliverable.id !== resolved.entry.productionDeliverableId || context.strategy.id !== resolved.entry.strategyRecommendationId || context.opportunity.key !== resolved.entry.topicCluster) invalid('Delivered publication canonical context is inconsistent.')
+  const ruleIds = canonicalRuleIds(context)
+  const topicCluster = resolved.entry.topicCluster
   return { ...resolved, ruleIds, topicCluster }
 }
 
@@ -508,7 +539,7 @@ function safeMeasurementSnapshot(values: unknown[]): unknown[] {
       windowEnd: value.windowEnd,
       capturedAt: value.capturedAt,
       sourceHash: value.sourceHash,
-      metrics: isRecord(value.metrics) ? Object.fromEntries(Object.entries(value.metrics).filter(([, metric]) => typeof metric === 'number').slice(0, 50)) : {},
+      metrics: isRecord(value.metrics) ? Object.fromEntries(Object.entries(value.metrics).filter(([, metric]) => typeof metric === 'number' && Number.isFinite(metric)).slice(0, 50)) : {},
     }
   })
 }
@@ -571,10 +602,33 @@ export async function recordOwnerOutcomeAssessment(ownerUserId: number, input: u
   })
 }
 
+function nextActionForEntry(entry: ContentOperationCalendarEntryRow, hasApprovedDraft: boolean, hasPassedRiskGate: boolean, hasOutcome: boolean): WorkspacePayload['entries'][number]['nextAction'] {
+  if (entry.status === 'planned') return 'generate'
+  if (entry.status === 'materialized' || entry.status === 'awaiting_generation') return hasApprovedDraft && hasPassedRiskGate ? 'publish' : 'generate'
+  if (entry.status === 'awaiting_review') return 'review'
+  if (entry.status === 'ready_to_publish' || entry.status === 'publishing') return 'publish'
+  if (entry.status === 'delivered') return hasOutcome ? 'learn' : 'measure'
+  if (entry.status === 'completed') return hasOutcome ? 'learn' : 'measure'
+  return 'none'
+}
+
+function outcomeValidPairCount(snapshot: unknown): number | null {
+  if (!isRecord(snapshot) || typeof snapshot.validPairCount !== 'number' || !Number.isSafeInteger(snapshot.validPairCount) || snapshot.validPairCount < 0) return null
+  return snapshot.validPairCount
+}
+
 export async function getOwnerContentOperationsWorkspace(ownerUserId: number, repository?: ContentOperationsRepository): Promise<WorkspacePayload> {
   const db = await getRepository(repository)
   const [clients, calendars, entries, runs, outcomeAssessments] = await Promise.all([db.listClients(ownerUserId), db.listCalendars(ownerUserId), db.listEntries(ownerUserId), db.listRuns(ownerUserId), db.listOutcomes(ownerUserId)])
-  return { clients: clients.map(publicClient), calendars, entries, runs, outcomeAssessments, capabilities: { schedulerAvailable: true, generationExecutorConfigured: false, firstPartyPublisherConfigured: false, outcomeCollectionConfigured: false }, limitations: [...CONTENT_OPERATIONS_LIMITATIONS] }
+  const lineages = await Promise.all(entries.map(entry => db.resolveWorkspaceEntry(ownerUserId, entry.id)))
+  const projections = entries.map((entry, index) => {
+    const lineage = lineages[index]
+    const hasApprovedDraft = Boolean(lineage?.draft && lineage.review && ['approved_for_preview', 'approved_for_delivery'].includes(lineage.review.decision) && lineage.review.evidenceSnapshotHash === entry.evidenceSnapshotHash && lineage.draft.jobId === lineage.job?.id)
+    const hasPassedRiskGate = Boolean(lineage?.riskGate && lineage.riskGate.status === 'passed' && lineage.riskGate.evidenceSnapshotHash === entry.evidenceSnapshotHash && lineage.riskGate.draftId === lineage.draft?.id)
+    const hasOutcome = outcomeAssessments.some(outcome => outcome.entryId === entry.id)
+    return { ...entry, framework: lineage?.client.framework || null, target: lineage?.client.canonicalSiteOrigin || null, hasApprovedDraft, hasPassedRiskGate, nextAction: nextActionForEntry(entry, hasApprovedDraft, hasPassedRiskGate, hasOutcome) }
+  })
+  return { clients: clients.map(publicClient), calendars, entries: projections, runs, outcomeAssessments: outcomeAssessments.map(outcome => ({ ...outcome, validPairCount: outcomeValidPairCount(outcome.assessmentSnapshot) })), capabilities: { schedulerAvailable: true, generationExecutorConfigured: false, firstPartyPublisherConfigured: false, outcomeCollectionConfigured: false }, limitations: [...CONTENT_OPERATIONS_LIMITATIONS] }
 }
 
 export function getDefaultContentOperationsClock(): Clock {

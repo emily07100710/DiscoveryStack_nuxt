@@ -11,7 +11,7 @@ export default defineTask({
     const ownerUserId = await resolveControlledOwnerDatabaseUserId(String(config.ownerOpenId || process.env.OWNER_OPEN_ID || ''))
     const requested = payload && typeof payload === 'object' && 'maxEntries' in payload ? Number((payload as { maxEntries?: unknown }).maxEntries) : 50
     const maxEntries = Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, 50) : 50
-    const result = await runContentOperationsTick({ ownerUserId, maxEntries, leaseOwner: `content-operations-task:${process.pid}` })
+    const result = await runContentOperationsTick({ ownerUserId, maxEntries })
     return { result }
   },
 })

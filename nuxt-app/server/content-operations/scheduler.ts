@@ -7,7 +7,6 @@ export type ContentOperationsTickInput = {
   ownerUserId: number
   repository?: ContentOperationsRepository
   clock?: Clock
-  leaseOwner?: string
   maxEntries?: number
 }
 
@@ -42,11 +41,18 @@ export async function runContentOperationsTick(input: ContentOperationsTickInput
   let leaseConflicts = 0
   const calendarIds = new Set<number>()
   for (const candidate of selected) {
-    const result = await materializeOwnerDueContent(input.ownerUserId, { calendarId: candidate.calendarId, clock, maxEntries: 1, onlyEntryIds: [candidate.entry.id], leaseOwner: input.leaseOwner || `content-operations-tick:${process.pid}` }, repository)
-    calendarIds.add(candidate.calendarId)
-    materialized += result.dueWork.length
-    skipped += result.entries.filter(entry => entry.id === candidate.entry.id && entry.status === 'skipped').length
-    if (!result.dueWork.length && !result.entries.some(entry => entry.id === candidate.entry.id && entry.status === 'skipped')) leaseConflicts += 1
+    try {
+      const calendar = await repository.findCalendar(input.ownerUserId, candidate.calendarId)
+      if (!calendar || calendar.status === 'archived' || calendar.status === 'paused') continue
+      const result = await materializeOwnerDueContent(input.ownerUserId, { calendarId: candidate.calendarId, expectedPlanFingerprint: calendar.planFingerprint, idempotencyKey: `scheduler:${candidate.entry.id}:${clock.now().getTime()}` }, repository, { clock, eligibleEntryIds: [candidate.entry.id] })
+      calendarIds.add(candidate.calendarId)
+      materialized += result.entries.some(entry => entry.id === candidate.entry.id && entry.status === 'materialized') ? 1 : 0
+      skipped += result.entries.some(entry => entry.id === candidate.entry.id && entry.status === 'skipped') ? 1 : 0
+      if (result.replayed || (!result.entries.some(entry => entry.id === candidate.entry.id && (entry.status === 'materialized' || entry.status === 'skipped')))) leaseConflicts += 1
+    } catch (error: any) {
+      if (error?.statusCode === 409) leaseConflicts += 1
+      else throw error
+    }
   }
   return { selected: selected.length, materialized, skipped, leaseConflicts, calendarIds: [...calendarIds].sort((a, b) => a - b), limitations: ['bounded durable materialization only', 'no provider, CMS, website, publication, review approval, or outcome collection'] }
 }

@@ -1,17 +1,18 @@
-import { and, desc, eq, inArray, isNull, lt, or, ne } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDatabase } from '../database'
 import {
   contentOperationCalendarEntries,
   contentOperationCalendars,
   contentOperationClients,
-  contentOperationEvents,
   contentOperationOutcomeAssessments,
   contentOperationRuns,
+  contentOperationEvents,
   seoGeoProductionDeliverables,
   seoGeoContentJobs,
   seoGeoContentDrafts,
   seoGeoContentReviews,
+  seoGeoContentRiskGates,
 } from '../database/schema'
 import { getProductionPlanBundle, resolveProductionContext } from '../seo-geo-core/repository'
 import type {
@@ -24,12 +25,15 @@ import type {
   PlanBundle,
   DeliveredPublication,
 } from './types'
-import type { Clock } from './types'
+import type { OperationClaim } from './types'
 
 export type CalendarInsert = Omit<ContentOperationCalendarRow, 'id' | 'createdAt' | 'updatedAt'>
 export type EntryInsert = Omit<ContentOperationCalendarEntryRow, 'id' | 'createdAt' | 'updatedAt'>
 export type RunInsert = Omit<ContentOperationRunRow, 'id' | 'createdAt' | 'updatedAt'>
 export type EventInsert = Omit<ContentOperationEventRow, 'id' | 'occurredAt'>
+export type OperationClaimInput = { ownerUserId: number; calendarId: number; operation: 'replan' | 'materialize'; idempotencyKey: string; requestFingerprint: string; eventFingerprint: string }
+export type LeaseError = { code?: string; summary?: string; retryEligibleAt?: Date | null }
+export type WorkspaceEntryLineage = { entry: ContentOperationCalendarEntryRow; calendar: ContentOperationCalendarRow; client: ContentOperationClientRow; deliverable: Record<string, unknown> & { id: number; ownerUserId: number; planId: number; briefId: number | null; jobId: number | null; selectionId: number; contentType: string; title: string; audience: string; language: string; evidenceSnapshotHash: string; opportunityKey: string; provenance: unknown }; job: (Record<string, unknown> & { id: number; ownerUserId: number; productionPlanId: number | null; productionDeliverableId: number | null; strategyRecommendationId: number | null; evidenceSnapshotHash: string; briefId: number }) | null; draft: (Record<string, unknown> & { id: number; jobId: number; version: number; contentHash: string; evidenceRefs: unknown; safetyStatus: string }) | null; review: (Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string }) | null; riskGate: (Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string }) | null }
 export type OutcomeInsert = Omit<ContentOperationOutcomeAssessmentRow, 'id' | 'createdAt'>
 
 export type CanonicalContext = Awaited<ReturnType<typeof resolveProductionContext>>
@@ -45,6 +49,8 @@ export type ContentOperationsRepository = {
   findCalendar(ownerUserId: number, calendarId: number): Promise<ContentOperationCalendarRow | null>
   insertCalendar(input: CalendarInsert): Promise<ContentOperationCalendarRow>
   updateCalendar(ownerUserId: number, calendarId: number, patch: Partial<CalendarInsert>): Promise<ContentOperationCalendarRow>
+  updateCalendarIfFingerprint(ownerUserId: number, calendarId: number, expectedPlanFingerprint: string, patch: Partial<CalendarInsert>): Promise<ContentOperationCalendarRow | null>
+  claimOperation(input: OperationClaimInput): Promise<OperationClaim>
   listCalendars(ownerUserId: number): Promise<ContentOperationCalendarRow[]>
   findEntry(ownerUserId: number, entryId: number): Promise<ContentOperationCalendarEntryRow | null>
   listEntries(ownerUserId: number, calendarId?: number): Promise<ContentOperationCalendarEntryRow[]>
@@ -53,8 +59,8 @@ export type ContentOperationsRepository = {
   listRuns(ownerUserId: number, entryId?: number): Promise<ContentOperationRunRow[]>
   findRunByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationRunRow | null>
   insertRun(input: RunInsert): Promise<ContentOperationRunRow>
-  acquireRunLease(ownerUserId: number, runId: number, leaseOwner: string, now: Date, leaseMs: number): Promise<ContentOperationRunRow | null>
-  releaseRunLease(ownerUserId: number, runId: number, state: RunInsert['state'], now: Date, error?: { code?: string; summary?: string }): Promise<ContentOperationRunRow>
+  acquireRunLease(ownerUserId: number, runId: number, leaseToken: string, now: Date, leaseMs: number): Promise<ContentOperationRunRow | null>
+  releaseRunLease(ownerUserId: number, runId: number, state: RunInsert['state'], leaseToken: string, now: Date, error?: LeaseError): Promise<ContentOperationRunRow | null>
   appendEvent(input: EventInsert): Promise<ContentOperationEventRow>
   listEvents(ownerUserId: number, entryId?: number): Promise<ContentOperationEventRow[]>
   findOutcomeByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationOutcomeAssessmentRow | null>
@@ -63,6 +69,7 @@ export type ContentOperationsRepository = {
   getPlanBundle(ownerUserId: number, productionPlanId: number): Promise<PlanBundle>
   resolveCanonicalContext(ownerUserId: number, productionPlanId: number, deliverableId: number): Promise<CanonicalContext>
   resolveDeliveredPublication(ownerUserId: number, entryId: number): Promise<DeliveredPublication | null>
+  resolveWorkspaceEntry(ownerUserId: number, entryId: number): Promise<WorkspaceEntryLineage | null>
 }
 
 function requireOperationsDatabase() {
@@ -75,6 +82,11 @@ function rowId(result: any): number {
   const id = Number(result?.[0]?.insertId)
   if (!Number.isSafeInteger(id) || id < 1) throw createError({ statusCode: 500, statusMessage: 'Content operation record could not be recorded.' })
   return id
+}
+
+function isDuplicateError(error: unknown): boolean {
+  const candidate = error as { code?: string; errno?: number; message?: string }
+  return candidate?.code === 'ER_DUP_ENTRY' || candidate?.errno === 1062 || /duplicate entry|unique constraint/i.test(candidate?.message || '')
 }
 
 function makeRepository(database: any): ContentOperationsRepository {
@@ -123,6 +135,25 @@ function makeRepository(database: any): ContentOperationsRepository {
       if (!row) throw createError({ statusCode: 404, statusMessage: 'Content operation calendar was not found.' })
       return row
     },
+    async updateCalendarIfFingerprint(ownerUserId, calendarId, expectedPlanFingerprint, patch) {
+      const result = await database.update(contentOperationCalendars).set(patch as any).where(and(eq(contentOperationCalendars.id, calendarId), eq(contentOperationCalendars.ownerUserId, ownerUserId), eq(contentOperationCalendars.planFingerprint, expectedPlanFingerprint)))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      return repository.findCalendar(ownerUserId, calendarId)
+    },
+    async claimOperation(input) {
+      const metadata = { operation: input.operation, calendarId: input.calendarId, idempotencyKey: input.idempotencyKey, requestFingerprint: input.requestFingerprint, claim: true }
+      try {
+        await database.insert(contentOperationEvents).values({ ownerUserId: input.ownerUserId, clientId: null, calendarId: input.calendarId, entryId: null, runId: null, eventType: 'operation_claim', fromStatus: null, toStatus: null, eventFingerprint: input.eventFingerprint, metadata })
+        return { claimed: true, requestFingerprint: input.requestFingerprint, operation: input.operation, ownerUserId: input.ownerUserId, calendarId: input.calendarId, idempotencyKey: input.idempotencyKey }
+      } catch (error) {
+        if (!isDuplicateError(error)) throw error
+        const [existing] = await database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, input.ownerUserId), eq(contentOperationEvents.eventFingerprint, input.eventFingerprint))).limit(1)
+        if (!existing) throw error
+        const existingMetadata = existing.metadata as { requestFingerprint?: unknown }
+        if (typeof existingMetadata?.requestFingerprint !== 'string') throw createError({ statusCode: 500, statusMessage: 'Content operation claim metadata is malformed.' })
+        return { claimed: false, requestFingerprint: existingMetadata.requestFingerprint, operation: input.operation, ownerUserId: input.ownerUserId, calendarId: input.calendarId, idempotencyKey: input.idempotencyKey }
+      }
+    },
     async listCalendars(ownerUserId) {
       return database.select().from(contentOperationCalendars).where(eq(contentOperationCalendars.ownerUserId, ownerUserId)).orderBy(desc(contentOperationCalendars.createdAt)).limit(100)
     },
@@ -153,34 +184,51 @@ function makeRepository(database: any): ContentOperationsRepository {
       return row || null
     },
     async insertRun(input) {
-      const id = rowId(await database.insert(contentOperationRuns).values(input as any))
-      const [row] = await database.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, id))).limit(1)
-      if (!row) throw createError({ statusCode: 500, statusMessage: 'Content operation run could not be loaded.' })
-      return row
+      try {
+        const id = rowId(await database.insert(contentOperationRuns).values(input as any))
+        const [row] = await database.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, id))).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Content operation run could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!isDuplicateError(error)) throw error
+        const [existing] = await database.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.idempotencyKey, input.idempotencyKey))).limit(1)
+        if (!existing) throw error
+        return existing
+      }
     },
-    async acquireRunLease(ownerUserId, runId, leaseOwner, now, leaseMs) {
+    async acquireRunLease(ownerUserId, runId, leaseToken, now, leaseMs) {
       const leaseExpiresAt = new Date(now.getTime() + leaseMs)
-      await database.update(contentOperationRuns).set({ state: 'processing', leaseOwner, leaseExpiresAt, startedAt: now, updatedAt: now }).where(and(
+      const result = await database.update(contentOperationRuns).set({ state: 'processing', leaseOwner: leaseToken, leaseExpiresAt, startedAt: sql`COALESCE(${contentOperationRuns.startedAt}, ${now})`, updatedAt: now }).where(and(
         eq(contentOperationRuns.id, runId),
         eq(contentOperationRuns.ownerUserId, ownerUserId),
-        or(ne(contentOperationRuns.state, 'processing'), isNull(contentOperationRuns.leaseExpiresAt), lt(contentOperationRuns.leaseExpiresAt, now)),
+        or(
+          eq(contentOperationRuns.state, 'queued'),
+          and(eq(contentOperationRuns.state, 'retry_wait'), lte(contentOperationRuns.retryEligibleAt, now)),
+          and(eq(contentOperationRuns.state, 'processing'), lt(contentOperationRuns.leaseExpiresAt, now)),
+        ),
       ))
-      const [row] = await database.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, ownerUserId), eq(contentOperationRuns.id, runId), eq(contentOperationRuns.leaseOwner, leaseOwner))).limit(1)
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      const [row] = await database.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, ownerUserId), eq(contentOperationRuns.id, runId), eq(contentOperationRuns.leaseOwner, leaseToken), eq(contentOperationRuns.state, 'processing'))).limit(1)
       return row || null
     },
-    async releaseRunLease(ownerUserId, runId, state, now, error) {
-      await database.update(contentOperationRuns).set({ state, leaseOwner: null, leaseExpiresAt: null, completedAt: state === 'succeeded' || state === 'failed' || state === 'blocked' || state === 'cancelled' ? now : null, errorCode: error?.code || null, errorSummary: error?.summary || null, updatedAt: now }).where(and(eq(contentOperationRuns.ownerUserId, ownerUserId), eq(contentOperationRuns.id, runId)))
+    async releaseRunLease(ownerUserId, runId, state, leaseToken, now, error) {
+      const result = await database.update(contentOperationRuns).set({ state, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: error?.retryEligibleAt || null, completedAt: state === 'succeeded' || state === 'failed' || state === 'blocked' || state === 'cancelled' ? now : null, errorCode: error?.code || null, errorSummary: error?.summary || null, updatedAt: now }).where(and(eq(contentOperationRuns.ownerUserId, ownerUserId), eq(contentOperationRuns.id, runId), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, leaseToken)))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
       const [row] = await database.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, ownerUserId), eq(contentOperationRuns.id, runId))).limit(1)
-      if (!row) throw createError({ statusCode: 404, statusMessage: 'Content operation run was not found.' })
-      return row
+      return row || null
     },
     async appendEvent(input) {
-      const [existing] = await database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, input.ownerUserId), eq(contentOperationEvents.eventFingerprint, input.eventFingerprint))).limit(1)
-      if (existing) return existing
-      const id = rowId(await database.insert(contentOperationEvents).values(input as any))
-      const [row] = await database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, input.ownerUserId), eq(contentOperationEvents.id, id))).limit(1)
-      if (!row) throw createError({ statusCode: 500, statusMessage: 'Content operation event could not be loaded.' })
-      return row
+      try {
+        const id = rowId(await database.insert(contentOperationEvents).values(input as any))
+        const [row] = await database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, input.ownerUserId), eq(contentOperationEvents.id, id))).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Content operation event could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!isDuplicateError(error)) throw error
+        const [existing] = await database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, input.ownerUserId), eq(contentOperationEvents.eventFingerprint, input.eventFingerprint))).limit(1)
+        if (!existing) throw error
+        return existing
+      }
     },
     async listEvents(ownerUserId, entryId) {
       return database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, ownerUserId), entryId ? eq(contentOperationEvents.entryId, entryId) : undefined)).orderBy(desc(contentOperationEvents.occurredAt)).limit(500)
@@ -204,19 +252,26 @@ function makeRepository(database: any): ContentOperationsRepository {
     async resolveCanonicalContext(ownerUserId, productionPlanId, deliverableId) {
       return resolveProductionContext({ ownerUserId, planId: productionPlanId, deliverableId })
     },
-    async resolveDeliveredPublication(ownerUserId, entryId) {
+    async resolveWorkspaceEntry(ownerUserId, entryId) {
       const [entry] = await database.select().from(contentOperationCalendarEntries).where(and(eq(contentOperationCalendarEntries.ownerUserId, ownerUserId), eq(contentOperationCalendarEntries.id, entryId))).limit(1)
       if (!entry) return null
       const [calendar] = await database.select().from(contentOperationCalendars).where(and(eq(contentOperationCalendars.ownerUserId, ownerUserId), eq(contentOperationCalendars.id, entry.calendarId))).limit(1)
+      const [client] = await database.select().from(contentOperationClients).where(and(eq(contentOperationClients.ownerUserId, ownerUserId), eq(contentOperationClients.id, calendar?.clientId || -1))).limit(1)
       const [deliverable] = await database.select().from(seoGeoProductionDeliverables).where(and(eq(seoGeoProductionDeliverables.ownerUserId, ownerUserId), eq(seoGeoProductionDeliverables.id, entry.productionDeliverableId), eq(seoGeoProductionDeliverables.planId, calendar?.productionPlanId || -1))).limit(1)
-      if (!calendar || !deliverable || !entry.jobId || !entry.draftId || !entry.reviewId) return null
-      const [job] = await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentJobs.id, entry.jobId))).limit(1)
-      const [draft] = await database.select().from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, entry.draftId), eq(seoGeoContentDrafts.jobId, entry.jobId))).limit(1)
-      const [review] = await database.select().from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.id, entry.reviewId), eq(seoGeoContentReviews.jobId, entry.jobId), eq(seoGeoContentReviews.draftId, entry.draftId), eq(seoGeoContentReviews.reviewerUserId, ownerUserId))).limit(1)
-      if (!job || !draft || !review) return null
-      const publicationRuns = await repository.listRuns(ownerUserId, entry.id)
-      const publicationRun = publicationRuns.find(run => run.stage === 'publication') || null
-      return { entry, calendar, deliverable, job, draft, review, publicationRun }
+      if (!calendar || !client || !deliverable) return null
+      const [job] = entry.jobId ? await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentJobs.id, entry.jobId), eq(seoGeoContentJobs.productionPlanId, calendar.productionPlanId), eq(seoGeoContentJobs.productionDeliverableId, entry.productionDeliverableId), eq(seoGeoContentJobs.strategyRecommendationId, entry.strategyRecommendationId), eq(seoGeoContentJobs.evidenceSnapshotHash, entry.evidenceSnapshotHash))).limit(1) : [null]
+      const [draft] = job && entry.draftId ? await database.select().from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, entry.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1) : [null]
+      const [review] = job && draft && entry.reviewId ? await database.select().from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.id, entry.reviewId), eq(seoGeoContentReviews.jobId, job.id), eq(seoGeoContentReviews.draftId, draft.id), eq(seoGeoContentReviews.reviewerUserId, ownerUserId), eq(seoGeoContentReviews.evidenceSnapshotHash, entry.evidenceSnapshotHash))).limit(1) : [null]
+      const [riskGate] = draft ? await database.select().from(seoGeoContentRiskGates).where(and(eq(seoGeoContentRiskGates.draftId, draft.id), eq(seoGeoContentRiskGates.status, 'passed'), eq(seoGeoContentRiskGates.evidenceSnapshotHash, entry.evidenceSnapshotHash))).orderBy(desc(seoGeoContentRiskGates.createdAt)).limit(1) : [null]
+      return { entry, calendar, client, deliverable, job: job || null, draft: draft || null, review: review || null, riskGate: riskGate || null }
+    },
+    async resolveDeliveredPublication(ownerUserId, entryId) {
+      const lineage = await repository.resolveWorkspaceEntry(ownerUserId, entryId)
+      if (!lineage || !lineage.job || !lineage.draft || !lineage.review || lineage.review.decision !== 'approved_for_delivery' || lineage.entry.status !== 'delivered' && lineage.entry.status !== 'completed' || !lineage.entry.contentHash || lineage.draft.contentHash !== lineage.entry.contentHash || lineage.review.evidenceSnapshotHash !== lineage.entry.evidenceSnapshotHash) return null
+      const publicationRuns = await repository.listRuns(ownerUserId, entryId)
+      const publicationRun = publicationRuns.find(run => run.stage === 'publication' && run.state === 'succeeded' && run.ownerUserId === ownerUserId && run.entryId === entryId) || null
+      if (!publicationRun) return null
+      return { entry: lineage.entry, calendar: lineage.calendar, deliverable: lineage.deliverable, job: lineage.job, draft: lineage.draft, review: lineage.review, riskGate: lineage.riskGate || undefined, publicationRun }
     },
   }
   return repository

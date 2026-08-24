@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { parseMaterializeInput, parseReplanInput } from '../server/content-operations/normalization'
 
 const root = join(process.cwd(), 'server/api/content-operations')
 const routes = [
@@ -24,6 +25,22 @@ describe('Content Operations owner-only route contract', () => {
         expect(source).toContain('parse')
       }
     }
+  })
+
+  it('accepts the actual 03 flat replan and materialize payloads at the parser boundary', () => {
+    const fingerprint = 'a'.repeat(64)
+    const replan = { expectedPlanFingerprint: fingerprint, planStartDate: '2026-02-01', planEndDate: '2026-04-30', publishLocalTime: '09:00', cadenceDays: 7, monthlyBudgetUnits: 100, defaultCostUnits: 1, maxItemsPerCalendarMonth: 31, maximumTotalItems: 10, catchUpPolicy: 'one_catch_up', idempotencyKey: 'replan-03' }
+    expect(parseReplanInput(replan)).toEqual({ expectedPlanFingerprint: fingerprint, idempotencyKey: 'replan-03', request: { planStartDate: '2026-02-01', planEndDate: '2026-04-30', publishLocalTime: '09:00', cadenceDays: 7, monthlyBudgetUnits: 100, defaultCostUnits: 1, maxItemsPerCalendarMonth: 31, maximumTotalItems: 10, catchUpPolicy: 'one_catch_up' } })
+    expect(parseMaterializeInput({ expectedPlanFingerprint: fingerprint, idempotencyKey: 'materialize-03' })).toEqual({ expectedPlanFingerprint: fingerprint, idempotencyKey: 'materialize-03' })
+    for (const payload of [
+      { ...replan, request: replan },
+      { ...replan, clock: {} },
+      { ...replan, ownerUserId: 1 },
+      { ...replan, expectedPlanFingerprint: 'A'.repeat(64) },
+      { expectedPlanFingerprint: fingerprint, idempotencyKey: 'materialize-03', leaseOwner: 'worker' },
+      { expectedPlanFingerprint: fingerprint, idempotencyKey: '' },
+    ]) expect(() => parseReplanInput(payload)).toThrow()
+    expect(() => parseMaterializeInput({ expectedPlanFingerprint: fingerprint, idempotencyKey: 'materialize-03', clock: {} })).toThrow()
   })
 
   it('keeps the materialize route server-clock-only and keeps calendar opportunity construction server-side', () => {

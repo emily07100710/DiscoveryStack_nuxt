@@ -36,19 +36,31 @@ export type CreateCalendarInput = {
   idempotencyKey: string
 }
 
-export type ReplanCalendarInput = {
-  calendarId: number
+export type ReplanCalendarInput = Omit<CreateCalendarInput, 'clientId' | 'productionPlanId'> & {
   expectedPlanFingerprint: string
-  request: CreateCalendarInput
 }
 
 export type MaterializeInput = {
   calendarId: number
+  expectedPlanFingerprint: string
+  idempotencyKey: string
+}
+
+export type MaterializeExecutionOptions = {
   clock?: Clock
   maxEntries?: number
-  onlyEntryIds?: number[]
-  leaseOwner?: string
+  eligibleEntryIds?: number[]
+  leaseToken?: string
   leaseMs?: number
+}
+
+export type OperationClaim = {
+  claimed: boolean
+  requestFingerprint: string
+  operation: 'replan' | 'materialize'
+  ownerUserId: number
+  calendarId: number
+  idempotencyKey: string
 }
 
 export type OutcomeAssessmentInput = {
@@ -74,6 +86,7 @@ export type MaterializeResult = {
   entries: ContentOperationCalendarEntryRow[]
   runs: ContentOperationRunRow[]
   events: ContentOperationEventRow[]
+  replayed: boolean
 }
 
 export type OutcomeResult = {
@@ -82,12 +95,24 @@ export type OutcomeResult = {
   persisted: ContentOperationOutcomeAssessmentRow
 }
 
+export type WorkspaceEntryProjection = ContentOperationCalendarEntryRow & {
+  framework: 'astro' | 'nuxt' | null
+  target: string | null
+  hasApprovedDraft: boolean
+  hasPassedRiskGate: boolean
+  nextAction: 'generate' | 'review' | 'publish' | 'measure' | 'learn' | 'wait' | 'none'
+}
+
+export type WorkspaceOutcomeProjection = ContentOperationOutcomeAssessmentRow & {
+  validPairCount: number | null
+}
+
 export type WorkspacePayload = {
   clients: ContentOperationClientRow[]
   calendars: ContentOperationCalendarRow[]
-  entries: ContentOperationCalendarEntryRow[]
+  entries: WorkspaceEntryProjection[]
   runs: ContentOperationRunRow[]
-  outcomeAssessments: ContentOperationOutcomeAssessmentRow[]
+  outcomeAssessments: WorkspaceOutcomeProjection[]
   capabilities: {
     schedulerAvailable: boolean
     generationExecutorConfigured: false
@@ -100,15 +125,16 @@ export type WorkspacePayload = {
 export type DeliveredPublication = {
   entry: ContentOperationCalendarEntryRow
   calendar: ContentOperationCalendarRow
-  deliverable: Record<string, unknown> & { id: number; ownerUserId: number; planId: number; provenance: unknown }
-  job: Record<string, unknown> & { id: number }
-  draft: Record<string, unknown> & { id: number; version: number; contentHash: string }
-  review: Record<string, unknown> & { id: number; decision: string }
+  deliverable: Record<string, unknown> & { id: number; ownerUserId: number; planId: number; selectionId: number; contentType: string; title: string; audience: string; language: string; evidenceSnapshotHash: string; opportunityKey: string; provenance: unknown }
+  job: Record<string, unknown> & { id: number; ownerUserId: number; productionPlanId: number | null; productionDeliverableId: number | null; strategyRecommendationId: number | null; evidenceSnapshotHash: string; briefId: number }
+  draft: Record<string, unknown> & { id: number; jobId: number; version: number; contentHash: string; evidenceRefs: unknown; safetyStatus: string }
+  review: Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string }
+  riskGate?: Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string }
   publicationRun: ContentOperationRunRow | null
 }
 
 export type PlanBundle = {
-  plan: Record<string, unknown> & { id: number; ownerUserId: number; status: string; evidenceSnapshotHash: string }
+  plan: Record<string, unknown> & { id: number; ownerUserId: number; diagnosisId: number | null; status: string; evidenceSnapshotHash: string }
   selections: Array<Record<string, unknown> & { id: number; ownerUserId: number; planId: number; strategyRecommendationId: number; status: string; evidenceSnapshotHash: string }>
   strategies: Array<Record<string, unknown> & { id: number; ownerUserId: number; diagnosisId: number; status: string; evidenceSnapshotHash: string; ruleIds: unknown; evidenceRefs: unknown; contentOpportunities: unknown; provenance: unknown }>
   deliverables: Array<Record<string, unknown> & { id: number; ownerUserId: number; planId: number; selectionId: number; opportunityKey: string; contentType: string; title: string; audience: string; language: string; evidenceSnapshotHash: string; provenance: unknown }>

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isIP } from 'node:net'
 import { createError } from 'h3'
 import { z } from 'zod'
 import { CONTENT_CALENDAR_LIMITS } from '../content-calendar'
@@ -16,6 +17,10 @@ const strictClient = z.object({
   idempotencyKey: z.string().trim().min(1).max(128),
 }).strict()
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 const strictCalendar = z.object({
   clientId: z.number().int().positive(),
   productionPlanId: z.number().int().positive(),
@@ -31,12 +36,14 @@ const strictCalendar = z.object({
   idempotencyKey: z.string().trim().min(1).max(128),
 }).strict()
 
-const strictReplan = z.object({
+const strictReplan = strictCalendar.omit({ clientId: true, productionPlanId: true }).extend({
   expectedPlanFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
-  request: strictCalendar.omit({ clientId: true, productionPlanId: true, idempotencyKey: true }).strict(),
 }).strict()
 
-const strictMaterialize = z.object({}).strict()
+const strictMaterialize = z.object({
+  expectedPlanFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  idempotencyKey: z.string().trim().min(1).max(128),
+}).strict()
 
 const strictOutcome = z.object({
   entryId: z.number().int().positive(),
@@ -66,34 +73,38 @@ export function parseCalendarInput(value: unknown): CreateCalendarInput {
   return { ...parsed.data }
 }
 
-export function parseReplanInput(value: unknown): { expectedPlanFingerprint: string; request: Omit<CreateCalendarInput, 'clientId' | 'productionPlanId' | 'idempotencyKey'> } {
+export function parseReplanInput(value: unknown): { expectedPlanFingerprint: string; idempotencyKey: string; request: Omit<CreateCalendarInput, 'clientId' | 'productionPlanId' | 'idempotencyKey'> } {
   const parsed = strictReplan.safeParse(value)
   if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid content operation replan input.' })
-  assertDateOnly(parsed.data.request.planStartDate)
-  assertDateOnly(parsed.data.request.planEndDate)
-  if (parsed.data.request.planEndDate < parsed.data.request.planStartDate) throw createError({ statusCode: 422, statusMessage: 'Calendar plan end date must not precede its start date.' })
-  if (parsed.data.request.defaultCostUnits > parsed.data.request.monthlyBudgetUnits) throw createError({ statusCode: 422, statusMessage: 'Default cost units exceed the monthly budget.' })
-  return parsed.data
+  assertDateOnly(parsed.data.planStartDate)
+  assertDateOnly(parsed.data.planEndDate)
+  if (parsed.data.planEndDate < parsed.data.planStartDate) throw createError({ statusCode: 422, statusMessage: 'Calendar plan end date must not precede its start date.' })
+  if (parsed.data.defaultCostUnits > parsed.data.monthlyBudgetUnits) throw createError({ statusCode: 422, statusMessage: 'Default cost units exceed the monthly budget.' })
+  const { expectedPlanFingerprint, idempotencyKey, ...request } = parsed.data
+  return { expectedPlanFingerprint, idempotencyKey, request }
 }
 
-export function parseMaterializeInput(value: unknown): Record<string, never> {
+export function parseMaterializeInput(value: unknown): { expectedPlanFingerprint: string; idempotencyKey: string } {
   const parsed = strictMaterialize.safeParse(value)
-  if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Materialize input must be an empty object.' })
+  if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid content operation materialize input.' })
   return parsed.data
 }
 
 export function parseOutcomeInput(value: unknown): OutcomeAssessmentInput {
   const parsed = strictOutcome.safeParse(value)
   if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid content operation outcome input.' })
+  for (const measurement of [...parsed.data.baselineMeasurements, ...parsed.data.followUpMeasurements]) {
+    if (isRecord(measurement) && isRecord(measurement.metrics) && Object.values(measurement.metrics).some(metric => typeof metric === 'number' && !Number.isFinite(metric))) throw createError({ statusCode: 422, statusMessage: 'Outcome metrics must be finite numbers.' })
+  }
   return parsed.data
 }
 
 export function normalizePublicHttpsOrigin(value: string): string {
   let url: URL
   try { url = new URL(value.trim()) } catch { throw createError({ statusCode: 422, statusMessage: 'Site origin must be a public HTTPS origin.' }) }
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/' && url.pathname !== '') throw createError({ statusCode: 422, statusMessage: 'Site origin must be a public HTTPS origin without credentials, path, query, or fragment.' })
-  const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
-  if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local') || hostname === '0.0.0.0' || hostname === '::1' || hostname === '[::1]' || isPrivateIpv4(hostname) || isPrivateIpv6(hostname)) throw createError({ statusCode: 422, statusMessage: 'Private, local, and link-local site origins are not allowed.' })
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || (url.pathname !== '/' && url.pathname !== '') || (url.port !== '' && url.port !== '443')) throw createError({ statusCode: 422, statusMessage: 'Site origin must be a public HTTPS origin without credentials, path, query, fragment, or non-standard port.' })
+  const hostname = url.hostname.toLowerCase()
+  if (!isPublicDnsHostname(hostname)) throw createError({ statusCode: 422, statusMessage: 'Private, local, special-use, or malformed site origins are not allowed.' })
   url.hostname = hostname
   url.username = ''
   url.password = ''
@@ -103,19 +114,77 @@ export function normalizePublicHttpsOrigin(value: string): string {
   return url.toString().replace(/\/$/, '')
 }
 
-function isPrivateIpv4(hostname: string): boolean {
-  const parts = hostname.split('.')
-  if (parts.length !== 4 || parts.some(part => !/^\d+$/.test(part))) return false
-  const octets = parts.map(Number)
-  if (octets.some(octet => octet < 0 || octet > 255)) return true
-  const first = octets[0]!
-  const second = octets[1]!
-  return first === 10 || first === 127 || first === 0 || first === 169 && second === 254 || first === 172 && second >= 16 && second <= 31 || first === 192 && second === 168
+function isPublicDnsHostname(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/g, '')
+  const ipVersion = isIP(normalized)
+  if (ipVersion === 4) return !isSpecialUseIpv4(normalized)
+  if (ipVersion === 6) return !isSpecialUseIpv6(normalized)
+  if (!normalized || normalized.length > 253 || normalized.endsWith('.') || !normalized.includes('.')) return false
+  const labels = normalized.split('.')
+  if (labels.some(label => label.length < 1 || label.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label))) return false
+  if (labels.every(label => /^\d+$/.test(label))) return false
+  const suffix = normalized.toLowerCase()
+  return !['localhost', 'local', 'internal', 'onion'].some(value => suffix === value || suffix.endsWith(`.${value}`))
 }
 
-function isPrivateIpv6(hostname: string): boolean {
-  const value = hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  return value.includes(':') && (value === '::1' || value === '::' || value.startsWith('fc') || value.startsWith('fd') || value.startsWith('fe8') || value.startsWith('fe9') || value.startsWith('fea') || value.startsWith('feb'))
+function parseIpv4(hostname: string): number[] | null {
+  const parts = hostname.split('.')
+  if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part))) return null
+  const octets = parts.map(Number)
+  return octets.every(octet => octet >= 0 && octet <= 255) ? octets : null
+}
+
+function isSpecialUseIpv4(hostname: string): boolean {
+  const octets = parseIpv4(hostname)
+  if (!octets) return true
+  const [first, second, third] = octets as [number, number, number, number]
+  if (first === 0 || first === 10 || first === 127 || first === 169 && second === 254 || first === 172 && second >= 16 && second <= 31 || first === 192 && (second === 0 || second === 168) || first === 192 && second === 0 && third === 2 || first === 192 && second === 88 && third === 99 || first === 198 && (second === 18 || second === 19) || first === 198 && second === 51 && third === 100 || first === 203 && second === 0 && third === 113 || first >= 224) return true
+  if (first === 100 && second >= 64 && second <= 127) return true
+  return false
+}
+
+function ipv6Words(hostname: string): number[] | null {
+  const value = hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  const pieces = value.split('::')
+  if (pieces.length > 2) return null
+  const left = pieces[0] ? pieces[0].split(':') : []
+  const right = pieces.length === 2 && pieces[1] ? pieces[1].split(':') : []
+  const expand = (part: string): number[] | null => {
+    if (part.includes('.')) {
+      const ipv4 = parseIpv4(part)
+      return ipv4 ? [(ipv4[0]! << 8) | ipv4[1]!, (ipv4[2]! << 8) | ipv4[3]!] : null
+    }
+    if (!/^[0-9a-f]{1,4}$/i.test(part)) return null
+    return [Number.parseInt(part, 16)]
+  }
+  const expandAll = (parts: string[]): number[] | null => {
+    const words: number[] = []
+    for (const part of parts) {
+      const expanded = expand(part)
+      if (!expanded) return null
+      words.push(...expanded)
+    }
+    return words
+  }
+  const leftWords = expandAll(left)
+  const rightWords = expandAll(right)
+  if (!leftWords || !rightWords || (leftWords.length + rightWords.length > 8) || (pieces.length === 1 && leftWords.length !== 8)) return null
+  const zeroes = 8 - leftWords.length - rightWords.length
+  return [...leftWords, ...Array.from({ length: zeroes }, () => 0), ...rightWords]
+}
+
+function isSpecialUseIpv6(hostname: string): boolean {
+  const words = ipv6Words(hostname)
+  if (!words || words.length !== 8) return true
+  const allZero = words.every(word => word === 0)
+  const loopback = words.every(word => word === 0 || word === 1) && words.slice(0, 7).every(word => word === 0) && words[7] === 1
+  const first = words[0]!
+  const mapped = words.slice(0, 5).every(word => word === 0) && words[5] === 0xffff
+  if (mapped) {
+    const ipv4 = `${words[6]! >> 8}.${words[6]! & 255}.${words[7]! >> 8}.${words[7]! & 255}`
+    return isSpecialUseIpv4(ipv4)
+  }
+  return allZero || loopback || (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00 || first === 0x0100 && words[1] === 0 && words[2] === 0 && words[3] === 0 || first === 0x2001 && words[1] === 0x0db8
 }
 
 export function normalizeTimeZone(value: string): string {
@@ -149,4 +218,11 @@ export function stableStringify(value: unknown): string {
 export function sanitizeErrorSummary(error: unknown): string {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'Content operation failed.'
   return message.replace(/Bearer\s+[A-Za-z0-9._~+\-/]+=*/gi, 'Bearer [redacted]').replace(/(?:token|secret|password|authorization|credential)[^\s:=]*\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]').replace(/\s+at\s+[^\n]+/g, '').replace(/[\r\n\t]+/g, ' ').slice(0, 480)
+}
+
+export function toPublicContentOperationsError(error: unknown, fallback = 'Content operation request was rejected.') {
+  const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error && Number.isInteger((error as { statusCode?: unknown }).statusCode) ? Number((error as { statusCode: number }).statusCode) : 503
+  const status = [400, 401, 403, 404, 409, 422, 429].includes(statusCode) ? statusCode : 503
+  const statusMessage = status === 401 || status === 403 ? 'Owner authorization is required.' : status === 404 ? 'Content operation resource was not found.' : status === 409 ? 'Content operation request conflicts with current state.' : status === 422 ? 'Content operation request is invalid.' : fallback
+  return createError({ statusCode: status, statusMessage })
 }

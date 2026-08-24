@@ -9,6 +9,7 @@ export {
   parseOutcomeInput,
   parseReplanInput,
   sanitizeErrorSummary,
+  toPublicContentOperationsError,
   stableFingerprint,
   stableStringify,
 } from './normalization'
