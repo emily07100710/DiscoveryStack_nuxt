@@ -721,6 +721,158 @@ export const seoGeoDeliveryAttempts = mysqlTable('seoGeoDeliveryAttempts', {
   index('seo_geo_delivery_attempts_job_idx').on(table.jobId, table.createdAt),
 ])
 
+/** Owner-scoped client publication configuration. Credentials are deliberately not represented here. */
+export const contentOperationClients = mysqlTable('contentOperationClients', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  displayName: varchar('displayName', { length: 160 }).notNull(),
+  canonicalSiteOrigin: varchar('canonicalSiteOrigin', { length: 2048 }).notNull(),
+  framework: mysqlEnum('framework', ['astro', 'nuxt']).notNull(),
+  publicationTransport: mysqlEnum('publicationTransport', ['first_party_git', 'first_party_signed_api']).notNull(),
+  timeZone: varchar('timeZone', { length: 80 }).notNull(),
+  defaultCadenceDays: int('defaultCadenceDays').notNull(),
+  defaultPublishLocalTime: varchar('defaultPublishLocalTime', { length: 5 }).notNull(),
+  monthlyBudgetUnits: int('monthlyBudgetUnits').notNull(),
+  status: mysqlEnum('status', ['active', 'paused', 'archived']).default('active').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('content_operation_clients_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('content_operation_clients_owner_origin_unique').on(table.ownerUserId, table.canonicalSiteOrigin),
+  index('content_operation_clients_owner_status_idx').on(table.ownerUserId, table.status),
+])
+
+/** Durable calendar snapshot produced only from the persisted SEO/GEO Production Plan. */
+export const contentOperationCalendars = mysqlTable('contentOperationCalendars', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  productionPlanId: int('productionPlanId').notNull().references(() => seoGeoProductionPlans.id),
+  engineVersion: varchar('engineVersion', { length: 96 }).notNull(),
+  status: mysqlEnum('status', ['ready', 'partial', 'blocked', 'paused', 'archived']).default('ready').notNull(),
+  planStartDate: varchar('planStartDate', { length: 10 }).notNull(),
+  planEndDate: varchar('planEndDate', { length: 10 }).notNull(),
+  timeZone: varchar('timeZone', { length: 80 }).notNull(),
+  publishLocalTime: varchar('publishLocalTime', { length: 5 }).notNull(),
+  cadenceDays: int('cadenceDays').notNull(),
+  monthlyBudgetUnits: int('monthlyBudgetUnits').notNull(),
+  defaultCostUnits: int('defaultCostUnits').notNull(),
+  maxItemsPerCalendarMonth: int('maxItemsPerCalendarMonth').notNull(),
+  maximumTotalItems: int('maximumTotalItems').notNull(),
+  catchUpPolicy: mysqlEnum('catchUpPolicy', ['skip_missed', 'one_catch_up']).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  revision: int('revision').notNull(),
+  previousPlanFingerprint: varchar('previousPlanFingerprint', { length: 128 }),
+  planFingerprint: varchar('planFingerprint', { length: 128 }).notNull(),
+  normalizedRequestSnapshot: json('normalizedRequestSnapshot').notNull(),
+  resultSnapshot: json('resultSnapshot').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('content_operation_calendars_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('content_operation_calendars_owner_fingerprint_idx').on(table.ownerUserId, table.planFingerprint),
+  index('content_operation_calendars_owner_status_idx').on(table.ownerUserId, table.status),
+])
+
+/** Durable entry projection; draft/review/content hash remain server-owned linkages. */
+export const contentOperationCalendarEntries = mysqlTable('contentOperationCalendarEntries', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  calendarId: int('calendarId').notNull().references(() => contentOperationCalendars.id),
+  productionDeliverableId: int('productionDeliverableId').notNull().references(() => seoGeoProductionDeliverables.id),
+  strategyRecommendationId: int('strategyRecommendationId').notNull().references(() => seoGeoStrategyRecommendations.id),
+  jobId: int('jobId').references(() => seoGeoContentJobs.id),
+  draftId: int('draftId').references(() => seoGeoContentDrafts.id),
+  reviewId: int('reviewId').references(() => seoGeoContentReviews.id),
+  scheduleKey: varchar('scheduleKey', { length: 180 }).notNull(),
+  plannedLocalDate: varchar('plannedLocalDate', { length: 10 }).notNull(),
+  publishLocalTime: varchar('publishLocalTime', { length: 5 }).notNull(),
+  timeZone: varchar('timeZone', { length: 80 }).notNull(),
+  contentType: mysqlEnum('contentType', ['article', 'faq', 'service_page']).notNull(),
+  language: mysqlEnum('language', ['en', 'zh-hant']).notNull(),
+  topicCluster: varchar('topicCluster', { length: 128 }).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }),
+  status: mysqlEnum('status', ['planned', 'materialized', 'awaiting_generation', 'awaiting_review', 'ready_to_publish', 'publishing', 'delivered', 'completed', 'cancelled', 'skipped', 'blocked']).default('planned').notNull(),
+  engineEntryId: varchar('engineEntryId', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('content_operation_entries_calendar_engine_unique').on(table.calendarId, table.engineEntryId),
+  uniqueIndex('content_operation_entries_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('content_operation_entries_owner_status_idx').on(table.ownerUserId, table.status, table.plannedLocalDate),
+  index('content_operation_entries_calendar_status_idx').on(table.calendarId, table.status),
+])
+
+/** Staged, leaseable runtime state. Error summaries are sanitized application text only. */
+export const contentOperationRuns = mysqlTable('contentOperationRuns', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  stage: mysqlEnum('stage', ['generation', 'review_wait', 'publication', 'measurement', 'learning']).notNull(),
+  state: mysqlEnum('state', ['queued', 'processing', 'retry_wait', 'succeeded', 'failed', 'blocked', 'cancelled']).default('queued').notNull(),
+  attemptNumber: int('attemptNumber').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  outputFingerprint: varchar('outputFingerprint', { length: 128 }),
+  leaseOwner: varchar('leaseOwner', { length: 128 }),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
+  retryEligibleAt: timestamp('retryEligibleAt'),
+  errorCode: varchar('errorCode', { length: 120 }),
+  errorSummary: varchar('errorSummary', { length: 500 }),
+  startedAt: timestamp('startedAt'),
+  completedAt: timestamp('completedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('content_operation_runs_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('content_operation_runs_entry_stage_idx').on(table.entryId, table.stage, table.state),
+  index('content_operation_runs_lease_idx').on(table.entryId, table.stage, table.leaseExpiresAt),
+])
+
+/** Append-only operational audit ledger. There are intentionally no update/delete helpers. */
+export const contentOperationEvents = mysqlTable('contentOperationEvents', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').references(() => contentOperationClients.id),
+  calendarId: int('calendarId').references(() => contentOperationCalendars.id),
+  entryId: int('entryId').references(() => contentOperationCalendarEntries.id),
+  runId: int('runId').references(() => contentOperationRuns.id),
+  eventType: varchar('eventType', { length: 120 }).notNull(),
+  fromStatus: varchar('fromStatus', { length: 80 }),
+  toStatus: varchar('toStatus', { length: 80 }),
+  eventFingerprint: varchar('eventFingerprint', { length: 128 }).notNull(),
+  metadata: json('metadata').notNull(),
+  occurredAt: timestamp('occurredAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('content_operation_events_owner_fingerprint_unique').on(table.ownerUserId, table.eventFingerprint),
+  index('content_operation_events_owner_occurred_idx').on(table.ownerUserId, table.occurredAt),
+  index('content_operation_events_entry_idx').on(table.entryId, table.occurredAt),
+])
+
+/** Bounded outcome snapshots only; crawled page bodies are intentionally excluded. */
+export const contentOperationOutcomeAssessments = mysqlTable('contentOperationOutcomeAssessments', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  runId: int('runId').references(() => contentOperationRuns.id),
+  assessmentStatus: varchar('assessmentStatus', { length: 40 }).notNull(),
+  assessmentFingerprint: varchar('assessmentFingerprint', { length: 128 }).notNull(),
+  baselineSnapshot: json('baselineSnapshot').notNull(),
+  followUpSnapshot: json('followUpSnapshot').notNull(),
+  assessmentSnapshot: json('assessmentSnapshot').notNull(),
+  consentLineageSnapshot: json('consentLineageSnapshot').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  measuredAt: timestamp('measuredAt').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('content_operation_outcomes_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('content_operation_outcomes_entry_idx').on(table.entryId, table.measuredAt),
+])
+
 /** Owner-only configuration for one bounded LLM observation workspace. It does not imply consumer-UI visibility. */
 export const llmVisibilityProjects = mysqlTable('llmVisibilityProjects', {
   id: int('id').autoincrement().primaryKey(),
