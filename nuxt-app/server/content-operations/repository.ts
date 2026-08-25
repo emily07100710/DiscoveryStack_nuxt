@@ -6,6 +6,8 @@ import {
   contentOperationCalendars,
   contentOperationClients,
   contentOperationOutcomeAssessments,
+  contentOperationPublicationAttempts,
+  contentOperationPublicationTargets,
   contentOperationRuns,
   contentOperationEvents,
   seoGeoProductionDeliverables,
@@ -21,6 +23,8 @@ import type {
   ContentOperationClientRow,
   ContentOperationEventRow,
   ContentOperationOutcomeAssessmentRow,
+  ContentOperationPublicationAttemptRow,
+  ContentOperationPublicationTargetRow,
   ContentOperationRunRow,
   PlanBundle,
   DeliveredPublication,
@@ -33,8 +37,19 @@ export type RunInsert = Omit<ContentOperationRunRow, 'id' | 'createdAt' | 'updat
 export type EventInsert = Omit<ContentOperationEventRow, 'id' | 'occurredAt'>
 export type OperationClaimInput = { ownerUserId: number; calendarId: number; operation: 'replan' | 'materialize'; idempotencyKey: string; requestFingerprint: string; eventFingerprint: string }
 export type LeaseError = { code?: string; summary?: string; retryEligibleAt?: Date | null }
-export type WorkspaceEntryLineage = { entry: ContentOperationCalendarEntryRow; calendar: ContentOperationCalendarRow; client: ContentOperationClientRow; deliverable: Record<string, unknown> & { id: number; ownerUserId: number; planId: number; briefId: number | null; jobId: number | null; selectionId: number; contentType: string; title: string; audience: string; language: string; evidenceSnapshotHash: string; opportunityKey: string; provenance: unknown }; job: (Record<string, unknown> & { id: number; ownerUserId: number; productionPlanId: number | null; productionDeliverableId: number | null; strategyRecommendationId: number | null; evidenceSnapshotHash: string; briefId: number }) | null; draft: (Record<string, unknown> & { id: number; jobId: number; version: number; contentHash: string; evidenceRefs: unknown; safetyStatus: string }) | null; review: (Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string }) | null; riskGate: (Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string }) | null }
+export type WorkspaceEntryLineage = { entry: ContentOperationCalendarEntryRow; calendar: ContentOperationCalendarRow; client: ContentOperationClientRow; target?: ContentOperationPublicationTargetRow | null; deliverable: Record<string, unknown> & { id: number; ownerUserId: number; planId: number; briefId: number | null; jobId: number | null; selectionId: number; contentType: string; title: string; audience: string; language: string; evidenceSnapshotHash: string; opportunityKey: string; provenance: unknown }; job: (Record<string, unknown> & { id: number; ownerUserId: number; productionPlanId: number | null; productionDeliverableId: number | null; strategyRecommendationId: number | null; evidenceSnapshotHash: string; briefId: number }) | null; draft: (Record<string, unknown> & { id: number; jobId: number; version: number; contentHash: string; evidenceRefs: unknown; safetyStatus: string }) | null; review: (Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string }) | null; riskGate: (Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string }) | null }
 export type OutcomeInsert = Omit<ContentOperationOutcomeAssessmentRow, 'id' | 'createdAt'>
+export type PublicationTargetInsert = Omit<ContentOperationPublicationTargetRow, 'id' | 'createdAt' | 'updatedAt'>
+export type PublicationAttemptInsert = Omit<ContentOperationPublicationAttemptRow, 'id' | 'createdAt'>
+export type PublicationAttemptReservationInput = Omit<PublicationAttemptInsert, 'attemptNumber' | 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'> & {
+  startedAt: Date
+  jobId: number
+  draftId: number
+  reviewId: number
+  riskGateId: number
+}
+export type PublicationAttemptReservation = { attempt: ContentOperationPublicationAttemptRow; run: ContentOperationRunRow; replayed: boolean }
+export type PublicationAttemptFinalization = Pick<ContentOperationPublicationAttemptRow, 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'>
 
 export type CanonicalContext = Awaited<ReturnType<typeof resolveProductionContext>>
 
@@ -45,6 +60,12 @@ export type ContentOperationsRepository = {
   findClient(ownerUserId: number, clientId: number): Promise<ContentOperationClientRow | null>
   insertClient(input: Omit<ContentOperationClientRow, 'id' | 'createdAt' | 'updatedAt'>): Promise<ContentOperationClientRow>
   listClients(ownerUserId: number): Promise<ContentOperationClientRow[]>
+  findPublicationTargetByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationPublicationTargetRow | null>
+  findPublicationTarget(ownerUserId: number, targetRowId: number): Promise<ContentOperationPublicationTargetRow | null>
+  findActivePublicationTarget(ownerUserId: number, clientId: number): Promise<ContentOperationPublicationTargetRow | null>
+  insertPublicationTarget(input: PublicationTargetInsert): Promise<ContentOperationPublicationTargetRow>
+  updatePublicationTarget(ownerUserId: number, targetRowId: number, patch: Partial<PublicationTargetInsert>): Promise<ContentOperationPublicationTargetRow>
+  listPublicationTargets(ownerUserId: number): Promise<ContentOperationPublicationTargetRow[]>
   findCalendarByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationCalendarRow | null>
   findCalendar(ownerUserId: number, calendarId: number): Promise<ContentOperationCalendarRow | null>
   insertCalendar(input: CalendarInsert): Promise<ContentOperationCalendarRow>
@@ -57,12 +78,22 @@ export type ContentOperationsRepository = {
   insertEntry(input: EntryInsert): Promise<ContentOperationCalendarEntryRow>
   updateEntry(ownerUserId: number, entryId: number, patch: Partial<EntryInsert>): Promise<ContentOperationCalendarEntryRow>
   listRuns(ownerUserId: number, entryId?: number): Promise<ContentOperationRunRow[]>
+  listEligibleRuns(now: Date, limit: number, ownerUserId?: number): Promise<ContentOperationRunRow[]>
   findRunByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationRunRow | null>
   insertRun(input: RunInsert): Promise<ContentOperationRunRow>
   acquireRunLease(ownerUserId: number, runId: number, leaseToken: string, now: Date, leaseMs: number): Promise<ContentOperationRunRow | null>
   releaseRunLease(ownerUserId: number, runId: number, state: RunInsert['state'], leaseToken: string, now: Date, error?: LeaseError): Promise<ContentOperationRunRow | null>
+  updateRun(ownerUserId: number, runId: number, patch: Partial<RunInsert>): Promise<ContentOperationRunRow>
   appendEvent(input: EventInsert): Promise<ContentOperationEventRow>
   listEvents(ownerUserId: number, entryId?: number): Promise<ContentOperationEventRow[]>
+  findLatestOptimizedDraft(ownerUserId: number, jobId: number): Promise<Record<string, unknown> & { id: number; jobId: number; version: number; title: string; body: string; contentHash: string; provenance: unknown; safetyStatus: string } | null>
+  findRiskGate(ownerUserId: number, draftId: number, evidenceSnapshotHash: string): Promise<Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string } | null>
+  findLatestReview(ownerUserId: number, jobId: number, draftId: number, evidenceSnapshotHash: string): Promise<Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string } | null>
+  findPublicationAttemptByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationPublicationAttemptRow | null>
+  listPublicationAttempts(ownerUserId: number, entryId?: number): Promise<ContentOperationPublicationAttemptRow[]>
+  insertPublicationAttempt(input: PublicationAttemptInsert): Promise<ContentOperationPublicationAttemptRow>
+  reservePublicationAttempt(input: PublicationAttemptReservationInput & { ownerUserId: number; runId: number; leaseToken: string; entryId: number }): Promise<PublicationAttemptReservation>
+  finalizePublicationAttempt(ownerUserId: number, attemptId: number, patch: PublicationAttemptFinalization): Promise<ContentOperationPublicationAttemptRow | null>
   findOutcomeByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationOutcomeAssessmentRow | null>
   insertOutcome(input: OutcomeInsert): Promise<ContentOperationOutcomeAssessmentRow>
   listOutcomes(ownerUserId: number): Promise<ContentOperationOutcomeAssessmentRow[]>
@@ -114,6 +145,46 @@ function makeRepository(database: any): ContentOperationsRepository {
     },
     async listClients(ownerUserId) {
       return database.select().from(contentOperationClients).where(eq(contentOperationClients.ownerUserId, ownerUserId)).orderBy(desc(contentOperationClients.createdAt)).limit(100)
+    },
+    async findPublicationTargetByIdempotency(ownerUserId, idempotencyKey) {
+      const [row] = await database.select().from(contentOperationPublicationTargets).where(and(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId), eq(contentOperationPublicationTargets.idempotencyKey, idempotencyKey))).limit(1)
+      return row || null
+    },
+    async findPublicationTarget(ownerUserId, targetRowId) {
+      const [row] = await database.select().from(contentOperationPublicationTargets).where(and(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId), eq(contentOperationPublicationTargets.id, targetRowId))).limit(1)
+      return row || null
+    },
+    async findActivePublicationTarget(ownerUserId, clientId) {
+      const [row] = await database.select().from(contentOperationPublicationTargets).where(and(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId), eq(contentOperationPublicationTargets.clientId, clientId), eq(contentOperationPublicationTargets.status, 'active'), eq(contentOperationPublicationTargets.activeSlot, 1))).orderBy(desc(contentOperationPublicationTargets.updatedAt)).limit(1)
+      return row || null
+    },
+    async insertPublicationTarget(input) {
+      try {
+        const id = rowId(await database.insert(contentOperationPublicationTargets).values(input as any))
+        const row = await repository.findPublicationTarget(input.ownerUserId, id)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Publication target could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!isDuplicateError(error)) throw error
+        const replay = await repository.findPublicationTargetByIdempotency(input.ownerUserId, input.idempotencyKey)
+        if (replay && replay.clientId === input.clientId && replay.targetId === input.targetId && replay.configurationFingerprint === input.configurationFingerprint) return replay
+        if (replay) throw createError({ statusCode: 409, statusMessage: 'Publication target idempotency key is associated with a different configuration.' })
+        throw createError({ statusCode: 409, statusMessage: 'Publication target active slot is already occupied.' })
+      }
+    },
+    async updatePublicationTarget(ownerUserId, targetRowId, patch) {
+      try {
+        await database.update(contentOperationPublicationTargets).set(patch as any).where(and(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId), eq(contentOperationPublicationTargets.id, targetRowId)))
+      } catch (error) {
+        if (isDuplicateError(error)) throw createError({ statusCode: 409, statusMessage: 'Publication target active slot is already occupied.' })
+        throw error
+      }
+      const row = await repository.findPublicationTarget(ownerUserId, targetRowId)
+      if (!row) throw createError({ statusCode: 404, statusMessage: 'Publication target was not found.' })
+      return row
+    },
+    async listPublicationTargets(ownerUserId) {
+      return database.select().from(contentOperationPublicationTargets).where(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId)).orderBy(desc(contentOperationPublicationTargets.createdAt)).limit(100)
     },
     async findCalendarByIdempotency(ownerUserId, idempotencyKey) {
       const [row] = await database.select().from(contentOperationCalendars).where(and(eq(contentOperationCalendars.ownerUserId, ownerUserId), eq(contentOperationCalendars.idempotencyKey, idempotencyKey))).limit(1)
@@ -179,6 +250,13 @@ function makeRepository(database: any): ContentOperationsRepository {
     async listRuns(ownerUserId, entryId) {
       return database.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, ownerUserId), entryId ? eq(contentOperationRuns.entryId, entryId) : undefined)).orderBy(desc(contentOperationRuns.createdAt)).limit(500)
     },
+    async listEligibleRuns(now, limit, ownerUserId) {
+      return database.select().from(contentOperationRuns).where(and(ownerUserId ? eq(contentOperationRuns.ownerUserId, ownerUserId) : undefined, or(
+        eq(contentOperationRuns.state, 'queued'),
+        and(eq(contentOperationRuns.state, 'retry_wait'), lte(contentOperationRuns.retryEligibleAt, now)),
+        and(eq(contentOperationRuns.state, 'processing'), lt(contentOperationRuns.leaseExpiresAt, now)),
+      ))).orderBy(sql`COALESCE(${contentOperationRuns.retryEligibleAt}, ${contentOperationRuns.createdAt})`, contentOperationRuns.createdAt, contentOperationRuns.id).limit(Math.max(1, Math.min(50, Math.trunc(limit))))
+    },
     async findRunByIdempotency(ownerUserId, idempotencyKey) {
       const [row] = await database.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, ownerUserId), eq(contentOperationRuns.idempotencyKey, idempotencyKey))).limit(1)
       return row || null
@@ -217,6 +295,12 @@ function makeRepository(database: any): ContentOperationsRepository {
       const [row] = await database.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, ownerUserId), eq(contentOperationRuns.id, runId))).limit(1)
       return row || null
     },
+    async updateRun(ownerUserId, runId, patch) {
+      await database.update(contentOperationRuns).set({ ...patch as any, updatedAt: new Date() }).where(and(eq(contentOperationRuns.ownerUserId, ownerUserId), eq(contentOperationRuns.id, runId)))
+      const [row] = await database.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, ownerUserId), eq(contentOperationRuns.id, runId))).limit(1)
+      if (!row) throw createError({ statusCode: 404, statusMessage: 'Content operation run was not found.' })
+      return row
+    },
     async appendEvent(input) {
       try {
         const id = rowId(await database.insert(contentOperationEvents).values(input as any))
@@ -232,6 +316,104 @@ function makeRepository(database: any): ContentOperationsRepository {
     },
     async listEvents(ownerUserId, entryId) {
       return database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, ownerUserId), entryId ? eq(contentOperationEvents.entryId, entryId) : undefined)).orderBy(desc(contentOperationEvents.occurredAt)).limit(500)
+    },
+    async findLatestOptimizedDraft(ownerUserId, jobId) {
+      const rows = await database.select({ id: seoGeoContentDrafts.id, jobId: seoGeoContentDrafts.jobId, version: seoGeoContentDrafts.version, title: seoGeoContentDrafts.title, body: seoGeoContentDrafts.body, contentHash: seoGeoContentDrafts.contentHash, provenance: seoGeoContentDrafts.provenance, safetyStatus: seoGeoContentDrafts.safetyStatus }).from(seoGeoContentDrafts).innerJoin(seoGeoContentJobs, eq(seoGeoContentDrafts.jobId, seoGeoContentJobs.id)).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentDrafts.jobId, jobId))).orderBy(desc(seoGeoContentDrafts.version)).limit(50)
+      const optimized = rows.find((row: { provenance: unknown }) => typeof row.provenance === 'object' && row.provenance !== null && !Array.isArray(row.provenance) && (row.provenance as { stage?: unknown }).stage === 'optimized')
+      return optimized ? optimized as Record<string, unknown> & { id: number; jobId: number; version: number; title: string; body: string; contentHash: string; provenance: unknown; safetyStatus: string } : null
+    },
+    async findRiskGate(ownerUserId, draftId, evidenceSnapshotHash) {
+      const [row] = await database.select({ id: seoGeoContentRiskGates.id, draftId: seoGeoContentRiskGates.draftId, status: seoGeoContentRiskGates.status, evidenceSnapshotHash: seoGeoContentRiskGates.evidenceSnapshotHash }).from(seoGeoContentRiskGates).innerJoin(seoGeoContentDrafts, eq(seoGeoContentRiskGates.draftId, seoGeoContentDrafts.id)).innerJoin(seoGeoContentJobs, eq(seoGeoContentDrafts.jobId, seoGeoContentJobs.id)).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentRiskGates.draftId, draftId), eq(seoGeoContentRiskGates.evidenceSnapshotHash, evidenceSnapshotHash))).orderBy(desc(seoGeoContentRiskGates.id)).limit(1)
+      return row ? row as Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string } : null
+    },
+    async findLatestReview(ownerUserId, jobId, draftId, evidenceSnapshotHash) {
+      const [row] = await database.select().from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.reviewerUserId, ownerUserId), eq(seoGeoContentReviews.jobId, jobId), eq(seoGeoContentReviews.draftId, draftId), eq(seoGeoContentReviews.evidenceSnapshotHash, evidenceSnapshotHash))).orderBy(desc(seoGeoContentReviews.id)).limit(1)
+      return row ? row as Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string } : null
+    },
+    async findPublicationAttemptByIdempotency(ownerUserId, idempotencyKey) {
+      const [row] = await database.select().from(contentOperationPublicationAttempts).where(and(eq(contentOperationPublicationAttempts.ownerUserId, ownerUserId), eq(contentOperationPublicationAttempts.idempotencyKey, idempotencyKey))).limit(1)
+      return row || null
+    },
+    async listPublicationAttempts(ownerUserId, entryId) {
+      return database.select().from(contentOperationPublicationAttempts).where(and(eq(contentOperationPublicationAttempts.ownerUserId, ownerUserId), entryId ? eq(contentOperationPublicationAttempts.entryId, entryId) : undefined)).orderBy(desc(contentOperationPublicationAttempts.createdAt)).limit(500)
+    },
+    async insertPublicationAttempt(input) {
+      try {
+        const id = rowId(await database.insert(contentOperationPublicationAttempts).values(input as any))
+        const [row] = await database.select().from(contentOperationPublicationAttempts).where(and(eq(contentOperationPublicationAttempts.ownerUserId, input.ownerUserId), eq(contentOperationPublicationAttempts.id, id))).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Publication attempt could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!isDuplicateError(error)) throw error
+        const replay = await repository.findPublicationAttemptByIdempotency(input.ownerUserId, input.idempotencyKey)
+        if (replay) {
+          const matches = replay.clientId === input.clientId
+            && replay.entryId === input.entryId
+            && replay.runId === input.runId
+            && replay.targetId === input.targetId
+            && replay.attemptNumber === input.attemptNumber
+            && replay.mode === input.mode
+            && replay.inputFingerprint === input.inputFingerprint
+            && replay.publicationId === input.publicationId
+            && replay.publicationSlug === input.publicationSlug
+            && replay.publicationPath === input.publicationPath
+            && replay.contentHash === input.contentHash
+            && replay.evidenceSnapshotHash === input.evidenceSnapshotHash
+            && replay.status === input.status
+          if (matches) return replay
+          throw createError({ statusCode: 409, statusMessage: 'Publication attempt idempotency key is associated with a different ledger record.' })
+        }
+        throw error
+      }
+    },
+    async reservePublicationAttempt(input) {
+      return database.transaction(async (transaction: any) => {
+        const [lockedJob] = await transaction.select({ id: seoGeoContentJobs.id }).from(seoGeoContentJobs).where(and(
+          eq(seoGeoContentJobs.id, input.jobId),
+          eq(seoGeoContentJobs.ownerUserId, input.ownerUserId),
+        )).for('update').limit(1)
+        if (!lockedJob) throw createError({ statusCode: 409, statusMessage: 'Publication job is missing or no longer owner-scoped.' })
+        const [latestReview] = await transaction.select({ id: seoGeoContentReviews.id, decision: seoGeoContentReviews.decision }).from(seoGeoContentReviews).where(and(
+          eq(seoGeoContentReviews.jobId, input.jobId),
+          eq(seoGeoContentReviews.draftId, input.draftId),
+          eq(seoGeoContentReviews.reviewerUserId, input.ownerUserId),
+          eq(seoGeoContentReviews.evidenceSnapshotHash, input.evidenceSnapshotHash),
+        )).orderBy(desc(seoGeoContentReviews.id)).limit(1)
+        if (!latestReview || latestReview.id !== input.reviewId || latestReview.decision !== 'approved_for_delivery') throw createError({ statusCode: 409, statusMessage: 'Publication approval changed before attempt reservation.' })
+        const [latestRiskGate] = await transaction.select({ id: seoGeoContentRiskGates.id, status: seoGeoContentRiskGates.status }).from(seoGeoContentRiskGates).where(and(
+          eq(seoGeoContentRiskGates.draftId, input.draftId),
+          eq(seoGeoContentRiskGates.evidenceSnapshotHash, input.evidenceSnapshotHash),
+        )).orderBy(desc(seoGeoContentRiskGates.id)).limit(1)
+        if (!latestRiskGate || latestRiskGate.id !== input.riskGateId || latestRiskGate.status !== 'passed') throw createError({ statusCode: 409, statusMessage: 'Publication risk gate changed before attempt reservation.' })
+        const txRepository = makeRepository(transaction)
+        const existing = await txRepository.findPublicationAttemptByIdempotency(input.ownerUserId, input.idempotencyKey)
+        if (existing) {
+          if (existing.entryId !== input.entryId || existing.runId !== input.runId || existing.targetId !== input.targetId || existing.mode !== input.mode || existing.inputFingerprint !== input.inputFingerprint) throw createError({ statusCode: 409, statusMessage: 'Publication attempt idempotency key is associated with a different publication.' })
+          const [run] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId), eq(contentOperationRuns.stage, 'publication'), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, input.leaseToken))).limit(1)
+          if (!run) throw createError({ statusCode: 409, statusMessage: 'Publication attempt run is missing or is not leased by this worker.' })
+          await transaction.update(contentOperationCalendarEntries).set({ status: 'publishing', updatedAt: input.startedAt }).where(and(eq(contentOperationCalendarEntries.ownerUserId, input.ownerUserId), eq(contentOperationCalendarEntries.id, input.entryId), or(eq(contentOperationCalendarEntries.status, 'ready_to_publish'), eq(contentOperationCalendarEntries.status, 'publishing'))))
+          return { attempt: existing, run, replayed: true } satisfies PublicationAttemptReservation
+        }
+        const [current] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId), eq(contentOperationRuns.stage, 'publication'), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, input.leaseToken))).limit(1)
+        if (!current) throw createError({ statusCode: 409, statusMessage: 'Publication run lease is no longer held.' })
+        const claimedEntry = await transaction.update(contentOperationCalendarEntries).set({ status: 'publishing', updatedAt: input.startedAt }).where(and(eq(contentOperationCalendarEntries.ownerUserId, input.ownerUserId), eq(contentOperationCalendarEntries.id, input.entryId), or(eq(contentOperationCalendarEntries.status, 'ready_to_publish'), eq(contentOperationCalendarEntries.status, 'publishing'))))
+        if (Number(claimedEntry?.[0]?.affectedRows || 0) !== 1) throw createError({ statusCode: 409, statusMessage: 'Publication entry is no longer executable.' })
+        const nextAttemptNumber = current.attemptNumber + 1
+        if (!Number.isSafeInteger(nextAttemptNumber) || nextAttemptNumber > 3) throw createError({ statusCode: 422, statusMessage: 'Publication retry limit has been reached.' })
+        const updated = await transaction.update(contentOperationRuns).set({ attemptNumber: sql`${contentOperationRuns.attemptNumber} + 1`, updatedAt: input.startedAt }).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId), eq(contentOperationRuns.stage, 'publication'), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, input.leaseToken), eq(contentOperationRuns.attemptNumber, current.attemptNumber)))
+        if (Number(updated?.[0]?.affectedRows || 0) !== 1) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter was claimed by another worker.' })
+        const [run] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId))).limit(1)
+        if (!run || run.attemptNumber !== nextAttemptNumber) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter could not be verified.' })
+        const { jobId: _jobId, draftId: _draftId, reviewId: _reviewId, riskGateId: _riskGateId, leaseToken: _leaseToken, ...attemptInput } = input
+        const attempt = await txRepository.insertPublicationAttempt({ ...attemptInput, attemptNumber: nextAttemptNumber, artifactFingerprint: null, status: 'planned', remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null })
+        return { attempt, run, replayed: false } satisfies PublicationAttemptReservation
+      })
+    },
+    async finalizePublicationAttempt(ownerUserId, attemptId, patch) {
+      const result = await database.update(contentOperationPublicationAttempts).set({ ...patch as any }).where(and(eq(contentOperationPublicationAttempts.ownerUserId, ownerUserId), eq(contentOperationPublicationAttempts.id, attemptId), eq(contentOperationPublicationAttempts.status, 'planned')))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      const [row] = await database.select().from(contentOperationPublicationAttempts).where(and(eq(contentOperationPublicationAttempts.ownerUserId, ownerUserId), eq(contentOperationPublicationAttempts.id, attemptId))).limit(1)
+      return row || null
     },
     async findOutcomeByIdempotency(ownerUserId, idempotencyKey) {
       const [row] = await database.select().from(contentOperationOutcomeAssessments).where(and(eq(contentOperationOutcomeAssessments.ownerUserId, ownerUserId), eq(contentOperationOutcomeAssessments.idempotencyKey, idempotencyKey))).limit(1)
@@ -257,13 +439,14 @@ function makeRepository(database: any): ContentOperationsRepository {
       if (!entry) return null
       const [calendar] = await database.select().from(contentOperationCalendars).where(and(eq(contentOperationCalendars.ownerUserId, ownerUserId), eq(contentOperationCalendars.id, entry.calendarId))).limit(1)
       const [client] = await database.select().from(contentOperationClients).where(and(eq(contentOperationClients.ownerUserId, ownerUserId), eq(contentOperationClients.id, calendar?.clientId || -1))).limit(1)
+      const [target] = entry.publicationTargetId ? await database.select().from(contentOperationPublicationTargets).where(and(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId), eq(contentOperationPublicationTargets.id, entry.publicationTargetId), eq(contentOperationPublicationTargets.clientId, calendar?.clientId || -1))).limit(1) : [null]
       const [deliverable] = await database.select().from(seoGeoProductionDeliverables).where(and(eq(seoGeoProductionDeliverables.ownerUserId, ownerUserId), eq(seoGeoProductionDeliverables.id, entry.productionDeliverableId), eq(seoGeoProductionDeliverables.planId, calendar?.productionPlanId || -1))).limit(1)
       if (!calendar || !client || !deliverable) return null
       const [job] = entry.jobId ? await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentJobs.id, entry.jobId), eq(seoGeoContentJobs.productionPlanId, calendar.productionPlanId), eq(seoGeoContentJobs.productionDeliverableId, entry.productionDeliverableId), eq(seoGeoContentJobs.strategyRecommendationId, entry.strategyRecommendationId), eq(seoGeoContentJobs.evidenceSnapshotHash, entry.evidenceSnapshotHash))).limit(1) : [null]
       const [draft] = job && entry.draftId ? await database.select().from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, entry.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1) : [null]
-      const [review] = job && draft && entry.reviewId ? await database.select().from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.id, entry.reviewId), eq(seoGeoContentReviews.jobId, job.id), eq(seoGeoContentReviews.draftId, draft.id), eq(seoGeoContentReviews.reviewerUserId, ownerUserId), eq(seoGeoContentReviews.evidenceSnapshotHash, entry.evidenceSnapshotHash))).limit(1) : [null]
-      const [riskGate] = draft ? await database.select().from(seoGeoContentRiskGates).where(and(eq(seoGeoContentRiskGates.draftId, draft.id), eq(seoGeoContentRiskGates.status, 'passed'), eq(seoGeoContentRiskGates.evidenceSnapshotHash, entry.evidenceSnapshotHash))).orderBy(desc(seoGeoContentRiskGates.createdAt)).limit(1) : [null]
-      return { entry, calendar, client, deliverable, job: job || null, draft: draft || null, review: review || null, riskGate: riskGate || null }
+      const [review] = job && draft ? await database.select().from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.jobId, job.id), eq(seoGeoContentReviews.draftId, draft.id), eq(seoGeoContentReviews.reviewerUserId, ownerUserId), eq(seoGeoContentReviews.evidenceSnapshotHash, entry.evidenceSnapshotHash))).orderBy(desc(seoGeoContentReviews.id)).limit(1) : [null]
+      const [riskGate] = draft ? await database.select().from(seoGeoContentRiskGates).where(and(eq(seoGeoContentRiskGates.draftId, draft.id), eq(seoGeoContentRiskGates.evidenceSnapshotHash, entry.evidenceSnapshotHash))).orderBy(desc(seoGeoContentRiskGates.id)).limit(1) : [null]
+      return { entry, calendar, client, target: target || null, deliverable, job: job || null, draft: draft || null, review: review || null, riskGate: riskGate || null }
     },
     async resolveDeliveredPublication(ownerUserId, entryId) {
       const lineage = await repository.resolveWorkspaceEntry(ownerUserId, entryId)
@@ -271,7 +454,7 @@ function makeRepository(database: any): ContentOperationsRepository {
       const publicationRuns = await repository.listRuns(ownerUserId, entryId)
       const publicationRun = publicationRuns.find(run => run.stage === 'publication' && run.state === 'succeeded' && run.ownerUserId === ownerUserId && run.entryId === entryId) || null
       if (!publicationRun) return null
-      return { entry: lineage.entry, calendar: lineage.calendar, deliverable: lineage.deliverable, job: lineage.job, draft: lineage.draft, review: lineage.review, riskGate: lineage.riskGate || undefined, publicationRun }
+      return { entry: lineage.entry, calendar: lineage.calendar, deliverable: lineage.deliverable, job: lineage.job, draft: lineage.draft, review: lineage.review, riskGate: lineage.riskGate || undefined, publicationRun, publicationIdentity: lineage.entry.publicationSlug && lineage.entry.publicationPath && lineage.entry.publicationIdentityFingerprint ? { publicationId: `publication-${lineage.entry.id}`, slug: lineage.entry.publicationSlug, path: lineage.entry.publicationPath, identityFingerprint: lineage.entry.publicationIdentityFingerprint } : null }
     },
   }
   return repository

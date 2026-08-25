@@ -743,6 +743,74 @@ export const contentOperationClients = mysqlTable('contentOperationClients', {
   index('content_operation_clients_owner_status_idx').on(table.ownerUserId, table.status),
 ])
 
+/** Owner-scoped first-party publication configuration. Credential values never enter this table. */
+export const contentOperationPublicationTargets = mysqlTable('contentOperationPublicationTargets', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  targetId: varchar('targetId', { length: 128 }).notNull(),
+  framework: mysqlEnum('framework', ['astro', 'nuxt']).notNull(),
+  transport: mysqlEnum('transport', ['first_party_git', 'first_party_signed_api']).notNull(),
+  targetOrigin: varchar('targetOrigin', { length: 2048 }).notNull(),
+  contentRoot: varchar('contentRoot', { length: 256 }).notNull(),
+  defaultBranch: varchar('defaultBranch', { length: 128 }),
+  repositoryOwner: varchar('repositoryOwner', { length: 100 }),
+  repositoryName: varchar('repositoryName', { length: 100 }),
+  endpointPath: varchar('endpointPath', { length: 256 }),
+  credentialReference: varchar('credentialReference', { length: 128 }).notNull(),
+  allowedContentTypes: json('allowedContentTypes').notNull(),
+  allowedLanguages: json('allowedLanguages').notNull(),
+  maximumPayloadBytes: int('maximumPayloadBytes').notNull(),
+  status: mysqlEnum('status', ['active', 'paused', 'revoked']).default('active').notNull(),
+  executionEnabled: boolean('executionEnabled').default(false).notNull(),
+  /** Exactly one active target may occupy owner/client slot; paused and revoked targets use NULL. */
+  activeSlot: int('activeSlot'),
+  configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+  revokedAt: timestamp('revokedAt'),
+}, table => [
+  uniqueIndex('content_operation_targets_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('content_operation_targets_owner_target_unique').on(table.ownerUserId, table.targetId),
+  uniqueIndex('content_operation_targets_owner_client_active_slot_unique').on(table.ownerUserId, table.clientId, table.activeSlot),
+  index('content_operation_targets_owner_client_status_idx').on(table.ownerUserId, table.clientId, table.status),
+])
+
+/** Append-only first-party publication attempt ledger. Each retry is a new row. */
+export const contentOperationPublicationAttempts = mysqlTable('contentOperationPublicationAttempts', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  runId: int('runId').notNull().references(() => contentOperationRuns.id),
+  targetId: int('targetId').notNull().references(() => contentOperationPublicationTargets.id),
+  attemptNumber: int('attemptNumber').notNull(),
+  mode: mysqlEnum('mode', ['dry_run', 'execute']).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  publicationId: varchar('publicationId', { length: 160 }).notNull(),
+  publicationSlug: varchar('publicationSlug', { length: 160 }).notNull(),
+  publicationPath: varchar('publicationPath', { length: 512 }).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  artifactFingerprint: varchar('artifactFingerprint', { length: 128 }),
+  status: mysqlEnum('status', ['planned', 'dry_run_succeeded', 'delivered', 'retryable_failure', 'permanent_failure', 'blocked']).notNull(),
+  remoteState: varchar('remoteState', { length: 64 }),
+  remoteRevision: varchar('remoteRevision', { length: 256 }),
+  errorCode: varchar('errorCode', { length: 120 }),
+  errorSummary: varchar('errorSummary', { length: 500 }),
+  startedAt: timestamp('startedAt').defaultNow().notNull(),
+  completedAt: timestamp('completedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('content_operation_attempts_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('content_operation_attempts_owner_entry_idx').on(table.ownerUserId, table.entryId),
+  index('content_operation_attempts_owner_status_idx').on(table.ownerUserId, table.status),
+  index('content_operation_attempts_run_idx').on(table.runId),
+  index('content_operation_attempts_target_idx').on(table.targetId),
+])
+
 /** Durable calendar snapshot produced only from the persisted SEO/GEO Production Plan. */
 export const contentOperationCalendars = mysqlTable('contentOperationCalendars', {
   id: int('id').autoincrement().primaryKey(),
@@ -795,6 +863,10 @@ export const contentOperationCalendarEntries = mysqlTable('contentOperationCalen
   topicCluster: varchar('topicCluster', { length: 128 }).notNull(),
   evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
   contentHash: varchar('contentHash', { length: 128 }),
+  publicationTargetId: int('publicationTargetId').references(() => contentOperationPublicationTargets.id),
+  publicationSlug: varchar('publicationSlug', { length: 160 }),
+  publicationPath: varchar('publicationPath', { length: 512 }),
+  publicationIdentityFingerprint: varchar('publicationIdentityFingerprint', { length: 128 }),
   status: mysqlEnum('status', ['planned', 'materialized', 'awaiting_generation', 'awaiting_review', 'ready_to_publish', 'publishing', 'delivered', 'completed', 'cancelled', 'skipped', 'blocked']).default('planned').notNull(),
   engineEntryId: varchar('engineEntryId', { length: 128 }).notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),

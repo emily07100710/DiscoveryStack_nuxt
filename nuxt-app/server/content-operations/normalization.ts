@@ -3,7 +3,7 @@ import { isIP } from 'node:net'
 import { createError } from 'h3'
 import { z } from 'zod'
 import { CONTENT_CALENDAR_LIMITS } from '../content-calendar'
-import type { ContentOperationClientInput, CreateCalendarInput, OutcomeAssessmentInput } from './types'
+import type { ContentOperationClientInput, CreateCalendarInput, ExecuteContentOperationInput, OutcomeAssessmentInput, PublicationTargetInput, PublicationTargetPatchInput } from './types'
 
 const strictClient = z.object({
   displayName: z.string().trim().min(1).max(160),
@@ -223,4 +223,62 @@ export function toPublicContentOperationsError(error: unknown, fallback = 'Conte
   const status = [400, 401, 403, 404, 409, 422, 429].includes(statusCode) ? statusCode : 503
   const statusMessage = status === 401 || status === 403 ? 'Owner authorization is required.' : status === 404 ? 'Content operation resource was not found.' : status === 409 ? 'Content operation request conflicts with current state.' : status === 422 ? 'Content operation request is invalid.' : fallback
   return createError({ statusCode: status, statusMessage })
+}
+
+const strictPublicationTarget = z.object({
+  idempotencyKey: z.string().trim().min(1).max(128),
+  framework: z.enum(['astro', 'nuxt']),
+  transport: z.enum(['first_party_git', 'first_party_signed_api']),
+  targetOrigin: z.string().trim().min(1).max(2048),
+  contentRoot: z.string().trim().min(1).max(256),
+  defaultBranch: z.string().trim().min(1).max(128).nullable().optional(),
+  repositoryOwner: z.string().trim().min(1).max(100).nullable().optional(),
+  repositoryName: z.string().trim().min(1).max(100).nullable().optional(),
+  endpointPath: z.string().trim().min(1).max(256).nullable().optional(),
+  credentialReference: z.string().trim().min(1).max(128),
+  allowedContentTypes: z.array(z.string().trim().min(1).max(64)).min(1).max(32),
+  allowedLanguages: z.array(z.string().trim().min(1).max(24)).min(1).max(32),
+  maximumPayloadBytes: z.number().int().min(1).max(10_000_000),
+  executionEnabled: z.boolean().optional().default(false),
+}).strict()
+
+const strictPublicationTargetPatch = z.object({
+  targetOrigin: z.string().trim().min(1).max(2048).optional(),
+  contentRoot: z.string().trim().min(1).max(256).optional(),
+  defaultBranch: z.string().trim().min(1).max(128).optional(),
+  repositoryOwner: z.string().trim().min(1).max(100).nullable().optional(),
+  repositoryName: z.string().trim().min(1).max(100).nullable().optional(),
+  endpointPath: z.string().trim().min(1).max(256).nullable().optional(),
+  credentialReference: z.string().trim().min(1).max(128).optional(),
+  allowedContentTypes: z.array(z.string().trim().min(1).max(64)).min(1).max(32).optional(),
+  allowedLanguages: z.array(z.string().trim().min(1).max(24)).min(1).max(32).optional(),
+  maximumPayloadBytes: z.number().int().min(1).max(10_000_000).optional(),
+  executionEnabled: z.boolean().optional(),
+  status: z.enum(['active', 'paused', 'revoked']).optional(),
+}).strict().refine(value => Object.keys(value).length > 0, { message: 'At least one target patch field is required.' })
+
+const strictExecute = z.object({
+  idempotencyKey: z.string().trim().min(1).max(128),
+  mode: z.enum(['dry_run', 'execute']).optional().default('dry_run'),
+}).strict()
+
+export function parsePublicationTargetInput(value: unknown): PublicationTargetInput {
+  const parsed = strictPublicationTarget.safeParse(value)
+  if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid first-party publication target input.' })
+  const data = parsed.data
+  if (data.transport === 'first_party_git' && !data.defaultBranch) throw createError({ statusCode: 422, statusMessage: 'Git publication target requires defaultBranch.' })
+  if (data.transport === 'first_party_signed_api' && data.defaultBranch !== undefined && data.defaultBranch !== null) throw createError({ statusCode: 422, statusMessage: 'Signed API publication target must not use defaultBranch.' })
+  return { ...data, defaultBranch: data.defaultBranch ?? null, repositoryOwner: data.repositoryOwner ?? null, repositoryName: data.repositoryName ?? null, endpointPath: data.endpointPath ?? null }
+}
+
+export function parsePublicationTargetPatchInput(value: unknown): PublicationTargetPatchInput {
+  const parsed = strictPublicationTargetPatch.safeParse(value)
+  if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid first-party publication target patch.' })
+  return { ...parsed.data, repositoryOwner: parsed.data.repositoryOwner ?? undefined, repositoryName: parsed.data.repositoryName ?? undefined, endpointPath: parsed.data.endpointPath ?? undefined }
+}
+
+export function parseExecuteInput(value: unknown): ExecuteContentOperationInput {
+  const parsed = strictExecute.safeParse(value)
+  if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid content operation execute input.' })
+  return parsed.data
 }

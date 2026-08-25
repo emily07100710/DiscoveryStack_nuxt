@@ -18,6 +18,8 @@ import {
   seoGeoDeliveryTargets,
   seoGeoDiagnoses,
   seoGeoEvidenceApprovals,
+  contentOperationCalendarEntries,
+  contentOperationPublicationAttempts,
 } from '../database/schema'
 import type { AutoGeoStrategyRecommendation, ContentBriefInput, ContentJobStatus, ContentRiskGateResult, DiagnosisResult, EvidenceMaterial, EvidenceRef, ProductionDeliverableStatus, ProductionPlanStatus } from './contracts'
 import { canTransitionContentJob } from './contracts'
@@ -721,7 +723,25 @@ export async function saveContentCandidate(input: { jobId: number, title: string
 
 export async function saveRiskGate(input: { draftId: number, result: ContentRiskGateResult, evidenceSnapshotHash: string }) {
   const database = requireAuditDatabase()
-  await database.insert(seoGeoContentRiskGates).values({ draftId: input.draftId, gateVersion: input.result.gateVersion, status: input.result.status, findings: input.result.findings, evidenceSnapshotHash: input.evidenceSnapshotHash })
+  return database.transaction(async tx => {
+    const [draft] = await tx.select({ id: seoGeoContentDrafts.id, jobId: seoGeoContentDrafts.jobId }).from(seoGeoContentDrafts).where(eq(seoGeoContentDrafts.id, input.draftId)).limit(1)
+    if (!draft) throw createError({ statusCode: 404, statusMessage: 'Risk gate draft was not found.' })
+    const [lockedJob] = await tx.select({ id: seoGeoContentJobs.id }).from(seoGeoContentJobs).where(eq(seoGeoContentJobs.id, draft.jobId)).for('update').limit(1)
+    if (!lockedJob) throw createError({ statusCode: 409, statusMessage: 'Risk gate job is no longer available.' })
+    const [publicationAttempt] = await tx.select({ id: contentOperationPublicationAttempts.id }).from(contentOperationPublicationAttempts).innerJoin(contentOperationCalendarEntries, eq(contentOperationPublicationAttempts.entryId, contentOperationCalendarEntries.id)).where(and(
+      eq(contentOperationPublicationAttempts.mode, 'execute'),
+      eq(contentOperationCalendarEntries.jobId, draft.jobId),
+      eq(contentOperationCalendarEntries.draftId, draft.id),
+      eq(contentOperationCalendarEntries.evidenceSnapshotHash, input.evidenceSnapshotHash),
+    )).limit(1)
+    if (publicationAttempt) throw createError({ statusCode: 409, statusMessage: 'A new risk gate cannot replace the gate bound to an existing publication attempt.' })
+    const inserted = await tx.insert(seoGeoContentRiskGates).values({ draftId: input.draftId, gateVersion: input.result.gateVersion, status: input.result.status, findings: input.result.findings, evidenceSnapshotHash: input.evidenceSnapshotHash })
+    const insertedId = Number(inserted?.[0]?.insertId)
+    if (!Number.isSafeInteger(insertedId) || insertedId < 1) throw createError({ statusCode: 500, statusMessage: 'Risk gate could not be recorded.' })
+    const [row] = await tx.select().from(seoGeoContentRiskGates).where(eq(seoGeoContentRiskGates.id, insertedId)).limit(1)
+    if (!row) throw createError({ statusCode: 500, statusMessage: 'Risk gate could not be loaded.' })
+    return row
+  })
 }
 
 export async function createContentReview(input: { ownerUserId: number, jobId: number, draftId: number, decision: 'approved_for_preview' | 'approved_for_delivery' | 'changes_requested' | 'rejected', reviewNote?: string }) {
@@ -753,6 +773,22 @@ export async function createContentReview(input: { ownerUserId: number, jobId: n
   const next: ContentJobStatus = input.decision.startsWith('approved') ? 'approved' : input.decision === 'changes_requested' ? 'needs_human_review' : 'blocked'
   if (!approvalUpgrade && !canTransitionContentJob(job.status, next) && job.status !== next) throw createError({ statusCode: 409, statusMessage: `Invalid content job transition: ${job.status} -> ${next}` })
   const review = await database.transaction(async tx => {
+    const [lockedJob] = await tx.select({ id: seoGeoContentJobs.id, status: seoGeoContentJobs.status }).from(seoGeoContentJobs).where(and(
+      eq(seoGeoContentJobs.id, job.id),
+      eq(seoGeoContentJobs.ownerUserId, input.ownerUserId),
+    )).for('update').limit(1)
+    if (!lockedJob || lockedJob.status !== job.status) throw createError({ statusCode: 409, statusMessage: 'Content job changed while this review was being recorded.' })
+    if (input.decision === 'changes_requested' || input.decision === 'rejected') {
+      const [publishingAttempt] = await tx.select({ id: contentOperationPublicationAttempts.id }).from(contentOperationPublicationAttempts).innerJoin(contentOperationCalendarEntries, eq(contentOperationPublicationAttempts.entryId, contentOperationCalendarEntries.id)).where(and(
+        eq(contentOperationPublicationAttempts.ownerUserId, input.ownerUserId),
+        eq(contentOperationPublicationAttempts.status, 'planned'),
+        eq(contentOperationCalendarEntries.ownerUserId, input.ownerUserId),
+        eq(contentOperationCalendarEntries.jobId, job.id),
+        eq(contentOperationCalendarEntries.draftId, draft.id),
+        eq(contentOperationCalendarEntries.evidenceSnapshotHash, job.evidenceSnapshotHash),
+      )).limit(1)
+      if (publishingAttempt) throw createError({ statusCode: 409, statusMessage: 'Publication has already started for this draft; wait for the attempt to finish before changing the review.' })
+    }
     const [reviewId] = await tx.insert(seoGeoContentReviews).values({ jobId: job.id, draftId: draft.id, reviewerUserId: input.ownerUserId, decision: input.decision, reviewNote: input.reviewNote?.trim() || null, evidenceSnapshotHash: job.evidenceSnapshotHash }).$returningId()
     await tx.update(seoGeoContentJobs).set({ status: next, completedAt: ['candidate_ready', 'needs_human_review', 'approved', 'blocked', 'failed', 'delivered'].includes(next) ? new Date() : null }).where(eq(seoGeoContentJobs.id, job.id))
     if (job.productionDeliverableId) {

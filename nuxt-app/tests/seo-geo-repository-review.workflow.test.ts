@@ -16,11 +16,14 @@ vi.mock('../server/audit/repository', () => ({
   requireAuditDatabase: () => {
     const read = () => state.selectQueue.shift() || []
     const select = () => {
+      let lockingJob = false
       const builder: any = {
         from: () => builder,
+        innerJoin: () => builder,
         where: () => builder,
         orderBy: () => builder,
-        limit: () => Promise.resolve(read()),
+        for: () => { lockingJob = true; return builder },
+        limit: () => Promise.resolve(lockingJob ? [state.job] : read()),
         then: (resolve: (value: any) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve(read()).then(resolve, reject),
       }
       return builder
@@ -96,15 +99,22 @@ describe('repository review workflow with a mocked database', () => {
 
   it('allows approved preview to become changes_requested and returns the job to review', async () => {
     state.job.status = 'approved'
-    state.selectQueue = [[state.job], [state.draft], [state.passedGate], [state.plan], [{ status: 'needs_human_review' }]]
+    state.selectQueue = [[state.job], [state.draft], [state.passedGate], [], [state.plan], [{ status: 'needs_human_review' }]]
     const result = await createContentReview({ ownerUserId: 11, jobId: 10, draftId: 101, decision: 'changes_requested', reviewNote: '請補充可核對的段落。' })
     expect(result.nextStatus).toBe('needs_human_review')
     expect(state.reviews[0]).toMatchObject({ draftId: 101, decision: 'changes_requested' })
   })
 
+  it('rejects a negative review after an execute attempt has been durably planned', async () => {
+    state.job.status = 'approved'
+    state.selectQueue = [[state.job], [state.draft], [state.passedGate], [{ id: 990 }]]
+    await expect(createContentReview({ ownerUserId: 11, jobId: 10, draftId: 101, decision: 'changes_requested' })).rejects.toThrow(/already started/)
+    expect(state.reviews).toHaveLength(0)
+  })
+
   it('requires a new optimized draft before reapproval after preview approval changes_requested', async () => {
     state.job.status = 'approved'
-    state.selectQueue = [[state.job], [state.draft], [state.passedGate], [state.plan], [{ status: 'needs_human_review' }]]
+    state.selectQueue = [[state.job], [state.draft], [state.passedGate], [], [state.plan], [{ status: 'needs_human_review' }]]
     const change = await createContentReview({ ownerUserId: 11, jobId: 10, draftId: 101, decision: 'changes_requested', reviewNote: '請修改。' })
     expect(change.nextStatus).toBe('needs_human_review')
 
@@ -126,7 +136,7 @@ describe('repository review workflow with a mocked database', () => {
   })
 
   it('allows an explicit rejection on a gated optimized candidate', async () => {
-    state.selectQueue = [[state.job], [state.draft], [state.passedGate], [state.plan], [{ status: 'blocked' }]]
+    state.selectQueue = [[state.job], [state.draft], [state.passedGate], [], [state.plan], [{ status: 'blocked' }]]
     const result = await createContentReview({ ownerUserId: 11, jobId: 10, draftId: 101, decision: 'rejected', reviewNote: '內容不符合目前需求。' })
     expect(result.nextStatus).toBe('blocked')
     expect(state.reviews[0]).toMatchObject({ draftId: 101, decision: 'rejected' })

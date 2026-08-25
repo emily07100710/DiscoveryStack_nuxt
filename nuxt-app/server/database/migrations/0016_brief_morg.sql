@@ -1,0 +1,2 @@
+ALTER TABLE `contentOperationPublicationTargets` ADD `activeSlot` int;--> statement-breakpoint
+ALTER TABLE `contentOperationPublicationTargets` ADD CONSTRAINT `content_operation_targets_owner_client_active_slot_unique` UNIQUE(`ownerUserId`,`clientId`,`activeSlot`);
