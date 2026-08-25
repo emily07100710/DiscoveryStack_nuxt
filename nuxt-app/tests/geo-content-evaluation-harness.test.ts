@@ -180,9 +180,12 @@ describe('createGeoContentEvaluationCase', () => {
     expect(result.status).toBe('blocked')
   })
 
-  it('rejects a provider body mutation through the response contract', () => {
-    const output = goldenOutput(GOLDEN_INPUT, { body: `${GOLDEN_MARKDOWN}\nmutation` })
-    expect(evaluate({ providerOutput: output, markdown: output.body }).status).toBe('blocked')
+  it('rejects a Markdown mutation against validated provider body', () => {
+    const output = goldenOutput(GOLDEN_INPUT)
+    const mutatedMarkdown = `${output.body}\nmutation`
+    const result = evaluate({ providerOutput: output, markdown: mutatedMarkdown })
+    expect(result.status).toBe('blocked')
+    expect(result.reasonCodes).toContain('CONTENT_HASH_MISMATCH')
   })
 
   it('retains the exact suite version', () => {
@@ -192,7 +195,7 @@ describe('createGeoContentEvaluationCase', () => {
   it.each([
     ['direct-answer-presence', ['markdown:first-meaningful-paragraph']],
     ['heading-hierarchy', ['markdown:heading-levels']],
-    ['paragraph-bounds', ['markdown:meaningful-paragraph-count']],
+    ['paragraph-binding-integrity', ['provider-output:paragraph-bindings']],
     ['faq-binding', ['markdown:faq']],
     ['selected-autogeo-rule-coverage', ['quality-gate:selected-rule-checks']],
     ['citation-marker-coverage', ['markdown:citation-markers']],
@@ -329,16 +332,19 @@ describe('evaluation metrics', () => {
     expect(makeEvaluationMetric('direct-answer-presence', -1, 2).numerator).toBe(0)
   })
 
-  it('truncates fractional values', () => {
-    expect(makeEvaluationMetric('direct-answer-presence', 1.9, 2.9).denominator).toBe(2)
+  it('rejects fractional metric values instead of truncating them', () => {
+    const metric = makeEvaluationMetric('direct-answer-presence', 1.9, 2.9)
+    expect(metric.denominator).toBe(0)
+    expect(metric.reasonCodes).toContain('EVALUATION_METRIC_BOUNDS')
+    expect(metric.ratio).toBeNull()
   })
 
   it('preserves reason codes', () => {
-    expect(makeEvaluationMetric('direct-answer-presence', 0, 1, ['X']).reasonCodes).toEqual(['X'])
+    expect(makeEvaluationMetric('direct-answer-presence', 0, 1, ['EVALUATION_INVALID_INPUT']).reasonCodes).toEqual(['EVALUATION_INVALID_INPUT'])
   })
 
   it('deduplicates reason codes', () => {
-    expect(makeEvaluationMetric('direct-answer-presence', 0, 1, ['X', 'X']).reasonCodes).toEqual(['X'])
+    expect(makeEvaluationMetric('direct-answer-presence', 0, 1, ['EVALUATION_INVALID_INPUT', 'EVALUATION_INVALID_INPUT']).reasonCodes).toEqual(['EVALUATION_INVALID_INPUT'])
   })
 
   it('deduplicates evidence locators', () => {
@@ -363,8 +369,8 @@ describe('evaluation metrics', () => {
     expect(metricNames()).toContain('heading-hierarchy')
   })
 
-  it('contains paragraph metric in the catalog', () => {
-    expect(metricNames()).toContain('paragraph-bounds')
+  it('contains paragraph-binding-integrity metric in the catalog', () => {
+    expect(metricNames()).toContain('paragraph-binding-integrity')
   })
 
   it('contains FAQ metric in the catalog', () => {
@@ -429,173 +435,192 @@ describe('evaluation metrics', () => {
 })
 
 describe('candidate comparison', () => {
-  it('compares two compatible review-ready candidates', () => {
-    const left = validCase({ candidateId: 'candidate-a', variantLabel: 'a' })
-    const right = validCase({ candidateId: 'candidate-b', variantLabel: 'b' })
-    const result = compareGeoContentCandidates(left, right)
+  it('compares two compatible raw candidates', () => {
+    const result = compareGeoContentCandidates(goldenCandidate({ candidateId: 'candidate-a', variantLabel: 'a' }), goldenCandidate({ candidateId: 'candidate-b', variantLabel: 'b' }))
     expect(result.baselineCompatible).toBe(true)
     expect(result.status).toBe('review_ready')
   })
 
   it('does not compare different topics', () => {
-    const left = validCase({ candidateId: 'candidate-a', variantLabel: 'a' })
-    const right = validCase({ candidateId: 'candidate-b', variantLabel: 'b', qualityInput: goldenInput({ topic: 'different topic' }) })
-    const result = compareGeoContentCandidates(left, right)
+    const result = compareGeoContentCandidates(goldenCandidate({ candidateId: 'candidate-a', variantLabel: 'a' }), goldenCandidate({ candidateId: 'candidate-b', variantLabel: 'b', qualityInput: goldenInput({ topic: 'different topic' }) }))
     expect(result.status).toBe('blocked')
     expect(result.reasonCodes).toContain('EVALUATION_BASELINE_MISMATCH')
   })
 
   it('does not compare different content types', () => {
-    const left = validCase({ candidateId: 'candidate-a', variantLabel: 'a' })
-    const right = validCase({ candidateId: 'candidate-b', variantLabel: 'b', qualityInput: goldenInput({ contentType: 'service_page' }) })
-    expect(compareGeoContentCandidates(left, right).status).toBe('blocked')
+    expect(compareGeoContentCandidates(goldenCandidate({ candidateId: 'candidate-a', variantLabel: 'a' }), goldenCandidate({ candidateId: 'candidate-b', variantLabel: 'b', qualityInput: goldenInput({ contentType: 'service_page' }) })).status).toBe('blocked')
   })
 
   it('does not compare different locales', () => {
-    const left = validCase({ candidateId: 'candidate-a', variantLabel: 'a' })
-    const right = validCase({ candidateId: 'candidate-b', variantLabel: 'b', qualityInput: goldenInput({ language: 'zh-hant' }) })
-    expect(compareGeoContentCandidates(left, right).status).toBe('blocked')
+    expect(compareGeoContentCandidates(goldenCandidate({ candidateId: 'candidate-a', variantLabel: 'a' }), goldenCandidate({ candidateId: 'candidate-b', variantLabel: 'b', qualityInput: goldenInput({ language: 'zh-hant' }) })).status).toBe('blocked')
   })
 
   it('does not compare different evidence snapshots', () => {
-    const left = validCase({ candidateId: 'candidate-a', variantLabel: 'a' })
-    const right = validCase({ candidateId: 'candidate-b', variantLabel: 'b', qualityInput: goldenInput({ evidenceSnapshotHash: 'f'.repeat(64) }) })
-    expect(compareGeoContentCandidates(left, right).status).toBe('blocked')
+    expect(compareGeoContentCandidates(goldenCandidate({ candidateId: 'candidate-a', variantLabel: 'a' }), goldenCandidate({ candidateId: 'candidate-b', variantLabel: 'b', qualityInput: goldenInput({ evidenceSnapshotHash: 'f'.repeat(64) }) })).status).toBe('blocked')
   })
 
   it('does not compare different selected rules', () => {
-    const left = validCase({ candidateId: 'candidate-a', variantLabel: 'a' })
-    const right = validCase({ candidateId: 'candidate-b', variantLabel: 'b', qualityInput: goldenInput({ selectedRuleIds: ['evidence-boundary', 'direct-answer-first'] }) })
-    expect(compareGeoContentCandidates(left, right).status).toBe('blocked')
+    expect(compareGeoContentCandidates(goldenCandidate({ candidateId: 'candidate-a', variantLabel: 'a' }), goldenCandidate({ candidateId: 'candidate-b', variantLabel: 'b', qualityInput: goldenInput({ selectedRuleIds: ['evidence-boundary', 'direct-answer-first'] }) })).status).toBe('blocked')
   })
 
-  it('does not compare different suite versions', () => {
-    const left = validCase({ candidateId: 'candidate-a', variantLabel: 'a' })
-    const right = cloneCase(validCase({ candidateId: 'candidate-b', variantLabel: 'b' }), { suiteVersion: 'wrong-suite' as GeoContentEvaluationCase['suiteVersion'] })
-    expect(compareGeoContentCandidates(left, right).status).toBe('blocked')
+  it('rejects an output-only evaluation case', () => {
+    const outputOnly = validCase({ candidateId: 'candidate-b', variantLabel: 'b' })
+    const result = compareGeoContentCandidates(goldenCandidate({ candidateId: 'candidate-a', variantLabel: 'a' }), outputOnly)
+    expect(result.status).toBe('blocked')
+    expect(result.winnerCandidateId).toBeNull()
+    expect(result.reasonCodes).toContain('EVALUATION_RAW_INPUT_REQUIRED')
+  })
+
+  it('rejects forged status and metrics fields', () => {
+    const forged = { ...goldenCandidate({ candidateId: 'candidate-b' }), status: 'review_ready', metrics: [], contentHash: 'f'.repeat(64) }
+    const result = compareGeoContentCandidates(goldenCandidate({ candidateId: 'candidate-a' }), forged)
+    expect(result.status).toBe('blocked')
+    expect(result.winnerCandidateId).toBeNull()
+    expect(result.reasonCodes).toContain('EVALUATION_UNKNOWN_FIELD')
   })
 
   it('rejects null left candidate', () => {
-    expect(compareGeoContentCandidates(null, validCase()).status).toBe('blocked')
+    expect(compareGeoContentCandidates(null, goldenCandidate()).status).toBe('blocked')
   })
 
   it('rejects null right candidate', () => {
-    expect(compareGeoContentCandidates(validCase(), null).status).toBe('blocked')
+    expect(compareGeoContentCandidates(goldenCandidate(), null).status).toBe('blocked')
   })
 
   it('rejects array left candidate', () => {
-    expect(compareGeoContentCandidates([], validCase()).status).toBe('blocked')
+    expect(compareGeoContentCandidates([], goldenCandidate()).status).toBe('blocked')
   })
 
   it('rejects array right candidate', () => {
-    expect(compareGeoContentCandidates(validCase(), []).status).toBe('blocked')
+    expect(compareGeoContentCandidates(goldenCandidate(), []).status).toBe('blocked')
   })
 
   it('does not choose a blocked winner', () => {
-    const blocked = validCase({ qualityInput: { ...GOLDEN_INPUT, injected: true }, candidateId: 'blocked' })
-    const ready = validCase({ candidateId: 'ready' })
-    const result = compareGeoContentCandidates(blocked, ready)
+    const blocked = goldenCandidate({ qualityInput: { ...GOLDEN_INPUT, injected: true }, candidateId: 'blocked' })
+    const result = compareGeoContentCandidates(blocked, goldenCandidate({ candidateId: 'ready' }))
     expect(result.winnerCandidateId).toBeNull()
     expect(result.decision).toBe('blocked')
   })
 
   it('does not choose an insufficient-data winner', () => {
-    const insufficient = validCase({ markdown: null, candidateId: 'insufficient' })
-    const ready = validCase({ candidateId: 'ready' })
-    const result = compareGeoContentCandidates(insufficient, ready)
+    const result = compareGeoContentCandidates(goldenCandidate({ markdown: null, candidateId: 'insufficient' }), goldenCandidate({ candidateId: 'ready' }))
     expect(result.winnerCandidateId).toBeNull()
     expect(result.decision).toBe('insufficient_data')
   })
 
   it('returns a fixed metric comparison order', () => {
-    const result = compareGeoContentCandidates(validCase({ candidateId: 'a' }), validCase({ candidateId: 'b' }))
+    const result = compareGeoContentCandidates(goldenCandidate({ candidateId: 'a' }), goldenCandidate({ candidateId: 'b' }))
     expect(result.metricComparisons.map(metric => metric.metricName)).toEqual(metricNames())
   })
 
-  it('uses a tie decision when every metric is equal', () => {
-    const result = compareGeoContentCandidates(validCase({ candidateId: 'a' }), validCase({ candidateId: 'b' }))
+  it('uses a tie decision when every content metric is equal', () => {
+    const result = compareGeoContentCandidates(goldenCandidate({ candidateId: 'a' }), goldenCandidate({ candidateId: 'b' }))
     expect(result.decision).toBe('tie')
     expect(result.winnerCandidateId).toBeNull()
   })
 
-  it('does not return a truth score', () => {
-    const result = compareGeoContentCandidates(validCase({ candidateId: 'a' }), validCase({ candidateId: 'b' }))
+  it('uses Pareto left dominance for a strictly better heading candidate', () => {
+    const worseBody = GOLDEN_MARKDOWN.replace('## Details', '#### Details')
+    const result = compareGeoContentCandidates(
+      goldenCandidate({ candidateId: 'left', providerOutput: goldenOutput(GOLDEN_INPUT, { body: GOLDEN_MARKDOWN }), markdown: GOLDEN_MARKDOWN }),
+      goldenCandidate({ candidateId: 'right', providerOutput: goldenOutput(GOLDEN_INPUT, { body: worseBody }), markdown: worseBody }),
+    )
+    expect(result.decision).toBe('left')
+    expect(result.winnerCandidateId).toBe('left')
+  })
+
+  it('uses Pareto right dominance symmetrically', () => {
+    const worseBody = GOLDEN_MARKDOWN.replace('## Details', '#### Details')
+    const result = compareGeoContentCandidates(
+      goldenCandidate({ candidateId: 'left', providerOutput: goldenOutput(GOLDEN_INPUT, { body: worseBody }), markdown: worseBody }),
+      goldenCandidate({ candidateId: 'right', providerOutput: goldenOutput(GOLDEN_INPUT, { body: GOLDEN_MARKDOWN }), markdown: GOLDEN_MARKDOWN }),
+    )
+    expect(result.decision).toBe('right')
+    expect(result.winnerCandidateId).toBe('right')
+  })
+
+  it('returns inconclusive for mixed metric wins', () => {
+    const directAnswerMissing = GOLDEN_MARKDOWN.replace('Acme provides a bounded answer', 'This article begins with an overview')
+    const headingRegression = GOLDEN_MARKDOWN.replace('## Details', '#### Details')
+    const result = compareGeoContentCandidates(
+      goldenCandidate({ candidateId: 'left', providerOutput: goldenOutput(GOLDEN_INPUT, { body: directAnswerMissing }), markdown: directAnswerMissing }),
+      goldenCandidate({ candidateId: 'right', providerOutput: goldenOutput(GOLDEN_INPUT, { body: headingRegression }), markdown: headingRegression }),
+    )
+    expect(result.decision).toBe('inconclusive')
+    expect(result.winnerCandidateId).toBeNull()
+  })
+
+  it('does not vote governance metrics into a winner', () => {
+    const result = compareGeoContentCandidates(goldenCandidate({ candidateId: 'a' }), goldenCandidate({ candidateId: 'b' }))
+    const governance = result.metricComparisons.filter(metric => ['provider-provenance-integrity', 'human-review-requirement'].includes(metric.metricName))
+    expect(governance.every(metric => metric.winner === 'not_comparable')).toBe(true)
+  })
+
+  it('returns insufficient_data when both raw candidates have no comparable content data', () => {
+    const result = compareGeoContentCandidates(goldenCandidate({ candidateId: 'a', providerOutput: null }), goldenCandidate({ candidateId: 'b', providerOutput: null }))
+    expect(result.status).toBe('insufficient_data')
+    expect(result.decision).toBe('insufficient_data')
+    expect(result.winnerCandidateId).toBeNull()
+  })
+
+  it('does not return a truth or majority score', () => {
+    const result = compareGeoContentCandidates(goldenCandidate({ candidateId: 'a' }), goldenCandidate({ candidateId: 'b' }))
     expect(result).not.toHaveProperty('score')
     expect(result).not.toHaveProperty('ranking')
-  })
-
-  it('marks a changed prompt fingerprint as incomparable', () => {
-    const left = validCase({ candidateId: 'a' })
-    const right = cloneCase(validCase({ candidateId: 'b' }), { promptPackFingerprint: 'f'.repeat(64) })
-    expect(compareGeoContentCandidates(left, right).reasonCodes).toContain('EVALUATION_BASELINE_MISMATCH')
-  })
-
-  it('marks a changed retrieval fingerprint as incomparable', () => {
-    const left = validCase({ candidateId: 'a' })
-    const right = cloneCase(validCase({ candidateId: 'b' }), { retrievalFingerprint: 'f'.repeat(64) })
-    expect(compareGeoContentCandidates(left, right).reasonCodes).toContain('EVALUATION_BASELINE_MISMATCH')
-  })
-
-  it('marks a changed brief fingerprint as incomparable', () => {
-    const left = validCase({ candidateId: 'a' })
-    const right = cloneCase(validCase({ candidateId: 'b' }), { briefFingerprint: 'f'.repeat(64) })
-    expect(compareGeoContentCandidates(left, right).reasonCodes).toContain('EVALUATION_BASELINE_MISMATCH')
-  })
-
-  it('marks a changed case evidence hash as incomparable', () => {
-    const left = validCase({ candidateId: 'a' })
-    const right = cloneCase(validCase({ candidateId: 'b' }), { evidenceSnapshotHash: 'f'.repeat(64) })
-    expect(compareGeoContentCandidates(left, right).reasonCodes).toContain('EVALUATION_BASELINE_MISMATCH')
+    expect(result).not.toHaveProperty('leftWins')
+    expect(result).not.toHaveProperty('rightWins')
   })
 
   it('returns comparison limitations', () => {
-    const result = compareGeoContentCandidates(validCase({ candidateId: 'a' }), validCase({ candidateId: 'b' }))
-    expect(result.limitations.length).toBeGreaterThan(0)
+    expect(compareGeoContentCandidates(goldenCandidate({ candidateId: 'a' }), goldenCandidate({ candidateId: 'b' })).limitations.length).toBeGreaterThan(0)
   })
 })
 
 describe('regression reports', () => {
-  it('builds a report for one case', () => {
-    const report = buildGeoContentRegressionReport([validCase()])
+  it('builds a report from one raw candidate', () => {
+    const report = buildGeoContentRegressionReport([goldenCandidate()])
     expect(report.caseCount).toBe(1)
     expect(report.regressionFingerprint).toMatch(/^[a-f0-9]{64}$/)
+    expect(report.cases[0]?.evaluationFingerprint).toMatch(/^[a-f0-9]{64}$/)
   })
 
-  it('builds a report for two variants', () => {
-    const report = buildGeoContentRegressionReport([validCase({ candidateId: 'a' }), validCase({ candidateId: 'b' })])
+  it('builds a report for two raw variants', () => {
+    const report = buildGeoContentRegressionReport([goldenCandidate({ candidateId: 'a' }), goldenCandidate({ candidateId: 'b' })])
     expect(report.caseCount).toBe(2)
     expect(report.cases).toHaveLength(2)
   })
 
   it('sorts report cases by stable code-unit identity', () => {
-    const report = buildGeoContentRegressionReport([validCase({ candidateId: 'b' }), validCase({ candidateId: 'a' })])
+    const report = buildGeoContentRegressionReport([goldenCandidate({ candidateId: 'b' }), goldenCandidate({ candidateId: 'a' })])
     expect(report.cases.map(value => value.candidateId)).toEqual(['a', 'b'])
   })
 
   it('is independent of input case order', () => {
-    const left = buildGeoContentRegressionReport([validCase({ candidateId: 'a' }), validCase({ candidateId: 'b' })])
-    const right = buildGeoContentRegressionReport([validCase({ candidateId: 'b' }), validCase({ candidateId: 'a' })])
+    const left = buildGeoContentRegressionReport([goldenCandidate({ candidateId: 'a' }), goldenCandidate({ candidateId: 'b' })])
+    const right = buildGeoContentRegressionReport([goldenCandidate({ candidateId: 'b' }), goldenCandidate({ candidateId: 'a' })])
     expect(left.regressionFingerprint).toBe(right.regressionFingerprint)
   })
 
   it('counts review-ready cases', () => {
-    const report = buildGeoContentRegressionReport([validCase()])
-    expect(report.reviewReadyCount).toBe(1)
+    expect(buildGeoContentRegressionReport([goldenCandidate()]).reviewReadyCount).toBe(1)
   })
 
   it('counts blocked cases', () => {
-    const report = buildGeoContentRegressionReport([validCase(), validCase({ qualityInput: { ...GOLDEN_INPUT, injected: true } })])
+    const report = buildGeoContentRegressionReport([goldenCandidate(), goldenCandidate({ qualityInput: { ...GOLDEN_INPUT, injected: true } })])
     expect(report.blockedCount).toBeGreaterThanOrEqual(1)
+    expect(report.status).toBe('blocked')
   })
 
   it('counts insufficient-data cases', () => {
-    const report = buildGeoContentRegressionReport([validCase({ markdown: null })])
+    const report = buildGeoContentRegressionReport([goldenCandidate({ markdown: null })])
     expect(report.insufficientDataCount).toBe(1)
+    expect(report.status).toBe('insufficient_data')
   })
 
-  it('blocks reports containing blocked cases', () => {
-    const report = buildGeoContentRegressionReport([validCase({ providerOutput: null })])
-    expect(report.status).toBe('insufficient_data')
+  it('preserves blocked status for a malformed provider object', () => {
+    const report = buildGeoContentRegressionReport([goldenCandidate({ providerOutput: {} })])
+    expect(report.status).toBe('blocked')
+    expect(report.cases[0]?.reasonCodes.length).toBeGreaterThan(0)
   })
 
   it('returns insufficient_data for an empty array', () => {
@@ -612,70 +637,105 @@ describe('regression reports', () => {
     expect(buildGeoContentRegressionReport('not-an-array').status).toBe('blocked')
   })
 
-  it('rejects an array with a malformed case', () => {
-    expect(buildGeoContentRegressionReport([{}]).status).toBe('blocked')
+  it('rejects an output-only evaluation case array', () => {
+    expect(buildGeoContentRegressionReport([validCase()]).reasonCodes).toContain('EVALUATION_UNKNOWN_FIELD')
+  })
+
+  it('rejects duplicate case/candidate/variant identity', () => {
+    const first = goldenCandidate({ candidateId: 'same', variantLabel: 'same' })
+    const second = goldenCandidate({ candidateId: 'same', variantLabel: 'same' })
+    const report = buildGeoContentRegressionReport([first, second])
+    expect(report.status).toBe('blocked')
+    expect(report.regressionFingerprint).toBeNull()
+    expect(report.reasonCodes).toContain('EVALUATION_DUPLICATE_IDENTITY')
+  })
+
+  it('rejects more than 500 candidates before evaluation', () => {
+    const values = Array.from({ length: 501 }, (_, index) => goldenCandidate({ candidateId: `candidate-${index}`, variantLabel: `variant-${index}` }))
+    const report = buildGeoContentRegressionReport(values)
+    expect(report.status).toBe('blocked')
+    expect(report.regressionFingerprint).toBeNull()
+    expect(report.reasonCodes).toContain('EVALUATION_LIMIT_EXCEEDED')
+  })
+
+  it('rejects a throwing candidate getter without throwing the report', () => {
+    const candidate = new Proxy(goldenCandidate(), { get(_target, property) { if (property === 'candidateId') throw new Error('hostile getter'); return Reflect.get(_target, property) } })
+    expect(() => buildGeoContentRegressionReport([candidate])).not.toThrow()
+    expect(buildGeoContentRegressionReport([candidate]).status).toBe('blocked')
   })
 
   it('keeps metric aggregate denominators', () => {
-    const report = buildGeoContentRegressionReport([validCase()])
-    expect(report.metricAggregates.every(metric => metric.denominator >= 0)).toBe(true)
+    const report = buildGeoContentRegressionReport([goldenCandidate()])
+    expect(report.metricAggregates.every(metric => Number.isInteger(metric.denominator) && metric.denominator >= 0)).toBe(true)
   })
 
   it('keeps metric aggregate ratios nullable', () => {
-    const report = buildGeoContentRegressionReport([])
-    expect(report.metricAggregates.every(metric => metric.ratio === null)).toBe(true)
+    expect(buildGeoContentRegressionReport([]).metricAggregates.every(metric => metric.ratio === null)).toBe(true)
   })
 
   it('contains all metric aggregates', () => {
-    expect(buildGeoContentRegressionReport([validCase()]).metricAggregates).toHaveLength(15)
+    expect(buildGeoContentRegressionReport([goldenCandidate()]).metricAggregates).toHaveLength(15)
   })
 
   it('includes human-review limitation text', () => {
-    const report = buildGeoContentRegressionReport([validCase()])
-    expect(report.limitations.join(' ')).toContain('publication')
+    expect(buildGeoContentRegressionReport([goldenCandidate()]).limitations.join(' ')).toContain('publication')
   })
 
   it('does not label a report approved', () => {
-    const report = buildGeoContentRegressionReport([validCase()])
+    const report = buildGeoContentRegressionReport([goldenCandidate()])
     expect(report).not.toHaveProperty('approved')
     expect(report).not.toHaveProperty('publishable')
   })
 
   it('does not label a report as ranking improvement', () => {
-    expect(buildGeoContentRegressionReport([validCase()])).not.toHaveProperty('rankingImprovement')
+    expect(buildGeoContentRegressionReport([goldenCandidate()])).not.toHaveProperty('rankingImprovement')
   })
 
-  it('preserves case reason codes in the report', () => {
-    const value = validCase({ providerOutput: null })
-    const report = buildGeoContentRegressionReport([value])
+  it('preserves insufficient-data reason codes in the report', () => {
+    const report = buildGeoContentRegressionReport([goldenCandidate({ providerOutput: null })])
     expect(report.cases[0]?.reasonCodes).toContain('EVALUATION_DATA_INSUFFICIENT')
   })
 
-  it('changes regression fingerprint when candidate outcome changes', () => {
-    const first = buildGeoContentRegressionReport([validCase({ candidateId: 'a' })])
-    const second = buildGeoContentRegressionReport([validCase({ candidateId: 'b' })])
+  it('changes regression fingerprint when candidate identity changes', () => {
+    const first = buildGeoContentRegressionReport([goldenCandidate({ candidateId: 'a' })])
+    const second = buildGeoContentRegressionReport([goldenCandidate({ candidateId: 'b' })])
+    expect(first.regressionFingerprint).not.toBe(second.regressionFingerprint)
+  })
+
+  it('changes regression fingerprint when provider request identity changes', () => {
+    const first = buildGeoContentRegressionReport([goldenCandidate({ candidateId: 'a' })])
+    const changedOutput = goldenOutput(GOLDEN_INPUT, { requestId: 'request-2' })
+    const second = buildGeoContentRegressionReport([goldenCandidate({ candidateId: 'a', providerOutput: changedOutput })])
     expect(first.regressionFingerprint).not.toBe(second.regressionFingerprint)
   })
 })
 
 describe('golden fixtures and contract variants', () => {
   it.each([
-    ['high-quality candidate', {}],
-    ['missing direct answer candidate', { candidateId: 'missing-answer', variantLabel: 'missing-answer' }],
-    ['heading regression candidate', { candidateId: 'heading-regression', variantLabel: 'heading-regression', markdown: GOLDEN_MARKDOWN.replace('## Details', '#### Details') }],
-    ['citation missing candidate', { candidateId: 'citation-missing', variantLabel: 'citation-missing', providerOutput: goldenOutput(GOLDEN_INPUT, { citations: [] }) }],
-    ['unselected evidence candidate', { candidateId: 'unselected', variantLabel: 'unselected', providerOutput: goldenOutput(GOLDEN_INPUT, { citations: [{ ...GOLDEN_OUTPUT.citations[0]!, sourceId: 'foreign' }] }) }],
-    ['unsupported claim candidate', { candidateId: 'unsupported', variantLabel: 'unsupported', providerOutput: goldenOutput(GOLDEN_INPUT, { claims: [{ ...GOLDEN_OUTPUT.claims[0]!, claimType: 'quantitative', text: '100% guaranteed.', citationIds: [] }] }) }],
-    ['stale evidence candidate', { candidateId: 'stale', variantLabel: 'stale', qualityInput: goldenInput({ evidenceSnapshotHash: 'f'.repeat(64) }) }],
-    ['wrong rule candidate', { candidateId: 'wrong-rule', variantLabel: 'wrong-rule', qualityInput: goldenInput({ selectedRuleIds: ['unknown-rule'] }) }],
-    ['FAQ unbound candidate', { candidateId: 'faq-unbound', variantLabel: 'faq-unbound', qualityInput: goldenInput({ contentType: 'faq' }) }],
-    ['Unicode CJK candidate', { candidateId: 'unicode', variantLabel: 'unicode-cjk', qualityInput: goldenInput({ language: 'zh-hant', topic: '合成服務範圍', workingTitle: '合成服務範圍', primaryQuestion: '什麼是合成服務範圍？' }) }],
-    ['prompt regression candidate', { candidateId: 'prompt-regression', variantLabel: 'prompt-regression', providerOutput: goldenOutput(GOLDEN_INPUT, { promptFingerprint: 'e'.repeat(64) }) }],
-    ['retrieval regression candidate', { candidateId: 'retrieval-regression', variantLabel: 'retrieval-regression', providerOutput: goldenOutput(GOLDEN_INPUT, { retrievalFingerprint: 'e'.repeat(64) }) }],
-    ['provider provenance candidate', { candidateId: 'provenance', variantLabel: 'provenance', providerOutput: goldenOutput(GOLDEN_INPUT, { provider: 'other' }) }],
-  ])('evaluates fixture variant: %s', (_label, overrides) => {
+    ['high-quality candidate', {}, 'review_ready', [], [['direct-answer-presence', 1, 1, 1], ['paragraph-binding-integrity', 1, 1, 1], ['faq-binding', 0, 0, null]]],
+    ['malformed Markdown candidate', { candidateId: 'malformed', variantLabel: 'malformed', markdown: `${GOLDEN_MARKDOWN}\nUnbound mutation.` }, 'blocked', ['CONTENT_HASH_MISMATCH'], []],
+    ['missing direct answer candidate', { candidateId: 'missing-answer', variantLabel: 'missing-answer', providerOutput: goldenOutput(GOLDEN_INPUT, { body: GOLDEN_MARKDOWN.replace('Acme provides a bounded answer', 'This article begins with an overview') }), markdown: GOLDEN_MARKDOWN.replace('Acme provides a bounded answer', 'This article begins with an overview') }, 'review_ready', ['DIRECT_ANSWER_MISSING', 'RULE_CHECK_FAILED'], [['direct-answer-presence', 0, 1, 0]]],
+    ['heading regression candidate', { candidateId: 'heading-regression', variantLabel: 'heading-regression', providerOutput: goldenOutput(GOLDEN_INPUT, { body: GOLDEN_MARKDOWN.replace('## Details', '#### Details') }), markdown: GOLDEN_MARKDOWN.replace('## Details', '#### Details') }, 'review_ready', ['INVALID_HEADING_HIERARCHY'], [['heading-hierarchy', 0, 1, 0]]],
+    ['citation missing candidate', { candidateId: 'citation-missing', variantLabel: 'citation-missing', providerOutput: goldenOutput(GOLDEN_INPUT, { citations: [] }) }, 'blocked', ['INVALID_CITATION_BINDING'], []],
+    ['unselected evidence candidate', { candidateId: 'unselected', variantLabel: 'unselected', providerOutput: goldenOutput(GOLDEN_INPUT, { citations: [{ ...GOLDEN_OUTPUT.citations[0]!, sourceId: 'foreign' }] }) }, 'blocked', ['CITATION_OUTSIDE_APPROVED_EVIDENCE'], []],
+    ['unsupported claim candidate', { candidateId: 'unsupported', variantLabel: 'unsupported', providerOutput: goldenOutput(GOLDEN_INPUT, { claims: [{ ...GOLDEN_OUTPUT.claims[0]!, claimType: 'quantitative', text: '100% guaranteed.', citationIds: [] }] }) }, 'blocked', ['PARAGRAPH_BINDING_MISMATCH'], []],
+    ['stale evidence candidate', { candidateId: 'stale', variantLabel: 'stale', qualityInput: goldenInput({ evidenceSnapshotHash: 'f'.repeat(64) }) }, 'blocked', ['EVALUATION_INVALID_INPUT', 'EVIDENCE_SNAPSHOT_MISMATCH'], []],
+    ['wrong rule candidate', { candidateId: 'wrong-rule', variantLabel: 'wrong-rule', qualityInput: goldenInput({ selectedRuleIds: ['unknown-rule'] }) }, 'blocked', ['EVALUATION_INVALID_INPUT', 'RULE_CHECK_FAILED'], []],
+    ['FAQ unbound candidate', { candidateId: 'faq-unbound', variantLabel: 'faq-unbound', qualityInput: goldenInput({ contentType: 'faq' }), providerOutput: goldenOutput(goldenInput({ contentType: 'faq' }), { faqPairs: [] }) }, 'blocked', ['FAQ_BODY_MISMATCH'], []],
+    ['Unicode CJK candidate', { candidateId: 'unicode', variantLabel: 'unicode-cjk', qualityInput: goldenInput({ language: 'zh-hant', topic: '合成服務範圍', workingTitle: '合成服務範圍', primaryQuestion: '什麼是合成服務範圍？' }) }, 'blocked', ['EVALUATION_INVALID_INPUT', 'QUERY_FINGERPRINT_MISMATCH'], []],
+    ['prompt regression candidate', { candidateId: 'prompt-regression', variantLabel: 'prompt-regression', providerOutput: goldenOutput(GOLDEN_INPUT, { promptFingerprint: 'e'.repeat(64) }) }, 'blocked', ['PROVIDER_PROVENANCE_MISMATCH'], []],
+    ['retrieval regression candidate', { candidateId: 'retrieval-regression', variantLabel: 'retrieval-regression', providerOutput: goldenOutput(GOLDEN_INPUT, { retrievalFingerprint: 'e'.repeat(64) }) }, 'blocked', ['RETRIEVAL_FINGERPRINT_MISMATCH'], []],
+    ['provider provenance candidate', { candidateId: 'provenance', variantLabel: 'provenance', providerOutput: goldenOutput(GOLDEN_INPUT, { provider: 'other' }) }, 'blocked', ['PROVIDER_PROVENANCE_MISMATCH'], []],
+  ])('matches exact golden expected outcome: %s', (_label, overrides, expectedStatus, expectedReasonCodes, expectedMetrics) => {
     const result = evaluate(overrides)
-    expect(['review_ready', 'blocked', 'insufficient_data']).toContain(result.status)
+    expect(result.status).toBe(expectedStatus)
+    expect(result.reasonCodes).toEqual(expectedReasonCodes)
+    for (const [metricName, numerator, denominator, ratio] of expectedMetrics as Array<[EvaluationMetricName, number, number, number | null]>) {
+      const metric = metricByName(result, metricName)
+      expect(metric.numerator).toBe(numerator)
+      expect(metric.denominator).toBe(denominator)
+      expect(metric.ratio).toBe(ratio)
+    }
     expect(result.suiteVersion).toBe('geo-content-evaluation-harness-v1')
   })
 
@@ -691,5 +751,194 @@ describe('golden fixtures and contract variants', () => {
   it('uses synthetic provider metadata only', () => {
     expect(GOLDEN_OUTPUT.provider).toBe('synthetic-provider')
     expect(GOLDEN_OUTPUT.requestId).toBe('request-1')
+  })
+})
+
+
+describe('final trust-boundary regressions', () => {
+  it('re-evaluates raw output instead of accepting caller status', () => {
+    const raw = goldenCandidate()
+    const forged = { ...raw, status: 'review_ready', qualityGateResult: null }
+    const result = evaluateGeoContentCandidate(forged)
+    expect(result.status).toBe('blocked')
+    expect(result.reasonCodes).toContain('EVALUATION_UNKNOWN_FIELD')
+  })
+
+  it('re-evaluates raw output instead of accepting caller metric values', () => {
+    const raw = goldenCandidate()
+    const forged = { ...raw, metrics: [{ metricName: 'direct-answer-presence', applicable: true, numerator: 999, denominator: 999, ratio: 1, reasonCodes: [], evidenceLocator: [] }] }
+    const result = evaluateGeoContentCandidate(forged)
+    expect(result.status).toBe('blocked')
+    expect(result.reasonCodes).toContain('EVALUATION_UNKNOWN_FIELD')
+  })
+
+  it('binds comparison baseline to caseId', () => {
+    const result = compareGeoContentCandidates(goldenCandidate({ caseId: 'case-a' }), goldenCandidate({ caseId: 'case-b' }))
+    expect(result.status).toBe('blocked')
+    expect(result.reasonCodes).toContain('EVALUATION_BASELINE_MISMATCH')
+  })
+
+  it('requires the full raw envelope for comparison', () => {
+    const result = compareGeoContentCandidates({ caseId: 'a' }, goldenCandidate())
+    expect(result.status).toBe('blocked')
+    expect(result.winnerCandidateId).toBeNull()
+    expect(result.reasonCodes).toContain('EVALUATION_BASELINE_MISMATCH')
+  })
+
+  it('does not treat output-only report input as a valid raw candidate', () => {
+    const report = buildGeoContentRegressionReport([validCase()])
+    expect(report.status).toBe('blocked')
+    expect(report.reasonCodes).toContain('EVALUATION_UNKNOWN_FIELD')
+  })
+
+  it('returns a deterministic evaluation-case fingerprint', () => {
+    const value = validCase()
+    expect(evaluationCaseFingerprint(value)).toEqual(evaluationCaseFingerprint(value))
+  })
+
+  it('changes evaluation-case fingerprint when Markdown changes', () => {
+    const first = validCase()
+    const second = evaluate({ markdown: `${GOLDEN_MARKDOWN}\nextra` })
+    expect(evaluationCaseFingerprint(first).fingerprint).not.toBe(evaluationCaseFingerprint(second).fingerprint)
+  })
+
+  it('rejects a throwing case fingerprint getter without throwing', () => {
+    const value = new Proxy(validCase(), { get(_target, property) { if (property === 'metrics') throw new Error('hostile getter'); return Reflect.get(_target, property) } })
+    expect(() => evaluationCaseFingerprint(value)).not.toThrow()
+    expect(evaluationCaseFingerprint(value).status).toBe('invalid')
+  })
+
+  it('rejects a non-record fingerprint input', () => {
+    expect(computeEvaluationFingerprint(null).status).toBe('invalid')
+    expect(computeEvaluationFingerprint([]).status).toBe('invalid')
+  })
+
+  it('produces canonical string output for a valid fingerprint', () => {
+    const result = computeEvaluationFingerprint({ z: 1, a: 'two' })
+    expect(result.status).toBe('valid')
+    expect(result.canonicalValue).toBe('{"a":"two","z":1}')
+    expect(result.fingerprint).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('keeps every canonical metric finite and bounded', () => {
+    for (const metric of validCase().metrics) {
+      expect(Number.isFinite(metric.numerator)).toBe(true)
+      expect(Number.isFinite(metric.denominator)).toBe(true)
+      expect(metric.numerator).toBeGreaterThanOrEqual(0)
+      expect(metric.denominator).toBeGreaterThanOrEqual(0)
+      if (metric.ratio !== null) expect(metric.ratio).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('keeps all metrics in the fixed catalog exactly once', () => {
+    const metrics = validCase().metrics
+    expect(metrics.map(metric => metric.metricName)).toEqual(metricNames())
+    expect(new Set(metrics.map(metric => metric.metricName)).size).toBe(metrics.length)
+  })
+
+  it('keeps metric ratios at or below one', () => {
+    for (const metric of validCase().metrics) {
+      if (metric.ratio !== null) expect(metric.ratio).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('represents a non-applicable FAQ metric as 0/0 null', () => {
+    const metric = metricByName(validCase(), 'faq-binding')
+    expect(metric.applicable).toBe(false)
+    expect(metric.numerator).toBe(0)
+    expect(metric.denominator).toBe(0)
+    expect(metric.ratio).toBeNull()
+    expect(metric.reasonCodes).toContain('METRIC_NOT_APPLICABLE')
+  })
+
+  it('represents an empty metric as 0/0 null', () => {
+    const metric = emptyEvaluationMetric('faq-binding')
+    expect(metric).toMatchObject({ applicable: false, numerator: 0, denominator: 0, ratio: null })
+    expect(metric.reasonCodes).toContain('METRIC_NOT_APPLICABLE')
+  })
+
+  it('fails closed for a negative denominator', () => {
+    const metric = makeEvaluationMetric('direct-answer-presence', 0, -1)
+    expect(metric.denominator).toBe(0)
+    expect(metric.ratio).toBeNull()
+    expect(metric.reasonCodes).toContain('EVALUATION_METRIC_BOUNDS')
+  })
+
+  it('fails closed when numerator exceeds denominator', () => {
+    const metric = makeEvaluationMetric('direct-answer-presence', 2, 1)
+    expect(metric.numerator).toBe(1)
+    expect(metric.denominator).toBe(1)
+    expect(metric.reasonCodes).toContain('EVALUATION_METRIC_BOUNDS')
+  })
+
+  it('fails closed for NaN and Infinity metrics', () => {
+    const nanMetric = makeEvaluationMetric('direct-answer-presence', Number.NaN, 1)
+    const infiniteMetric = makeEvaluationMetric('direct-answer-presence', 1, Number.POSITIVE_INFINITY)
+    expect(nanMetric.ratio).toBeNull()
+    expect(nanMetric.reasonCodes).toContain('EVALUATION_NON_FINITE_METRIC')
+    expect(infiniteMetric.ratio).toBeNull()
+    expect(infiniteMetric.reasonCodes).toContain('EVALUATION_NON_FINITE_METRIC')
+  })
+
+  it('deduplicates metric reason codes and evidence locators', () => {
+    const metric = makeEvaluationMetric('direct-answer-presence', 1, 1, ['EVALUATION_INVALID_INPUT', 'EVALUATION_INVALID_INPUT'], ['x', 'x'])
+    expect(metric.reasonCodes).toEqual(['EVALUATION_INVALID_INPUT'])
+    expect(metric.evidenceLocator).toEqual(['x'])
+  })
+
+  it('aggregates applicable numerator and denominator independently', () => {
+    const cases = [validCase({ candidateId: 'one' }), validCase({ candidateId: 'two' })]
+    const aggregate = aggregateEvaluationMetrics(cases).find(metric => metric.metricName === 'direct-answer-presence')
+    expect(aggregate).toMatchObject({ applicableCases: 2, numerator: 2, denominator: 2, ratio: 1 })
+  })
+
+  it('keeps aggregate ratio null when every case is 0/0', () => {
+    const aggregate = aggregateEvaluationMetrics([]).find(metric => metric.metricName === 'faq-binding')
+    expect(aggregate).toMatchObject({ applicableCases: 0, numerator: 0, denominator: 0, ratio: null })
+  })
+
+  it('merges aggregate reason codes from non-applicable metrics', () => {
+    const aggregate = aggregateEvaluationMetrics([validCase()]).find(metric => metric.metricName === 'faq-binding')
+    expect(aggregate?.reasonCodes).toContain('METRIC_NOT_APPLICABLE')
+  })
+
+  it('includes an evaluation fingerprint for every accepted report case', () => {
+    const report = buildGeoContentRegressionReport([goldenCandidate()])
+    expect(report.cases[0]?.evaluationFingerprint).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('returns review_ready only when every raw case is review_ready', () => {
+    const report = buildGeoContentRegressionReport([goldenCandidate({ candidateId: 'ready-a' }), goldenCandidate({ candidateId: 'ready-b' })])
+    expect(report.status).toBe('review_ready')
+    expect(report.reviewReadyCount).toBe(2)
+    expect(report.blockedCount).toBe(0)
+    expect(report.insufficientDataCount).toBe(0)
+  })
+
+  it('accepts exactly 500 raw candidates within the capacity bound', () => {
+    const values = Array.from({ length: 500 }, (_, index) => goldenCandidate({ candidateId: `capacity-${index}`, variantLabel: `capacity-${index}` }))
+    const report = buildGeoContentRegressionReport(values)
+    expect(report.status).toBe('review_ready')
+    expect(report.caseCount).toBe(500)
+  })
+
+  it('sorts report identity by caseId before candidateId', () => {
+    const report = buildGeoContentRegressionReport([
+      goldenCandidate({ caseId: 'case-b', candidateId: 'same', variantLabel: 'same' }),
+      goldenCandidate({ caseId: 'case-a', candidateId: 'same', variantLabel: 'same' }),
+    ])
+    expect(report.cases.map(value => value.caseId)).toEqual(['case-a', 'case-b'])
+  })
+
+  it('keeps regression fingerprint independent of raw input order', () => {
+    const a = goldenCandidate({ caseId: 'case-a', candidateId: 'a' })
+    const b = goldenCandidate({ caseId: 'case-b', candidateId: 'b' })
+    expect(buildGeoContentRegressionReport([a, b]).regressionFingerprint).toBe(buildGeoContentRegressionReport([b, a]).regressionFingerprint)
+  })
+
+  it('does not expose cryptographic signature semantics for regression fingerprints', () => {
+    const report = buildGeoContentRegressionReport([goldenCandidate()])
+    expect(report).not.toHaveProperty('signature')
+    expect(report.limitations.join(' ')).toContain('cryptographic')
   })
 })

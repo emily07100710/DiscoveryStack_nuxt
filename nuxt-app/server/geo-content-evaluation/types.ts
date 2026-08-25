@@ -6,6 +6,7 @@ import type {
   ProviderOutput,
   ProviderProvenance,
   QualityGateResult,
+  ReasonCode,
 } from '../geo-content-quality'
 
 export const EVALUATION_SUITE_VERSION = 'geo-content-evaluation-harness-v1' as const
@@ -15,7 +16,7 @@ export type EvaluationStatus = typeof EVALUATION_STATUSES[number]
 export const EVALUATION_METRIC_NAMES = [
   'direct-answer-presence',
   'heading-hierarchy',
-  'paragraph-bounds',
+  'paragraph-binding-integrity',
   'faq-binding',
   'selected-autogeo-rule-coverage',
   'citation-marker-coverage',
@@ -31,17 +32,36 @@ export const EVALUATION_METRIC_NAMES = [
 ] as const
 export type EvaluationMetricName = typeof EVALUATION_METRIC_NAMES[number]
 
-export type EvaluationReasonCode =
-  | 'EVALUATION_INVALID_INPUT'
-  | 'EVALUATION_CASE_HASH_MISMATCH'
-  | 'EVALUATION_FINGERPRINT_MISMATCH'
-  | 'EVALUATION_BASELINE_MISMATCH'
-  | 'EVALUATION_CASE_BLOCKED'
-  | 'EVALUATION_DATA_INSUFFICIENT'
-  | 'EVALUATION_METRIC_NOT_COMPARABLE'
-  | 'EVALUATION_UNKNOWN_FIELD'
-  | 'METRIC_NOT_APPLICABLE'
-  | string
+export const EVALUATION_REASON_CODES = [
+  'EVALUATION_INVALID_INPUT',
+  'EVALUATION_UNKNOWN_FIELD',
+  'EVALUATION_DATA_INSUFFICIENT',
+  'EVALUATION_BASELINE_MISMATCH',
+  'EVALUATION_CASE_BLOCKED',
+  'EVALUATION_METRIC_NOT_COMPARABLE',
+  'EVALUATION_LIMIT_EXCEEDED',
+  'EVALUATION_DUPLICATE_IDENTITY',
+  'EVALUATION_RAW_INPUT_REQUIRED',
+  'EVALUATION_NON_FINITE_METRIC',
+  'EVALUATION_METRIC_BOUNDS',
+  'EVALUATION_DIRECT_ANSWER_MISSING',
+  'EVALUATION_HEADING_HIERARCHY_FAILED',
+  'EVALUATION_PARAGRAPH_BINDING_FAILED',
+  'EVALUATION_FAQ_BINDING_FAILED',
+  'EVALUATION_RULE_COVERAGE_FAILED',
+  'EVALUATION_CITATION_MARKER_FAILED',
+  'EVALUATION_EVIDENCE_UTILIZATION_FAILED',
+  'EVALUATION_UNUSED_CITATIONS_FOUND',
+  'EVALUATION_UNSUPPORTED_FACTUAL_CLAIMS_FOUND',
+  'EVALUATION_AUTHORITY_BINDING_FAILED',
+  'EVALUATION_TITLE_H1_MISMATCH',
+  'EVALUATION_TOPIC_RELEVANCE_FAILED',
+  'EVALUATION_CONTENT_BOUNDS_FAILED',
+  'EVALUATION_PROVIDER_PROVENANCE_INVALID',
+  'EVALUATION_HUMAN_REVIEW_REQUIRED',
+] as const
+export type EvaluationSpecificReasonCode = typeof EVALUATION_REASON_CODES[number]
+export type EvaluationReasonCode = ReasonCode | EvaluationSpecificReasonCode
 
 export type EvaluationMetric = {
   metricName: EvaluationMetricName
@@ -102,7 +122,7 @@ export type GeoContentCandidateComparison = {
   leftCandidateId: string
   rightCandidateId: string
   winnerCandidateId: string | null
-  decision: 'left' | 'right' | 'tie' | 'blocked' | 'insufficient_data'
+  decision: 'left' | 'right' | 'tie' | 'inconclusive' | 'blocked' | 'insufficient_data'
   metricComparisons: EvaluationMetricComparison[]
   reasonCodes: EvaluationReasonCode[]
   limitations: string[]
@@ -118,6 +138,10 @@ export type EvaluationMetricAggregate = {
   evidenceLocator: string[]
 }
 
+export type GeoContentRegressionCase = Pick<GeoContentEvaluationCase, 'caseId' | 'candidateId' | 'variantLabel' | 'status' | 'reasonCodes' | 'metrics'> & {
+  evaluationFingerprint: string | null
+}
+
 export type GeoContentRegressionReport = {
   suiteVersion: typeof EVALUATION_SUITE_VERSION
   status: EvaluationStatus
@@ -125,7 +149,7 @@ export type GeoContentRegressionReport = {
   reviewReadyCount: number
   blockedCount: number
   insufficientDataCount: number
-  cases: Array<Pick<GeoContentEvaluationCase, 'caseId' | 'candidateId' | 'variantLabel' | 'status' | 'reasonCodes' | 'metrics'>>
+  cases: GeoContentRegressionCase[]
   metricAggregates: EvaluationMetricAggregate[]
   regressionFingerprint: string | null
   reasonCodes: EvaluationReasonCode[]

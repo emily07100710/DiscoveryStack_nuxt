@@ -19,17 +19,22 @@ export function makeEvaluationMetric(
   reasonCodes: EvaluationReasonCode[] = [],
   evidenceLocator: string[] = [],
 ): EvaluationMetric {
-  const safeDenominator = Number.isFinite(denominator) ? Math.max(0, Math.trunc(denominator)) : 0
-  const safeNumerator = Number.isFinite(numerator)
-    ? Math.max(0, Math.min(safeDenominator, Math.trunc(numerator)))
-    : 0
+  const reasons = [...reasonCodes]
+  const finite = Number.isFinite(numerator) && Number.isFinite(denominator)
+  if (!finite) reasons.push('EVALUATION_NON_FINITE_METRIC')
+  if (finite && (!Number.isInteger(numerator) || !Number.isInteger(denominator) || numerator < 0 || denominator < 0 || numerator > denominator)) reasons.push('EVALUATION_METRIC_BOUNDS')
+
+  const safeDenominator = finite && Number.isInteger(denominator) && denominator > 0 ? denominator : 0
+  const safeNumerator = finite && Number.isInteger(numerator) && numerator >= 0 ? Math.min(numerator, safeDenominator) : 0
+  if (safeDenominator === 0) reasons.push('METRIC_NOT_APPLICABLE')
+  const uniqueReasons = [...new Set(reasons)]
   return {
     metricName,
     applicable: safeDenominator > 0,
     numerator: safeNumerator,
     denominator: safeDenominator,
     ratio: metricRatio(safeNumerator, safeDenominator),
-    reasonCodes: [...new Set(reasonCodes)],
+    reasonCodes: uniqueReasons,
     evidenceLocator: [...new Set(evidenceLocator)],
   }
 }
@@ -48,16 +53,14 @@ export function aggregateEvaluationMetrics(cases: readonly GeoContentEvaluationC
     const applicableMetrics = metrics.filter(metric => metric.applicable)
     const numerator = applicableMetrics.reduce((total, metric) => total + metric.numerator, 0)
     const denominator = applicableMetrics.reduce((total, metric) => total + metric.denominator, 0)
-    const reasonCodes = metrics.flatMap(metric => metric.reasonCodes)
-    const evidenceLocator = metrics.flatMap(metric => metric.evidenceLocator)
     return {
       metricName,
       applicableCases: applicableMetrics.length,
       numerator,
       denominator,
       ratio: metricRatio(numerator, denominator),
-      reasonCodes: [...new Set(reasonCodes)],
-      evidenceLocator: [...new Set(evidenceLocator)],
+      reasonCodes: [...new Set(metrics.flatMap(metric => metric.reasonCodes))],
+      evidenceLocator: [...new Set(metrics.flatMap(metric => metric.evidenceLocator))],
     }
   })
 }

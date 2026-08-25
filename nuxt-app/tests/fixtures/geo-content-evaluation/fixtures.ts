@@ -35,7 +35,7 @@ export function goldenInput(overrides: Partial<ContentQualityInput> = {}): Conte
 }
 
 export function goldenOutput(input: ContentQualityInput = GOLDEN_INPUT, overrides: Partial<ProviderOutput> = {}): ProviderOutput {
-  return { ...syntheticProviderOutput(input), ...overrides }
+  return syntheticProviderOutput(input, overrides)
 }
 
 export function goldenRetrieval(input: ContentQualityInput = GOLDEN_INPUT): RetrievalResult {

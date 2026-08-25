@@ -2,8 +2,10 @@ export {
   EVALUATION_SUITE_VERSION,
   EVALUATION_STATUSES,
   EVALUATION_METRIC_NAMES,
+  EVALUATION_REASON_CODES,
   type EvaluationStatus,
   type EvaluationMetricName,
+  type EvaluationSpecificReasonCode,
   type EvaluationReasonCode,
   type EvaluationMetric,
   type GeoContentEvaluationCandidateInput,
@@ -12,6 +14,7 @@ export {
   type EvaluationMetricComparison,
   type GeoContentCandidateComparison,
   type EvaluationMetricAggregate,
+  type GeoContentRegressionCase,
   type GeoContentRegressionReport,
   type EvaluationFingerprintResult,
 } from './types'
