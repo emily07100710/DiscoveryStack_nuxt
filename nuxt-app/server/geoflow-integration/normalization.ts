@@ -8,7 +8,7 @@ const OPAQUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{32,128}$/u
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u
-const SENSITIVE_QUERY_TOKEN_PATTERN = /(?:authorization|bearer|cookie|credential|password|secret|token|api_key|api-key|access_token|access-token|signature|private_key)/iu
+const SENSITIVE_QUERY_VALUE_PATTERN = /(?:authorization|bearer|cookie|credential|password|secret|token|api[-_]?key|access[-_]?token|private[-_]?key|signature)/iu
 const SPECIAL_USE_HOST_SUFFIXES = ['alt', 'arpa', 'example', 'example.com', 'example.net', 'example.org', 'invalid', 'local', 'localhost', 'onion', 'test'] as const
 const MAX_REVIEWED_TEXT_TOTAL_BYTES = 120_000
 const MAX_EVIDENCE_CHUNKS = 50
@@ -124,16 +124,18 @@ function normalizeIPv4(hostname: string): boolean {
   if (octets.some(octet => octet > 255)) return false
   return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) || (a === 203 && b === 0 && c === 113) || a >= 224
 }
-function ipv4FromMappedHex(high: string, low: string): string {
-  const value = (Number.parseInt(high, 16) * 0x10000) + Number.parseInt(low, 16)
-  return `${(value >>> 24) & 255}.${(value >>> 16) & 255}.${(value >>> 8) & 255}.${value & 255}`
-}
 function normalizeIPv6(hostname: string): boolean {
   const host = hostname.replace(/^\[/u, '').replace(/\]$/u, '').toLowerCase()
-  if (host === '::' || host === '::1' || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe8') || host.startsWith('fe9') || host.startsWith('fea') || host.startsWith('feb') || host.startsWith('100:') || host.startsWith('2002:') || host.startsWith('3fff:') || host.startsWith('5f00:') || /^(?:2001:0?db8:|2001:0{3,4}:|2001:0002:|2001:0010:|2001:0020:|2001:0030:)/u.test(host)) return true
-  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u.exec(host)
-  if (mapped?.[1] && mapped[2] && normalizeIPv4(ipv4FromMappedHex(mapped[1], mapped[2]))) return true
+  const [firstHextet = '', secondHextet = ''] = host.split(':')
+  const first = Number.parseInt(firstHextet, 16)
+  const second = secondHextet === '' ? 0 : Number.parseInt(secondHextet, 16)
+  if (host.startsWith('::') || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe') || host.startsWith('ff') || host.startsWith('64:ff9b:') || host.startsWith('100:') || host.startsWith('2002:') || (first >= 0x3ff0 && first <= 0x3fff) || host.startsWith('5f00:') || (first === 0x2001 && second <= 0x01ff) || host.startsWith('2001:db8:')) return true
   return false
+}
+
+function isSensitiveQueryName(name: string): boolean {
+  const compact = name.normalize('NFKC').toLowerCase().replace(/[^a-z0-9]/gu, '')
+  return compact === 'auth' || compact === 'sig' || compact === 'pass' || /(?:authorization|bearer|cookie|credential|password|secret|token|apikey|accesstoken|privatekey|signature)/u.test(compact)
 }
 
 export function validatePublicHttpsUrl(value: unknown, path = '$.locator'): ValidationResult<string> {
@@ -143,7 +145,12 @@ export function validatePublicHttpsUrl(value: unknown, path = '$.locator'): Vali
   const hostname = url.hostname.toLowerCase(); const ipHost = hostname.replace(/^\[/u, '').replace(/\]$/u, ''); const ipKind = isIP(ipHost)
   const specialUseHost = SPECIAL_USE_HOST_SUFFIXES.some(suffix => hostname === suffix || hostname.endsWith(`.${suffix}`)) || hostname === 'home.arpa' || hostname.endsWith('.home.arpa')
   if (url.protocol !== 'https:' || url.username || url.password || url.hash || (url.port && url.port !== '443') || !hostname || hostname === 'localhost' || hostname.endsWith('.local') || hostname.endsWith('.internal') || hostname.endsWith('.localhost') || hostname === 'local' || hostname === 'internal' || hostname === 'onion' || hostname.endsWith('.onion') || specialUseHost) return failure('INVALID_PUBLIC_URL', path)
-  try { for (const [name, value] of url.searchParams.entries()) if (SENSITIVE_QUERY_TOKEN_PATTERN.test(name) || SENSITIVE_QUERY_TOKEN_PATTERN.test(value)) return failure('INVALID_PUBLIC_URL', path) } catch { return failure('INVALID_PUBLIC_URL', path) }
+  try {
+    for (const [name, value] of url.searchParams.entries()) {
+      const normalizedValue = value.normalize('NFKC')
+      if (isSensitiveQueryName(name) || SENSITIVE_QUERY_VALUE_PATTERN.test(normalizedValue)) return failure('INVALID_PUBLIC_URL', path)
+    }
+  } catch { return failure('INVALID_PUBLIC_URL', path) }
   if (ipKind === 4 && normalizeIPv4(ipHost)) return failure('PRIVATE_OR_SPECIAL_TARGET', path)
   if (ipKind === 6 && normalizeIPv6(ipHost)) return failure('PRIVATE_OR_SPECIAL_TARGET', path)
   if (ipKind === 0 && !hostname.includes('.')) return failure('INVALID_PUBLIC_URL', path)

@@ -193,9 +193,9 @@ keyId
 
 ## 9. Public HTTPS URL policy
 
-Evidence locator 只做 syntax/policy guard。它要求 public HTTPS、預設 443、無 credentials、無 fragment，拒絕 IANA special-use domain 與所有子網域，包括 `alt`、`arpa`、`example`、`example.com`、`example.net`、`example.org`、`invalid`、`local`、`localhost`、`onion`、`test`、`home.arpa`。它使用 `URLSearchParams` 讀取 decoded query parameter names 與 values；因此 `%74oken`、`api%5Fkey`、大小寫變化、`Bearer-secret` 與 encoded sensitive values 都會被拒絕。它不只對 raw `url.search` 做 regex。
+Evidence locator 只做 syntax/policy guard。它要求 public HTTPS、預設 443、無 credentials、無 fragment，拒絕 IANA special-use domain 與所有子網域，包括 `alt`、`arpa`、`example`、`example.com`、`example.net`、`example.org`、`invalid`、`local`、`localhost`、`onion`、`test`、`home.arpa`。它使用 `URLSearchParams` 讀取 decoded query parameter names 與 values；因此 `%74oken`、`api%5Fkey`、`apikey`、`auth`、`sig`、大小寫變化、`Bearer-secret` 與 encoded sensitive values 都會被拒絕。它不只對 raw `url.search` 做 regex。
 
-拒絕範圍包括 localhost、single-label/local/internal/onion suffix、HTTP/FTP/file/data/javascript scheme、private、loopback、link-local、CGNAT、benchmark、reserved、multicast、IPv4 documentation blocks `198.51.100.0/24`、`192.0.2.0/24`、`203.0.113.0/24`，以及 IPv6 `::/128`、`::1/128`、`fc00::/7`、`fe80::/10`、`100::/64`、`2001:db8::/32`、`2002::/16`、`3fff::/20`、`5f00::/16` 與 IPv4-mapped special addresses。
+拒絕範圍包括 localhost、single-label/local/internal/onion suffix、HTTP/FTP/file/data/javascript scheme、private、loopback、link-local、CGNAT、benchmark、reserved、multicast、IPv4 documentation blocks `198.51.100.0/24`、`192.0.2.0/24`、`203.0.113.0/24`，以及 IPv6 unspecified/loopback、IPv4-compatible/mapped/translated forms、`fc00::/7`、`fe80::/10`、multicast、`64:ff9b::/96`、`100::/64`、IANA special-purpose `2001::/23`、`2001:db8::/32`、`2002::/16`、`3fff::/20` 與 `5f00::/16`。
 
 此 guard 不做 DNS resolution，也沒有 network request。正式 connector 仍需要 DNS pinning、egress allowlist、redirect revalidation 與完整 SSRF 防護；通過本 policy 不代表 URL 已可信、可達或已被抓取。
 
