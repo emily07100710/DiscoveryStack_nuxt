@@ -1,0 +1,9 @@
+# Preserve the pinned GEOFlow browser assets byte-for-byte. These generated or
+# vendored files contain upstream whitespace that must not be rewritten during
+# DiscoveryStack whitespace checks.
+services/geoflow/public/assets/css/style.css -whitespace
+services/geoflow/public/assets/js/main.js -whitespace
+services/geoflow/public/js/filament/forms/components/code-editor.js -whitespace
+services/geoflow/public/js/filament/forms/components/file-upload.js -whitespace
+services/geoflow/public/js/filament/forms/components/rich-editor.js -whitespace
+services/geoflow/public/vendor/vditor/dist/** -whitespace

@@ -1,0 +1,6 @@
+upstream_sha: 9d70db04ee9c5d308f5fa29b4c65834229af9eea
+upstream_url: https://github.com/yaojingang/GEOFlow.git
+obtained_date: 2026-08-25
+verifiable_tag: v2.3.0
+tag_sha: 97119662325b1d6d88ff6a3f390567bcfa91eedd
+tag_relation: pinned SHA is 6 commits after v2.3.0 and is not itself tagged
