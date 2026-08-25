@@ -390,6 +390,10 @@ function evaluationCaseIsCoherent(fields: Record<string, unknown>): boolean {
     expectedQualityGateResult = evaluateContentQuality(gateInput)
   }
   if (qualityGateResult === null ? expectedQualityGateResult !== null : expectedQualityGateResult === null || canonicalizeQualityValue(qualityGateResult) !== canonicalizeQualityValue(expectedQualityGateResult)) return false
+  const expectedMetrics = expectedQualityGateResult !== null && providerValidation?.status === 'valid' && normalizedInput !== null
+    ? metricsFromQualityGate(expectedQualityGateResult, normalizedInput, providerValidation.output)
+    : []
+  if (canonicalizeQualityValue(fields.metrics) !== canonicalizeQualityValue(expectedMetrics)) return false
   if (status === 'review_ready') {
     if (qualityInput === null || providerOutput === null || markdown === null || qualityGateResult === null || qualityGateResult.status === 'blocked' || fields.reasonCodes.includes('EVALUATION_CASE_BLOCKED') || !Array.isArray(fields.metrics) || fields.metrics.length !== EVALUATION_METRIC_NAMES.length) return false
   }

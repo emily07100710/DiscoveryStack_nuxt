@@ -327,15 +327,24 @@ describe('GEO evaluation adversarial fingerprint and report admission', () => {
     expect(first.fingerprint).not.toBe(second.fingerprint)
   })
 
-  it('binds metric applicability and ratio changes', () => {
+  it('rejects forged metric applicability and ratio changes', () => {
     const value = createGeoContentEvaluationCase(goldenCandidate())
     const ratioChanged = { ...value, metrics: value.metrics.map(metric => metric.metricName === 'direct-answer-presence' ? { ...metric, numerator: 0, denominator: 1, ratio: 0 } : metric) }
     const applicabilityChanged = { ...value, metrics: value.metrics.map(metric => metric.metricName === 'direct-answer-presence' ? { ...metric, applicable: false, numerator: 0, denominator: 0, ratio: null, reasonCodes: ['METRIC_NOT_APPLICABLE' as const] } : metric) }
     expect(evaluationCaseFingerprint(value).status).toBe('valid')
-    expect(evaluationCaseFingerprint(ratioChanged).status).toBe('valid')
-    expect(evaluationCaseFingerprint(applicabilityChanged).status).toBe('valid')
-    expect(evaluationCaseFingerprint(value).fingerprint).not.toBe(evaluationCaseFingerprint(ratioChanged).fingerprint)
-    expect(evaluationCaseFingerprint(value).fingerprint).not.toBe(evaluationCaseFingerprint(applicabilityChanged).fingerprint)
+    expect(evaluationCaseFingerprint(ratioChanged)).toMatchObject({ status: 'invalid', fingerprint: null })
+    expect(evaluationCaseFingerprint(applicabilityChanged)).toMatchObject({ status: 'invalid', fingerprint: null })
+  })
+
+  it('rejects a structurally valid but server-inconsistent metric catalog', () => {
+    const value = createGeoContentEvaluationCase(goldenCandidate())
+    const forged = {
+      ...value,
+      metrics: value.metrics.map(metric => metric.metricName === 'heading-hierarchy'
+        ? { ...metric, numerator: 0, denominator: 1, ratio: 0, reasonCodes: ['EVALUATION_HEADING_HIERARCHY_FAILED' as const] }
+        : metric),
+    }
+    expect(evaluationCaseFingerprint(forged)).toMatchObject({ status: 'invalid', fingerprint: null })
   })
 
   it('binds selected rule order changes', () => {

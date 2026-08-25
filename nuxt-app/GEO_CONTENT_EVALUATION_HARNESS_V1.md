@@ -58,7 +58,7 @@ Invalid metrics are never clamped into a valid or perfect result. They do not pa
 | Content and validated inputs | `exactMarkdown`, recomputed `contentHash`, normalized `qualityInput`, validated `providerOutput`, `providerProvenance` |
 | Evaluation findings | `qualityGateResult`, fixed metric catalog and order, applicability, numerator, denominator, ratio, metric reason codes, case `reasonCodes` |
 
-The function validates the minimum evaluation-case structure before hashing. It rejects hostile getters and proxies, inconsistent status/gate combinations, forged or incomplete metric catalogs, and an `exactMarkdown`/`contentHash` mismatch. The fingerprint is a deterministic identifier for regression comparison, not a digital signature, authenticity proof, truth certificate, ranking signal, or publication approval.
+The function validates the evaluation-case structure and re-derives the complete metric catalog from the validated quality gate before hashing. It rejects hostile getters and proxies, inconsistent status/gate combinations, forged or incomplete metric catalogs, and an `exactMarkdown`/`contentHash` mismatch. The fingerprint is a deterministic identifier for regression comparison, not a digital signature, authenticity proof, truth certificate, ranking signal, or publication approval.
 
 ## Comparison identity and Pareto behavior
 
