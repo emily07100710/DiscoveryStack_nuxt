@@ -37,14 +37,14 @@ function attachLineage(fixture: ContentOperationsFixture, entryId: number, targe
   const calendar = fixture.calendars.find(item => item.id === entry.calendarId)!
   const client = fixture.clients.find(item => item.id === calendar.clientId)!
   let review: Record<string, unknown> | null = null
-  const job = { id: 700, ownerUserId: entry.ownerUserId, productionPlanId: calendar.productionPlanId, productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId, evidenceSnapshotHash: entry.evidenceSnapshotHash, briefId: 701 }
+  const job = { id: 700, ownerUserId: entry.ownerUserId, productionPlanId: calendar.productionPlanId, productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId, evidenceSnapshotHash: entry.evidenceSnapshotHash, briefId: 701, status: 'approved' }
   const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified draft', body: 'Direct answer\n\nEvidence-bound body.', contentHash: BODY_HASH, provenance: { stage: 'optimized', selectedRuleIds: ['rule-topic'], appliedRuleIds: ['rule-topic'] }, safetyStatus: 'passed', evidenceRefs: [] }
   const gate = { id: 703, draftId: draft.id, status: 'passed', evidenceSnapshotHash: entry.evidenceSnapshotHash }
   const repository = fixture.repository as ContentOperationsRepository
   repository.findLatestOptimizedDraft = async () => draft
   repository.findRiskGate = async () => gate
   repository.findLatestReview = async () => review as never
-  repository.resolveWorkspaceEntry = async () => ({ entry, calendar, client, target, deliverable: { id: entry.productionDeliverableId, ownerUserId: entry.ownerUserId, planId: calendar.productionPlanId, briefId: job.briefId, jobId: job.id, selectionId: entry.strategyRecommendationId, contentType: entry.contentType, title: 'Verified draft', audience: 'owner audience', language: entry.language, evidenceSnapshotHash: entry.evidenceSnapshotHash, opportunityKey: '1:opportunity-1', provenance: {} }, job, draft, review: review as never, riskGate: gate })
+  repository.resolveWorkspaceEntry = async () => ({ entry, calendar, client, target, deliverable: { id: entry.productionDeliverableId, ownerUserId: entry.ownerUserId, planId: calendar.productionPlanId, briefId: job.briefId, jobId: job.id, selectionId: entry.strategyRecommendationId, contentType: entry.contentType, title: 'Verified draft', audience: 'owner audience', language: entry.language, evidenceSnapshotHash: entry.evidenceSnapshotHash, opportunityKey: '1:opportunity-1', provenance: {}, status: 'approved' }, job, draft, review: review as never, riskGate: gate })
   return {
     repository,
     setReview(value: Record<string, unknown> | null) { review = value },

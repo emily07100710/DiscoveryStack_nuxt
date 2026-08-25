@@ -73,4 +73,8 @@ Target execution 會重算 persisted publication identity 的正式 artifact pat
 
 Owner execute API 與明確 Nitro task invocation 會使用 server-only credential registry、CSPRNG nonce 與 AbortController-based bounded fetch；沒有可用 registry 時 execute fail closed，dry-run 仍可完成。runtime capability 的 `runtimeCredentialResolverAvailable` 只表示 parser/registry 可用，不代表指定 credential reference 有效；`credentialConfigured` 只表示 server-side reference 存在。測試中的 publisher、fetch、credential 與 nonce 均為 mock 或 synthetic，不能作為 production credential/site connectivity 證據。
 
+正式 execute reservation 會與 owner review、risk-gate transaction 共用 content job row lock，並在 planned ledger 寫入前重新核對最新 `approved_for_delivery` review ID 與最新 passed risk-gate ID。這避免負面 review、risk-gate replacement 與 publication reservation 的 TOCTOU 競爭；已有 execute attempt 的 immutable draft 不可再追加替代 risk gate。若 review、gate、job 或 ledger identity 在 preflight 後改變，reservation 會在任何外部 request 前 fail closed。Dry-run 與 target duplicate replay 也會逐欄核對 owner/client/entry/run/target/input identity，不接受不同資源共用 idempotency key。
+
+Bounded fetch 會先檢查可信的 bounded `content-length`，並以 stream reader 逐 chunk 累計 UTF-8 bytes；一旦超過 policy limit 立即 abort，不會先把任意大小的 response body 完整載入記憶體。
+
 本輪 migration 為 `0016_brief_morg.sql`，只由 Drizzle workflow 產生 activeSlot 欄位與 unique index DDL，未執行 migration runtime validation，未套用 production migration。Full Vitest 依任務要求 NOT RUN；production build 只代表 compile/prerender 可通過，不代表已部署或已對客戶網站寫入。

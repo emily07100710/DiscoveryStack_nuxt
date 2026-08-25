@@ -103,7 +103,8 @@ export class ContentOperationsFixture {
         if (nextAttemptNumber > 3) throw Object.assign(new Error('Publication retry limit has been reached.'), { statusCode: 422 })
         run.attemptNumber = nextAttemptNumber
         run.updatedAt = input.startedAt
-        const attempt = { ...input, attemptNumber: nextAttemptNumber, artifactFingerprint: null, status: 'planned' as const, remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null, id: ++this.nextId, createdAt: now() } as ContentOperationPublicationAttemptRow
+        const { jobId: _jobId, draftId: _draftId, reviewId: _reviewId, riskGateId: _riskGateId, leaseToken: _leaseToken, ...attemptInput } = input
+        const attempt = { ...attemptInput, attemptNumber: nextAttemptNumber, artifactFingerprint: null, status: 'planned' as const, remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null, id: ++this.nextId, createdAt: now() } as ContentOperationPublicationAttemptRow
         this.attempts.push(attempt)
         return { attempt, run, replayed: false }
       },

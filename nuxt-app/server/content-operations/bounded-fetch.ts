@@ -30,6 +30,39 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || /abort|timeout/i.test(error.message))
 }
 
+async function readBoundedBody(response: Response, maximumBytes: number, controller: AbortController): Promise<string> {
+  const contentLength = response.headers.get('content-length')
+  if (contentLength !== null && /^\d+$/.test(contentLength) && Number(contentLength) > maximumBytes) {
+    controller.abort()
+    throw new BoundedFetchNetworkError()
+  }
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  try {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      totalBytes += chunk.value.byteLength
+      if (totalBytes > maximumBytes) {
+        controller.abort()
+        throw new BoundedFetchNetworkError()
+      }
+      chunks.push(chunk.value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const joined = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    joined.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(joined)
+}
+
 export type BoundedFetchOptions = {
   nativeFetch?: typeof globalThis.fetch
   maxResponseBodyBytes?: number
@@ -54,9 +87,8 @@ export function createBoundedFetch(options: BoundedFetchOptions = {}): FirstPart
         redirect: 'manual',
         signal: controller.signal,
       })
-      const body = await response.text()
+      const body = await readBoundedBody(response, maxResponseBodyBytes, controller)
       if (timedOut) throw new BoundedFetchTimeoutError()
-      if (Buffer.byteLength(body, 'utf8') > maxResponseBodyBytes) throw new BoundedFetchNetworkError()
       return {
         status: response.status,
         headers: Object.fromEntries(response.headers.entries()),

@@ -41,7 +41,13 @@ export type WorkspaceEntryLineage = { entry: ContentOperationCalendarEntryRow; c
 export type OutcomeInsert = Omit<ContentOperationOutcomeAssessmentRow, 'id' | 'createdAt'>
 export type PublicationTargetInsert = Omit<ContentOperationPublicationTargetRow, 'id' | 'createdAt' | 'updatedAt'>
 export type PublicationAttemptInsert = Omit<ContentOperationPublicationAttemptRow, 'id' | 'createdAt'>
-export type PublicationAttemptReservationInput = Omit<PublicationAttemptInsert, 'attemptNumber' | 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'> & { startedAt: Date }
+export type PublicationAttemptReservationInput = Omit<PublicationAttemptInsert, 'attemptNumber' | 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'> & {
+  startedAt: Date
+  jobId: number
+  draftId: number
+  reviewId: number
+  riskGateId: number
+}
 export type PublicationAttemptReservation = { attempt: ContentOperationPublicationAttemptRow; run: ContentOperationRunRow; replayed: boolean }
 export type PublicationAttemptFinalization = Pick<ContentOperationPublicationAttemptRow, 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'>
 
@@ -161,7 +167,7 @@ function makeRepository(database: any): ContentOperationsRepository {
       } catch (error) {
         if (!isDuplicateError(error)) throw error
         const replay = await repository.findPublicationTargetByIdempotency(input.ownerUserId, input.idempotencyKey)
-        if (replay && replay.configurationFingerprint === input.configurationFingerprint) return replay
+        if (replay && replay.clientId === input.clientId && replay.targetId === input.targetId && replay.configurationFingerprint === input.configurationFingerprint) return replay
         if (replay) throw createError({ statusCode: 409, statusMessage: 'Publication target idempotency key is associated with a different configuration.' })
         throw createError({ statusCode: 409, statusMessage: 'Publication target active slot is already occupied.' })
       }
@@ -340,12 +346,45 @@ function makeRepository(database: any): ContentOperationsRepository {
       } catch (error) {
         if (!isDuplicateError(error)) throw error
         const replay = await repository.findPublicationAttemptByIdempotency(input.ownerUserId, input.idempotencyKey)
-        if (replay) return replay
+        if (replay) {
+          const matches = replay.clientId === input.clientId
+            && replay.entryId === input.entryId
+            && replay.runId === input.runId
+            && replay.targetId === input.targetId
+            && replay.attemptNumber === input.attemptNumber
+            && replay.mode === input.mode
+            && replay.inputFingerprint === input.inputFingerprint
+            && replay.publicationId === input.publicationId
+            && replay.publicationSlug === input.publicationSlug
+            && replay.publicationPath === input.publicationPath
+            && replay.contentHash === input.contentHash
+            && replay.evidenceSnapshotHash === input.evidenceSnapshotHash
+            && replay.status === input.status
+          if (matches) return replay
+          throw createError({ statusCode: 409, statusMessage: 'Publication attempt idempotency key is associated with a different ledger record.' })
+        }
         throw error
       }
     },
     async reservePublicationAttempt(input) {
       return database.transaction(async (transaction: any) => {
+        const [lockedJob] = await transaction.select({ id: seoGeoContentJobs.id }).from(seoGeoContentJobs).where(and(
+          eq(seoGeoContentJobs.id, input.jobId),
+          eq(seoGeoContentJobs.ownerUserId, input.ownerUserId),
+        )).for('update').limit(1)
+        if (!lockedJob) throw createError({ statusCode: 409, statusMessage: 'Publication job is missing or no longer owner-scoped.' })
+        const [latestReview] = await transaction.select({ id: seoGeoContentReviews.id, decision: seoGeoContentReviews.decision }).from(seoGeoContentReviews).where(and(
+          eq(seoGeoContentReviews.jobId, input.jobId),
+          eq(seoGeoContentReviews.draftId, input.draftId),
+          eq(seoGeoContentReviews.reviewerUserId, input.ownerUserId),
+          eq(seoGeoContentReviews.evidenceSnapshotHash, input.evidenceSnapshotHash),
+        )).orderBy(desc(seoGeoContentReviews.id)).limit(1)
+        if (!latestReview || latestReview.id !== input.reviewId || latestReview.decision !== 'approved_for_delivery') throw createError({ statusCode: 409, statusMessage: 'Publication approval changed before attempt reservation.' })
+        const [latestRiskGate] = await transaction.select({ id: seoGeoContentRiskGates.id, status: seoGeoContentRiskGates.status }).from(seoGeoContentRiskGates).where(and(
+          eq(seoGeoContentRiskGates.draftId, input.draftId),
+          eq(seoGeoContentRiskGates.evidenceSnapshotHash, input.evidenceSnapshotHash),
+        )).orderBy(desc(seoGeoContentRiskGates.id)).limit(1)
+        if (!latestRiskGate || latestRiskGate.id !== input.riskGateId || latestRiskGate.status !== 'passed') throw createError({ statusCode: 409, statusMessage: 'Publication risk gate changed before attempt reservation.' })
         const txRepository = makeRepository(transaction)
         const existing = await txRepository.findPublicationAttemptByIdempotency(input.ownerUserId, input.idempotencyKey)
         if (existing) {
@@ -365,7 +404,8 @@ function makeRepository(database: any): ContentOperationsRepository {
         if (Number(updated?.[0]?.affectedRows || 0) !== 1) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter was claimed by another worker.' })
         const [run] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId))).limit(1)
         if (!run || run.attemptNumber !== nextAttemptNumber) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter could not be verified.' })
-        const attempt = await txRepository.insertPublicationAttempt({ ...input, attemptNumber: nextAttemptNumber, artifactFingerprint: null, status: 'planned', remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null })
+        const { jobId: _jobId, draftId: _draftId, reviewId: _reviewId, riskGateId: _riskGateId, leaseToken: _leaseToken, ...attemptInput } = input
+        const attempt = await txRepository.insertPublicationAttempt({ ...attemptInput, attemptNumber: nextAttemptNumber, artifactFingerprint: null, status: 'planned', remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null })
         return { attempt, run, replayed: false } satisfies PublicationAttemptReservation
       })
     },

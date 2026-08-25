@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ContentOperationsRepository } from '../server/content-operations/repository'
 import { buildPublicationIdentity, validatePersistedPublicationIdentity } from '../server/content-operations/publication-identity'
 import { createOwnerPublicationTarget, executeContentOperationEntry, runContentOperationsExecutionTick } from '../server/content-operations/orchestrator'
-import { BoundedFetchTimeoutError, createBoundedFetch } from '../server/content-operations/bounded-fetch'
+import { BoundedFetchNetworkError, BoundedFetchTimeoutError, createBoundedFetch } from '../server/content-operations/bounded-fetch'
 import { createSecureFirstPartyNonce } from '../server/content-operations/runtime-dependencies'
 import { parseCredentialRegistryForTests, resolveServerCredential } from '../server/content-operations/credential-resolver'
 import type { ContentOperationPublicationTargetRow, ContentOperationRunRow } from '../server/content-operations/types'
@@ -25,14 +25,14 @@ function attachLineage(fixture: ContentOperationsFixture, entryId: number, targe
   const calendar = fixture.calendars.find(item => item.id === entry.calendarId)!
   const client = fixture.clients.find(item => item.id === calendar.clientId)!
   let review: Record<string, unknown> | null = null
-  const job = { id: 700, ownerUserId: entry.ownerUserId, productionPlanId: calendar.productionPlanId, productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId, evidenceSnapshotHash: entry.evidenceSnapshotHash, briefId: 701 }
+  const job = { id: 700, ownerUserId: entry.ownerUserId, productionPlanId: calendar.productionPlanId, productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId, evidenceSnapshotHash: entry.evidenceSnapshotHash, briefId: 701, status: 'approved' }
   const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified draft', body: BODY, contentHash: BODY_HASH, provenance: { stage: 'optimized', selectedRuleIds: ['rule-topic'], appliedRuleIds: ['rule-topic'] }, safetyStatus: 'passed', evidenceRefs: [] }
   let gate: Record<string, unknown> = { id: 703, draftId: draft.id, status: 'passed', evidenceSnapshotHash: entry.evidenceSnapshotHash }
   const repository = fixture.repository as ContentOperationsRepository
   repository.findLatestOptimizedDraft = async () => draft
   repository.findRiskGate = async () => gate as never
   repository.findLatestReview = async () => review as never
-  const workspace = { entry, calendar, client, target, deliverable: { id: entry.productionDeliverableId, ownerUserId: entry.ownerUserId, planId: calendar.productionPlanId, briefId: job.briefId, jobId: job.id, selectionId: entry.strategyRecommendationId, contentType: entry.contentType, title: 'Verified draft', audience: 'owner audience', language: entry.language, evidenceSnapshotHash: entry.evidenceSnapshotHash, opportunityKey: '1:opportunity-1', provenance: {} }, job, draft, review: review as never, riskGate: gate as never }
+  const workspace = { entry, calendar, client, target, deliverable: { id: entry.productionDeliverableId, ownerUserId: entry.ownerUserId, planId: calendar.productionPlanId, briefId: job.briefId, jobId: job.id, selectionId: entry.strategyRecommendationId, contentType: entry.contentType, title: 'Verified draft', audience: 'owner audience', language: entry.language, evidenceSnapshotHash: entry.evidenceSnapshotHash, opportunityKey: '1:opportunity-1', provenance: {}, status: 'approved' }, job, draft, review: review as never, riskGate: gate as never }
   repository.resolveWorkspaceEntry = async (_owner, requestedEntryId) => requestedEntryId === entry.id ? workspace as never : null
   return { fixture, workspace, repository, entry, target, job, draft, setReview(value: Record<string, unknown> | null) { review = value; workspace.review = value as never }, setGate(value: Record<string, unknown>) { gate = value; workspace.riskGate = value as never } }
 }
@@ -130,6 +130,8 @@ describe('content operations execution adversarial hardening', () => {
     for (const decision of ['changes_requested', 'rejected'] as const) {
       const lineage = await readyFixture()
       lineage.setReview({ id: decision === 'changes_requested' ? 705 : 706, jobId: lineage.job.id, draftId: lineage.draft.id, reviewerUserId: 1, decision, evidenceSnapshotHash: lineage.entry.evidenceSnapshotHash })
+      lineage.job.status = decision === 'changes_requested' ? 'needs_human_review' : 'blocked'
+      lineage.workspace.deliverable.status = decision === 'changes_requested' ? 'needs_human_review' : 'blocked'
       let calls = 0
       const result = await executeContentOperationEntry({ ownerUserId: 1, entryId: lineage.entry.id, trigger: 'owner_manual', now: NOW, value: { idempotencyKey: `latest-${decision}`, mode: 'execute' }, dependencies: { repository: lineage.repository, publicationExecutor: async () => { calls += 1; return { status: 'delivered' as const, remoteState: 'created' as const, publicationId: 'deliverable-1', contentHash: BODY_HASH, remoteRevision: 'synthetic', artifactFingerprint: HASH, idempotencyKey: 'synthetic' } } } })
       expect(calls).toBe(0)
@@ -213,6 +215,33 @@ describe('content operations execution adversarial hardening', () => {
     expect(observed).toMatchObject({ method: 'POST', body: '{}', redirect: 'manual' })
     expect(observed).not.toHaveProperty('timeoutMs')
     expect(observed?.signal).toBeDefined()
+  })
+
+  it('stops reading a response stream as soon as the configured body limit is exceeded', async () => {
+    let pulls = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1
+        controller.enqueue(new TextEncoder().encode('abcd'))
+        if (pulls >= 100) controller.close()
+      },
+    })
+    const nativeFetch = vi.fn(async () => new Response(body, { status: 200 }))
+    const bounded = createBoundedFetch({ nativeFetch: nativeFetch as unknown as typeof fetch, maxResponseBodyBytes: 7 })
+    await expect(bounded('https://synthetic.example', { method: 'GET', headers: {}, redirect: 'manual', timeoutMs: 1000 })).rejects.toBeInstanceOf(BoundedFetchNetworkError)
+    expect(pulls).toBeLessThan(10)
+  })
+
+  it('passes the exact review and risk-gate lineage into the atomic execute reservation', async () => {
+    const lineage = await readyFixture()
+    const originalReserve = lineage.repository.reservePublicationAttempt
+    let reservationInput: Record<string, unknown> | null = null
+    lineage.repository.reservePublicationAttempt = async input => {
+      reservationInput = input as unknown as Record<string, unknown>
+      return originalReserve(input)
+    }
+    await executeContentOperationEntry({ ownerUserId: 1, entryId: lineage.entry.id, trigger: 'owner_manual', now: NOW, value: { idempotencyKey: 'bound-reservation', mode: 'execute' }, dependencies: { repository: lineage.repository, publicationExecutor: async input => ({ status: 'delivered', remoteState: 'created', publicationId: input.publication.productionDeliverableId, contentHash: input.publication.contentHash, remoteRevision: 'commit-bound', artifactFingerprint: HASH, idempotencyKey: 'bound-reservation' }) } })
+    expect(reservationInput).toMatchObject({ jobId: lineage.job.id, draftId: lineage.draft.id, reviewId: 704, riskGateId: 703 })
   })
 
   it('enforces the active target slot under concurrent create and includes credential reference in collision fingerprint', async () => {

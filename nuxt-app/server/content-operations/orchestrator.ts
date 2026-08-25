@@ -338,8 +338,6 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
   const draft = lineage.draft as typeof lineage.draft & { title: string; body: string; provenance: unknown }
   const job = lineage.job as typeof lineage.job & { status?: string }
   const deliverable = lineage.deliverable as typeof lineage.deliverable & { status?: string }
-  if (typeof job.status === 'string' && job.status !== 'approved') badRequest('Publication requires the content job to remain approved.')
-  if (typeof deliverable.status === 'string' && !['approved', 'exported'].includes(deliverable.status)) badRequest('Publication requires the deliverable to remain approved.')
   if (validatedTarget.allowedContentTypes.includes(entry.contentType) === false || !validatedTarget.allowedLanguages.includes(entry.language)) badRequest('Publication target does not allow this content type or language.')
   const latestReview = await repository.findLatestReview(ownerUserId, job.id, draft.id, entry.evidenceSnapshotHash)
   if (!latestReview || latestReview.reviewerUserId !== ownerUserId || latestReview.jobId !== job.id || latestReview.draftId !== draft.id || latestReview.evidenceSnapshotHash !== entry.evidenceSnapshotHash) badRequest('A current owner review is required before publication.')
@@ -365,6 +363,8 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
     }
     badRequest('The latest owner review decision is malformed or does not authorize publication.')
   }
+  if (typeof job.status === 'string' && job.status !== 'approved') badRequest('Publication requires the content job to remain approved.')
+  if (typeof deliverable.status === 'string' && !['approved', 'exported'].includes(deliverable.status)) badRequest('Publication requires the deliverable to remain approved.')
   const gate = await repository.findRiskGate(ownerUserId, draft.id, entry.evidenceSnapshotHash)
   if (!gate || gate.draftId !== draft.id || gate.evidenceSnapshotHash !== entry.evidenceSnapshotHash || gate.status !== 'passed') badRequest('Publication requires the latest exact passed risk gate.')
   const context = await repository.resolveCanonicalContext(ownerUserId, lineage.calendar.productionPlanId, entry.productionDeliverableId)
@@ -406,7 +406,7 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
     attemptNumber = Math.max(1, attempts.filter(attempt => attempt.mode === 'dry_run').reduce((max, attempt) => Math.max(max, attempt.attemptNumber), 0) + 1)
   } else {
     try {
-      reservation = await repository.reservePublicationAttempt({ ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, mode, idempotencyKey: attemptKey, inputFingerprint: requestFingerprint, publicationId: identity.publicationId, publicationSlug: identity.slug, publicationPath: identity.path, contentHash: draft.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, startedAt: now, leaseToken: token })
+      reservation = await repository.reservePublicationAttempt({ ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, mode, idempotencyKey: attemptKey, inputFingerprint: requestFingerprint, publicationId: identity.publicationId, publicationSlug: identity.slug, publicationPath: identity.path, contentHash: draft.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, startedAt: now, leaseToken: token, jobId: job.id, draftId: draft.id, reviewId: latestReview.id, riskGateId: gate.id })
       attemptNumber = reservation.attempt.attemptNumber
     } catch (error) {
       const released = await repository.releaseRunLease(ownerUserId, leased.id, 'blocked', token, now, { code: 'ATTEMPT_RESERVATION_FAILED', summary: sanitizeErrorSummary(error) })
