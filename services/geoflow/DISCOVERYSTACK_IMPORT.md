@@ -27,6 +27,11 @@ git -C /tmp/geoflow-upstream checkout-index --all --force --prefix=/absolute/pat
 
 The upstream `LICENSE` and `NOTICE` must remain unmodified and byte-identical on future syncs. Attribution must also remain in the root `THIRD_PARTY_NOTICES.md`.
 
+Some pinned browser assets contain upstream trailing whitespace. The root
+`.gitattributes` disables whitespace diagnostics only for those exact generated
+or vendored asset paths so the imported blobs stay byte-identical. Do not use
+that exception for DiscoveryStack-authored source or documentation.
+
 ## Suggested future upstream sync
 
 Perform a future sync only in a new clean feature-branch worktree. Fetch the official URL into a separate temporary clone, resolve and record a new exact SHA, repeat the pre-import secret/artifact/symlink scans, and export that exact tree into an empty temporary staging directory with `read-tree` plus `checkout-index`. Compare the staged manifest and licenses before replacing the existing vendor boundary, then review all upstream changes and refresh the provenance hashes. Do not sync from a moving branch name or an unverified archive.
