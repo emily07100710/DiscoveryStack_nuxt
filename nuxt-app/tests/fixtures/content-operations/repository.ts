@@ -1,7 +1,7 @@
 import { buildContentCalendar, materializeDueContentWork } from '../../../server/content-calendar'
 import { stableFingerprint } from '../../../server/content-operations/normalization'
 import type { ContentOperationsRepository, WorkspaceEntryLineage } from '../../../server/content-operations/repository'
-import type { ContentOperationCalendarEntryRow, ContentOperationCalendarRow, ContentOperationClientRow, ContentOperationEventRow, ContentOperationOutcomeAssessmentRow, ContentOperationPublicationAttemptRow, ContentOperationPublicationTargetRow, ContentOperationRunRow, DeliveredPublication, PlanBundle } from '../../../server/content-operations/types'
+import type { ContentOperationAutopilotPolicyRow, ContentOperationCalendarEntryRow, ContentOperationCalendarRow, ContentOperationClientRow, ContentOperationEventRow, ContentOperationOutcomeAssessmentRow, ContentOperationPublicationAttemptRow, ContentOperationPublicationTargetRow, ContentOperationRunRow, DeliveredPublication, PlanBundle } from '../../../server/content-operations/types'
 
 export const HASH = 'a'.repeat(64)
 
@@ -30,6 +30,7 @@ export class ContentOperationsFixture {
   events: ContentOperationEventRow[] = []
   outcomes: ContentOperationOutcomeAssessmentRow[] = []
   targets: ContentOperationPublicationTargetRow[] = []
+  autopilotPolicies: ContentOperationAutopilotPolicyRow[] = []
   attempts: ContentOperationPublicationAttemptRow[] = []
   bundles = new Map<string, PlanBundle>()
   delivered = new Map<number, DeliveredPublication>()
@@ -39,8 +40,8 @@ export class ContentOperationsFixture {
   constructor() {
     this.repository = {
       transaction: async work => {
-        const snapshot = { clients: this.clients.map(row => ({ ...row })), calendars: this.calendars.map(row => ({ ...row })), entries: this.entries.map(row => ({ ...row })), runs: this.runs.map(row => ({ ...row })), events: this.events.map(row => ({ ...row })), outcomes: this.outcomes.map(row => ({ ...row })), targets: this.targets.map(row => ({ ...row })), attempts: this.attempts.map(row => ({ ...row })), nextId: this.nextId }
-        try { return await work(this.repository) } catch (error) { this.clients = snapshot.clients; this.calendars = snapshot.calendars; this.entries = snapshot.entries; this.runs = snapshot.runs; this.events = snapshot.events; this.outcomes = snapshot.outcomes; this.targets = snapshot.targets; this.attempts = snapshot.attempts; this.nextId = snapshot.nextId; throw error }
+        const snapshot = { clients: this.clients.map(row => ({ ...row })), calendars: this.calendars.map(row => ({ ...row })), entries: this.entries.map(row => ({ ...row })), runs: this.runs.map(row => ({ ...row })), events: this.events.map(row => ({ ...row })), outcomes: this.outcomes.map(row => ({ ...row })), targets: this.targets.map(row => ({ ...row })), autopilotPolicies: this.autopilotPolicies.map(row => ({ ...row })), attempts: this.attempts.map(row => ({ ...row })), nextId: this.nextId }
+        try { return await work(this.repository) } catch (error) { this.clients = snapshot.clients; this.calendars = snapshot.calendars; this.entries = snapshot.entries; this.runs = snapshot.runs; this.events = snapshot.events; this.outcomes = snapshot.outcomes; this.targets = snapshot.targets; this.autopilotPolicies = snapshot.autopilotPolicies; this.attempts = snapshot.attempts; this.nextId = snapshot.nextId; throw error }
       },
       findClientByIdempotency: async (owner, key) => this.clients.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       findClientByOrigin: async (owner, origin) => this.clients.find(row => row.ownerUserId === owner && row.canonicalSiteOrigin === origin) || null,
@@ -53,6 +54,9 @@ export class ContentOperationsFixture {
       insertPublicationTarget: async input => { if (input.activeSlot === 1 && this.targets.some(row => row.ownerUserId === input.ownerUserId && row.clientId === input.clientId && row.activeSlot === 1)) throw Object.assign(new Error('active slot duplicate'), { code: 'ER_DUP_ENTRY' }); const row = { ...input, id: ++this.nextId, createdAt: now(), updatedAt: now() } as ContentOperationPublicationTargetRow; this.targets.push(row); return row },
       updatePublicationTarget: async (owner, id, patch) => { const row = this.targets.find(item => item.ownerUserId === owner && item.id === id); if (!row) throw new Error('missing target'); if (patch.activeSlot === 1 && this.targets.some(item => item.ownerUserId === owner && item.clientId === row.clientId && item.activeSlot === 1 && item.id !== id)) throw Object.assign(new Error('active slot duplicate'), { code: 'ER_DUP_ENTRY' }); Object.assign(row, patch, { updatedAt: now() }); return row },
       listPublicationTargets: async owner => this.targets.filter(row => row.ownerUserId === owner),
+      findAutopilotPolicy: async (owner, clientId, publicationTargetId) => this.autopilotPolicies.find(row => row.ownerUserId === owner && row.clientId === clientId && row.publicationTargetId === publicationTargetId) || null,
+      insertAutopilotPolicy: async input => { if (this.autopilotPolicies.some(row => row.ownerUserId === input.ownerUserId && row.publicationTargetId === input.publicationTargetId)) throw Object.assign(new Error('autopilot policy duplicate'), { code: 'ER_DUP_ENTRY' }); const row = { ...input, id: ++this.nextId, createdAt: now(), updatedAt: now() } as ContentOperationAutopilotPolicyRow; this.autopilotPolicies.push(row); return row },
+      revokeAutopilotPolicy: async (owner, policyId, revokedAt) => { const row = this.autopilotPolicies.find(item => item.ownerUserId === owner && item.policyId === policyId); if (!row) return null; Object.assign(row, { status: 'revoked', revokedAt, updatedAt: now() }); return row },
       findCalendarByIdempotency: async (owner, key) => this.calendars.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       findCalendar: async (owner, id) => this.calendars.find(row => row.ownerUserId === owner && row.id === id) || null,
       insertCalendar: async input => { if (this.calendars.some(row => row.ownerUserId === input.ownerUserId && row.idempotencyKey === input.idempotencyKey)) throw Object.assign(new Error('duplicate entry'), { code: 'ER_DUP_ENTRY' }); const row = { ...input, id: ++this.nextId, createdAt: now(), updatedAt: now() } as ContentOperationCalendarRow; this.calendars.push(row); return row },

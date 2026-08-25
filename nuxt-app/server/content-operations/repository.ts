@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDatabase } from '../database'
 import {
+  contentOperationAutopilotPolicies,
   contentOperationCalendarEntries,
   contentOperationCalendars,
   contentOperationClients,
@@ -18,6 +19,7 @@ import {
 } from '../database/schema'
 import { getProductionPlanBundle, resolveProductionContext } from '../seo-geo-core/repository'
 import type {
+  ContentOperationAutopilotPolicyRow,
   ContentOperationCalendarEntryRow,
   ContentOperationCalendarRow,
   ContentOperationClientRow,
@@ -40,6 +42,7 @@ export type LeaseError = { code?: string; summary?: string; retryEligibleAt?: Da
 export type WorkspaceEntryLineage = { entry: ContentOperationCalendarEntryRow; calendar: ContentOperationCalendarRow; client: ContentOperationClientRow; target?: ContentOperationPublicationTargetRow | null; deliverable: Record<string, unknown> & { id: number; ownerUserId: number; planId: number; briefId: number | null; jobId: number | null; selectionId: number; contentType: string; title: string; audience: string; language: string; evidenceSnapshotHash: string; opportunityKey: string; provenance: unknown }; job: (Record<string, unknown> & { id: number; ownerUserId: number; productionPlanId: number | null; productionDeliverableId: number | null; strategyRecommendationId: number | null; evidenceSnapshotHash: string; briefId: number }) | null; draft: (Record<string, unknown> & { id: number; jobId: number; version: number; contentHash: string; evidenceRefs: unknown; safetyStatus: string }) | null; review: (Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string }) | null; riskGate: (Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string }) | null }
 export type OutcomeInsert = Omit<ContentOperationOutcomeAssessmentRow, 'id' | 'createdAt'>
 export type PublicationTargetInsert = Omit<ContentOperationPublicationTargetRow, 'id' | 'createdAt' | 'updatedAt'>
+export type AutopilotPolicyInsert = Omit<ContentOperationAutopilotPolicyRow, 'id' | 'createdAt' | 'updatedAt'>
 export type PublicationAttemptInsert = Omit<ContentOperationPublicationAttemptRow, 'id' | 'createdAt'>
 export type PublicationAttemptReservationInput = Omit<PublicationAttemptInsert, 'attemptNumber' | 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'> & {
   startedAt: Date
@@ -66,6 +69,9 @@ export type ContentOperationsRepository = {
   insertPublicationTarget(input: PublicationTargetInsert): Promise<ContentOperationPublicationTargetRow>
   updatePublicationTarget(ownerUserId: number, targetRowId: number, patch: Partial<PublicationTargetInsert>): Promise<ContentOperationPublicationTargetRow>
   listPublicationTargets(ownerUserId: number): Promise<ContentOperationPublicationTargetRow[]>
+  findAutopilotPolicy(ownerUserId: number, clientId: number, publicationTargetId: number): Promise<ContentOperationAutopilotPolicyRow | null>
+  insertAutopilotPolicy(input: AutopilotPolicyInsert): Promise<ContentOperationAutopilotPolicyRow>
+  revokeAutopilotPolicy(ownerUserId: number, policyId: string, revokedAt: Date): Promise<ContentOperationAutopilotPolicyRow | null>
   findCalendarByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationCalendarRow | null>
   findCalendar(ownerUserId: number, calendarId: number): Promise<ContentOperationCalendarRow | null>
   insertCalendar(input: CalendarInsert): Promise<ContentOperationCalendarRow>
@@ -185,6 +191,22 @@ function makeRepository(database: any): ContentOperationsRepository {
     },
     async listPublicationTargets(ownerUserId) {
       return database.select().from(contentOperationPublicationTargets).where(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId)).orderBy(desc(contentOperationPublicationTargets.createdAt)).limit(100)
+    },
+    async findAutopilotPolicy(ownerUserId, clientId, publicationTargetId) {
+      const [row] = await database.select().from(contentOperationAutopilotPolicies).where(and(eq(contentOperationAutopilotPolicies.ownerUserId, ownerUserId), eq(contentOperationAutopilotPolicies.clientId, clientId), eq(contentOperationAutopilotPolicies.publicationTargetId, publicationTargetId))).limit(1)
+      return row || null
+    },
+    async insertAutopilotPolicy(input) {
+      const id = rowId(await database.insert(contentOperationAutopilotPolicies).values(input as any))
+      const [row] = await database.select().from(contentOperationAutopilotPolicies).where(eq(contentOperationAutopilotPolicies.id, id)).limit(1)
+      if (!row) throw createError({ statusCode: 500, statusMessage: 'Autopilot policy could not be loaded.' })
+      return row
+    },
+    async revokeAutopilotPolicy(ownerUserId, policyId, revokedAt) {
+      const updated = await database.update(contentOperationAutopilotPolicies).set({ status: 'revoked', revokedAt }).where(and(eq(contentOperationAutopilotPolicies.ownerUserId, ownerUserId), eq(contentOperationAutopilotPolicies.policyId, policyId)))
+      if (!Number((updated as any)?.[0]?.affectedRows)) return null
+      const [row] = await database.select().from(contentOperationAutopilotPolicies).where(and(eq(contentOperationAutopilotPolicies.ownerUserId, ownerUserId), eq(contentOperationAutopilotPolicies.policyId, policyId))).limit(1)
+      return row || null
     },
     async findCalendarByIdempotency(ownerUserId, idempotencyKey) {
       const [row] = await database.select().from(contentOperationCalendars).where(and(eq(contentOperationCalendars.ownerUserId, ownerUserId), eq(contentOperationCalendars.idempotencyKey, idempotencyKey))).limit(1)

@@ -262,6 +262,12 @@ const strictExecute = z.object({
   mode: z.enum(['dry_run', 'execute']).optional().default('dry_run'),
 }).strict()
 
+const strictAutopilotPolicy = z.object({
+  expiresAt: z.string().trim().min(1).max(64),
+  allowedContentTypes: z.array(z.enum(['article', 'faq', 'service_page'])).min(1).max(3),
+  allowedLanguages: z.array(z.enum(['en', 'zh-hant'])).min(1).max(2),
+}).strict()
+
 export function parsePublicationTargetInput(value: unknown): PublicationTargetInput {
   const parsed = strictPublicationTarget.safeParse(value)
   if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid first-party publication target input.' })
@@ -280,5 +286,17 @@ export function parsePublicationTargetPatchInput(value: unknown): PublicationTar
 export function parseExecuteInput(value: unknown): ExecuteContentOperationInput {
   const parsed = strictExecute.safeParse(value)
   if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid content operation execute input.' })
+  return parsed.data
+}
+
+export type AutopilotPolicyRequestInput = {
+  expiresAt: string
+  allowedContentTypes: Array<'article' | 'faq' | 'service_page'>
+  allowedLanguages: Array<'en' | 'zh-hant'>
+}
+
+export function parseAutopilotPolicyInput(value: unknown): AutopilotPolicyRequestInput {
+  const parsed = strictAutopilotPolicy.safeParse(value)
+  if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid governed autopilot policy input.' })
   return parsed.data
 }

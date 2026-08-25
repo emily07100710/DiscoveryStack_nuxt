@@ -8,6 +8,8 @@ import type { ContentOperationsRepository, EventInsert, PublicationAttemptFinali
 import { createContentOperationsRepository } from './repository'
 import { buildPublicationIdentity, validatePersistedPublicationIdentity, type PublicationIdentity } from './publication-identity'
 import { materializeOwnerDueContent, getDefaultContentOperationsClock } from './service'
+import { evaluateOwnerAutopilotPolicy, type OwnerAutopilotPolicy } from './autopilot-policy'
+import { projectAutopilotPolicy } from './autopilot-service'
 import { getContentOperationsRuntimeDependencies } from './runtime-dependencies'
 import { parseExecuteInput, parsePublicationTargetInput, parsePublicationTargetPatchInput, sanitizeErrorSummary, stableFingerprint, stableStringify } from './normalization'
 import type { Clock, ContentOperationCalendarEntryRow, ContentOperationPublicationTargetRow, ContentOperationRunRow, ExecuteContentOperationInput, ExecuteContentOperationResult, PublicationTargetInput, PublicationTargetPatchInput } from './types'
@@ -40,6 +42,7 @@ type FirstPartyPublicationExecutor = (input: {
 export type ContentOperationOrchestratorDependencies = {
   repository?: ContentOperationsRepository
   productionRuntime?: ProductionRuntimeDependencies
+  autopilotPolicy?: OwnerAutopilotPolicy
   productionDeliverableRunner?: (input: { ownerUserId: number; planId: number; deliverableId: number; dependencies?: ProductionRuntimeDependencies }) => Promise<ContentDraftResult>
   publicationExecutor?: FirstPartyPublicationExecutor
   fetchImpl?: FirstPartyFetch
@@ -327,7 +330,7 @@ async function synchronizeReview(ownerUserId: number, entry: ContentOperationCal
   return { entry: updated.ready, run: updated.completed, outcome: 'ready_to_publish' }
 }
 
-async function executePublication(ownerUserId: number, entry: ContentOperationCalendarEntryRow, input: ExecuteContentOperationInput, repository: ContentOperationsRepository, dependencies: ContentOperationOrchestratorDependencies, now: Date, expectedRunId?: number): Promise<ExecuteContentOperationResult> {
+async function executePublication(ownerUserId: number, entry: ContentOperationCalendarEntryRow, input: ExecuteContentOperationInput & { trigger: 'owner_manual' | 'scheduler' }, repository: ContentOperationsRepository, dependencies: ContentOperationOrchestratorDependencies, now: Date, expectedRunId?: number): Promise<ExecuteContentOperationResult> {
   const lineage = await repository.resolveWorkspaceEntry(ownerUserId, entry.id)
   if (!lineage || !lineage.calendar || !lineage.client || !lineage.job || !lineage.draft || !lineage.deliverable) badRequest('Publication lineage is incomplete.')
   const hasPersistedIdentity = Boolean(entry.publicationSlug || entry.publicationPath || entry.publicationIdentityFingerprint)
@@ -368,6 +371,10 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
   if (typeof deliverable.status === 'string' && !['approved', 'exported'].includes(deliverable.status)) badRequest('Publication requires the deliverable to remain approved.')
   const gate = await repository.findRiskGate(ownerUserId, draft.id, entry.evidenceSnapshotHash)
   if (!gate || gate.draftId !== draft.id || gate.evidenceSnapshotHash !== entry.evidenceSnapshotHash || gate.status !== 'passed') badRequest('Publication requires the latest exact passed risk gate.')
+  if (input.trigger === 'scheduler') {
+    const autopilot = evaluateOwnerAutopilotPolicy({ policy: dependencies.autopilotPolicy, ownerUserId, clientId: lineage.client.id, targetRowId: target.id, targetId: target.targetId, targetStatus: target.status, targetExecutionEnabled: target.executionEnabled, entry, reviewDecision: latestReview.decision, riskGateStatus: gate.status, now })
+    if (!autopilot.allowed) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: [...autopilot.reasons, `decisionCode=${autopilot.code}`] }
+  }
   const context = await repository.resolveCanonicalContext(ownerUserId, lineage.calendar.productionPlanId, entry.productionDeliverableId)
   if (context.plan.id !== lineage.calendar.productionPlanId || context.deliverable.id !== entry.productionDeliverableId || context.strategy.id !== entry.strategyRecommendationId || context.evidenceSnapshot.hash !== entry.evidenceSnapshotHash) badRequest('Publication canonical context is stale or mismatched.')
   const rules = context.rules.map(rule => rule.id)
@@ -639,7 +646,7 @@ export async function executeContentOperationEntry(input: { ownerUserId: number;
     if (synchronized.outcome === 'ready_to_publish') return { entryId: entry.id, previousStatus: entry.status, resultingStatus: synchronized.entry.status, runId: synchronized.run.id, stage: 'review_wait', outcome: 'ready_to_publish', retryAt: null, limitations: ['owner approval is synchronized; publication requires a separate explicit execute request'] }
     entry = synchronized.entry
   }
-  if (entry.status === 'ready_to_publish' || entry.status === 'publishing') return executePublication(input.ownerUserId, entry, parsed, repository, dependencies, now, input.expectedRunId)
+  if (entry.status === 'ready_to_publish' || entry.status === 'publishing') return executePublication(input.ownerUserId, entry, { ...parsed, trigger: input.trigger }, repository, dependencies, now, input.expectedRunId)
   return { entryId: entry.id, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: ['entry is not executable from its current durable status'] }
 }
 
@@ -675,7 +682,15 @@ export async function runContentOperationsExecutionTick(input: { ownerUserId?: n
         continue
       }
       const mode = run.stage === 'publication' ? 'execute' : 'dry_run'
-      const result = await executeContentOperationEntry({ ownerUserId: run.ownerUserId, entryId: entry.id, trigger: 'scheduler', expectedRunId: run.id, now, value: { idempotencyKey: `scheduler:publication:${run.id}:attempt:${run.attemptNumber + 1}`, mode }, dependencies: { ...input.dependencies, repository, productionRuntime: input.dependencies?.productionRuntime || {} } })
+      let persistedAutopilotPolicy: OwnerAutopilotPolicy | undefined
+      if (run.stage === 'publication') {
+        const lineage = await repository.resolveWorkspaceEntry(run.ownerUserId, entry.id)
+        if (lineage?.client && lineage.target) {
+          const policyRow = await repository.findAutopilotPolicy(run.ownerUserId, lineage.client.id, lineage.target.id)
+          persistedAutopilotPolicy = policyRow ? projectAutopilotPolicy(policyRow, lineage.target.targetId) : undefined
+        }
+      }
+      const result = await executeContentOperationEntry({ ownerUserId: run.ownerUserId, entryId: entry.id, trigger: 'scheduler', expectedRunId: run.id, now, value: { idempotencyKey: `scheduler:publication:${run.id}:attempt:${run.attemptNumber + 1}`, mode }, dependencies: { ...input.dependencies, repository, productionRuntime: input.dependencies?.productionRuntime || {}, autopilotPolicy: persistedAutopilotPolicy } })
       results.push({ runId: run.id, ownerUserId: run.ownerUserId, status: result.resultingStatus, outcome: result.outcome })
     } catch (error) {
       results.push({ runId: run.id, ownerUserId: run.ownerUserId, status: 'blocked', errorSummary: sanitizeErrorSummary(error) })

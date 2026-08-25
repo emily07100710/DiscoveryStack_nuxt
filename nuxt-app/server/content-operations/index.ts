@@ -12,7 +12,9 @@ export {
   toPublicContentOperationsError,
   stableFingerprint,
   stableStringify,
+  parseAutopilotPolicyInput,
 } from './normalization'
+export type { AutopilotPolicyRequestInput } from './normalization'
 export {
   createContentOperationsRepository,
   createContentOperationsRepositoryFromDatabase,
@@ -29,6 +31,9 @@ export {
   replanOwnerContentCalendar,
 } from './service'
 export { runContentOperationsTick } from './scheduler'
+export { enableOwnerAutopilot, revokeOwnerAutopilot, getOwnerAutopilotPolicy, projectAutopilotPolicy } from './autopilot-service'
+export { enableOwnerAutopilotPolicy, evaluateOwnerAutopilotPolicy, revokeOwnerAutopilotPolicy } from './autopilot-policy'
+export type { OwnerAutopilotPolicy, AutopilotEvaluation, AutopilotDecisionCode } from './autopilot-policy'
 export { createOwnerPublicationTarget, executeContentOperationEntry, listOwnerPublicationTargets, runContentOperationsExecutionTick, updateOwnerPublicationTarget } from './orchestrator'
 export type { ContentOperationOrchestratorDependencies } from './orchestrator'
 export { buildPublicationIdentity, publicationPathFor } from './publication-identity'

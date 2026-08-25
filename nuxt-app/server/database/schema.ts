@@ -777,6 +777,32 @@ export const contentOperationPublicationTargets = mysqlTable('contentOperationPu
   index('content_operation_targets_owner_client_status_idx').on(table.ownerUserId, table.clientId, table.status),
 ])
 
+/** Owner-scoped scheduler authorization; policy rows are revocable and never contain credential values. */
+export const contentOperationAutopilotPolicies = mysqlTable('contentOperationAutopilotPolicies', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  publicationTargetId: int('publicationTargetId').notNull().references(() => contentOperationPublicationTargets.id),
+  policyId: varchar('policyId', { length: 96 }).notNull(),
+  policyVersion: varchar('policyVersion', { length: 96 }).notNull(),
+  authorizedByOwnerUserId: int('authorizedByOwnerUserId').notNull().references(() => users.id),
+  status: mysqlEnum('status', ['enabled', 'paused', 'revoked']).default('enabled').notNull(),
+  authorizedAt: timestamp('authorizedAt').notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
+  revokedAt: timestamp('revokedAt'),
+  allowedContentTypes: json('allowedContentTypes').notNull(),
+  allowedLanguages: json('allowedLanguages').notNull(),
+  requireApprovedForDelivery: boolean('requireApprovedForDelivery').default(true).notNull(),
+  requirePassedRiskGate: boolean('requirePassedRiskGate').default(true).notNull(),
+  configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('content_operation_autopilot_policy_id_unique').on(table.policyId),
+  uniqueIndex('content_operation_autopilot_owner_target_unique').on(table.ownerUserId, table.publicationTargetId),
+  index('content_operation_autopilot_owner_status_idx').on(table.ownerUserId, table.status, table.expiresAt),
+])
+
 /** Append-only first-party publication attempt ledger. Each retry is a new row. */
 export const contentOperationPublicationAttempts = mysqlTable('contentOperationPublicationAttempts', {
   id: int('id').autoincrement().primaryKey(),

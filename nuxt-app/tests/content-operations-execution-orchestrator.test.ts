@@ -5,6 +5,8 @@ import type { ContentOperationsRepository } from '../server/content-operations/r
 import { buildPublicationIdentity } from '../server/content-operations/publication-identity'
 import { createOwnerPublicationTarget, executeContentOperationEntry, runContentOperationsExecutionTick, updateOwnerPublicationTarget } from '../server/content-operations/orchestrator'
 import type { ContentOperationOrchestratorDependencies } from '../server/content-operations/orchestrator'
+import { enableOwnerAutopilotPolicy } from '../server/content-operations/autopilot-policy'
+import { enableOwnerAutopilot } from '../server/content-operations/autopilot-service'
 import type { ContentOperationPublicationTargetRow, ContentOperationRunRow } from '../server/content-operations/types'
 import { parseExecuteInput, parsePublicationTargetInput } from '../server/content-operations/normalization'
 import { ContentOperationsFixture, fixtureClient } from './fixtures/content-operations/repository'
@@ -170,7 +172,7 @@ describe('content operations execution orchestrator', () => {
     const first = await executeContentOperationEntry({ ownerUserId: 1, entryId: entry.id, trigger: 'owner_manual', now: NOW, value: { idempotencyKey: 'retry-1', mode: 'execute' }, dependencies: { repository: lineage.repository, publicationExecutor: retrying } })
     expect(first.outcome).toBe('retry_wait')
     expect(first.retryAt?.toISOString()).toBe('2026-01-10T09:05:00.000Z')
-    const second = await executeContentOperationEntry({ ownerUserId: 1, entryId: entry.id, trigger: 'scheduler', now: new Date('2026-01-10T09:06:00.000Z'), value: { idempotencyKey: 'retry-2', mode: 'execute' }, dependencies: { repository: lineage.repository, publicationExecutor: retrying } })
+    const second = await executeContentOperationEntry({ ownerUserId: 1, entryId: entry.id, trigger: 'scheduler', now: new Date('2026-01-10T09:06:00.000Z'), value: { idempotencyKey: 'retry-2', mode: 'execute' }, dependencies: { repository: lineage.repository, publicationExecutor: retrying, autopilotPolicy: enableOwnerAutopilotPolicy({ ownerUserId: 1, clientId: client.id, targetRowId: target.id, targetId: target.targetId, authorizedByOwnerUserId: 1, authorizedAt: '2026-01-10T08:00:00.000Z', expiresAt: '2026-01-11T08:00:00.000Z', allowedContentTypes: ['article'], allowedLanguages: ['en', 'zh-hant'] }) } })
     expect(second.outcome).toBe('delivered')
     expect(fixture.attempts.map(attempt => attempt.status)).toEqual(['retryable_failure', 'delivered'])
   })
@@ -247,5 +249,25 @@ describe('content operations execution orchestrator', () => {
     const result = await executeContentOperationEntry({ ownerUserId: 1, entryId: entry.id, trigger: 'owner_manual', now: NOW, value: { idempotencyKey: 'runtime-propagation', mode: 'dry_run' }, dependencies: { repository: fixture.repository, productionRuntime: runtime, productionDeliverableRunner: async input => { received = input.dependencies; return { job: { id: 701 } } } } })
     expect(result.outcome).toBe('blocked')
     expect(received).toBe(runtime)
+  })
+
+  it('rehydrates persisted owner autopilot policy before scheduler publication execution', async () => {
+    const fixture = new ContentOperationsFixture()
+    const client = fixture.addClient(1)
+    const calendar = await fixture.addCalendar(1, '2026-01-10', 1)
+    const entry = fixture.entries.find(item => item.calendarId === calendar.id)!
+    entry.status = 'ready_to_publish'
+    const targetResult = await createOwnerPublicationTarget(1, client.id, targetInput(), fixture.repository)
+    const target = fixture.targets.find(item => item.id === targetResult.target.id)!
+    if (!target) throw new Error('target missing')
+    const lineage = attachLineage(fixture, entry.id, target)
+    lineage.setReview({ id: 704, jobId: lineage.job.id, draftId: lineage.draft.id, reviewerUserId: 1, decision: 'approved_for_delivery', evidenceSnapshotHash: entry.evidenceSnapshotHash })
+    await enableOwnerAutopilot(1, client.id, { expiresAt: '2026-12-31T23:59:59.000Z', allowedContentTypes: ['article'], allowedLanguages: ['en'] }, fixture.repository, NOW)
+    const seeded = await executeContentOperationEntry({ ownerUserId: 1, entryId: entry.id, trigger: 'owner_manual', now: NOW, value: { idempotencyKey: 'scheduler-seed', mode: 'dry_run' }, dependencies: { repository: lineage.repository, publicationExecutor: async () => ({ status: 'dry_run' as const, preview: { mode: 'dry_run' as const, method: 'PUT' as const, url: 'https://api.github.com', targetOrigin: 'https://api.github.com', path: 'content/en/articles/verified.md', branch: 'main', bodyBytes: 10, bodyIncluded: false as const, headerNames: [], includesAuthorization: false as const, includesSecret: false as const, redirect: 'manual' as const } }) } })
+    expect(seeded.outcome).toBe('dry_run_succeeded')
+    let calls = 0
+    const tick = await runContentOperationsExecutionTick({ ownerUserId: 1, repository: lineage.repository, now: new Date('2026-01-10T09:01:00.000Z'), dependencies: { publicationExecutor: async input => { calls += 1; return { status: 'delivered' as const, remoteState: 'created' as const, publicationId: input.publication.productionDeliverableId, contentHash: input.publication.contentHash, remoteRevision: 'scheduler-commit', artifactFingerprint: 's'.repeat(64), idempotencyKey: 'scheduler-execute' } } } })
+    expect(tick.results.some(result => result.outcome === 'delivered')).toBe(true)
+    expect(calls).toBe(1)
   })
 })

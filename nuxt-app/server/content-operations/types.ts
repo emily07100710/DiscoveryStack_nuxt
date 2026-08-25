@@ -1,12 +1,13 @@
 import type { ContentCalendarEntry, ContentCalendarRequest, ContentCalendarResult, DueContentWork } from '../content-calendar'
 import type { PublishedContentOutcomeAssessment, OutcomeLearningCandidateResult } from '../outcome-learning'
-import type { contentOperationCalendarEntries, contentOperationCalendars, contentOperationClients, contentOperationEvents, contentOperationOutcomeAssessments, contentOperationPublicationAttempts, contentOperationPublicationTargets, contentOperationRuns } from '../database/schema'
+import type { contentOperationAutopilotPolicies, contentOperationCalendarEntries, contentOperationCalendars, contentOperationClients, contentOperationEvents, contentOperationOutcomeAssessments, contentOperationPublicationAttempts, contentOperationPublicationTargets, contentOperationRuns } from '../database/schema'
 
 export type ContentOperationClientRow = typeof contentOperationClients.$inferSelect
 export type ContentOperationCalendarRow = typeof contentOperationCalendars.$inferSelect
 export type ContentOperationCalendarEntryRow = typeof contentOperationCalendarEntries.$inferSelect
 export type ContentOperationRunRow = typeof contentOperationRuns.$inferSelect
 export type ContentOperationPublicationTargetRow = typeof contentOperationPublicationTargets.$inferSelect
+export type ContentOperationAutopilotPolicyRow = typeof contentOperationAutopilotPolicies.$inferSelect
 export type ContentOperationPublicationAttemptRow = typeof contentOperationPublicationAttempts.$inferSelect
 export type ContentOperationEventRow = typeof contentOperationEvents.$inferSelect
 export type ContentOperationOutcomeAssessmentRow = typeof contentOperationOutcomeAssessments.$inferSelect
