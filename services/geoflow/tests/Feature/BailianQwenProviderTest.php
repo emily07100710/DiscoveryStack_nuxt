@@ -91,15 +91,15 @@ final class BailianQwenProviderTest extends TestCase
         $this->assertSame($this->china(), BailianRuntimeProvider::normalizeBaseUrl($this->china().'/'));
     }
 
-    public function test_full_chat_endpoint_is_reduced_to_base(): void
+    public function test_full_chat_endpoint_is_rejected(): void
     {
-        $this->assertSame($this->china(), BailianRuntimeProvider::normalizeBaseUrl($this->china().'/chat/completions'));
+        $this->assertFalse(BailianRuntimeProvider::isOfficialBailianUrl($this->china().'/chat/completions'));
     }
 
-    public function test_chat_endpoint_is_not_returned_as_caller_selected_endpoint(): void
+    public function test_configuration_rejects_caller_selected_chat_endpoint(): void
     {
-        $configuration = BailianRuntimeProvider::assertAllowedConfiguration($this->china().'/chat/completions', 'qwen-plus');
-        $this->assertSame($this->china().'/chat/completions', $configuration['endpoint']);
+        $this->expectException(InvalidArgumentException::class);
+        BailianRuntimeProvider::assertAllowedConfiguration($this->china().'/chat/completions', 'qwen-plus');
     }
 
     public function test_http_is_rejected(): void
@@ -182,9 +182,9 @@ final class BailianQwenProviderTest extends TestCase
         $this->assertFalse(BailianRuntimeProvider::isOfficialBailianUrl('https://workspace.cn-beijing.maas.aliyuncs.com.attacker.example/compatible-mode/v1'));
     }
 
-    public function test_workspace_prefix_spoof_is_rejected(): void
+    public function test_hyphenated_workspace_label_is_accepted(): void
     {
-        $this->assertFalse(BailianRuntimeProvider::isOfficialBailianUrl('https://attacker-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'));
+        $this->assertTrue(BailianRuntimeProvider::isOfficialBailianUrl('https://attacker-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'));
     }
 
     public function test_missing_path_is_rejected(): void
@@ -232,9 +232,12 @@ final class BailianQwenProviderTest extends TestCase
         $this->assertFalse(BailianRuntimeProvider::isOfficialBailianUrl(''));
     }
 
-    public function test_workspace_uppercase_is_rejected(): void
+    public function test_workspace_hostname_is_canonicalized_to_lowercase(): void
     {
-        $this->assertFalse(BailianRuntimeProvider::isOfficialBailianUrl('https://Workspace-abc.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'));
+        $this->assertSame(
+            $this->workspace('cn-beijing'),
+            BailianRuntimeProvider::normalizeBaseUrl('https://Workspace-abc.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'),
+        );
     }
 
     public function test_workspace_underscore_is_rejected(): void
@@ -507,7 +510,18 @@ final class BailianQwenProviderTest extends TestCase
     public function test_response_rejects_missing_message_content(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        BailianRuntimeProvider::validateChatResponse($this->response(['choices' => [[ 'message' => [] ]]]));
+        BailianRuntimeProvider::validateChatResponse([
+            'id' => 'chatcmpl_fake_1',
+            'choices' => [[
+                'message' => [],
+                'finish_reason' => 'stop',
+            ]],
+            'usage' => [
+                'prompt_tokens' => 3,
+                'completion_tokens' => 1,
+                'total_tokens' => 4,
+            ],
+        ]);
     }
 
     public function test_response_rejects_empty_content(): void

@@ -121,12 +121,7 @@ final class BailianRuntimeProvider
             throw new InvalidArgumentException('invalid_configuration');
         }
 
-        $canonicalPath = rtrim($path, '/') === self::CANONICAL_PATH
-            ? self::CANONICAL_PATH
-            : $path === self::CANONICAL_PATH.self::CHAT_PATH
-                ? self::CANONICAL_PATH
-                : null;
-        if ($canonicalPath === null) {
+        if (rtrim($path, '/') !== self::CANONICAL_PATH) {
             throw new InvalidArgumentException('invalid_configuration');
         }
 
