@@ -228,3 +228,11 @@ Codex review 前應具備：
 Phase 0 inventory 已建立於本文件。正式進入 Phase 1 前，必須維持以下邊界：不修改 main、不 push main、不 deploy、不套 production migration、不呼叫真實 provider、不寫入真實客戶網站；所有後續程式變更只在 `feature/discoverystack-end-to-end-platform-v1`，並以可審查的普通 checkpoint commits 推進。
 
 Phase 1 的第一優先是以最新 main 為基準收斂 foundations 與 paused work；任何無法驗證的 patch 都標記為 reconstructed，不得偽稱 ported。
+
+## 12. Phase 2 foundation audit result
+
+Phase 2 的唯讀稽核已完成。authoritative `origin/main` 仍精確為 `a7a96c68e3ec68eb6415708c9cc027d67096f4d7`；可由 remote 取得的 paused branch 只有 `feature/geoflow-runtime-convergence-v1`（`23ceebd062c9cf82ed5260f792c5190e427fa89d`），而該 commit 不是 authoritative main 的 ancestor，且其 diff 會移除 main 已有的 GEO content quality／evaluation 與 publication routing V2，因此沒有 wholesale merge。AutoGEO Workflow Bridge、GEO Content Training Dataset、LLM Visibility Bailian Adapter 的列出 branch ref 目前不存在於 remote；四份 uncommitted patch／ZIP 亦未在本次附件或 checkout 中找到，故未假裝讀取、未重算為可用 patch、未套用任何一份。
+
+Phase 2 targeted tests 已於 Nuxt app 執行並通過：6 個 test files、1,308 個 tests 全部通過，涵蓋 GEOFlow integration contract、production provider selection、GEO content quality Prompt/RAG、GEO content evaluation harness、Unified Publication Routing V2 與 Content Operations execution orchestrator。這些結果只證明現有 contract／engine／orchestrator 的 targeted baseline，不能取代後續 runtime、provider、executor 與 end-to-end acceptance。Phase 2 未新增 migration、未呼叫真實 provider、未寫入外部目標。
+
+Phase 2 的決策是：保留 authoritative main 已吸收的安全 contract 與 V2 implementation；對 paused GEOFlow work 只在後續對照最新 contract 後 selective port 或 reconstructed；對其餘不可存取 patch 以 current main、available contracts、tests 與報告 reconstructed；所有變更繼續只在本地 integration branch，且因 active GitHub account 不符合 `emily07100710`，禁止 push。
