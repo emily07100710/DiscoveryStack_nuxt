@@ -106,7 +106,7 @@ export type ProductionRuntimeDependencies = {
   optimizationAdapter?: GeoRewriteAdapter
 }
 
-async function runOwnerProductionDeliverable(input: { ownerUserId: number, context: Awaited<ReturnType<typeof resolveProductionContext>>, job: Awaited<ReturnType<typeof getOwnerContentJob>>, dependencies?: ProductionRuntimeDependencies }) {
+async function runOwnerProductionDeliverableInternal(input: { ownerUserId: number, context: Awaited<ReturnType<typeof resolveProductionContext>>, job: Awaited<ReturnType<typeof getOwnerContentJob>>, dependencies?: ProductionRuntimeDependencies }) {
   const { context, job } = input
   if (job.operation !== 'content_draft') throw createError({ statusCode: 422, statusMessage: 'Production job must use the content_draft operation.' })
   if (job.status === 'candidate_ready' || job.status === 'needs_human_review' || job.status === 'approved' || job.status === 'blocked') return { job, replayed: true }
@@ -154,16 +154,32 @@ async function runOwnerProductionDeliverable(input: { ownerUserId: number, conte
       safetyStatus: optimizedRisk.status === 'blocked' ? 'blocked' : optimizedRisk.status === 'needs_human_review' ? 'needs_review' : 'passed',
       safetyNotes: [...candidate.safetyNotes, optimizationResult.interpretationLimit, 'Optimization is a selected-rule AutoGEO-compatible pass; it is not a ranking or conversion prediction.'],
     })
-    await saveRiskGate({ draftId: optimizedDraft.id, result: optimizedRisk, evidenceSnapshotHash: context.evidenceSnapshot.hash })
+    const optimizedRiskGate = await saveRiskGate({ draftId: optimizedDraft.id, result: optimizedRisk, evidenceSnapshotHash: context.evidenceSnapshot.hash })
     const finalStatus = optimizedRisk.status === 'blocked' ? 'blocked' : 'needs_human_review'
     await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: finalStatus, providerProvenance: { stage: 'optimized', provider: candidate.provider, providerVersion: candidate.providerVersion, selectedRuleIds: selectedRules.map(rule => rule.id), appliedRuleIds: candidate.appliedRuleIds, baseDraftId: baseDraft.id, optimizedDraftId: optimizedDraft.id, execution: candidate.provenance.execution || 'selected-rule-optimization', fallbackReason: runtimeProviders.fallbackReason ?? candidate.provenance.fallbackReason ?? null } })
     await updateProductionDeliverable(input.ownerUserId, context.deliverable.id, { status: finalStatus === 'blocked' ? 'blocked' : 'needs_human_review', briefId: brief.id, jobId: job.id })
-    return { job: { ...job, status: finalStatus }, baseDraft: { id: baseDraft.id, version: baseDraft.version, sourceMode: baseDraft.sourceMode }, draft: { id: optimizedDraft.id, version: optimizedDraft.version, sourceMode: optimizedDraft.sourceMode }, result: optimizationResult, riskGate: optimizedRisk, replayed: false }
+    return { job: { ...job, status: finalStatus },       baseDraft: { id: baseDraft.id, version: baseDraft.version, sourceMode: baseDraft.sourceMode, contentHash: baseDraft.contentHash },
+      draft: { id: optimizedDraft.id, version: optimizedDraft.version, sourceMode: optimizedDraft.sourceMode, contentHash: optimizedDraft.contentHash },
+      result: optimizationResult, riskGate: optimizedRiskGate, riskGateDecision: optimizedRisk.status, replayed: false }
   } catch (error) {
     await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: 'failed', errorCode: 'production_generation_failed', errorSummary: error instanceof Error ? error.message.slice(0, 500) : 'Unknown production generation error', providerProvenance: { stage: 'failed', runtimeProvider: runtimeProviders.provenance, actualProviderMode: runtimeProviders.mode, fallbackReason: runtimeProviders.fallbackReason ?? null } })
     await updateProductionDeliverable(input.ownerUserId, context.deliverable.id, { status: 'blocked', briefId: brief.id, jobId: job.id })
     throw error
   }
+}
+
+export async function runOwnerProductionDeliverable(input: { ownerUserId: number, planId: number, deliverableId: number, dependencies?: ProductionRuntimeDependencies }) {
+  const context = await resolveProductionContext({ ownerUserId: input.ownerUserId, planId: input.planId, deliverableId: input.deliverableId, includeArtifacts: true })
+  if (context.plan.ownerUserId !== input.ownerUserId || context.deliverable.ownerUserId !== input.ownerUserId || context.deliverable.planId !== input.planId || context.deliverable.id !== input.deliverableId) throw createError({ statusCode: 404, statusMessage: 'Production deliverable lineage was not found.' })
+  if (['blocked', 'archived', 'cancelled'].includes(context.plan.status) || ['blocked', 'exported'].includes(context.deliverable.status)) throw createError({ statusCode: 422, statusMessage: 'Production deliverable is not executable in its current state.' })
+  const brief = context.brief || await createCanonicalProductionBrief(input.ownerUserId, context)
+  const runtimeProviders = resolveProductionRuntimeProviders()
+  const job = context.job || await createContentJob({ ownerUserId: input.ownerUserId, briefId: brief.id, operation: 'content_draft', providerMode: runtimeProviders.mode, idempotencyKey: `orchestrator:plan:${input.planId}:deliverable:${input.deliverableId}`.slice(0, 128), productionPlanId: input.planId, strategyRecommendationId: context.strategy.id, productionDeliverableId: input.deliverableId })
+  const result = await runOwnerProductionDeliverableInternal({ ownerUserId: input.ownerUserId, context: { ...context, brief, job }, job, dependencies: input.dependencies })
+  const optimizedDraft = 'draft' in result && result.draft ? result.draft : null
+  const riskGate = 'riskGate' in result && result.riskGate ? result.riskGate : null
+  return { ...result, planId: input.planId, deliverableId: input.deliverableId, briefId: brief.id, jobId: result.job.id, optimizedDraftId: optimizedDraft?.id || null, contentHash: optimizedDraft && typeof optimizedDraft.contentHash === 'string' ? optimizedDraft.contentHash : null, riskGateId: riskGate && 'id' in riskGate && typeof riskGate.id === 'number' ? riskGate.id : null, riskGateDecision: riskGate && typeof riskGate.status === 'string' ? riskGate.status : null, resultingStatus: result.job.status }
+
 }
 
 /** Standalone owner request. Governed Production Plans use runOwnerProductionPlan below. */
@@ -179,7 +195,7 @@ export async function runOwnerAutoGeoContentJob(input: { ownerUserId: number, br
   if (input.jobId && job.idempotencyKey !== input.idempotencyKey) throw createError({ statusCode: 409, statusMessage: 'The supplied idempotency key does not match this content job.' })
   if (brief.productionPlanId && brief.productionDeliverableId) {
     const context = await resolveProductionContext({ ownerUserId: input.ownerUserId, planId: brief.productionPlanId, deliverableId: brief.productionDeliverableId, includeArtifacts: true })
-    return runOwnerProductionDeliverable({ ownerUserId: input.ownerUserId, context: { ...context, brief, job }, job })
+    return runOwnerProductionDeliverableInternal({ ownerUserId: input.ownerUserId, context: { ...context, brief, job }, job })
   }
   if (job.status === 'candidate_ready' || job.status === 'needs_human_review' || job.status === 'approved' || job.status === 'blocked') return { job, replayed: true }
   await transitionContentJob({ ownerUserId: input.ownerUserId, jobId: job.id, to: 'processing' })
@@ -210,7 +226,7 @@ export async function runOwnerProductionPlan(input: { ownerUserId: number, planI
       const context = await resolveProductionContext({ ownerUserId: input.ownerUserId, planId: input.planId, deliverableId: item.deliverableId, includeArtifacts: true })
       const brief = context.brief || await createCanonicalProductionBrief(input.ownerUserId, context)
       const job = context.job || await getOwnerContentJob(input.ownerUserId, item.jobId)
-      const result = await runOwnerProductionDeliverable({ ownerUserId: input.ownerUserId, context: { ...context, brief, job }, job, dependencies: input.dependencies })
+      const result = await runOwnerProductionDeliverableInternal({ ownerUserId: input.ownerUserId, context: { ...context, brief, job }, job, dependencies: input.dependencies })
       generated.push({ deliverableId: item.deliverableId, jobId: item.jobId, status: result.job.status, baseDraftId: 'baseDraft' in result ? result.baseDraft?.id : undefined, draftId: 'draft' in result ? result.draft?.id : undefined })
     } catch {
       generated.push({ deliverableId: item.deliverableId, jobId: item.jobId, status: 'blocked' })

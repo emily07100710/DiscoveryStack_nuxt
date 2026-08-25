@@ -261,6 +261,10 @@ function entryInsert(ownerUserId: number, calendarId: number, deliverableId: num
     topicCluster: entry.topicCluster,
     evidenceSnapshotHash: entry.evidenceSnapshotHash,
     contentHash: null,
+    publicationTargetId: null,
+    publicationSlug: null,
+    publicationPath: null,
+    publicationIdentityFingerprint: null,
     status: entryStatusForDatabase(entry.status),
     engineEntryId: entry.entryId,
     idempotencyKey: durableEntryIdempotencyKey(calendarId, entry),
@@ -656,7 +660,7 @@ function outcomeValidPairCount(snapshot: unknown): number | null {
 
 export async function getOwnerContentOperationsWorkspace(ownerUserId: number, repository?: ContentOperationsRepository): Promise<WorkspacePayload> {
   const db = await getRepository(repository)
-  const [clients, calendars, entries, runs, outcomeAssessments] = await Promise.all([db.listClients(ownerUserId), db.listCalendars(ownerUserId), db.listEntries(ownerUserId), db.listRuns(ownerUserId), db.listOutcomes(ownerUserId)])
+  const [clients, calendars, entries, runs, outcomeAssessments, targets] = await Promise.all([db.listClients(ownerUserId), db.listCalendars(ownerUserId), db.listEntries(ownerUserId), db.listRuns(ownerUserId), db.listOutcomes(ownerUserId), db.listPublicationTargets(ownerUserId)])
   const lineages = await Promise.all(entries.map(entry => db.resolveWorkspaceEntry(ownerUserId, entry.id)))
   const projections = entries.map((entry, index) => {
     const lineage = lineages[index]
@@ -665,7 +669,9 @@ export async function getOwnerContentOperationsWorkspace(ownerUserId: number, re
     const hasOutcome = outcomeAssessments.some(outcome => outcome.entryId === entry.id)
     return { ...entry, topic: entry.topicCluster, framework: lineage?.client.framework || null, target: lineage?.client.canonicalSiteOrigin || null, hasApprovedDraft, hasPassedRiskGate, nextAction: nextActionForEntry(entry, hasApprovedDraft, hasPassedRiskGate, hasOutcome) }
   })
-  return { clients: clients.map(publicClient), calendars, entries: projections, runs, outcomeAssessments: outcomeAssessments.map(outcome => ({ ...outcome, validPairCount: outcomeValidPairCount(outcome.assessmentSnapshot) })), capabilities: { schedulerAvailable: true, generationExecutorConfigured: false, firstPartyPublisherConfigured: false, outcomeCollectionConfigured: false }, limitations: [...CONTENT_OPERATIONS_LIMITATIONS] }
+  const activeTargets = targets.filter(target => target.status === 'active')
+  const publicationTargets = targets.map(target => ({ id: target.id, clientId: target.clientId, targetId: target.targetId, framework: target.framework, transport: target.transport, targetOrigin: target.targetOrigin, contentRoot: target.contentRoot, defaultBranch: target.defaultBranch, repositoryOwner: target.repositoryOwner, repositoryName: target.repositoryName, endpointPath: target.endpointPath, allowedContentTypes: target.allowedContentTypes, allowedLanguages: target.allowedLanguages, maximumPayloadBytes: target.maximumPayloadBytes, status: target.status, executionEnabled: target.executionEnabled, credentialConfigured: Boolean(target.credentialReference), configurationFingerprint: target.configurationFingerprint, idempotencyKey: target.idempotencyKey, createdAt: target.createdAt, updatedAt: target.updatedAt }))
+  return { clients: clients.map(publicClient), calendars, entries: projections, runs, outcomeAssessments: outcomeAssessments.map(outcome => ({ ...outcome, validPairCount: outcomeValidPairCount(outcome.assessmentSnapshot) })), publicationTargets, capabilities: { schedulerAvailable: true, generationExecutorConfigured: false, firstPartyPublisherConfigured: false, outcomeCollectionConfigured: false }, readiness: { schedulerAvailable: true, generationExecutorAvailable: true, publicationTargetConfigured: activeTargets.length > 0, publicationExecutionEnabled: activeTargets.some(target => target.executionEnabled), credentialReferenceConfigured: activeTargets.some(target => Boolean(target.credentialReference)), outcomeCollectionConfigured: false }, limitations: [...CONTENT_OPERATIONS_LIMITATIONS] }
 }
 
 export function getDefaultContentOperationsClock(): Clock {

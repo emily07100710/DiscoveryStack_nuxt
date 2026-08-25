@@ -224,3 +224,40 @@ describe('Owner Content Operations Workbench V1 contract', () => {
     expect(source).not.toMatch(/<h[1-3][^>]*>[^<]*(?:Client ID|Calendar ID|Entry ID|planFingerprint)/i)
   })
 })
+
+describe('Content Operations Execution Orchestrator workbench additions', () => {
+  it('keeps the new execution readiness projection and first-party-only target controls', () => {
+    const source = page()
+    expect(source).toContain('generationExecutorAvailable')
+    expect(source).toContain('publicationTargetConfigured')
+    expect(source).toContain('publicationExecutionEnabled')
+    expect(source).toContain('credentialConfigured')
+    expect(source).toContain('credential reference 已設定')
+    expect(source).toContain('credential reference 未設定')
+    expect(source).toContain('第一方 target 尚未設定')
+    expect(source).toContain('第一方 Git')
+    expect(source).toContain('第一方 Signed API')
+    expect(source).not.toMatch(/wordpress/i)
+    expect(source).not.toMatch(/generic[_ -]?http/i)
+  })
+
+  it('shows the explicit execution warning and durable pipeline actions', () => {
+    const source = page()
+    expect(source).toContain('開啟後，通過正式 delivery approval 的內容可由 scheduler 發布到第一方網站')
+    for (const status of ['awaiting_review', 'ready_to_publish', 'retry_wait', 'delivered', 'blocked']) expect(source).toContain(status)
+    expect(source).toContain('執行下一步 dry-run')
+    expect(source).toContain("executeEntry(entry, 'execute')")
+    expect(source).toContain("mode: 'dry_run'")
+    expect(source).toContain('mode },')
+  })
+
+  it('uses the allowed client target endpoint and keeps loading/saving/error behavior', () => {
+    const source = page()
+    expect(source).toContain('/api/content-operations/clients/${targetForm.clientId}/publication-target')
+    expect(source).toContain('/api/content-operations/entries/${entry.id}/execute')
+    expect(source).toContain('正在讀取內容營運資料')
+    expect(source).toContain('isSaving')
+    expect(source).toContain('notice--success')
+    expect(source).toContain('notice--error')
+  })
+})

@@ -721,7 +721,12 @@ export async function saveContentCandidate(input: { jobId: number, title: string
 
 export async function saveRiskGate(input: { draftId: number, result: ContentRiskGateResult, evidenceSnapshotHash: string }) {
   const database = requireAuditDatabase()
-  await database.insert(seoGeoContentRiskGates).values({ draftId: input.draftId, gateVersion: input.result.gateVersion, status: input.result.status, findings: input.result.findings, evidenceSnapshotHash: input.evidenceSnapshotHash })
+  const inserted = await database.insert(seoGeoContentRiskGates).values({ draftId: input.draftId, gateVersion: input.result.gateVersion, status: input.result.status, findings: input.result.findings, evidenceSnapshotHash: input.evidenceSnapshotHash })
+  const insertedId = Number(inserted?.[0]?.insertId)
+  if (!Number.isSafeInteger(insertedId) || insertedId < 1) throw createError({ statusCode: 500, statusMessage: 'Risk gate could not be recorded.' })
+  const [row] = await database.select().from(seoGeoContentRiskGates).where(eq(seoGeoContentRiskGates.id, insertedId)).limit(1)
+  if (!row) throw createError({ statusCode: 500, statusMessage: 'Risk gate could not be loaded.' })
+  return row
 }
 
 export async function createContentReview(input: { ownerUserId: number, jobId: number, draftId: number, decision: 'approved_for_preview' | 'approved_for_delivery' | 'changes_requested' | 'rejected', reviewNote?: string }) {

@@ -29,5 +29,8 @@ export {
   replanOwnerContentCalendar,
 } from './service'
 export { runContentOperationsTick } from './scheduler'
+export { createOwnerPublicationTarget, executeContentOperationEntry, listOwnerPublicationTargets, runContentOperationsExecutionTick, updateOwnerPublicationTarget } from './orchestrator'
+export type { ContentOperationOrchestratorDependencies } from './orchestrator'
+export { buildPublicationIdentity, publicationPathFor } from './publication-identity'
 export type { ContentOperationsTickInput, ContentOperationsTickResult } from './scheduler'
 export type * from './types'
