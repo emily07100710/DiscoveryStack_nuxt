@@ -40,7 +40,7 @@ Input normalizer 會拒絕 null、undefined、array、primitive、unknown key、
 
 `fingerprintContentQualityInput()` 先 normalize input，再以 canonical serializer 對 object key 做 deterministic code-unit sorting，對完整 brief、topic/query fields、brand voice、goals/constraints、selected rules、evidence identity/hash/reviewed text、authority source、retrieval plan 與 provider provenance 產生 SHA-256。Canonical serializer 拒絕 circular object、symbol、non-finite number 與 getter/Proxy error。
 
-相同 normalized input 必須得到相同 fingerprint；任一 evidence、rule、brief、constraint、topic/question/title、retrieval 或 provider field 改變時 fingerprint 必須改變。`queryFingerprint`、`retrievalFingerprint`、`promptFingerprint`、`contentQualityFingerprint` 與 provider `responseHash` 各自綁定其實際 canonical payload，不能由 caller 直接覆蓋。
+相同 normalized input 必須得到相同 fingerprint；任一 evidence、rule、brief、constraint、topic/question/title、retrieval 或 provider field 改變時 fingerprint 必須改變。`selectedRuleIds` 保留 caller 的 exact order；duplicate 與 unknown rule ID 都以 `RULE_CHECK_FAILED` fail closed，不得 dedupe 或 sort。`queryFingerprint`、`retrievalFingerprint`、`promptFingerprint`、`contentQualityFingerprint` 與 provider `responseHash` 各自綁定其實際 canonical payload，不能由 caller 直接覆蓋。
 
 ## Nine-section evidence-bound Prompt Pack
 
@@ -66,7 +66,7 @@ Final prompt 使用 readable canonical JSON data sections，不包含 Base64 dec
 
 `buildRetrievalResult()` 接受完整 normalized content input、strict candidate records 與必要的 retrieval context，從 `topic + workingTitle + primaryQuestion + audience + goals + language` 產生 Unicode-normalized lexical query tokens。English 以 deterministic word tokens 正規化；CJK 以 deterministic code-point/bigram tokenization。每個 candidate 計算 bounded overlap count/ratio，zero relevance 不進結果，依 relevance 再以 stable code-unit identity tie-break，最後套用 topK。Caller 不得提供或覆蓋 score；candidate 只允許 approved chunk 與 bounded limitations，舊式 `scoreBasis` 等未知欄位會拒絕。
 
-Result 對每個選中 chunk 保存 `matchedTokenCount`、`queryTokenCount`、`relevanceRatio`、固定 `scoreBasis = deterministic_lexical_overlap_v1` 與 limitations。沒有可接受 chunk 時只回傳 `status: not_ready`，不建立 generic knowledge fallback。Prompt pack 與 quality gate 會再次驗證 retrieval query fingerprint、chunk identity、reviewed text/hash、snapshot、purpose、allowlist 與 retrieval fingerprint。
+Result 對每個選中 chunk 保存 `matchedTokenCount`、`queryTokenCount`、`relevanceRatio`、固定 `scoreBasis = deterministic_lexical_overlap_v1` 與 limitations。沒有可接受 chunk 時只回傳 `status: not_ready`，不建立 generic knowledge fallback。`verifyRetrievalResult()` 會先 strict-normalize presented result，再從 normalized input/query/chunks 重新執行 retrieval；caller supplied metrics、chunk order、score、fingerprint、stale text 或 snapshot 不被信任，canonical recomputation 不一致即 fail closed。Prompt pack 與 quality gate 會再次驗證 retrieval query fingerprint、chunk identity、reviewed text/hash、snapshot、purpose、allowlist 與 retrieval fingerprint。
 
 ## Provider structured output and provenance
 
@@ -80,11 +80,11 @@ provider, model, requestId, requestedAt, generatedAt
 promptFingerprint, contentQualityFingerprint, retrievalFingerprint, responseHash
 ```
 
-Validator 拒絕 raw prose、malformed JSON-like input、unknown key、symbol、getter/Proxy exception、circular collection、non-finite value、oversize field、body hash mismatch、duplicate claim/citation ID、citation outside verified retrieval、citation hash mismatch、claim/FAQ/paragraph citation binding error、appliedRuleIds missing/extra/duplicate/unknown、provenance mismatch、timestamp order error 與 response hash mismatch。`generatedAt >= requestedAt`；`responseHash` 由去除自身 hash 的 canonical ProviderOutput payload 內部重算。
+Validator 拒絕 raw prose、malformed JSON-like input、unknown key、symbol、getter/Proxy exception、circular collection、non-finite value、oversize field、body hash mismatch、duplicate claim/citation ID、citation outside verified retrieval、citation hash mismatch、claim/FAQ/paragraph citation binding error、appliedRuleIds missing/extra/duplicate/unknown、provenance mismatch、timestamp order error 與 response hash mismatch。`provider`、`model`、`requestId`、`requestedAt`、`generatedAt` 都必須與 normalized input provenance 精確 echo；比較值是 normalized UTC timestamp，不接受只有時間順序正確但值不同。`responseHash` 由去除自身 hash 的完整 normalized canonical ProviderOutput payload 內部重算。
 
-Markdown parser 產生 meaningful paragraph 的 normalized text、full SHA-256 paragraph hash 與固定 `[cite:CITATION_ID]` marker IDs。每一個 `paragraphBindings` 必須以 paragraph index/hash、claim type 與 citation IDs 與正文一一對應。`factual`、`quantitative`、`comparative`、`high_risk`、`interpretation`、`opinion` 的正文 paragraph 沒有 citation 時 fail closed；`process` 與 `call_to_action` 可在 evidence boundary 內不帶 citation。FAQ structured pairs 必須與正文 FAQ headings/answers 數量、正規化 question/answer、citation binding 一一相同；非 FAQ body 不得憑空提供 FAQ pairs。
+Markdown parser 產生移除 citation marker 後的 meaningful paragraph normalized text、full SHA-256 paragraph hash 與固定 `[cite:CITATION_ID]` marker IDs。Provider claim 只允許 `summary` 或 exact `body.paragraph:<non-negative-index>` locator；必須有且只有一個 summary claim，且每個 meaningful body paragraph 恰有一個 claim。每一個 `paragraphBindings` 必須以 paragraph index/hash、claim type、exact one `claimIds` 與 citation IDs 與正文一一對應，claim text 必須等於對應 paragraph 移除 marker 後的 normalized text。`factual`、`quantitative`、`comparative`、`high_risk` 的 claim 必須有 citation；正文有 citation marker 卻標成 process/opinion/call_to_action 會 fail closed。FAQ structured pairs 必須有非空且無 duplicate citationIds，每個 ID 必須存在於 validated citations，並與正文 answer marker IDs exact 一致；非 FAQ body 不得憑空提供 FAQ pairs。
 
-Provider output 的 provenance 必須 echo server request metadata：provider、model、requestId、requestedAt 必須相同，prompt/content/retrieval fingerprints 必須分別等於本次實際 pack、normalized input、verified retrieval。不得由 client/provider output 反向覆蓋 request provenance。
+Provider output 的 provenance 必須 echo server request metadata：provider、model、requestId、requestedAt、generatedAt 必須分別等於 normalized input provenance；不同 timezone 但同一 instant 以 normalized UTC value 視為相同，其他任何差異都回傳 `PROVIDER_PROVENANCE_MISMATCH`。Validator 會先重新建立 server canonical retrieval 與 PromptPack，再對 caller supplied context 做完整 exact canonical comparison；不能只 echo 一個 prompt/retrieval fingerprint。不得由 client/provider output 反向覆蓋 request provenance。
 
 ## Markdown structure parser
 
@@ -118,7 +118,7 @@ Timestamp 必須是嚴格 RFC3339、含 `Z` 或明確 offset、calendar date 有
 
 ## Testing and limitations
 
-`tests/geo-content-quality-prompt-rag.test.ts` 使用完全 synthetic fixtures，所有測試直接呼叫正式 public functions，沒有真實網站內容或 provider call。Targeted suite 目前有 **178 direct tests**，涵蓋 strict input/evidence/hash/timestamp/URL、topic/query fingerprint、English/CJK lexical retrieval、topK/allowlist/zero relevance、canonical JSON prompt injection boundary、canonical GEO rule resolution、provider provenance/responseHash、paragraph/citation/FAQ binding、Markdown structure、0/0 metrics、content length、topic overlap、risk/conflict、blocked/review/passed status 與 mandatory human review。
+`tests/geo-content-quality-prompt-rag.test.ts` 使用完全 synthetic fixtures，所有測試直接呼叫正式 public functions，沒有真實網站內容或 provider call。Targeted suite 目前有 **204 direct tests**，涵蓋 strict input/evidence/hash/timestamp/URL、正負與半小時 timezone、topic/query fingerprint、English/CJK lexical retrieval、topK/allowlist/zero relevance、fake retrieval metrics/order/fingerprint、canonical JSON prompt injection boundary、canonical GEO rule order/duplicate resolution、fake PromptPack、provider exact provenance/responseHash、exact claim/paragraph/claimIds/citation/FAQ binding、Markdown structure、0/0 metrics、content length、topic overlap、risk/conflict、blocked/review/passed status 與 mandatory human review。
 
 這是 evidence-bound contract、mocked structured output validator、pure lexical retrieval、Markdown parser 與 deterministic heuristic gate，不是 Qwen/百煉接入、不是真實 semantic RAG、不代表已使用 GEOFlow、不代表已產生或發布高品質文章，也不表示 GEO、排名、流量、轉換、ROI 或 LLM citation 已提升。Evidence 與 authority 的內容正確性仍需 owner/human review。V1 不做完整 semantic PII anonymization、不做 durable retrieval persistence、不接 scheduler、API、database 或 UI。
 

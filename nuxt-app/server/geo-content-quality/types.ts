@@ -121,7 +121,7 @@ export type ProviderClaim = { claimId: string, text: string, claimType: ClaimTyp
 export type ProviderCitation = { citationId: string, sourceId: string, artifactId: string, chunkId: string, chunkHash: string, artifactHash: string, sourceLocator: string }
 export type FaqPair = { question: string, answer: string, citationIds: string[] }
 export type ParagraphIdentity = { paragraphIndex: number, normalizedText: string, paragraphHash: string, citationMarkerIds: string[] }
-export type ParagraphBinding = { paragraphIndex: number, paragraphHash: string, claimType: ClaimType, citationIds: string[] }
+export type ParagraphBinding = { paragraphIndex: number, paragraphHash: string, claimType: ClaimType, citationIds: string[], claimIds: string[] }
 
 export type ProviderOutput = {
   outputVersion: typeof PROVIDER_OUTPUT_VERSION

@@ -1,5 +1,5 @@
-import { sha256Text, canonicalizeQualityValue, buildPromptPack, buildRetrievalResult, parseMarkdownStructure, queryFingerprintForFields } from '../../../server/geo-content-quality'
-import type { ApprovedEvidenceChunk, ContentQualityInput, ProviderOutput, RetrievalPlan } from '../../../server/geo-content-quality'
+import { sha256Text, canonicalizeQualityValue, buildPromptPack, buildRetrievalResult, parseMarkdownStructure, queryFingerprintForFields, fingerprintContentQualityInput, normalizeTimestamp } from '../../../server/geo-content-quality'
+import type { ApprovedEvidenceChunk, ContentQualityInput, ProviderClaim, ProviderOutput, RetrievalPlan } from '../../../server/geo-content-quality'
 
 export const HASH_A = 'a'.repeat(64)
 export const HASH_B = 'b'.repeat(64)
@@ -58,23 +58,32 @@ function faqBody(input: ContentQualityInput): string {
 
 function bodyFor(input: ContentQualityInput): string { return input.contentType === 'faq' ? faqBody(input) : input.contentType === 'service_page' ? serviceBody(input) : articleBody(input) }
 function responseHash(output: Omit<ProviderOutput, 'responseHash'>): string { return sha256Text(canonicalizeQualityValue(output)) }
+function markerIds(value: string): string[] { const ids: string[] = []; const markerPattern = /\[cite:([A-Za-z0-9._:-]{1,160})\]/gu; for (const match of value.matchAll(markerPattern)) ids.push(match[1]!); return ids }
 
 export function syntheticProviderOutput(input: ContentQualityInput = syntheticInput(), overrides: Partial<ProviderOutput> = {}): ProviderOutput {
   const body = bodyFor(input)
   const firstChunk = input.approvedEvidenceChunks[0] ?? syntheticChunk()
   const prompt = buildPromptPack(input)
   const retrieval = buildRetrievalResult(input, input.approvedEvidenceChunks.map(chunk => ({ chunk })))
+  const contentFingerprint = fingerprintContentQualityInput(input)
+  const normalizedRequestedAt = normalizeTimestamp(input.requestedAt)
+  const normalizedGeneratedAt = normalizeTimestamp(input.providerProvenance.generatedAt)
+  const summary = 'A bounded synthetic summary based on approved evidence.'
   const outputBase: Omit<ProviderOutput, 'responseHash'> = {
-    outputVersion: 'geo-content-quality-output-v1', title: input.workingTitle, summary: 'A bounded synthetic summary based on approved evidence.', body, bodyHash: sha256Text(body), faqPairs: input.contentType === 'faq' ? [{ question: 'What is the service?', answer: 'The service is described only by the approved source. It has a bounded synthetic scope, preserves evidence limits, and requires human review before any publication or delivery decision. [cite:citation-1]', citationIds: ['citation-1'] }, { question: 'Who is the service for?', answer: 'The service is intended for readers comparing a bounded option. This answer uses only the approved evidence and does not make customer, outcome, ranking, traffic, or revenue claims. [cite:citation-1]', citationIds: ['citation-1'] }, { question: 'What is the next step?', answer: 'The next step is to review the approved evidence, verify the scope with the owner, and record any missing facts as limitations before drafting or publishing content. [cite:citation-1]', citationIds: ['citation-1'] }] : [], claims: [{ claimId: 'claim-1', text: 'The service scope is bounded by the approved source.', claimType: 'factual', bodyLocator: 'body.section:details', citationIds: ['citation-1'] }], citations: [{ citationId: 'citation-1', sourceId: firstChunk.sourceId, artifactId: firstChunk.artifactId, chunkId: firstChunk.chunkId, chunkHash: firstChunk.chunkHash, artifactHash: firstChunk.artifactHash, sourceLocator: firstChunk.locator }], appliedRuleIds: [...input.selectedRuleIds], limitations: ['Synthetic output; human review required before publication.'], paragraphBindings: [], provider: input.providerProvenance.provider, model: input.providerProvenance.model, requestId: input.providerProvenance.requestId, requestedAt: input.requestedAt, generatedAt: input.providerProvenance.generatedAt, promptFingerprint: prompt.status === 'ready' ? prompt.promptPack.promptFingerprint : HASH_E, contentQualityFingerprint: sha256Text(canonicalizeQualityValue(input)), retrievalFingerprint: retrieval.status === 'ready' ? retrieval.retrievalFingerprint! : HASH_E,
+    outputVersion: 'geo-content-quality-output-v1', title: input.workingTitle, summary, body, bodyHash: sha256Text(body), faqPairs: [], claims: [], citations: [{ citationId: 'citation-1', sourceId: firstChunk.sourceId, artifactId: firstChunk.artifactId, chunkId: firstChunk.chunkId, chunkHash: firstChunk.chunkHash, artifactHash: firstChunk.artifactHash, sourceLocator: firstChunk.locator }], appliedRuleIds: [...input.selectedRuleIds], limitations: ['Synthetic output; human review required before publication.'], paragraphBindings: [], provider: input.providerProvenance.provider, model: input.providerProvenance.model, requestId: input.providerProvenance.requestId, requestedAt: normalizedRequestedAt, generatedAt: normalizedGeneratedAt, promptFingerprint: prompt.status === 'ready' ? prompt.promptPack.promptFingerprint : HASH_E, contentQualityFingerprint: contentFingerprint.status === 'valid' ? contentFingerprint.fingerprint : HASH_E, retrievalFingerprint: retrieval.status === 'ready' ? retrieval.retrievalFingerprint! : HASH_E,
   }
-  const derivedBody = overrides.body ?? body
-  const parsedForBody = parseMarkdownStructure(derivedBody)
-  const finalBindings = overrides.paragraphBindings ?? parsedForBody.report.paragraphs.map((paragraph, index) => ({ paragraphIndex: paragraph.paragraphIndex, paragraphHash: paragraph.paragraphHash, claimType: paragraph.citationMarkerIds.length > 0 ? 'factual' : 'process', citationIds: paragraph.citationMarkerIds }))
-  const boundCitationIds = new Set(finalBindings.flatMap(binding => binding.citationIds))
+  const mergedBody = overrides.body ?? body
+  const parsedForBody = parseMarkdownStructure(mergedBody)
+  const summaryClaim: ProviderClaim = { claimId: 'claim-summary', text: overrides.summary ?? summary, claimType: 'factual', bodyLocator: 'summary', citationIds: ['citation-1'] }
+  const derivedBindings = parsedForBody.report.paragraphs.map(paragraph => ({ paragraphIndex: paragraph.paragraphIndex, paragraphHash: paragraph.paragraphHash, claimType: paragraph.citationMarkerIds.length > 0 ? 'factual' as const : 'process' as const, citationIds: paragraph.citationMarkerIds, claimIds: [`claim-body-${paragraph.paragraphIndex}`] }))
+  const derivedClaims: ProviderClaim[] = [summaryClaim, ...parsedForBody.report.paragraphs.map(paragraph => ({ claimId: `claim-body-${paragraph.paragraphIndex}`, text: paragraph.normalizedText, claimType: paragraph.citationMarkerIds.length > 0 ? 'factual' as const : 'process' as const, bodyLocator: `body.paragraph:${paragraph.paragraphIndex}`, citationIds: paragraph.citationMarkerIds }))]
+  const finalBindings = overrides.paragraphBindings ?? derivedBindings
+  const allClaimCitationIds = (overrides.claims ?? derivedClaims).flatMap(claim => claim.citationIds)
+  const boundCitationIds = new Set([...finalBindings.flatMap(binding => binding.citationIds), ...allClaimCitationIds])
   const derivedCitations = overrides.citations ?? outputBase.citations.filter(citation => boundCitationIds.has(citation.citationId))
-  const derivedClaims = overrides.claims ?? outputBase.claims.map(claim => ({ ...claim, claimType: boundCitationIds.size > 0 ? claim.claimType : 'process', citationIds: claim.citationIds.filter(citationId => boundCitationIds.has(citationId)) }))
-  const derivedFaqPairs = overrides.faqPairs ?? (input.contentType === 'faq' ? parsedForBody.report.faqPairs.map(pair => ({ question: pair.question, answer: pair.answer, citationIds: pair.answer.match(/\[cite:([A-Za-z0-9._:-]{1,160})\]/gu)?.map(marker => marker.slice('cite:'.length)) ?? [] })) : [])
-  const merged = { ...outputBase, ...overrides, body: derivedBody, bodyHash: overrides.bodyHash ?? sha256Text(derivedBody), paragraphBindings: finalBindings, citations: derivedCitations, claims: derivedClaims, faqPairs: derivedFaqPairs }
+  const derivedClaimsFinal = overrides.claims ?? derivedClaims
+  const derivedFaqPairs = overrides.faqPairs ?? (input.contentType === 'faq' ? parsedForBody.report.faqPairs.map(pair => ({ question: pair.question, answer: pair.answer, citationIds: markerIds(pair.answer) })) : [])
+  const merged = { ...outputBase, ...overrides, body: mergedBody, summary: overrides.summary ?? summary, bodyHash: overrides.bodyHash ?? sha256Text(mergedBody), paragraphBindings: finalBindings, citations: derivedCitations, claims: derivedClaimsFinal, faqPairs: derivedFaqPairs }
   const withoutResponseHash = { ...merged } as Omit<ProviderOutput, 'responseHash'>
   delete (withoutResponseHash as Partial<ProviderOutput>).responseHash
   return { ...withoutResponseHash, responseHash: overrides.responseHash ?? responseHash(withoutResponseHash) }

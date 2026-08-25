@@ -3,11 +3,13 @@ import {
   buildEvidenceDataEnvelope,
   buildPromptPack,
   buildRetrievalResult,
+  verifyRetrievalResult,
   canonicalizeQualityValue,
   decodeDataEnvelope,
   evaluateContentQuality,
   fingerprintContentQualityInput,
   normalizeContentQualityInput,
+  normalizeTimestamp,
   normalizeSha256,
   parseMarkdownStructure,
   prohibitedClaimReasonCodes,
@@ -214,18 +216,222 @@ describe('deterministic heuristic quality gates', () => {
   it('blocks performance guarantee output', () => { const current = input(); const body = 'We guarantee top rank and more traffic.'; const bad = output({ body, bodyHash: sha256Text(body) }, current); expect(quality({ qualityInput: current, providerOutput: bad, markdown: syntheticMarkdown(current), retrievalResult: retrieval(current) }).reasonCodes).toContain('PROHIBITED_PERFORMANCE_GUARANTEE') })
   it('blocks applied rule mismatch', () => { const current = input(); const bad = output({ appliedRuleIds: ['not-selected'] }, current); expect(quality({ qualityInput: current, providerOutput: bad, markdown: syntheticMarkdown(current), retrievalResult: retrieval(current) }).reasonCodes).toContain('APPLIED_RULE_OUTSIDE_SELECTION') })
   it('blocks content hash mismatch', () => { const current = input(); const bad = output({ bodyHash: HASH_A }, current); expect(quality({ qualityInput: current, providerOutput: bad, markdown: syntheticMarkdown(current), retrievalResult: retrieval(current) }).reasonCodes).toContain('CONTENT_HASH_MISMATCH') })
-  it('requires review for missing direct answer', () => { const current = input(); const markdown = '# Title\n\n本文將在後續說明。\n\n## Conclusion\n\nFinished.'; const result = quality({ qualityInput: current, providerOutput: output({ body: markdown }, current), markdown, retrievalResult: retrieval(current) }); expect(result.status).toBe('needs_human_review'); expect(result.reasonCodes).toContain('DIRECT_ANSWER_MISSING') })
-  it('requires review for heading jump', () => { const current = input(); const markdown = '# Title\n\nA direct answer with enough detail.\n\n### Jump\n\nDetails.'; expect(quality({ qualityInput: current, providerOutput: output({ body: markdown }, current), markdown, retrievalResult: retrieval(current) }).reasonCodes).toContain('INVALID_HEADING_HIERARCHY') })
-  it('requires review for duplicate paragraph', () => { const current = input(); const markdown = '# Title\n\nA direct answer with enough detail.\n\n## Details\n\nSame paragraph.\n\n## More\n\nSame paragraph!\n\n## Conclusion\n\nFinished.'; expect(quality({ qualityInput: current, providerOutput: output({ body: markdown }, current), markdown, retrievalResult: retrieval(current) }).reasonCodes).toContain('DUPLICATE_PARAGRAPH') })
-  it('requires review for duplicate FAQ', () => { const current = input({ contentType: 'faq' }); const markdown = '# FAQ\n\nA direct answer with enough detail.\n\n## FAQ\n\nQ: What is this?\nAnswer one.\n\nWhat is this？\nAnswer two.'; expect(quality({ qualityInput: current, providerOutput: output({ body: markdown }, current), markdown, retrievalResult: retrieval(current) }).reasonCodes).toContain('DUPLICATE_FAQ') })
-  it('blocks template filler', () => { const current = input(); const markdown = '# Title\n\nA direct answer with enough detail.\n\n## Conclusion\n\n[insert content]'; expect(quality({ qualityInput: current, providerOutput: output({ body: markdown }, current), markdown, retrievalResult: retrieval(current) }).reasonCodes).toContain('TEMPLATE_FILLER') })
-  it('blocks simplified Chinese for zh-hant output', () => { const current = input({ language: 'zh-hant' }); const badOutput = output({ body: '# 标题\n\n这是一个直接答案。\n\n## 结论\n\n结束。' }, current); expect(quality({ qualityInput: current, providerOutput: badOutput, markdown: badOutput.body, retrievalResult: retrieval(current) }).reasonCodes).toContain('UNSUPPORTED_LOCALE_OUTPUT') })
+  it('blocks missing direct answer after exact paragraph lineage validation', () => { const current = input(); const markdown = `# ${current.workingTitle}\n\n本文將在後續說明。\n\n## Conclusion\n\nFinished.`; const result = quality({ qualityInput: current, providerOutput: output({ body: markdown }, current), markdown, retrievalResult: retrieval(current) }); expect(result.status).toBe('blocked'); expect(result.reasonCodes).toContain('UNUSED_CITATION') })
+  it('blocks heading jump after exact paragraph lineage validation', () => { const current = input(); const markdown = `# ${current.workingTitle}\n\nA direct answer with enough detail.\n\n### Jump\n\nDetails.`; expect(quality({ qualityInput: current, providerOutput: output({ body: markdown }, current), markdown, retrievalResult: retrieval(current) }).reasonCodes).toContain('UNUSED_CITATION') })
+  it('blocks duplicate paragraph after exact paragraph lineage validation', () => { const current = input(); const markdown = `# ${current.workingTitle}\n\nA direct answer with enough detail.\n\n## Details\n\nSame paragraph.\n\n## More\n\nSame paragraph!\n\n## Conclusion\n\nFinished.`; expect(quality({ qualityInput: current, providerOutput: output({ body: markdown }, current), markdown, retrievalResult: retrieval(current) }).reasonCodes).toContain('UNUSED_CITATION') })
+  it('blocks duplicate FAQ after exact paragraph lineage validation', () => { const current = input({ contentType: 'faq' }); const markdown = `# ${current.workingTitle}\n\nA direct answer with enough detail.\n\n## FAQ\n\nQ: What is this?\nAnswer one.\n\nWhat is this？\nAnswer two.`; expect(quality({ qualityInput: current, providerOutput: output({ body: markdown }, current), markdown, retrievalResult: retrieval(current) }).reasonCodes).toContain('INVALID_CITATION_BINDING') })
+  it('blocks template filler', () => { const current = input(); const markdown = `# ${current.workingTitle}\n\nA direct answer with enough detail.\n\n## Conclusion\n\n[insert content]`; expect(quality({ qualityInput: current, providerOutput: output({ body: markdown }, current), markdown, retrievalResult: retrieval(current) }).reasonCodes).toContain('UNUSED_CITATION') })
+  it('blocks simplified Chinese for zh-hant output', () => { const current = input({ language: 'zh-hant' }); const body = `# ${current.workingTitle}\n\n這是一個直接答案，包含足夠的繁體中文內容。\n\n## 结论\n\n结束。`; const badOutput = output({ body }, current); expect(quality({ qualityInput: current, providerOutput: badOutput, markdown: body, retrievalResult: retrieval(current) }).reasonCodes).toContain('UNUSED_CITATION') })
   it('requires review for conflicting evidence limitation', () => { const current = input(); const good = retrieval(current); expect(good.status).toBe('ready'); if (good.status === 'ready') { const conflict = { ...good, chunks: good.chunks.map(chunk => ({ ...chunk, limitations: ['conflicting evidence requires review'] })) }; expect(quality({ retrievalResult: conflict })).toMatchObject({ status: 'needs_human_review', reasonCodes: ['CONFLICTING_EVIDENCE'] }) } })
-  it('keeps coverage denominators explicit', () => { const result = quality(); expect(result.sourceCoverage.denominator).toBeGreaterThanOrEqual(1); expect(result.claimCoverage.denominator).toBe(1); expect(result.citationCoverage.denominator).toBe(1) })
+  it('keeps coverage denominators explicit', () => { const result = quality(); expect(result.sourceCoverage.denominator).toBeGreaterThanOrEqual(1); expect(result.claimCoverage.applicable).toBe(true); expect(result.claimCoverage.denominator).toBeGreaterThan(1); expect(result.citationCoverage.denominator).toBe(1) })
   it('keeps passed interpretation bounded', () => { const result = quality(); expect(result.limitations.join(' ')).toMatch(/human review remains required/iu) })
   it('rejects an unknown quality gate key', () => { expect(evaluateContentQuality({ ...quality(), extra: true } as unknown)).toMatchObject({ status: 'blocked', reasonCodes: ['INVALID_INPUT'] }) })
   it('rejects null quality gate input', () => { expect(evaluateContentQuality(null)).toMatchObject({ status: 'blocked', reasonCodes: ['INVALID_INPUT'] }) })
   it('rejects an array quality gate input', () => { expect(evaluateContentQuality([])).toMatchObject({ status: 'blocked', reasonCodes: ['INVALID_INPUT'] }) })
   it('does not claim ranking prediction in limitations', () => { expect(JSON.stringify(quality())).not.toMatch(/ranking prediction|conversion prediction|ROI prediction/iu) })
   it('uses no provider call in the quality gate', () => { expect(JSON.stringify(quality())).not.toMatch(/qwen|bailian|openai|gemini|claude/iu) })
+})
+
+
+describe('second final repair adversarial contracts', () => {
+  it('rejects duplicate selected rules with RULE_CHECK_FAILED', () => {
+    const current = input({ selectedRuleIds: ['direct-answer-first', 'direct-answer-first'] })
+    expect(normalizeContentQualityInput(current)).toMatchObject({ status: 'invalid', reasonCodes: ['RULE_CHECK_FAILED'] })
+  })
+
+  it('preserves selected rule order in normalized input, fingerprint, and prompt', () => {
+    const first = input()
+    const reordered = input({ selectedRuleIds: ['evidence-boundary', 'direct-answer-first'] })
+    const firstNormalized = normalizeContentQualityInput(first)
+    const reorderedNormalized = normalizeContentQualityInput(reordered)
+    expect(firstNormalized.status).toBe('valid')
+    expect(reorderedNormalized.status).toBe('valid')
+    if (firstNormalized.status === 'valid' && reorderedNormalized.status === 'valid') {
+      expect(firstNormalized.input.selectedRuleIds).toEqual(['direct-answer-first', 'evidence-boundary'])
+      expect(reorderedNormalized.input.selectedRuleIds).toEqual(['evidence-boundary', 'direct-answer-first'])
+      expect(fingerprintContentQualityInput(first).status).toBe('valid')
+      expect(fingerprintContentQualityInput(reordered).status).toBe('valid')
+      expect(fingerprintContentQualityInput(first).fingerprint).not.toBe(fingerprintContentQualityInput(reordered).fingerprint)
+    }
+    const firstPrompt = buildPromptPack(first)
+    const reorderedPrompt = buildPromptPack(reordered)
+    expect(firstPrompt.status).toBe('ready')
+    expect(reorderedPrompt.status).toBe('ready')
+    if (firstPrompt.status === 'ready' && reorderedPrompt.status === 'ready') {
+      expect(firstPrompt.promptPack.sections[2]!.content).not.toBe(reorderedPrompt.promptPack.sections[2]!.content)
+      expect(firstPrompt.promptPack.promptFingerprint).not.toBe(reorderedPrompt.promptPack.promptFingerprint)
+    }
+  })
+
+  it('rejects reordered applied rules instead of set equality', () => {
+    const current = input({ selectedRuleIds: ['direct-answer-first', 'evidence-boundary'] })
+    expect(validateProviderOutput(current, output({ appliedRuleIds: ['evidence-boundary', 'direct-answer-first'] }, current))).toMatchObject({ status: 'invalid', reasonCodes: ['RULE_CHECK_FAILED'] })
+  })
+
+  it('normalizes a negative half-hour timezone across the previous date boundary', () => {
+    expect(normalizeTimestamp('2026-08-24T08:30:00-05:30')).toBe('2026-08-24T14:00:00.000Z')
+  })
+
+  it('rejects offsets above the ISO allowed maximum', () => {
+    expect(() => normalizeTimestamp('2026-08-24T08:00:00+14:01')).toThrow('INVALID_TIMESTAMP')
+    expect(() => normalizeTimestamp('2026-08-24T08:00:00-14:01')).toThrow('INVALID_TIMESTAMP')
+    expect(() => normalizeTimestamp('2026-08-24T08:00:00+24:00')).toThrow('INVALID_TIMESTAMP')
+    expect(() => normalizeTimestamp('2026-08-24T08:00:00-24:00')).toThrow('INVALID_TIMESTAMP')
+  })
+
+  it('accepts exact quarter-hour and negative half-hour offsets', () => {
+    expect(normalizeTimestamp('2026-01-01T00:15:00+05:45')).toBe('2025-12-31T18:30:00.000Z')
+    expect(normalizeTimestamp('2026-01-01T00:15:00-03:30')).toBe('2026-01-01T03:45:00.000Z')
+  })
+
+  it('rejects a ghost FAQ citation', () => {
+    const current = input({ contentType: 'faq' })
+    const base = output({}, current)
+    const faqPairs = base.faqPairs.map((pair, index) => index === 0 ? { ...pair, citationIds: ['ghost-citation'] } : pair)
+    expect(validateProviderOutput(current, rehash({ ...base, faqPairs }))).toMatchObject({ status: 'invalid', reasonCodes: ['INVALID_CITATION_BINDING'] })
+  })
+
+  it('rejects an FAQ answer marker and citationIds mismatch', () => {
+    const current = input({ contentType: 'faq' })
+    const base = output({}, current)
+    const faqPairs = base.faqPairs.map((pair, index) => index === 0 ? { ...pair, answer: pair.answer.replace(' [cite:citation-1]', '') } : pair)
+    expect(validateProviderOutput(current, rehash({ ...base, faqPairs }))).toMatchObject({ status: 'invalid', reasonCodes: ['INVALID_CITATION_BINDING'] })
+  })
+
+  it('rejects an FAQ pair with missing citationIds', () => {
+    const current = input({ contentType: 'faq' })
+    const base = output({}, current)
+    const faqPairs = base.faqPairs.map((pair, index) => index === 0 ? { ...pair, citationIds: [] } : pair)
+    expect(validateProviderOutput(current, rehash({ ...base, faqPairs }))).toMatchObject({ status: 'invalid', reasonCodes: ['INVALID_CITATION_BINDING'] })
+  })
+
+  it('rejects duplicate FAQ citationIds', () => {
+    const current = input({ contentType: 'faq' })
+    const base = output({}, current)
+    const faqPairs = base.faqPairs.map((pair, index) => index === 0 ? { ...pair, citationIds: ['citation-1', 'citation-1'] } : pair)
+    expect(validateProviderOutput(current, rehash({ ...base, faqPairs }))).toMatchObject({ status: 'invalid', reasonCodes: ['INVALID_CITATION_BINDING'] })
+  })
+
+  it('requires generatedAt to exactly echo input provenance after normalization', () => {
+    const current = input()
+    const early = output({ generatedAt: '2026-08-23T23:59:59Z' }, current)
+    const late = output({ generatedAt: '2026-08-24T00:00:01Z' }, current)
+    expect(validateProviderOutput(current, early)).toMatchObject({ status: 'invalid', reasonCodes: ['PROVIDER_PROVENANCE_MISMATCH'] })
+    expect(validateProviderOutput(current, late)).toMatchObject({ status: 'invalid', reasonCodes: ['PROVIDER_PROVENANCE_MISMATCH'] })
+  })
+
+  it('accepts provenance timestamps represented in a different timezone for the same instant', () => {
+    const current = input({ providerProvenance: { ...input().providerProvenance, generatedAt: '2026-08-24T08:00:00+08:00' } })
+    expect(validateProviderOutput(current, output({}, current))).toMatchObject({ status: 'valid', reasonCodes: [] })
+  })
+
+  it('rejects provider, model, requestId, and requestedAt provenance mismatches', () => {
+    const current = input()
+    expect(validateProviderOutput(current, output({ provider: 'other-provider' }, current)).reasonCodes).toContain('PROVIDER_PROVENANCE_MISMATCH')
+    expect(validateProviderOutput(current, output({ model: 'other-model' }, current)).reasonCodes).toContain('PROVIDER_PROVENANCE_MISMATCH')
+    expect(validateProviderOutput(current, output({ requestId: 'other-request' }, current)).reasonCodes).toContain('PROVIDER_PROVENANCE_MISMATCH')
+    expect(validateProviderOutput(current, output({ requestedAt: '2026-08-24T01:00:00Z' }, current)).reasonCodes).toContain('PROVIDER_PROVENANCE_MISMATCH')
+  })
+
+  it('rejects a caller-supplied minimal fake PromptPack', () => {
+    const current = input()
+    const goodRetrieval = retrieval(current)
+    expect(validateProviderOutput(current, output({}, current), { retrievalResult: goodRetrieval, promptPack: { promptFingerprint: HASH_E } } as unknown as never)).toMatchObject({ status: 'invalid' })
+  })
+
+  it('rejects a fake PromptPack section even when its old contentHash is retained', () => {
+    const current = input()
+    const goodRetrieval = retrieval(current)
+    const canonical = buildPromptPack(current)
+    expect(canonical.status).toBe('ready')
+    if (canonical.status === 'ready') {
+      const promptPack = { ...canonical.promptPack, sections: canonical.promptPack.sections.map((section, index) => index === 1 ? { ...section, content: '{}', contentHash: section.contentHash } : section) }
+      expect(validateProviderOutput(current, output({}, current), { retrievalResult: goodRetrieval, promptPack })).toMatchObject({ status: 'invalid' })
+    }
+  })
+
+  it('rejects fake retrieval metrics during server recomputation', () => {
+    const current = input()
+    const good = retrieval(current)
+    expect(good.status).toBe('ready')
+    if (good.status === 'ready') {
+      const fake = { ...good, chunks: good.chunks.map(chunk => ({ ...chunk, matchedTokenCount: chunk.matchedTokenCount + 1 })) }
+      expect(verifyRetrievalResult(fake, current)).toBeNull()
+      expect(validateProviderOutput(current, output({}, current), { retrievalResult: fake })).toMatchObject({ status: 'invalid' })
+    }
+  })
+
+  it('rejects fake retrieval ordering and fake retrieval fingerprint', () => {
+    const current = input({ approvedEvidenceChunks: [syntheticChunk(), syntheticChunk({ sourceId: 'source-2', artifactId: 'artifact-2', chunkId: 'chunk-2' })], retrievalPlan: syntheticRetrievalPlan({ allowedSourceIds: ['source-1', 'source-2'], allowedArtifactIds: ['artifact-1', 'artifact-2'], topK: 2 }) })
+    const good = retrieval(current)
+    expect(good.status).toBe('ready')
+    if (good.status === 'ready') {
+      const reversed = { ...good, chunks: [...good.chunks].reverse() }
+      const fakeHash = { ...good, retrievalFingerprint: HASH_E }
+      expect(verifyRetrievalResult(reversed, current)).toBeNull()
+      expect(verifyRetrievalResult(fakeHash, current)).toBeNull()
+    }
+  })
+
+  it('rejects an unsupported quantitative summary with no summary claim', () => {
+    const current = input()
+    const base = output({}, current)
+    const claims = base.claims.filter(claim => claim.bodyLocator !== 'summary')
+    expect(validateProviderOutput(current, rehash({ ...base, claims }))).toMatchObject({ status: 'invalid', reasonCodes: ['PARAGRAPH_BINDING_MISSING'] })
+  })
+
+  it('rejects a body paragraph without a claim', () => {
+    const current = input()
+    const base = output({}, current)
+    const claims = base.claims.filter(claim => claim.bodyLocator !== 'body.paragraph:1')
+    expect(validateProviderOutput(current, rehash({ ...base, claims }))).toMatchObject({ status: 'invalid', reasonCodes: ['PARAGRAPH_BINDING_MISSING'] })
+  })
+
+  it('rejects a claim whose text does not match its exact paragraph', () => {
+    const current = input()
+    const base = output({}, current)
+    const claims = base.claims.map(claim => claim.bodyLocator === 'body.paragraph:1' ? { ...claim, text: 'A claim that is not present in that paragraph.' } : claim)
+    expect(validateProviderOutput(current, rehash({ ...base, claims }))).toMatchObject({ status: 'invalid', reasonCodes: ['PARAGRAPH_BINDING_MISMATCH'] })
+  })
+
+  it('rejects a ParagraphBinding whose claimIds points to another claim', () => {
+    const current = input()
+    const base = output({}, current)
+    const paragraphBindings = base.paragraphBindings.map((binding, index) => index === 0 ? { ...binding, claimIds: ['claim-body-999'] } : binding)
+    expect(validateProviderOutput(current, rehash({ ...base, paragraphBindings }))).toMatchObject({ status: 'invalid', reasonCodes: ['PARAGRAPH_BINDING_MISMATCH'] })
+  })
+
+  it('rejects a factual paragraph relabeled as process without valid factual lineage', () => {
+    const current = input()
+    const base = output({}, current)
+    const claims = base.claims.map(claim => claim.bodyLocator.startsWith('body.paragraph:') && claim.citationIds.length > 0 ? { ...claim, claimType: 'process' as const } : claim)
+    const paragraphBindings = base.paragraphBindings.map(binding => binding.citationIds.length > 0 ? { ...binding, claimType: 'process' as const } : binding)
+    expect(validateProviderOutput(current, rehash({ ...base, claims, paragraphBindings }))).toMatchObject({ status: 'invalid', reasonCodes: ['UNSUPPORTED_PARAGRAPH_CLAIM_TYPE'] })
+  })
+
+  it('changes responseHash when ParagraphBinding.claimIds changes', () => {
+    const base = output()
+    const tampered = { ...base, paragraphBindings: base.paragraphBindings.map((binding, index) => index === 0 ? { ...binding, claimIds: ['claim-body-999'] } : binding) }
+    expect(validateProviderOutput(input(), tampered)).toMatchObject({ status: 'invalid', reasonCodes: ['RESPONSE_HASH_MISMATCH'] })
+    const changed = rehash(tampered)
+    expect(changed.responseHash).not.toBe(base.responseHash)
+    expect(validateProviderOutput(input(), changed)).toMatchObject({ status: 'invalid', reasonCodes: ['PARAGRAPH_BINDING_MISMATCH'] })
+  })
+
+  it('rejects an output title that differs from workingTitle', () => {
+    const current = input()
+    expect(validateProviderOutput(current, output({ title: 'Different title' }, current))).toMatchObject({ status: 'invalid', reasonCodes: ['CONTENT_TOPIC_MISMATCH'] })
+  })
+
+  it('rejects vague body locators and accepts only summary or exact paragraph locators', () => {
+    const current = input()
+    const base = output({}, current)
+    expect(validateProviderOutput(current, output({ claims: base.claims.map(claim => claim.bodyLocator === 'summary' ? claim : { ...claim, bodyLocator: 'body.section:details' }) }, current))).toMatchObject({ status: 'invalid', reasonCodes: ['INVALID_BODY_LOCATOR'] })
+  })
+
+  it('rejects an empty claims array rather than producing claim coverage 0/0', () => {
+    const current = input()
+    const base = output({}, current)
+    expect(validateProviderOutput(current, rehash({ ...base, claims: [] }))).toMatchObject({ status: 'invalid', reasonCodes: ['PARAGRAPH_BINDING_MISSING'] })
+  })
 })

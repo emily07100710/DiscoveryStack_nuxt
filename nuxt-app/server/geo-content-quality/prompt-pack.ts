@@ -1,6 +1,6 @@
 import { resolveCanonicalGeoRules, GEO_RULESET_VERSION } from '../geo/rules'
-import { normalizeContentQualityInput, isRecord, readField, hasExactKeys, normalizeSha256, codeUnitCompare } from './normalization'
-import { buildRetrievalResult } from './rag-contract'
+import { normalizeContentQualityInput, isRecord, readField, hasExactKeys, normalizeSha256 } from './normalization'
+import { buildRetrievalResult, verifyRetrievalResult } from './rag-contract'
 import { canonicalizeQualityValue, contentQualityFingerprintForNormalizedInput, sha256Text } from './fingerprint'
 import { CONTENT_QUALITY_CONTRACT_VERSION, GOVERNANCE_RULES_VERSION, PROMPT_PACK_VERSION, PROMPT_SECTION_IDS, type ContentQualityInput, type PromptPack, type PromptPackResult, type PromptSection, type RetrievalResult } from './types'
 import type { ReasonCode } from './reason-codes'
@@ -15,33 +15,15 @@ function canonicalJson(value: unknown): string { return canonicalizeQualityValue
 function dataSection(id: PromptSection['id'], value: unknown): PromptSection { return section(id, canonicalJson(value)) }
 
 function validatePromptRetrieval(value: unknown, input: ContentQualityInput): RetrievalResult | null {
-  if (!isRecord(value) || !hasExactKeys(value, RETRIEVAL_KEYS)) return null
-  try {
-    if (readField(value, 'status') !== 'ready' || readField(value, 'retrievalVersion') !== 'geo-content-quality-retrieval-v1') return null
-    const queryFingerprint = normalizeSha256(readField(value, 'queryFingerprint'))
-    if (queryFingerprint !== input.retrievalPlan.queryFingerprint) return null
-    const retrievalFingerprint = normalizeSha256(readField(value, 'retrievalFingerprint'))
-    if (normalizeSha256(readField(value, 'corpusSnapshotHash')) !== input.retrievalPlan.corpusSnapshotHash || normalizeSha256(readField(value, 'evidenceSnapshotHash')) !== input.evidenceSnapshotHash) return null
-    const chunks = readField(value, 'chunks')
-    if (!Array.isArray(chunks) || chunks.length === 0 || chunks.length > input.retrievalPlan.topK) return null
-    const approvedByIdentity = new Map(input.approvedEvidenceChunks.map(chunk => [`${chunk.sourceId}|${chunk.artifactId}|${chunk.chunkId}`, chunk]))
-    const candidates = chunks.map(chunk => {
-      if (!isRecord(chunk) || !hasExactKeys(chunk, CHUNK_KEYS)) throw new Error('INVALID_INPUT')
-      const identity = `${String(readField(chunk, 'sourceId'))}|${String(readField(chunk, 'artifactId'))}|${String(readField(chunk, 'chunkId'))}`
-      const approved = approvedByIdentity.get(identity)
-      if (!approved || readField(chunk, 'chunkHash') !== approved.chunkHash || readField(chunk, 'artifactHash') !== approved.artifactHash || readField(chunk, 'reviewedText') !== approved.reviewedText || readField(chunk, 'evidenceSnapshotHash') !== approved.evidenceSnapshotHash || readField(chunk, 'corpusSnapshotHash') !== approved.corpusSnapshotHash) throw new Error('RETRIEVAL_OUTSIDE_ALLOWLIST')
-      const baseChunk: Record<string, unknown> = {}
-      for (const key of CHUNK_KEYS.slice(0, 14)) baseChunk[key] = readField(chunk, key)
-      return { chunk: baseChunk, limitations: readField(chunk, 'limitations') }
-    })
-    const verified = buildRetrievalResult(input, candidates)
-    if (verified.status !== 'ready' || verified.retrievalFingerprint !== retrievalFingerprint) return null
-    return verified
-  } catch { return null }
+  return verifyRetrievalResult(value, input)
 }
 
 function resolveRules(input: ContentQualityInput): ReturnType<typeof resolveCanonicalGeoRules> | null {
-  try { return resolveCanonicalGeoRules([...input.selectedRuleIds].sort(codeUnitCompare)) } catch { return null }
+  try {
+    const rules = resolveCanonicalGeoRules(input.selectedRuleIds)
+    if (rules.length !== input.selectedRuleIds.length || rules.some((rule, index) => rule.id !== input.selectedRuleIds[index])) return null
+    return rules
+  } catch { return null }
 }
 
 function buildSections(input: ContentQualityInput, retrieval: RetrievalResult): PromptSection[] | null {

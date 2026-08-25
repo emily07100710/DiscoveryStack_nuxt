@@ -4,6 +4,7 @@ import { contentQualityInputSchema } from './schemas'
 import { CONTENT_QUALITY_CONTRACT_VERSION, type ApprovedEvidenceChunk, type AuthoritySource, type ContentQualityInput, type ProviderProvenance, type RetrievalPlan } from './types'
 import type { ReasonCode } from './reason-codes'
 import { SHA256_HEX, ISO_TIMESTAMP } from './schemas'
+import { resolveCanonicalGeoRules } from '../geo/rules'
 
 export type NormalizationResult =
   | { status: 'valid', input: ContentQualityInput, reasonCodes: [] }
@@ -80,12 +81,14 @@ function parseTimestamp(value: string): Date {
   const second = Number(match[6])
   const millis = Number((match[7] || '0').padEnd(3, '0').slice(0, 3))
   const timezone = match[8]!
-  const offsetHours = timezone === 'Z' ? 0 : Number(timezone.slice(0, 3))
-  const offsetMinutes = timezone === 'Z' ? 0 : Number(timezone.slice(4))
-  if (year < 0 || month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59 || offsetHours > 23 || offsetMinutes > 59 || (offsetHours === 23 && offsetMinutes > 59)) throw new NormalizationIssue('INVALID_TIMESTAMP')
+  const offsetSign = timezone === 'Z' ? 1 : timezone[0] === '-' ? -1 : 1
+  const offsetHours = timezone === 'Z' ? 0 : Number(timezone.slice(1, 3))
+  const offsetMinutes = timezone === 'Z' ? 0 : Number(timezone.slice(4, 6))
+  const offsetTotalMinutes = offsetHours * 60 + offsetMinutes
+  if (year < 0 || month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59 || offsetHours > 14 || offsetMinutes > 59 || (offsetHours === 14 && offsetMinutes !== 0)) throw new NormalizationIssue('INVALID_TIMESTAMP')
   const base = new Date(Date.UTC(2000, month - 1, day, hour, minute, second, millis))
   base.setUTCFullYear(year)
-  const offset = timezone === 'Z' ? 0 : (offsetHours * 60 + offsetMinutes) * (timezone.startsWith('-') ? -1 : 1)
+  const offset = timezone === 'Z' ? 0 : offsetTotalMinutes * offsetSign
   const date = new Date(base.getTime() - offset * 60_000)
   if (!Number.isFinite(date.getTime())) throw new NormalizationIssue('INVALID_TIMESTAMP')
   const local = new Date(date.getTime() + offset * 60_000)
@@ -140,6 +143,13 @@ function normalizeId(value: unknown): string {
 function normalizeIdList(value: unknown, max: number, duplicateReason: ReasonCode = 'DUPLICATE_EVIDENCE'): string[] {
   if (!Array.isArray(value) || value.length > max || value.some(item => typeof item !== 'string')) throw new NormalizationIssue('INVALID_INPUT')
   return uniqueSorted(value as string[], duplicateReason)
+}
+
+function normalizeOrderedIdList(value: unknown, max: number, duplicateReason: ReasonCode): string[] {
+  if (!Array.isArray(value) || value.length > max || value.some(item => typeof item !== 'string')) throw new NormalizationIssue('INVALID_INPUT')
+  const ids = (value as unknown[]).map(normalizeId)
+  if (new Set(ids).size !== ids.length) throw new NormalizationIssue(duplicateReason)
+  return ids
 }
 
 function normalizePurposes(value: unknown): string[] {
@@ -256,8 +266,13 @@ export function normalizeContentQualityInput(value: unknown): NormalizationResul
     const goals = goalsRaw.map(goal => normalizeWhitespaceText(goal, 10000))
     const constraints = constraintsRaw.map(constraint => normalizeWhitespaceText(constraint, 10000))
     const selectedRuleIdsRaw = readField(value, 'selectedRuleIds')
-    if (!Array.isArray(selectedRuleIdsRaw)) throw new NormalizationIssue('INVALID_INPUT')
-    const selectedRuleIds = dedupeSorted(selectedRuleIdsRaw.map(normalizeId))
+    const selectedRuleIds = normalizeOrderedIdList(selectedRuleIdsRaw, 40, 'RULE_CHECK_FAILED')
+    try {
+      const canonicalRules = resolveCanonicalGeoRules(selectedRuleIds)
+      if (canonicalRules.length !== selectedRuleIds.length || canonicalRules.some((rule, index) => rule.id !== selectedRuleIds[index])) throw new Error('RULE_CHECK_FAILED')
+    } catch {
+      throw new NormalizationIssue('RULE_CHECK_FAILED')
+    }
     const retrievalPlan = normalizeRetrievalPlan(readField(value, 'retrievalPlan'))
     const language = readField(value, 'language') as ContentQualityInput['language']
     const computedQueryFingerprint = queryFingerprintForFields({ topic, workingTitle, primaryQuestion, audience, goals, language })

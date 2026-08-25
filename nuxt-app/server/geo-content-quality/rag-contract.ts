@@ -6,6 +6,8 @@ import type { ReasonCode } from './reason-codes'
 const CANDIDATE_KEYS = ['chunk', 'limitations'] as const
 const MINIMAL_CANDIDATE_KEYS = ['chunk'] as const
 const PLAN_KEYS = ['retrievalVersion', 'queryFingerprint', 'corpusSnapshotHash', 'evidenceSnapshotHash', 'topK', 'allowedSourceIds', 'allowedArtifactIds', 'requiredPurposes'] as const
+const RETRIEVAL_RESULT_KEYS = ['status', 'retrievalVersion', 'queryFingerprint', 'retrievalFingerprint', 'corpusSnapshotHash', 'evidenceSnapshotHash', 'chunks', 'reasonCodes', 'limitations'] as const
+const RETRIEVED_CHUNK_KEYS = ['sourceId', 'artifactId', 'chunkId', 'sourceType', 'title', 'locator', 'artifactHash', 'chunkHash', 'corpusSnapshotHash', 'evidenceSnapshotHash', 'reviewedText', 'approvedPurposes', 'capturedAt', 'reviewStatus', 'matchedTokenCount', 'queryTokenCount', 'relevanceRatio', 'scoreBasis', 'limitations'] as const
 
 function emptyResult(status: 'blocked' | 'not_ready', reasonCode: ReasonCode, plan?: RetrievalPlan, queryFingerprint = ''): RetrievalResult {
   return { status, retrievalVersion: RETRIEVAL_VERSION, queryFingerprint, retrievalFingerprint: null, corpusSnapshotHash: plan?.corpusSnapshotHash || '', evidenceSnapshotHash: plan?.evidenceSnapshotHash || '', chunks: [], reasonCodes: [reasonCode], limitations: ['Deterministic lexical evidence retrieval V1 did not create fallback context; human review is required.'] }
@@ -114,6 +116,38 @@ export function buildRetrievalResult(inputOrPlanValue: unknown, candidateValues:
     if (error instanceof NormalizationIssue) return emptyResult('blocked', error.reasonCode, plan, queryFingerprint)
     return emptyResult('blocked', 'INVALID_INPUT', plan, queryFingerprint)
   }
+}
+
+export function verifyRetrievalResult(value: unknown, input: ContentQualityInput): RetrievalResult | null {
+  if (!isRecord(value) || !hasExactKeys(value, RETRIEVAL_RESULT_KEYS)) return null
+  try {
+    if (readField(value, 'status') !== 'ready' || readField(value, 'retrievalVersion') !== RETRIEVAL_VERSION) return null
+    const rawChunks = readField(value, 'chunks')
+    const rawReasonCodes = readField(value, 'reasonCodes')
+    const rawLimitations = readField(value, 'limitations')
+    if (!Array.isArray(rawChunks) || !Array.isArray(rawReasonCodes) || rawReasonCodes.length !== 0 || !Array.isArray(rawLimitations) || rawLimitations.some(item => typeof item !== 'string' || item.length > 1000)) return null
+    const normalizedQueryFingerprint = normalizeSha256(readField(value, 'queryFingerprint'))
+    const normalizedRetrievalFingerprint = normalizeSha256(readField(value, 'retrievalFingerprint'))
+    const normalizedCorpusSnapshotHash = normalizeSha256(readField(value, 'corpusSnapshotHash'))
+    const normalizedEvidenceSnapshotHash = normalizeSha256(readField(value, 'evidenceSnapshotHash'))
+    const normalizedChunks: RetrievedEvidenceChunk[] = rawChunks.map(rawChunk => {
+      if (!isRecord(rawChunk) || !hasExactKeys(rawChunk, RETRIEVED_CHUNK_KEYS)) throw new NormalizationIssue('UNKNOWN_FIELD')
+      const baseChunk: Record<string, unknown> = {}
+      for (const key of RETRIEVED_CHUNK_KEYS.slice(0, 14)) baseChunk[key] = readField(rawChunk, key)
+      const candidate = normalizeCandidate({ chunk: baseChunk, limitations: readField(rawChunk, 'limitations') }, input.evidenceSnapshotHash)
+      const matchedTokenCount = readField(rawChunk, 'matchedTokenCount')
+      const queryTokenCount = readField(rawChunk, 'queryTokenCount')
+      const relevanceRatio = readField(rawChunk, 'relevanceRatio')
+      const scoreBasis = readField(rawChunk, 'scoreBasis')
+      if (typeof matchedTokenCount !== 'number' || !Number.isInteger(matchedTokenCount) || matchedTokenCount < 1 || typeof queryTokenCount !== 'number' || !Number.isInteger(queryTokenCount) || queryTokenCount < 1 || typeof relevanceRatio !== 'number' || !Number.isFinite(relevanceRatio) || relevanceRatio <= 0 || relevanceRatio > 1 || scoreBasis !== LEXICAL_RETRIEVAL_SCORE_BASIS) throw new NormalizationIssue('RETRIEVAL_FINGERPRINT_MISMATCH')
+      return { ...candidate.chunk, matchedTokenCount, queryTokenCount, relevanceRatio, scoreBasis: LEXICAL_RETRIEVAL_SCORE_BASIS, limitations: candidate.limitations || [] }
+    })
+    const presented: RetrievalResult = { status: 'ready', retrievalVersion: RETRIEVAL_VERSION, queryFingerprint: normalizedQueryFingerprint, retrievalFingerprint: normalizedRetrievalFingerprint, corpusSnapshotHash: normalizedCorpusSnapshotHash, evidenceSnapshotHash: normalizedEvidenceSnapshotHash, chunks: normalizedChunks, reasonCodes: [], limitations: [...rawLimitations] }
+    if (normalizedQueryFingerprint !== input.retrievalPlan.queryFingerprint || normalizedCorpusSnapshotHash !== input.retrievalPlan.corpusSnapshotHash || normalizedEvidenceSnapshotHash !== input.evidenceSnapshotHash) return null
+    const recomputed = buildRetrievalResult(input, normalizedChunks.map(chunk => ({ chunk: { sourceId: chunk.sourceId, artifactId: chunk.artifactId, chunkId: chunk.chunkId, sourceType: chunk.sourceType, title: chunk.title, locator: chunk.locator, artifactHash: chunk.artifactHash, chunkHash: chunk.chunkHash, corpusSnapshotHash: chunk.corpusSnapshotHash, evidenceSnapshotHash: chunk.evidenceSnapshotHash, reviewedText: chunk.reviewedText, approvedPurposes: chunk.approvedPurposes, capturedAt: chunk.capturedAt, reviewStatus: chunk.reviewStatus }, limitations: chunk.limitations })))
+    if (recomputed.status !== 'ready' || canonicalizeQualityValue(presented) !== canonicalizeQualityValue(recomputed)) return null
+    return recomputed
+  } catch { return null }
 }
 
 export function isRetrievalResult(value: unknown): value is RetrievalResult {

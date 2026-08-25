@@ -10,7 +10,8 @@ function emptyReport(): MarkdownStructureReport {
 }
 
 function normalizeComparable(value: string): string { return value.normalize('NFKC').toLowerCase().replace(/[\p{P}\p{S}]+/gu, ' ').replace(/\s+/gu, ' ').trim() }
-function normalizeParagraph(value: string): string { return normalizeComparable(value) }
+function removeCitationMarkers(value: string): string { return value.replace(CITATION_MARKER, '') }
+function normalizeParagraph(value: string): string { return normalizeComparable(removeCitationMarkers(value)) }
 function isFence(line: string): boolean { return /^\s*(```|~~~)/u.test(line) }
 function isHeading(line: string): { level: number, title: string } | null { const match = /^(#{1,6})[ \t]+(.+?)\s*#*\s*$/u.exec(line); return match ? { level: match[1]!.length, title: match[2]!.trim() } : null }
 function isMeaningfulLine(line: string): boolean { const trimmed = line.trim(); return Boolean(trimmed) && !/^([-*_])(?:\s*\1){2,}$/u.test(trimmed) && !/^<!--.*-->$/u.test(trimmed) }
