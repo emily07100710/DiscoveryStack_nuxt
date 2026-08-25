@@ -120,7 +120,7 @@ Response 只允許三個 discriminator family，不能再要求所有 status 都
 }
 ```
 
-`bodyMarkdown` 必須非空、最多 200,000 UTF-8 bytes、拒絕 NUL，且不得 NFKC、trim、whitespace rewrite 或改變 newline；`bodyHash` 必須由 exact UTF-8 bytes 計算並為 lowercase SHA-256。`contentType`、`language` 必須與 request 完全一致；`completedAt` 不得早於 request `createdAt`。Progress/failure 帶 artifact、或 draft result 缺 artifact，都必須拒絕。
+`bodyMarkdown` 必須非空、最多 200,000 UTF-8 bytes、拒絕 NUL，且不得 NFKC、trim、whitespace rewrite 或改變 newline；`bodyHash` 必須由 exact UTF-8 bytes 計算並為 lowercase SHA-256。`contentType`、`language` 必須與 request 完全一致；`completedAt` 不得早於 request `createdAt`。Progress/failure 帶 artifact、或 draft result 缺 artifact，都必須拒絕。所有 response family 都必須滿足 `eventTime >= request.createdAt`：progress/failure/retry 使用 `observedAt`，draft result 使用 `completedAt`。`retry_wait.retryAt` 必須嚴格晚於 `observedAt`，`attempt` 是 1–10 的 safe integer；`blocked.failure.retryable` 必須固定為 `false`。這些時間與 retry guards 在 progress/failure family 也會先於 success 執行。
 
 ## 7. GEOFlow-only status 與 combined state-event validation
 
@@ -140,7 +140,7 @@ GEOFlow V1 status 僅允許：
 | `ready_to_publish`、`publishing`、`delivered` | fail closed；不映射 |
 | GEOFlow `published` | fail closed；絕不映射為 DiscoveryStack `delivered` |
 
-Public helper `validateGeoFlowStatusEventForStoredState({ previousStatus, request, response, explicitRetry })` 依固定順序執行：validate request、validate discriminated response、verify request/response lineage、verify stored-state transition，最後才回傳 accepted normalized event。固定 transition 為：
+Public helper `validateGeoFlowStatusEventForStoredState({ previousResponse, request, response, explicitRetry })` 不接受 caller-provided `previousStatus`；它依固定順序執行：validate request、validate current response against request、以同一 request validate non-null `previousResponse`、比較 previous/current 的 project/task/job/article identities、由 `previousResponse.status` 推導 transition、檢查 current event time 不得早於 previous event time、對相同 timestamp 要求完整 canonical response fingerprint 相同，最後才驗證 transition 與 explicit retry，並回傳 accepted normalized event。固定 transition 為：
 
 | Previous state | Allowed next state |
 | --- | --- |
@@ -149,8 +149,11 @@ Public helper `validateGeoFlowStatusEventForStoredState({ previousStatus, reques
 | `running` | `running`、`draft_ready`、`review_required`、`blocked`、`failed`、`retry_wait` |
 | `draft_ready` | `draft_ready`、`review_required` |
 | `review_required` | `review_required`、`blocked`、`failed` |
-| `retry_wait` | `queued`、`running`、`blocked`、`failed`，且 `explicitRetry: true` |
-| `blocked`、`failed` | terminal by default；failed 僅能以 explicit retry 先回 `queued` |
+| `retry_wait` | GEOFlow 只可依 GEOFlow vocabulary 進入 `queued`、`running`、`blocked`、`failed`；需 `explicitRetry: true` |
+| `blocked` | terminal；只可維持 `blocked` |
+| `failed` | GEOFlow 只可用 explicit retry 回 `queued`；DiscoveryStack machine 則只可用 explicit retry 回 `awaiting_generation` |
+
+DiscoveryStack 與 GEOFlow 的 retry vocabulary 必須分開驗證：DiscoveryStack 不接受以 `queued` 表示重試，GEOFlow 不接受以 `awaiting_generation` 表示重試。`delivered` 維持不可 rollback。
 
 本 combined helper 不是 delivery acceptance；它只驗證 generation event。`verifyGeoFlowLineage()` 只驗證 candidate request/response identity、article key、fingerprint、evidence snapshot 與 artifact binding；已移除 `verifyPublishedGeoFlowLineage` public export。
 
@@ -184,9 +187,9 @@ receiver
 keyId
 ```
 
-`verifySigningEnvelope()` 會重新 validate request、重新計算 body hash、檢查 algorithm/method/path、protocol/request identity、sender/receiver/keyId、signature lowercase 64-hex 格式、clock skew 與 nonce freshness，最後只呼叫 injected `nonceFreshnessVerifier` 與 `signatureVerifier`。Verification context 必須注入 `verificationTime`、1–300 秒的 `maxClockSkewSeconds`、expected sender/receiver/keyId、nonce verifier 與 signature verifier。超出 clock skew 回傳 `SIGNATURE_EXPIRED`；nonce 已使用回傳 `NONCE_REPLAYED`；operation/context 不符回傳 `SIGNATURE_CONTEXT_MISMATCH`。
+`verifySigningEnvelope()` 回傳 `Promise<ValidationResult<true>>`，並固定依序執行：parse/validate envelope、validate request/context、驗證 protocol/method/path/sender/receiver/keyId、驗證 request identity/fingerprint/body hash、驗證 clock skew、呼叫 async-capable `signatureVerifier`，只有 signature 成功後才呼叫 async-capable `nonceClaimVerifier`，atomic claim 成功後才 accepted。`NonceClaimVerifier` 的 input 固定包含 `{ nonce, sender, receiver, keyId, timestamp }`；它不是 freshness check。無效或 throwing/rejecting signature 不得 claim nonce；claim throw/reject fail closed 為 `NONCE_REPLAYED`。Nonce scope 必須包含 sender、receiver、keyId、nonce，同一 scope concurrent request 至多一個成功。Verification context 必須注入 `verificationTime`、1–300 秒的 `maxClockSkewSeconds`、expected sender/receiver/keyId、nonce claim verifier 與 signature verifier。超出 clock skew 回傳 `SIGNATURE_EXPIRED`；nonce 已使用回傳 `NONCE_REPLAYED`；operation/context 不符回傳 `SIGNATURE_CONTEXT_MISMATCH`。
 
-這仍是 injected verifier contract；沒有 production key vault、real secret resolver、real HMAC signing service、network call、`process.env` 或 `Date.now()`。
+這仍是 injected verifier contract；沒有 production key vault、real secret resolver、real HMAC signing service、network call、`process.env` 或 `Date.now()`。Production adapter 必須以 durable store 的 unique constraint 或 compare-and-set/等價原子操作實作 nonce claim；本 pure TypeScript contract 不新增 DB、Redis、credential 或 persistence。
 
 ## 9. Public HTTPS URL policy
 
@@ -198,10 +201,10 @@ Evidence locator 只做 syntax/policy guard。它要求 public HTTPS、預設 44
 
 ## 10. Fixed reason taxonomy
 
-V1 使用 bounded reason codes，包括 `INVALID_PROTOCOL_VERSION`、`INVALID_INPUT`、`UNKNOWN_FIELD`、`LIMIT_EXCEEDED`、`INVALID_HASH`、`INVALID_TIMESTAMP`、`INVALID_PUBLIC_URL`、`PRIVATE_OR_SPECIAL_TARGET`、`INVALID_OPAQUE_IDENTIFIER`、`UNKNOWN_STATE`、`REQUEST_FINGERPRINT_MISMATCH`、`IDEMPOTENCY_COLLISION`、`IDENTITY_MISMATCH`、`EVIDENCE_SNAPSHOT_MISMATCH`、`BRIEF_FINGERPRINT_MISMATCH`、`CITATION_OUTSIDE_APPROVED_EVIDENCE`、`APPLIED_RULE_OUTSIDE_SELECTION`、`PROVIDER_PROVENANCE_MISSING`、`INVALID_STATUS_TRANSITION`、`UNTRUSTED_PUBLISHED_RESULT`、`EVIDENCE_CHUNK_HASH_MISMATCH`、`DUPLICATE_EVIDENCE_IDENTITY`、`REQUIRED_EVIDENCE_MISSING`、`REQUIRED_RULE_MISSING`、`CONTENT_HASH_MISMATCH`、`RESPONSE_TIME_INVALID`、`UNTRUSTED_DELIVERY_STATE`、`SIGNATURE_CONTEXT_MISMATCH`、`SIGNATURE_EXPIRED` 與 `NONCE_REPLAYED`。
+V1 使用 bounded reason codes，包括 `INVALID_PROTOCOL_VERSION`、`INVALID_INPUT`、`UNKNOWN_FIELD`、`LIMIT_EXCEEDED`、`INVALID_HASH`、`INVALID_TIMESTAMP`、`INVALID_PUBLIC_URL`、`PRIVATE_OR_SPECIAL_TARGET`、`INVALID_OPAQUE_IDENTIFIER`、`UNKNOWN_STATE`、`REQUEST_FINGERPRINT_MISMATCH`、`IDEMPOTENCY_COLLISION`、`IDENTITY_MISMATCH`、`EVIDENCE_SNAPSHOT_MISMATCH`、`BRIEF_FINGERPRINT_MISMATCH`、`CITATION_OUTSIDE_APPROVED_EVIDENCE`、`APPLIED_RULE_OUTSIDE_SELECTION`、`PROVIDER_PROVENANCE_MISSING`、`INVALID_STATUS_TRANSITION`、`UNTRUSTED_PUBLISHED_RESULT`、`EVIDENCE_CHUNK_HASH_MISMATCH`、`DUPLICATE_EVIDENCE_IDENTITY`、`DUPLICATE_IDENTIFIER`、`REQUIRED_EVIDENCE_MISSING`、`REQUIRED_RULE_MISSING`、`CONTENT_HASH_MISMATCH`、`RESPONSE_TIME_INVALID`、`UNTRUSTED_DELIVERY_STATE`、`SIGNATURE_CONTEXT_MISMATCH`、`SIGNATURE_EXPIRED` 與 `NONCE_REPLAYED`。
 
 ## 11. Fixtures、測試與限制聲明
 
-Golden fixtures 使用 synthetic IDs、lowercase hashes、public example URLs、approved evidence metadata 與 non-secret provider labels。`tests/geoflow-integration-contract.test.ts` 目前包含 **332 個 targeted public-function tests**，覆蓋 brief normalization/fingerprints、revision lineage、evidence hash/duplicate/prerequisite、canonicalization、idempotency、三種 response discriminator、artifact exact bytes/hash、capability-result consistency、status mapping/combined transitions、candidate lineage、fixed signing envelope、clock skew、nonce replay、decoded credential query keys、IPv4/IPv6 special ranges 與不回傳 raw sensitive metadata 等 adversarial safety intent。
+Golden fixtures 使用 synthetic IDs、lowercase hashes、public example URLs、approved evidence metadata 與 non-secret provider labels。`tests/geoflow-integration-contract.test.ts` 目前包含 **378 個 targeted public-function tests**，其中保留原有 332 項安全意圖並新增本輪的 async signature→atomic nonce claim order/concurrency、所有 response family 時間與 retry bounds、previousResponse stored-state lineage/replay fingerprint、all-family article identity、雙 machine retry vocabulary 與 duplicate fail-closed tests。測試覆蓋 brief normalization/fingerprints、revision lineage、evidence hash/duplicate/prerequisite、canonicalization、idempotency、三種 response discriminator、artifact exact bytes/hash、capability-result consistency、status mapping/combined transitions、candidate lineage、fixed signing envelope、clock skew、nonce replay、decoded credential query keys、IPv4/IPv6 special ranges 與不回傳 raw sensitive metadata 等 adversarial safety intent。
 
 本模組沒有宣稱 Qwen 或其他 provider 被呼叫、沒有宣稱產生高品質文章、沒有宣稱 GEOFlow runtime 已接通、沒有宣稱 client website 已發布，也沒有宣稱排名、流量、轉換或 ROI 改善。它只是供未來 connector implementation 使用的 deterministic internal contract。

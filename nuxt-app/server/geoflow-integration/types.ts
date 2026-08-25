@@ -38,6 +38,7 @@ export type ReasonCode =
   | 'UNTRUSTED_PUBLISHED_RESULT'
   | 'EVIDENCE_CHUNK_HASH_MISMATCH'
   | 'DUPLICATE_EVIDENCE_IDENTITY'
+  | 'DUPLICATE_IDENTIFIER'
   | 'REQUIRED_EVIDENCE_MISSING'
   | 'REQUIRED_RULE_MISSING'
   | 'CONTENT_HASH_MISMATCH'
@@ -193,8 +194,9 @@ export type SigningPlannerInput = {
   keyId: unknown
 }
 
-export type SignatureVerifier = (canonicalSigningInput: string, signature: string) => boolean
-export type NonceFreshnessVerifier = (nonce: string) => boolean
+export type SignatureVerifier = (canonicalSigningInput: string, signature: string) => boolean | Promise<boolean>
+export type NonceClaimInput = { nonce: string; sender: string; receiver: string; keyId: string; timestamp: string }
+export type NonceClaimVerifier = (input: NonceClaimInput) => boolean | Promise<boolean>
 export type SigningVerificationContext = {
   request: unknown
   verificationTime: unknown
@@ -202,9 +204,10 @@ export type SigningVerificationContext = {
   expectedSender: unknown
   expectedReceiver: unknown
   expectedKeyId: unknown
-  nonceFreshnessVerifier: unknown
+  nonceClaimVerifier: unknown
   signatureVerifier: unknown
 }
 
 export type LineageVerification = { request: GeoFlowRequest; response: GeoFlowResponse }
-export type AcceptedStatusEvent = { previousStatus: GeoFlowStatus | null; request: GeoFlowRequest; response: GeoFlowResponse }
+export type StoredStatusEventInput = { previousResponse: GeoFlowResponse | null; request: unknown; response: unknown; explicitRetry: unknown }
+export type AcceptedStatusEvent = { previousResponse: GeoFlowResponse | null; request: GeoFlowRequest; response: GeoFlowResponse }

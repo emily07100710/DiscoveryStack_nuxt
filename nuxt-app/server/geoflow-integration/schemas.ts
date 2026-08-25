@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { CitationBinding, ContentArtifact, ContentType, DraftResultResponse, FailureResponse, GeoFlowRequest, GeoFlowResponse, ProgressResponse, ProviderProvenance, ReasonCode, RetryWaitResponse, ValidationFailure, ValidationResult, ValidationSuccess } from './types'
 import { CONTENT_ARTIFACT_SCHEMA_VERSION, DETERMINISTIC_SCAFFOLD_LIMITATION, GEOFLOW_PROTOCOL_VERSION, SIGNING_ALGORITHM, SIGNING_METHOD, SIGNING_PATH } from './types'
-import { canonicalRequestFingerprint, briefFingerprintFromDraft, requestFingerprintFromDraft } from './fingerprint'
+import { canonicalRequestFingerprint, briefFingerprintFromDraft, requestFingerprintFromDraft, canonicalizeContractValue } from './fingerprint'
 import { canonicalizeTimestamp, normalizeGeoFlowRequest, normalizeGeoFlowRequestDraft, CONTRACT_LIMITS } from './normalization'
 
 const REQUEST_DRAFT_KEYS = ['protocolVersion', 'requestId', 'idempotencyKey', 'ownerUserId', 'clientId', 'calendarEntryId', 'productionPlanId', 'deliverableId', 'briefId', 'jobId', 'brief', 'contentType', 'language', 'generationMode', 'revisionContext', 'requestedCapabilities', 'selectedRuleIds', 'authoritySourceIds', 'evidenceChunks', 'createdAt'] as const
@@ -18,7 +18,7 @@ const FAILURE_KEYS_INNER = ['code', 'retryable'] as const
 const RETRY_KEYS = ['attempt', 'retryAt'] as const
 const GEO_STATUSES = ['queued', 'running', 'draft_ready', 'review_required', 'blocked', 'failed', 'retry_wait'] as const
 const PROVIDER_MODES = ['provider', 'deterministic_scaffold', 'reference_fallback'] as const
-const REASON_CODES = ['INVALID_PROTOCOL_VERSION', 'INVALID_INPUT', 'UNKNOWN_FIELD', 'LIMIT_EXCEEDED', 'INVALID_HASH', 'INVALID_TIMESTAMP', 'INVALID_PUBLIC_URL', 'PRIVATE_OR_SPECIAL_TARGET', 'INVALID_OPAQUE_IDENTIFIER', 'UNKNOWN_STATE', 'REQUEST_FINGERPRINT_MISMATCH', 'IDEMPOTENCY_COLLISION', 'IDENTITY_MISMATCH', 'EVIDENCE_SNAPSHOT_MISMATCH', 'BRIEF_FINGERPRINT_MISMATCH', 'CITATION_OUTSIDE_APPROVED_EVIDENCE', 'APPLIED_RULE_OUTSIDE_SELECTION', 'PROVIDER_PROVENANCE_MISSING', 'INVALID_STATUS_TRANSITION', 'UNTRUSTED_PUBLISHED_RESULT', 'EVIDENCE_CHUNK_HASH_MISMATCH', 'DUPLICATE_EVIDENCE_IDENTITY', 'REQUIRED_EVIDENCE_MISSING', 'REQUIRED_RULE_MISSING', 'CONTENT_HASH_MISMATCH', 'RESPONSE_TIME_INVALID', 'UNTRUSTED_DELIVERY_STATE', 'SIGNATURE_CONTEXT_MISMATCH', 'SIGNATURE_EXPIRED', 'NONCE_REPLAYED'] as const
+const REASON_CODES = ['INVALID_PROTOCOL_VERSION', 'INVALID_INPUT', 'UNKNOWN_FIELD', 'LIMIT_EXCEEDED', 'INVALID_HASH', 'INVALID_TIMESTAMP', 'INVALID_PUBLIC_URL', 'PRIVATE_OR_SPECIAL_TARGET', 'INVALID_OPAQUE_IDENTIFIER', 'UNKNOWN_STATE', 'REQUEST_FINGERPRINT_MISMATCH', 'IDEMPOTENCY_COLLISION', 'IDENTITY_MISMATCH', 'EVIDENCE_SNAPSHOT_MISMATCH', 'BRIEF_FINGERPRINT_MISMATCH', 'CITATION_OUTSIDE_APPROVED_EVIDENCE', 'APPLIED_RULE_OUTSIDE_SELECTION', 'PROVIDER_PROVENANCE_MISSING', 'INVALID_STATUS_TRANSITION', 'UNTRUSTED_PUBLISHED_RESULT', 'EVIDENCE_CHUNK_HASH_MISMATCH', 'DUPLICATE_EVIDENCE_IDENTITY', 'DUPLICATE_IDENTIFIER', 'REQUIRED_EVIDENCE_MISSING', 'REQUIRED_RULE_MISSING', 'CONTENT_HASH_MISMATCH', 'RESPONSE_TIME_INVALID', 'UNTRUSTED_DELIVERY_STATE', 'SIGNATURE_CONTEXT_MISMATCH', 'SIGNATURE_EXPIRED', 'NONCE_REPLAYED'] as const
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
 const OPAQUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u
@@ -48,7 +48,7 @@ function setIds(value: unknown, max: number, path: string): ValidationResult<str
   if (!Array.isArray(value)) return failure('INVALID_INPUT', path)
   if (value.length > max) return failure('LIMIT_EXCEEDED', path)
   const values: string[] = []
-  try { for (let index = 0; index < value.length; index += 1) { const item = opaque(value[index], `${path}[${index}]`); if (!item.ok) return item; if (!values.includes(item.value)) values.push(item.value) } } catch { return failure('INVALID_INPUT', path) }
+  try { for (let index = 0; index < value.length; index += 1) {     const item = opaque(value[index], `${path}[${index}]`); if (!item.ok) return item; if (values.includes(item.value)) return failure('DUPLICATE_IDENTIFIER', `${path}[${index}]`); values.push(item.value) } } catch { return failure('INVALID_INPUT', path) }
   values.sort()
   return success(values)
 }
@@ -120,6 +120,7 @@ function normalizeFailure(value: unknown): ValidationResult<{ code: ReasonCode; 
 function normalizeRetry(value: unknown): ValidationResult<{ attempt: number; retryAt: string }> {
   if (!isPlainRecord(value) || !exactKeys(value, RETRY_KEYS)) return failure('UNKNOWN_FIELD', '$.retry')
   const attempt = positiveInteger(safeValue(value, 'attempt'), '$.retry.attempt'); if (!attempt.ok) return attempt
+  if (attempt.value > 10) return failure('LIMIT_EXCEEDED', '$.retry.attempt')
   const retryAt = canonicalizeTimestamp(safeValue(value, 'retryAt'), '$.retry.retryAt'); if (!retryAt.ok) return retryAt
   return success({ attempt: attempt.value, retryAt: retryAt.value })
 }
@@ -174,7 +175,14 @@ export function normalizeGeoFlowResponse(input: unknown): ValidationResult<GeoFl
     const citationValue = safeValue(input, 'citationBindings'); if (!Array.isArray(citationValue)) return failure('INVALID_INPUT', '$.citationBindings')
     if (citationValue.length > CONTRACT_LIMITS.maxCitationBindings) return failure('LIMIT_EXCEEDED', '$.citationBindings')
     const citationBindings: CitationBinding[] = []
-    for (let index = 0; index < citationValue.length; index += 1) { const citation = normalizeCitation(citationValue[index], index); if (!citation.ok) return citation; citationBindings.push(citation.value) }
+    const citationIdentities = new Set<string>()
+    for (let index = 0; index < citationValue.length; index += 1) {
+      const citation = normalizeCitation(citationValue[index], index); if (!citation.ok) return citation
+      const identity = `${citation.value.sourceId}\u0000${citation.value.artifactId}\u0000${citation.value.chunkId}\u0000${citation.value.chunkHash}`
+      if (citationIdentities.has(identity)) return failure('DUPLICATE_EVIDENCE_IDENTITY', `$.citationBindings[${index}]`)
+      citationIdentities.add(identity)
+      citationBindings.push(citation.value)
+    }
     const appliedRuleIds = setIds(safeValue(input, 'appliedRuleIds'), CONTRACT_LIMITS.maxSelectedRuleIds, '$.appliedRuleIds'); if (!appliedRuleIds.ok) return appliedRuleIds
     const providerProvenance = normalizeProvenance(safeValue(input, 'providerProvenance')); if (!providerProvenance.ok) return providerProvenance
     const limitationValues = limitations(safeValue(input, 'limitations')); if (!limitationValues.ok) return limitationValues
@@ -184,18 +192,29 @@ export function normalizeGeoFlowResponse(input: unknown): ValidationResult<GeoFl
   return failure('UNKNOWN_STATE', '$.status')
 }
 
+export function responseFingerprint(input: unknown): ValidationResult<string> {
+  const normalized = normalizeGeoFlowResponse(input); if (!normalized.ok) return normalized
+  const canonical = canonicalizeContractValue(normalized.value); if (!canonical.ok) return canonical
+  return success(createHash('sha256').update(Buffer.from(canonical.value, 'utf8')).digest('hex'))
+}
+
 export function validateGeoFlowResponse(input: unknown, requestInput: unknown): ValidationResult<GeoFlowResponse> {
   const request = validateGeoFlowRequest(requestInput); if (!request.ok) return request
   const normalized = normalizeGeoFlowResponse(input); if (!normalized.ok) return normalized
   const response = normalized.value
   if (response.protocolVersion !== request.value.protocolVersion || response.requestId !== request.value.requestId || response.idempotencyKey !== request.value.idempotencyKey || response.requestFingerprint !== request.value.requestFingerprint || response.ownerUserId !== request.value.ownerUserId || response.clientId !== request.value.clientId || response.jobId !== request.value.jobId) return failure('IDENTITY_MISMATCH', '$')
+  const expectedArticleKey = `article-${request.value.calendarEntryId}-${request.value.deliverableId}`
+  if (response.externalArticleKey !== expectedArticleKey) return failure('IDENTITY_MISMATCH', '$.externalArticleKey')
+  const responseEventTime = 'observedAt' in response ? response.observedAt : response.completedAt
+  if (Date.parse(responseEventTime) < Date.parse(request.value.createdAt)) return failure('RESPONSE_TIME_INVALID', 'observedAt' in response ? '$.observedAt' : '$.completedAt')
+  if (response.status === 'retry_wait' && Date.parse(response.retry.retryAt) <= Date.parse(response.observedAt)) return failure('RESPONSE_TIME_INVALID', '$.retry.retryAt')
+  if (response.status === 'blocked' && response.failure.retryable) return failure('INVALID_INPUT', '$.failure.retryable')
   if (response.status === 'queued' || response.status === 'running' || response.status === 'retry_wait') return success(response)
   if (response.status === 'blocked' || response.status === 'failed') return success(response)
   if (response.status !== 'draft_ready' && response.status !== 'review_required') return failure('UNTRUSTED_DELIVERY_STATE', '$.status')
   if (response.draftIdentity.briefFingerprint !== request.value.briefFingerprint) return failure('BRIEF_FINGERPRINT_MISMATCH', '$.draftIdentity.briefFingerprint')
   if (response.evidenceSnapshotHash !== request.value.evidenceSnapshotHash) return failure('EVIDENCE_SNAPSHOT_MISMATCH', '$.evidenceSnapshotHash')
-  const expectedArticleKey = `article-${request.value.calendarEntryId}-${request.value.deliverableId}`
-  if (response.externalArticleKey !== expectedArticleKey || response.draftIdentity.externalArticleKey !== expectedArticleKey) return failure('IDENTITY_MISMATCH', '$.externalArticleKey')
+  if (response.draftIdentity.externalArticleKey !== expectedArticleKey) return failure('IDENTITY_MISMATCH', '$.externalArticleKey')
   if (response.contentArtifact.contentType !== request.value.contentType || response.contentArtifact.language !== request.value.language) return failure('IDENTITY_MISMATCH', '$.contentArtifact')
   if (Date.parse(response.completedAt) < Date.parse(request.value.createdAt)) return failure('RESPONSE_TIME_INVALID', '$.completedAt')
   if (request.value.requestedCapabilities.includes('knowledge_rag')) {

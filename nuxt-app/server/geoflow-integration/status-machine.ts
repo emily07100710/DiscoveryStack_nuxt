@@ -1,11 +1,12 @@
 import type { AcceptedStatusEvent, DiscoveryStackStatus, GeoFlowRequest, GeoFlowResponse, GeoFlowStatus, ReasonCode, StatusMachine, ValidationFailure, ValidationResult, ValidationSuccess } from './types'
-import { validateGeoFlowRequest, validateGeoFlowResponse } from './schemas'
+import { validateGeoFlowRequest, validateGeoFlowResponse, responseFingerprint } from './schemas'
 import { verifyGeoFlowLineage } from './lineage'
 
 const DISCOVERY_STATES = ['awaiting_generation', 'awaiting_review', 'ready_to_publish', 'publishing', 'delivered', 'blocked', 'failed', 'retry_wait'] as const
 const GEOFLOW_STATES = ['queued', 'running', 'draft_ready', 'review_required', 'blocked', 'failed', 'retry_wait'] as const
 const TRANSITION_KEYS = ['machine', 'from', 'to', 'explicitRetry'] as const
-const EVENT_KEYS = ['previousStatus', 'request', 'response', 'explicitRetry'] as const
+const EVENT_KEYS = ['previousResponse', 'request', 'response', 'explicitRetry'] as const
+const RESPONSE_IDENTITY_KEYS = ['externalProjectKey', 'externalTaskKey', 'externalJobKey', 'externalArticleKey'] as const
 
 type TransitionInput = { machine: StatusMachine; from: string; to: string; explicitRetry: boolean }
 
@@ -19,6 +20,8 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
 function safeRead(value: Record<string, unknown>, key: string): { ok: true; value: unknown } | { ok: false } { try { return { ok: true, value: value[key] } } catch { return { ok: false } } }
 function isDiscovery(value: string): value is DiscoveryStackStatus { return DISCOVERY_STATES.includes(value as DiscoveryStackStatus) }
 function isGeoFlow(value: string): value is GeoFlowStatus { return GEOFLOW_STATES.includes(value as GeoFlowStatus) }
+function responseEventTime(response: GeoFlowResponse): string { return 'observedAt' in response ? response.observedAt : response.completedAt }
+function sameExternalIdentity(previous: GeoFlowResponse, current: GeoFlowResponse): boolean { return RESPONSE_IDENTITY_KEYS.every(key => previous[key] === current[key]) }
 
 const DISCOVERY_NEXT: Record<DiscoveryStackStatus, readonly DiscoveryStackStatus[]> = {
   awaiting_generation: ['awaiting_generation', 'awaiting_review', 'blocked', 'failed', 'retry_wait'],
@@ -28,7 +31,7 @@ const DISCOVERY_NEXT: Record<DiscoveryStackStatus, readonly DiscoveryStackStatus
   delivered: ['delivered'],
   blocked: ['blocked'],
   failed: ['failed', 'awaiting_generation'],
-  retry_wait: ['retry_wait', 'awaiting_generation', 'awaiting_review', 'failed', 'blocked'],
+  retry_wait: ['retry_wait', 'awaiting_generation', 'failed', 'blocked'],
 }
 const GEOFLOW_NEXT: Record<GeoFlowStatus, readonly GeoFlowStatus[]> = {
   queued: ['queued', 'running', 'blocked', 'failed', 'retry_wait'],
@@ -69,32 +72,42 @@ export function verifyStatusTransition(input: unknown): ValidationResult<{ machi
   if (!known) return failure('UNKNOWN_STATE')
   const allowed = machine === 'discovery_stack' ? DISCOVERY_NEXT[from as DiscoveryStackStatus].includes(to as DiscoveryStackStatus) : GEOFLOW_NEXT[from as GeoFlowStatus].includes(to as GeoFlowStatus)
   if (!allowed) return failure('INVALID_STATUS_TRANSITION')
-  if (machine === 'discovery_stack' && (from === 'delivered' && to !== 'delivered')) return failure('INVALID_STATUS_TRANSITION')
+  if (machine === 'discovery_stack' && from === 'delivered' && to !== 'delivered') return failure('INVALID_STATUS_TRANSITION')
   if (from === 'blocked' && to !== 'blocked') return failure('INVALID_STATUS_TRANSITION')
-  if (from === 'failed' && to !== 'queued') return failure('INVALID_STATUS_TRANSITION')
+  if (machine === 'discovery_stack' && from === 'failed' && to !== 'awaiting_generation') return failure('INVALID_STATUS_TRANSITION')
+  if (machine === 'geoflow' && from === 'failed' && to !== 'queued') return failure('INVALID_STATUS_TRANSITION')
   if ((from === 'failed' || from === 'retry_wait') && to !== from && !explicitRetry) return failure('INVALID_STATUS_TRANSITION')
   return success({ machine, from, to })
 }
 
-function parseStatusEvent(input: unknown): ValidationResult<{ previousStatus: unknown; request: unknown; response: unknown; explicitRetry: boolean }> {
+function parseStatusEvent(input: unknown): ValidationResult<{ previousResponse: unknown; request: unknown; response: unknown; explicitRetry: boolean }> {
   if (!isPlainRecord(input) || !exactKeys(input, EVENT_KEYS)) return failure(isPlainRecord(input) ? 'UNKNOWN_FIELD' : 'INVALID_INPUT')
-  const previousStatus = safeRead(input, 'previousStatus'); const request = safeRead(input, 'request'); const response = safeRead(input, 'response'); const explicitRetry = safeRead(input, 'explicitRetry')
-  if (!previousStatus.ok || !request.ok || !response.ok || !explicitRetry.ok || typeof explicitRetry.value !== 'boolean') return failure('INVALID_INPUT')
-  return success({ previousStatus: previousStatus.value, request: request.value, response: response.value, explicitRetry: explicitRetry.value })
+  const previousResponse = safeRead(input, 'previousResponse'); const request = safeRead(input, 'request'); const response = safeRead(input, 'response'); const explicitRetry = safeRead(input, 'explicitRetry')
+  if (!previousResponse.ok || !request.ok || !response.ok || !explicitRetry.ok || typeof explicitRetry.value !== 'boolean') return failure('INVALID_INPUT')
+  return success({ previousResponse: previousResponse.value, request: request.value, response: response.value, explicitRetry: explicitRetry.value })
 }
 
 export function validateGeoFlowStatusEventForStoredState(input: unknown): ValidationResult<AcceptedStatusEvent> {
   const parsed = parseStatusEvent(input); if (!parsed.ok) return parsed
   const request = validateGeoFlowRequest(parsed.value.request); if (!request.ok) return request
-  const response = validateGeoFlowResponse(parsed.value.response, request.value); if (!response.ok) return response
-  const lineage = verifyGeoFlowLineage(request.value, response.value); if (!lineage.ok) return lineage
-  if (parsed.value.previousStatus === null) {
-    return response.value.status === 'queued' ? success({ previousStatus: null, request: request.value, response: response.value }) : failure('INVALID_STATUS_TRANSITION', '$.previousStatus')
+  const current = validateGeoFlowResponse(parsed.value.response, request.value); if (!current.ok) return current
+  const currentLineage = verifyGeoFlowLineage(request.value, current.value); if (!currentLineage.ok) return currentLineage
+  if (parsed.value.previousResponse === null) {
+    return current.value.status === 'queued' ? success({ previousResponse: null, request: request.value, response: current.value }) : failure('INVALID_STATUS_TRANSITION', '$.previousResponse')
   }
-  if (typeof parsed.value.previousStatus !== 'string' || !isGeoFlow(parsed.value.previousStatus)) return failure('UNKNOWN_STATE', '$.previousStatus')
-  const transition = verifyStatusTransition({ machine: 'geoflow', from: parsed.value.previousStatus, to: response.value.status, explicitRetry: parsed.value.explicitRetry })
+  const previous = validateGeoFlowResponse(parsed.value.previousResponse, request.value); if (!previous.ok) return previous
+  const previousLineage = verifyGeoFlowLineage(request.value, previous.value); if (!previousLineage.ok) return previousLineage
+  if (!sameExternalIdentity(previous.value, current.value)) return failure('IDENTITY_MISMATCH', '$.response')
+  const previousTime = Date.parse(responseEventTime(previous.value)); const currentTime = Date.parse(responseEventTime(current.value))
+  if (!Number.isFinite(previousTime) || !Number.isFinite(currentTime) || currentTime < previousTime) return failure('RESPONSE_TIME_INVALID', '$.response')
+  if (currentTime === previousTime) {
+    const previousFingerprint = responseFingerprint(previous.value); if (!previousFingerprint.ok) return previousFingerprint
+    const currentFingerprint = responseFingerprint(current.value); if (!currentFingerprint.ok) return currentFingerprint
+    if (previousFingerprint.value !== currentFingerprint.value) return failure('RESPONSE_TIME_INVALID', '$.response')
+  }
+  const transition = verifyStatusTransition({ machine: 'geoflow', from: previous.value.status, to: current.value.status, explicitRetry: parsed.value.explicitRetry })
   if (!transition.ok) return transition
-  return success({ previousStatus: parsed.value.previousStatus, request: request.value, response: response.value })
+  return success({ previousResponse: previous.value, request: request.value, response: current.value })
 }
 
 export function isKnownGeoFlowStatus(value: unknown): value is GeoFlowStatus { return typeof value === 'string' && isGeoFlow(value) }

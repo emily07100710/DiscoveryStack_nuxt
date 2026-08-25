@@ -16,7 +16,8 @@ export type {
   IdempotencyResolution,
   Language,
   LineageVerification,
-  NonceFreshnessVerifier,
+  NonceClaimInput,
+  NonceClaimVerifier,
   ProgressResponse,
   ProviderProvenance,
   ReasonCode,
@@ -28,13 +29,14 @@ export type {
   SigningPlannerInput,
   SigningVerificationContext,
   StatusMachine,
+  StoredStatusEventInput,
   ValidationFailure,
   ValidationIssue,
   ValidationResult,
   ValidationSuccess,
 } from './types'
 export { CONTENT_ARTIFACT_SCHEMA_VERSION, DETERMINISTIC_SCAFFOLD_LIMITATION, GEOFLOW_PROTOCOL_VERSION, SIGNING_ALGORITHM, SIGNING_METHOD, SIGNING_PATH } from './types'
-export { buildGeoFlowRequest, expectedRequestFingerprint, normalizeGeoFlowResponse, validateGeoFlowRequest, validateGeoFlowResponse, validateResponseForRequest } from './schemas'
+export { buildGeoFlowRequest, expectedRequestFingerprint,   normalizeGeoFlowResponse, responseFingerprint, validateGeoFlowRequest, validateGeoFlowResponse, validateResponseForRequest } from './schemas'
 export { canonicalizeTimestamp, normalizeHashValue, normalizeNonce, normalizeOpaqueIdentifier, validatePublicHttpsUrl, CONTRACT_LIMITS } from './normalization'
 export { briefFingerprintFromDraft, canonicalRequestFingerprint, canonicalizeContractValue, canonicalizeRequestDraft, requestFingerprintFromDraft } from './fingerprint'
 export { resolveGeoFlowIdempotency } from './idempotency'

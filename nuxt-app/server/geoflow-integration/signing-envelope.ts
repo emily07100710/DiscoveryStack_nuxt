@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { GeoFlowRequest, NonceFreshnessVerifier, ReasonCode, SigningEnvelope, SignatureVerifier, ValidationFailure, ValidationResult, ValidationSuccess } from './types'
+import type { GeoFlowRequest, NonceClaimInput, NonceClaimVerifier, ReasonCode, SigningEnvelope, SignatureVerifier, ValidationFailure, ValidationResult, ValidationSuccess } from './types'
 import { GEOFLOW_PROTOCOL_VERSION, SIGNING_ALGORITHM, SIGNING_METHOD, SIGNING_PATH } from './types'
 import { canonicalizeTimestamp, normalizeNonce, normalizeOpaqueIdentifier, normalizeHashValue } from './normalization'
 import { canonicalizeContractValue } from './fingerprint'
@@ -9,7 +9,7 @@ const HASH_PATTERN = /^[0-9a-f]{64}$/u
 const SIGNATURE_PATTERN = /^[0-9a-f]{64}$/u
 const PLANNER_KEYS = ['request', 'timestamp', 'nonce', 'sender', 'receiver', 'keyId'] as const
 const ENVELOPE_KEYS = ['algorithm', 'method', 'path', 'protocolVersion', 'requestId', 'idempotencyKey', 'requestFingerprint', 'bodyHash', 'timestamp', 'nonce', 'sender', 'receiver', 'keyId', 'canonicalSigningInput'] as const
-const CONTEXT_KEYS = ['request', 'verificationTime', 'maxClockSkewSeconds', 'expectedSender', 'expectedReceiver', 'expectedKeyId', 'nonceFreshnessVerifier', 'signatureVerifier'] as const
+const CONTEXT_KEYS = ['request', 'verificationTime', 'maxClockSkewSeconds', 'expectedSender', 'expectedReceiver', 'expectedKeyId', 'nonceClaimVerifier', 'signatureVerifier'] as const
 const READ_FAILED = Symbol('read-failed')
 
 type SafeValue = unknown | typeof READ_FAILED
@@ -73,31 +73,36 @@ function parseEnvelope(input: unknown): ValidationResult<SigningEnvelope> {
   return success({ ...core, canonicalSigningInput: values.canonicalSigningInput })
 }
 
-function parseContext(input: unknown): ValidationResult<{ request: GeoFlowRequest; verificationTime: string; maxClockSkewSeconds: number; expectedSender: string; expectedReceiver: string; expectedKeyId: string; nonceFreshnessVerifier: NonceFreshnessVerifier; signatureVerifier: SignatureVerifier }> {
+function parseContext(input: unknown): ValidationResult<{ request: GeoFlowRequest; verificationTime: string; maxClockSkewSeconds: number; expectedSender: string; expectedReceiver: string; expectedKeyId: string; nonceClaimVerifier: NonceClaimVerifier; signatureVerifier: SignatureVerifier }> {
   if (!isPlainRecord(input) || !exactKeys(input, CONTEXT_KEYS)) return failure(isPlainRecord(input) ? 'UNKNOWN_FIELD' : 'INVALID_INPUT')
-  const request = safeValue(input, 'request'); const verificationTime = safeValue(input, 'verificationTime'); const maxClockSkewSeconds = safeValue(input, 'maxClockSkewSeconds'); const expectedSender = safeValue(input, 'expectedSender'); const expectedReceiver = safeValue(input, 'expectedReceiver'); const expectedKeyId = safeValue(input, 'expectedKeyId'); const nonceFreshnessVerifier = safeValue(input, 'nonceFreshnessVerifier'); const signatureVerifier = safeValue(input, 'signatureVerifier')
-  if ([request, verificationTime, maxClockSkewSeconds, expectedSender, expectedReceiver, expectedKeyId, nonceFreshnessVerifier, signatureVerifier].some(value => value === READ_FAILED)) return failure('INVALID_INPUT')
+  const request = safeValue(input, 'request'); const verificationTime = safeValue(input, 'verificationTime'); const maxClockSkewSeconds = safeValue(input, 'maxClockSkewSeconds'); const expectedSender = safeValue(input, 'expectedSender'); const expectedReceiver = safeValue(input, 'expectedReceiver'); const expectedKeyId = safeValue(input, 'expectedKeyId'); const nonceClaimVerifier = safeValue(input, 'nonceClaimVerifier'); const signatureVerifier = safeValue(input, 'signatureVerifier')
+  if ([request, verificationTime, maxClockSkewSeconds, expectedSender, expectedReceiver, expectedKeyId, nonceClaimVerifier, signatureVerifier].some(value => value === READ_FAILED)) return failure('INVALID_INPUT')
   const timestamp = canonicalizeTimestamp(verificationTime, '$.verificationTime'); if (!timestamp.ok) return timestamp
   if (typeof maxClockSkewSeconds !== 'number' || !Number.isSafeInteger(maxClockSkewSeconds) || maxClockSkewSeconds < 1 || maxClockSkewSeconds > 300) return failure('INVALID_INPUT', '$.maxClockSkewSeconds')
   const sender = normalizeOpaqueIdentifier(expectedSender, '$.expectedSender'); if (!sender.ok) return sender
   const receiver = normalizeOpaqueIdentifier(expectedReceiver, '$.expectedReceiver'); if (!receiver.ok) return receiver
   const keyId = normalizeOpaqueIdentifier(expectedKeyId, '$.expectedKeyId'); if (!keyId.ok) return keyId
-  if (typeof nonceFreshnessVerifier !== 'function' || typeof signatureVerifier !== 'function') return failure('INVALID_INPUT', '$.verifier')
+  if (typeof nonceClaimVerifier !== 'function' || typeof signatureVerifier !== 'function') return failure('INVALID_INPUT', '$.verifier')
   const requestResult = validateGeoFlowRequest(request); if (!requestResult.ok) return requestResult
-  return success({ request: requestResult.value, verificationTime: timestamp.value, maxClockSkewSeconds, expectedSender: sender.value, expectedReceiver: receiver.value, expectedKeyId: keyId.value, nonceFreshnessVerifier: nonceFreshnessVerifier as NonceFreshnessVerifier, signatureVerifier: signatureVerifier as SignatureVerifier })
+  return success({ request: requestResult.value, verificationTime: timestamp.value, maxClockSkewSeconds, expectedSender: sender.value, expectedReceiver: receiver.value, expectedKeyId: keyId.value, nonceClaimVerifier: nonceClaimVerifier as NonceClaimVerifier, signatureVerifier: signatureVerifier as SignatureVerifier })
 }
 
-export function verifySigningEnvelope(input: unknown, signature: unknown, context: unknown): ValidationResult<true> {
+export async function verifySigningEnvelope(input: unknown, signature: unknown, context: unknown): Promise<ValidationResult<true>> {
   const envelope = parseEnvelope(input); if (!envelope.ok) return envelope
   if (typeof signature !== 'string' || !SIGNATURE_PATTERN.test(signature)) return failure('INVALID_INPUT', '$.signature')
   const parsedContext = parseContext(context); if (!parsedContext.ok) return parsedContext
   const request = parsedContext.value.request
   if (envelope.value.protocolVersion !== request.protocolVersion || envelope.value.requestId !== request.requestId || envelope.value.idempotencyKey !== request.idempotencyKey || envelope.value.requestFingerprint !== request.requestFingerprint) return failure('SIGNATURE_CONTEXT_MISMATCH', '$')
   if (envelope.value.sender !== parsedContext.value.expectedSender || envelope.value.receiver !== parsedContext.value.expectedReceiver || envelope.value.keyId !== parsedContext.value.expectedKeyId) return failure('SIGNATURE_CONTEXT_MISMATCH', '$')
-  const computedBodyHash = bodyHash(parsedContext.value.request); if (!computedBodyHash.ok) return computedBodyHash
+  const computedBodyHash = bodyHash(request); if (!computedBodyHash.ok) return computedBodyHash
   if (computedBodyHash.value !== envelope.value.bodyHash) return failure('CONTENT_HASH_MISMATCH', '$.bodyHash')
   const difference = Math.abs(Date.parse(envelope.value.timestamp) - Date.parse(parsedContext.value.verificationTime))
   if (!Number.isFinite(difference) || difference > parsedContext.value.maxClockSkewSeconds * 1000) return failure('SIGNATURE_EXPIRED', '$.timestamp')
-  try { if (!parsedContext.value.nonceFreshnessVerifier(envelope.value.nonce)) return failure('NONCE_REPLAYED', '$.nonce') } catch { return failure('NONCE_REPLAYED', '$.nonce') }
-  try { return parsedContext.value.signatureVerifier(envelope.value.canonicalSigningInput, signature) ? success(true) : failure('IDENTITY_MISMATCH', '$.signature') } catch { return failure('IDENTITY_MISMATCH', '$.signature') }
+  let signatureValid: boolean
+  try { signatureValid = await parsedContext.value.signatureVerifier(envelope.value.canonicalSigningInput, signature) } catch { return failure('IDENTITY_MISMATCH', '$.signature') }
+  if (!signatureValid) return failure('IDENTITY_MISMATCH', '$.signature')
+  const claimInput: NonceClaimInput = { nonce: envelope.value.nonce, sender: envelope.value.sender, receiver: envelope.value.receiver, keyId: envelope.value.keyId, timestamp: envelope.value.timestamp }
+  let claimed: boolean
+  try { claimed = await parsedContext.value.nonceClaimVerifier(claimInput) } catch { return failure('NONCE_REPLAYED', '$.nonce') }
+  return claimed ? success(true) : failure('NONCE_REPLAYED', '$.nonce')
 }

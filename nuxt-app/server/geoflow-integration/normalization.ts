@@ -81,7 +81,8 @@ function normalizeSetArray(value: unknown, max: number, path: string): Validatio
     for (let index = 0; index < value.length; index += 1) {
       const item = normalizeOpaque(value[index], 160, `${path}[${index}]`)
       if (!item.ok) return item
-      if (!result.includes(item.value)) result.push(item.value)
+      if (result.includes(item.value)) return failure('DUPLICATE_IDENTIFIER', `${path}[${index}]`)
+      result.push(item.value)
     }
   } catch { return failure('INVALID_INPUT', path) }
   result.sort()
