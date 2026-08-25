@@ -1,0 +1,221 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    {
+      "upstreamPath": "LICENSE",
+      "localPath": "LICENSE.autogeo",
+      "byteSize": 1064,
+      "sha256": "7db440f0a16ee1bb2b77726e9c693a6171667069c6ac1679efbb2c2fe41cf0b3"
+    },
+    {
+      "upstreamPath": "autogeo/config.py",
+      "localPath": "vendor/autogeo/config.py",
+      "byteSize": 3880,
+      "sha256": "f1a9584d03650750b9f97df92065e72d88ad1343b0c5e3c57d977ae3018f30ab"
+    },
+    {
+      "upstreamPath": "autogeo/evaluate.py",
+      "localPath": "vendor/autogeo/evaluate.py",
+      "byteSize": 12270,
+      "sha256": "68fdb39f6f062d37c242acb11c6064671f032d775edda98c02c7bc17a12d1d74"
+    },
+    {
+      "upstreamPath": "autogeo/evaluation/__init__.py",
+      "localPath": "vendor/autogeo/evaluation/__init__.py",
+      "byteSize": 389,
+      "sha256": "dfb22fe48864d93b439f57358a7c32ab34301c7cd4bcbb1398b348c46bc73ac0"
+    },
+    {
+      "upstreamPath": "autogeo/evaluation/aggregate_results.py",
+      "localPath": "vendor/autogeo/evaluation/aggregate_results.py",
+      "byteSize": 2214,
+      "sha256": "1667acc5654e1d882dcf0108d03161fa269019cedc0e985e81a50650ead16e83"
+    },
+    {
+      "upstreamPath": "autogeo/evaluation/evaluator.py",
+      "localPath": "vendor/autogeo/evaluation/evaluator.py",
+      "byteSize": 11565,
+      "sha256": "1d00e3010f4e766cfd4cf05c8aaea3cf9dad2c4f35dd7d4f9e68cdc87833ac21"
+    },
+    {
+      "upstreamPath": "autogeo/evaluation/generative_engine.py",
+      "localPath": "vendor/autogeo/evaluation/generative_engine.py",
+      "byteSize": 5098,
+      "sha256": "4a59041d196ae5d63cc2f4d191aeed9d9b58de49e2351c33b64aee0e066f7193"
+    },
+    {
+      "upstreamPath": "autogeo/evaluation/metrics/__init__.py",
+      "localPath": "vendor/autogeo/evaluation/metrics/__init__.py",
+      "byteSize": 1117,
+      "sha256": "a5c72a6b38741b603d1bd9a85861cbc430637541aa4fca793585e67c337c7fb3"
+    },
+    {
+      "upstreamPath": "autogeo/evaluation/metrics/geo_score.py",
+      "localPath": "vendor/autogeo/evaluation/metrics/geo_score.py",
+      "byteSize": 4055,
+      "sha256": "3c12623f138dec50c1c905c92c09aef1f3fe9b0a219a6ff6ffaa404007711b9d"
+    },
+    {
+      "upstreamPath": "autogeo/evaluation/metrics/geu_score.py",
+      "localPath": "vendor/autogeo/evaluation/metrics/geu_score.py",
+      "byteSize": 39062,
+      "sha256": "e920f20f6dd9e2d08efa078c904043674f0fd9789e188b404e650d6cbd9b3612"
+    },
+    {
+      "upstreamPath": "autogeo/extract_rules.py",
+      "localPath": "vendor/autogeo/extract_rules.py",
+      "byteSize": 25365,
+      "sha256": "0275facd055bac918de421f1309c7cdfc25b5e6c4a0507324335f6dc8d946324"
+    },
+    {
+      "upstreamPath": "autogeo/loader/__init__.py",
+      "localPath": "vendor/autogeo/loader/__init__.py",
+      "byteSize": 728,
+      "sha256": "9b7716f134cc2fc854bd5b61fcc16be1eeb1d5533ad34d1f204d8b8e6da62d97"
+    },
+    {
+      "upstreamPath": "autogeo/loader/cold_start_data.py",
+      "localPath": "vendor/autogeo/loader/cold_start_data.py",
+      "byteSize": 7872,
+      "sha256": "be70fc501a2cb74c1684efea017bcf156482c5e5e32cf67b7c880d1dd94dba9d"
+    },
+    {
+      "upstreamPath": "autogeo/loader/data_loader.py",
+      "localPath": "vendor/autogeo/loader/data_loader.py",
+      "byteSize": 8627,
+      "sha256": "d5412cae8a46ec8a8a7616928bd23228da48b55d762df60982ec4e414fbdf31d"
+    },
+    {
+      "upstreamPath": "autogeo/loader/github_loader.py",
+      "localPath": "vendor/autogeo/loader/github_loader.py",
+      "byteSize": 5399,
+      "sha256": "fad3c4a1a5c315ade60507b95cad5e87d420335c77ade907a92b828d9ff25582"
+    },
+    {
+      "upstreamPath": "autogeo/loader/grpo_data.py",
+      "localPath": "vendor/autogeo/loader/grpo_data.py",
+      "byteSize": 5831,
+      "sha256": "b64c842b21ba8fe997653e1238e6abbf491dd409be89d96b4359855e1761356c"
+    },
+    {
+      "upstreamPath": "autogeo/loader/inference_data.py",
+      "localPath": "vendor/autogeo/loader/inference_data.py",
+      "byteSize": 2459,
+      "sha256": "7f81e787fffeb0fd87651cfaf1ee1dbc7053bb1cf1106dd8d223fe96076f5bed"
+    },
+    {
+      "upstreamPath": "autogeo/loader/rule_candidate_data.py",
+      "localPath": "vendor/autogeo/loader/rule_candidate_data.py",
+      "byteSize": 4590,
+      "sha256": "7afc4313ce9d3a7cf07d6433f8ba2b8944e2faa6159273f6e3063d989d522f12"
+    },
+    {
+      "upstreamPath": "autogeo/loader/utils.py",
+      "localPath": "vendor/autogeo/loader/utils.py",
+      "byteSize": 1426,
+      "sha256": "82ef4b062cf207a6be196b58951ec5d5ea80054c446a7f58c5fcd71eceabb751"
+    },
+    {
+      "upstreamPath": "autogeo/rewriters/__init__.py",
+      "localPath": "vendor/autogeo/rewriters/__init__.py",
+      "byteSize": 538,
+      "sha256": "b2ca9ad5d1f6740889e0a13cd12aa0c3dc739c5063db9f9a45cf0d52b49e87e8"
+    },
+    {
+      "upstreamPath": "autogeo/rewriters/api.py",
+      "localPath": "vendor/autogeo/rewriters/api.py",
+      "byteSize": 8081,
+      "sha256": "d3825807069fe94e78ca99c16d7f830660190ad8de303125d9da352b0cc3f2ab"
+    },
+    {
+      "upstreamPath": "autogeo/rewriters/core.py",
+      "localPath": "vendor/autogeo/rewriters/core.py",
+      "byteSize": 22962,
+      "sha256": "fbefc941ddf7d4e7590c833bb41f24712d28af1cc9ef6293f63f7f8d3acbab26"
+    },
+    {
+      "upstreamPath": "autogeo/rewriters/mini.py",
+      "localPath": "vendor/autogeo/rewriters/mini.py",
+      "byteSize": 17332,
+      "sha256": "da985cf914c0fcca4ae1d91c3eaf178c6d0ed720d7c8cd09073e61d307517ec7"
+    },
+    {
+      "upstreamPath": "autogeo/rules/__init__.py",
+      "localPath": "vendor/autogeo/rules/__init__.py",
+      "byteSize": 464,
+      "sha256": "056be81c0d0de0493f0f9a819ed74129b854fab69b17f17c56ba1d2411686d22"
+    },
+    {
+      "upstreamPath": "autogeo/rules/explainer.py",
+      "localPath": "vendor/autogeo/rules/explainer.py",
+      "byteSize": 2653,
+      "sha256": "aa0fead3d4df481785af7fe4caffb604a3c91d708e3b3220d38c3509b540b745"
+    },
+    {
+      "upstreamPath": "autogeo/rules/extractor.py",
+      "localPath": "vendor/autogeo/rules/extractor.py",
+      "byteSize": 6367,
+      "sha256": "9516c2ab66cc9212a12790cd8fda64c2c00c3fd2e68c7408a9600f3828c83082"
+    },
+    {
+      "upstreamPath": "autogeo/rules/llm_client.py",
+      "localPath": "vendor/autogeo/rules/llm_client.py",
+      "byteSize": 2921,
+      "sha256": "2eb7a8a61b73de1aeafcdefd11f0ac248f7ded495dec8d35ecc8fcc128c30c3f"
+    },
+    {
+      "upstreamPath": "autogeo/rules/merger.py",
+      "localPath": "vendor/autogeo/rules/merger.py",
+      "byteSize": 14734,
+      "sha256": "d519cae14a93d5c8fee7cd6c89bb3458121bfd6b25b7d88770f6375df4e5dfe5"
+    },
+    {
+      "upstreamPath": "autogeo/rules/utils.py",
+      "localPath": "vendor/autogeo/rules/utils.py",
+      "byteSize": 2642,
+      "sha256": "5fd310bd171f1116c376a0578b2b8eb1af6561cd751281d27b08fb60b3b80b1a"
+    },
+    {
+      "upstreamPath": "autogeo/utils/__init__.py",
+      "localPath": "vendor/autogeo/utils/__init__.py",
+      "byteSize": 359,
+      "sha256": "dd7dd57c3b3f0ec3d60e6c64cf395ea7f723822004e36098d918db03342069b5"
+    },
+    {
+      "upstreamPath": "autogeo/utils/anthropic.py",
+      "localPath": "vendor/autogeo/utils/anthropic.py",
+      "byteSize": 2455,
+      "sha256": "846221ed8e17bb9e5d586d31de9a2a7c724e60e5f2c7e0de057f1279e427ba1b"
+    },
+    {
+      "upstreamPath": "autogeo/utils/constants.py",
+      "localPath": "vendor/autogeo/utils/constants.py",
+      "byteSize": 874,
+      "sha256": "9774cbb35945636747a733177221d8ba2bdafaa05e3d302b045b8d54a89ee5e7"
+    },
+    {
+      "upstreamPath": "autogeo/utils/gemini.py",
+      "localPath": "vendor/autogeo/utils/gemini.py",
+      "byteSize": 1681,
+      "sha256": "6c64d13be5d35ef22c1aa423664247207ea0191715e2427fd7b6295fd9dd7f57"
+    },
+    {
+      "upstreamPath": "autogeo/utils/hf_model.py",
+      "localPath": "vendor/autogeo/utils/hf_model.py",
+      "byteSize": 2710,
+      "sha256": "1aab2d4ef86ee7287e13af920fbc1ab30eed786d0847cac9362992f636bed4c4"
+    },
+    {
+      "upstreamPath": "autogeo/utils/logger.py",
+      "localPath": "vendor/autogeo/utils/logger.py",
+      "byteSize": 7401,
+      "sha256": "87aaa88fe16d0dab34d0c54053d7917c1e38fe22481007d38c27aa3ccf7d9e7b"
+    },
+    {
+      "upstreamPath": "autogeo/utils/openai.py",
+      "localPath": "vendor/autogeo/utils/openai.py",
+      "byteSize": 2347,
+      "sha256": "4a754bef3916caee3131b3848f74c9e0bde53723418c05e672c4c30db2c581d1"
+    }
+  ]
+}

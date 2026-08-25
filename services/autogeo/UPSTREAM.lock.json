@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/cxcscmu/AutoGEO.git",
+  "pinnedCommit": "49456df236774ea24087c44f45e9e52005b8e6a4",
+  "treeSha": "4eb429f3ee33150c122a8e37856977b13c089924",
+  "license": {
+    "spdx": "MIT",
+    "upstreamPath": "LICENSE",
+    "sha256": "7db440f0a16ee1bb2b77726e9c693a6171667069c6ac1679efbb2c2fe41cf0b3"
+  },
+  "importedAt": "2026-08-25T08:21:12Z",
+  "selectionPolicyVersion": "autogeo-runtime-source-v1"
+}

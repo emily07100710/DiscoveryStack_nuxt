@@ -1,0 +1,2 @@
+# Preserve pinned upstream bytes, including its whitespace and CRLF choices.
+vendor/** -whitespace
