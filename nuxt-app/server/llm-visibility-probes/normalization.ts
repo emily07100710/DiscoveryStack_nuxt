@@ -35,6 +35,8 @@ export const MAX_RESPONSE_BYTES = 2_000_000
 export const MAX_PROVIDER_REQUEST_ID_LENGTH = 160
 export const MAX_TOKEN_COUNT = 10_000_000
 
+const DISALLOWED_RESPONSE_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u
+
 export type NormalizationFailure = { reasonCode: string }
 
 const PLAN_KEYS = ['status', 'engineVersion', 'ownerScopeKey', 'project', 'observationWindowKey', 'maximumProbes', 'providerTargets', 'probes', 'planFingerprint', 'limitationCode'] as const
@@ -171,9 +173,10 @@ function normalizeProject(value: unknown): ProjectIdentity {
   const projectId = normalizeOpaqueIdentifier(read(value, 'projectId'), 120, 'MALFORMED_PROJECT')
   const canonicalWebsiteDomain = canonicalHostname(normalizeText(read(value, 'canonicalWebsiteDomain'), 253, 'MALFORMED_PROJECT'))
   const brandName = normalizeText(read(value, 'brandName'), 160, 'MALFORMED_PROJECT')
-  const brandAliases = normalizeStringList(read(value, 'brandAliases'), 30, 160, 'MALFORMED_PROJECT')
+  const brandKey = canonicalBrandKey(brandName)
+  const brandAliases = normalizeStringList(read(value, 'brandAliases'), 30, 160, 'MALFORMED_PROJECT').filter(alias => canonicalBrandKey(alias) !== brandKey)
   const competitorBrands = normalizeStringList(read(value, 'competitorBrands'), 30, 160, 'MALFORMED_PROJECT')
-  const brandKeys = new Set([canonicalBrandKey(brandName), ...brandAliases.map(canonicalBrandKey)])
+  const brandKeys = new Set([brandKey, ...brandAliases.map(canonicalBrandKey)])
   if (competitorBrands.some(competitor => brandKeys.has(canonicalBrandKey(competitor)))) throw new Error('BRAND_COMPETITOR_COLLISION')
   return { projectId, canonicalWebsiteDomain, brandName, brandAliases, competitorBrands, locale: normalizeLocale(read(value, 'locale'), 'MALFORMED_PROJECT') }
 }
@@ -438,10 +441,10 @@ export function normalizeObservedAt(value: unknown): string {
   const minute = Number(match[5])
   const second = Number(match[6])
   const timezone = match[8]!
-  const offsetHours = timezone === 'Z' ? 0 : Number(timezone.slice(0, 3))
+  const offsetHours = timezone === 'Z' ? 0 : Number(timezone.slice(1, 3))
   const offsetMinutes = timezone === 'Z' ? 0 : Number(timezone.slice(4))
   const offset = timezone === 'Z' ? 0 : (offsetHours * 60 + offsetMinutes) * (timezone.startsWith('-') ? -1 : 1)
-  if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month) || hour > 23 || minute > 59 || second > 59 || offsetHours > 23 || offsetMinutes > 59) throw new Error('MALFORMED_RESPONSE')
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month) || hour > 23 || minute > 59 || second > 59 || offsetHours > 14 || offsetMinutes > 59 || offsetHours === 14 && offsetMinutes !== 0) throw new Error('MALFORMED_RESPONSE')
   const milliseconds = Number((match[7] || '0').padEnd(3, '0').slice(0, 3))
   const base = new Date(Date.UTC(2000, month - 1, day, hour, minute, second, milliseconds))
   base.setUTCFullYear(year)
@@ -468,8 +471,8 @@ export function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength
 }
 
-function normalizeAnalysisText(value: string): string {
-  return value.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('und')
+function normalizeAnalysisSurface(value: string): string {
+  return value.normalize('NFKC').replace(/\s+/gu, ' ').trim()
 }
 
 function escapeRegExp(value: string): string {
@@ -481,16 +484,16 @@ function requiresTokenBoundary(value: string): boolean {
 }
 
 function findAnalysisMatches(text: string, aliases: string[]): Array<{ start: number, end: number, alias: string }> {
-  const normalizedText = normalizeAnalysisText(text)
+  const normalizedText = normalizeAnalysisSurface(text)
   const candidates: Array<{ start: number, end: number, alias: string }> = []
-  const normalizedAliases = [...new Set(aliases.map(normalizeAnalysisText).filter(Boolean))].sort((left, right) => {
+  const normalizedAliases = [...new Set(aliases.map(normalizeAnalysisSurface).filter(Boolean))].sort((left, right) => {
     const byLength = right.length - left.length
     return byLength || compareCanonicalStrings(left, right)
   })
   for (const alias of normalizedAliases) {
     const escaped = escapeRegExp(alias).replace(/\s+/gu, '\\s+')
     const pattern = requiresTokenBoundary(alias) ? `(^|[^\\p{L}\\p{N}])(${escaped})(?=$|[^\\p{L}\\p{N}])` : `(${escaped})`
-    const expression = new RegExp(pattern, 'gu')
+    const expression = new RegExp(pattern, 'giu')
     for (const match of normalizedText.matchAll(expression)) {
       const prefixLength = requiresTokenBoundary(alias) ? (match[1]?.length || 0) : 0
       const utf16Start = (match.index || 0) + prefixLength
@@ -505,14 +508,13 @@ function findAnalysisMatches(text: string, aliases: string[]): Array<{ start: nu
 }
 
 export function buildBoundedExcerpt(responseText: string, project: ProjectIdentity): string {
-  const codePoints = Array.from(responseText)
-  const mentions = findAnalysisMatches(responseText, [project.brandName, ...project.brandAliases])
+  const analysisSurface = normalizeAnalysisSurface(responseText)
+  const codePoints = Array.from(analysisSurface)
+  const mentions = findAnalysisMatches(analysisSurface, [project.brandName, ...project.brandAliases])
   if (!mentions.length) return codePoints.slice(0, MAX_EXCERPT_CHARS).join('')
   const first = mentions[0]!.start
   const start = Math.max(0, first - 350)
-  const centered = codePoints.slice(start, start + MAX_EXCERPT_CHARS).join('')
-  if (centered.includes(project.brandName) || project.brandAliases.some(alias => centered.includes(alias))) return centered
-  return codePoints.slice(Math.max(0, first - 1), Math.min(codePoints.length, first + MAX_EXCERPT_CHARS - 1)).join('')
+  return codePoints.slice(start, start + MAX_EXCERPT_CHARS).join('')
 }
 
 export function analyzeMentionFields(responseText: string, project: ProjectIdentity): Pick<ObservationCandidate, 'brandMentioned' | 'exactMentionCount' | 'firstMentionPosition' | 'competitorMentions'> {
@@ -542,7 +544,7 @@ export function buildEvidenceLocator(probe: VisibilityProbe, responseHash: strin
 }
 
 function normalizeBoundedExcerpt(value: unknown): string {
-  if (typeof value !== 'string' || !value || value !== value.normalize('NFKC') || /[\u0000-\u001f\u007f]/u.test(value)) throw new Error('MALFORMED_CANDIDATE')
+  if (typeof value !== 'string' || !value || value !== value.normalize('NFKC') || DISALLOWED_RESPONSE_CONTROLS.test(value)) throw new Error('MALFORMED_CANDIDATE')
   if (Array.from(value).length > MAX_EXCERPT_CHARS || byteLength(value) > MAX_EXCERPT_BYTES) throw new Error('MALFORMED_CANDIDATE')
   return value
 }
@@ -585,7 +587,7 @@ export function normalizeObservationCandidate(value: unknown, context: Candidate
   if (typeof brandMentioned !== 'boolean') throw new Error('MALFORMED_CANDIDATE')
   const exactMentionCount = normalizeNonNegativeInteger(read(value, 'exactMentionCount'), 'MALFORMED_CANDIDATE')
   const firstMentionPosition = read(value, 'firstMentionPosition')
-  if (brandMentioned && (typeof firstMentionPosition !== 'number' || !Number.isInteger(firstMentionPosition) || firstMentionPosition < 1)) throw new Error('MALFORMED_CANDIDATE')
+  if (brandMentioned && (typeof firstMentionPosition !== 'number' || !Number.isInteger(firstMentionPosition) || firstMentionPosition < 1 || firstMentionPosition > MAX_RESPONSE_BYTES)) throw new Error('MALFORMED_CANDIDATE')
   if (!brandMentioned && firstMentionPosition !== null) throw new Error('MALFORMED_CANDIDATE')
   if (!brandMentioned && exactMentionCount !== 0) throw new Error('MALFORMED_CANDIDATE')
   if (brandMentioned && exactMentionCount < 1) throw new Error('MALFORMED_CANDIDATE')
@@ -640,7 +642,7 @@ export function normalizeAdapterSuccessResponse(value: unknown): AdapterSuccess 
   const provider = normalizeProvider(read(value, 'provider'))
   const modelLabel = normalizeText(read(value, 'modelLabel'), 160, 'MALFORMED_RESPONSE')
   const responseText = read(value, 'responseText')
-  if (typeof responseText !== 'string' || !responseText || responseText !== responseText.normalize('NFKC') || /[\u0000-\u001f\u007f]/u.test(responseText)) throw new Error('MALFORMED_RESPONSE')
+  if (typeof responseText !== 'string' || !responseText || responseText !== responseText.normalize('NFKC') || DISALLOWED_RESPONSE_CONTROLS.test(responseText)) throw new Error('MALFORMED_RESPONSE')
   const citationUrls = normalizeCitationUrls(read(value, 'citationUrls'))
   const observedAt = normalizeObservedAt(read(value, 'observedAt'))
   const providerRequestId = normalizeProviderRequestId(read(value, 'providerRequestId'))

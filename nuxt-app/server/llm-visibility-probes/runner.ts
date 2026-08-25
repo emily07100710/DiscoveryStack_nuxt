@@ -58,7 +58,7 @@ function validAdapter(value: unknown, key: string): value is VisibilityProbeAdap
 function validAbortSignal(value: unknown): value is AbortSignal {
   if (value === undefined) return true
   if (!isRecord(value)) return false
-  try { return typeof read(value, 'aborted') === 'boolean' && typeof read(value, 'addEventListener') === 'function' } catch { return false }
+  try { return typeof read(value, 'aborted') === 'boolean' && typeof read(value, 'addEventListener') === 'function' && typeof read(value, 'removeEventListener') === 'function' } catch { return false }
 }
 
 function validRegistry(value: unknown): value is VisibilityProbeIdempotencyRegistry {
@@ -146,6 +146,26 @@ function targetForProbe(plan: VisibilityProbePlan, probe: VisibilityProbe) {
   return targets[0]!
 }
 
+async function executeAdapterWithDeadline(adapter: VisibilityProbeAdapter, input: Parameters<VisibilityProbeAdapter['execute']>[0], timeoutMs: number, upstreamSignal?: AbortSignal) {
+  const controller = new AbortController()
+  const forwardAbort = () => controller.abort()
+  const aborted = new Promise<never>((_resolve, reject) => controller.signal.addEventListener('abort', () => reject({ failureKind: 'timeout' as const }), { once: true }))
+  if (upstreamSignal) {
+    upstreamSignal.addEventListener('abort', forwardAbort, { once: true })
+    if (upstreamSignal.aborted) controller.abort()
+  }
+  const timeout = setTimeout(forwardAbort, timeoutMs)
+  try {
+    return await Promise.race([
+      adapter.execute({ ...input, abortSignal: upstreamSignal || controller.signal }),
+      aborted,
+    ])
+  } finally {
+    clearTimeout(timeout)
+    if (upstreamSignal) upstreamSignal.removeEventListener('abort', forwardAbort)
+  }
+}
+
 async function executeOne(probe: VisibilityProbe, input: { plan: VisibilityProbePlan, adapters: Record<string, VisibilityProbeAdapter>, idempotencyRegistry: VisibilityProbeIdempotencyRegistry, abortSignal?: AbortSignal }): Promise<ProbeExecutionResult> {
   const target = targetForProbe(input.plan, probe)
   if (!target) return blockedResult(probe, 'ADAPTER_TARGET_MISMATCH')
@@ -176,13 +196,12 @@ async function executeOne(probe: VisibilityProbe, input: { plan: VisibilityProbe
     return failureResult(probe, { failureKind: 'timeout' as ProbeFailureKind })
   }
   try {
-    const rawAdapterResult = await adapter.execute({
+    const rawAdapterResult = await executeAdapterWithDeadline(adapter, {
       probeIdentity: { probeId: probe.probeId, requestFingerprint: probe.requestFingerprint, ownerScopeKey: probe.ownerScopeKey, projectId: probe.projectId, queryId: probe.queryId, provider: probe.provider, modelLabel: probe.modelLabel },
       normalizedPrompt: probe.normalizedPrompt,
       locale: probe.locale,
       timeoutMs: target.timeoutMs,
-      abortSignal: input.abortSignal,
-    })
+    }, target.timeoutMs, input.abortSignal)
     if (input.abortSignal?.aborted) {
       await releaseClaim({ registry: input.idempotencyRegistry, probe, claimToken })
       return failureResult(probe, { failureKind: 'timeout' as ProbeFailureKind })

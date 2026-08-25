@@ -781,6 +781,28 @@ describe('LLM Visibility Probe Engine V1 trust-boundary hardening', () => {
     expect(candidate.observedAt).toBe('2026-08-24T00:00:00.000Z')
   })
 
+  it('canonicalizes a negative timezone offset without reversing its sign', () => {
+    const candidate = completedCandidate(responseInput({}, syntheticSuccess({ observedAt: '2026-08-24T08:30:00-05:30' })))
+    expect(candidate.observedAt).toBe('2026-08-24T14:00:00.000Z')
+  })
+
+  it.each(['2026-08-24T00:00:00+14:01', '2026-08-24T00:00:00-15:00'])('blocks an out-of-range ISO offset %s', observedAt => {
+    expect(analyzeProviderObservation(responseInput({}, syntheticSuccess({ observedAt })))).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_RESPONSE'] })
+  })
+
+  it('accepts normal multiline provider text while rejecting unsafe control bytes', () => {
+    const completed = completedCandidate(responseInput({}, syntheticSuccess({ responseText: 'First paragraph.\n\nAcme is cited in the second paragraph.\tUseful detail.' })))
+    expect(completed.brandMentioned).toBe(true)
+    expect(completed.boundedExcerpt).toContain('Acme')
+    expect(analyzeProviderObservation(responseInput({}, syntheticSuccess({ responseText: 'unsafe\u0000response' })))).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_RESPONSE'] })
+  })
+
+  it('uses one canonical code-point surface for whitespace-normalized mention positions and excerpts', () => {
+    const candidate = completedCandidate(responseInput({}, syntheticSuccess({ responseText: 'Prefix     text\n\nACME appears here.' })))
+    expect(candidate.firstMentionPosition).toBe(13)
+    expect(candidate.boundedExcerpt).toBe('Prefix text ACME appears here.')
+  })
+
   it.each([
     ['verifiedByOwner', { verifiedByOwner: true }],
     ['metricEligibility', { metricEligibility: 'primary' }],
@@ -841,6 +863,20 @@ describe('LLM Visibility Probe Engine V1 trust-boundary hardening', () => {
     expect(callCount).toBe(1)
     expect([firstResult, secondResult].some(result => result.status === 'completed' && result.results[0]?.status === 'completed' && result.results[0]?.replayed === false)).toBe(true)
     expect([firstResult, secondResult].some(result => result.status === 'completed' && result.results[0]?.status === 'retryable' && result.results[0]?.failure?.reasonCode === 'IDEMPOTENCY_IN_PROGRESS_RETRYABLE')).toBe(true)
+  })
+
+  it('enforces the target timeout even when an injected adapter does not implement its own timer', async () => {
+    const plan = planned({ providerTargets: [syntheticTarget({ timeoutMs: 10 })] })
+    let receivedSignal: AbortSignal | undefined
+    const adapter = syntheticAdapter({
+      onCall: async input => {
+        receivedSignal = (input as { abortSignal?: AbortSignal }).abortSignal
+        await new Promise<void>(() => undefined)
+      },
+    })
+    const result = await executeVisibilityProbeBatch({ plan, adapters: { [adapter.adapterKey]: adapter }, idempotencyRegistry: new SyntheticRegistry() })
+    expect(candidateResult(result)).toMatchObject({ status: 'retryable', failure: { reasonCode: 'TIMEOUT_RETRYABLE' } })
+    expect(receivedSignal?.aborted).toBe(true)
   })
 
   it('does not call the adapter for a claim collision', async () => {

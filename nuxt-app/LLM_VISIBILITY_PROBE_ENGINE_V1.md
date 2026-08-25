@@ -60,7 +60,7 @@ Candidate 不能通過既有 `ownerManualObservationImportSchema`；runner 不�
 
 `observedAt` 必須是完整 timezone-bearing ISO datetime，僅接受 `Z` 或 `±HH:MM`，並拒絕 date-only、無 timezone、空字串、不存在 calendar date、Invalid Date 與非法 offset。合法 offset 會 canonicalize 到 UTC ISO，例如 `2026-08-24T08:00:00+08:00` 變為 `2026-08-24T00:00:00.000Z`；candidate validator 要求保存值已是 canonical UTC。
 
-Brand/competitor analysis 使用 NFKC、case-folded、whitespace-normalized analysis text。mention position 從 1 開始，單位是 Unicode code point；bounded excerpt 也使用同一 position system 與 `Array.from()` code-point slicing，避免 UTF-16 offset 與 code-point slicing 混用。測試包含品牌名稱前 400 個 emoji。
+Brand/competitor analysis 使用保留原始大小寫的 NFKC、whitespace-normalized canonical surface，並以 Unicode case-insensitive matching 判斷提及。mention position 從 1 開始，單位是 Unicode code point；bounded excerpt 也從同一 canonical surface 以 `Array.from()` code-point slicing，避免 whitespace normalization、UTF-16 offset 與 excerpt 座標混用。測試包含品牌名稱前 400 個 emoji。
 
 Evidence locator 使用完整 response hash，而非前 16 字元：
 
@@ -94,6 +94,8 @@ Claim 必須在 adapter execute 前完成；只有 acquired 且持有 claim toke
 
 SyntheticRegistry 以同步 map state transition 實作真正 atomic claim，不使用先 get 再 set。兩個 Promise 並行執行相同 plan/registry 時，adapter call count 精確為 1；另一個 execution 只能取得 `in_progress` bounded retryable 或稍後得到 validated replay。Batch 結果 stable ordered，單一 probe failure 不抹除其他結果，也不會在同一 batch 內 sleep 或無限 retry。
 
+Runner 自己以 target `timeoutMs` 建立 bounded deadline，不只依賴 adapter 自行實作 timeout。若 caller 傳入 `abortSignal`，adapter 仍收到同一 signal identity；runner 另外以 deadline race fail closed，並在完成後清除 timer 與 upstream listener。
+
 ## Retry policy
 
 固定不可重試類別包含 invalid input、owner/project/query mismatch、unsupported locale、adapter mismatch、response too large、malformed response、citation validation、identity collision、redirect，以及 HTTP 400／401／403／404／409／422。可重試類別包含 timeout、network unavailable、HTTP 429 與 HTTP 500–599。輸出只有 boolean、bounded delay category（none／short／medium／long）與 reason code，不提供 duration、不 sleep、不回傳原始錯誤。
@@ -113,7 +115,7 @@ Provider mock candidate 永遠是 `verifiedByOwner=false`、`secondary_only`、`
 
 ## Testing and limitations
 
-`tests/llm-visibility-probe-engine.test.ts` 保留原有 targeted safety coverage，並新增 adversarial tests，現有 targeted suite 共 **185 direct tests**。覆蓋 planner deterministic ordering、strict exact-key/symbol/getter validation、全部 probe lineage tamper、plan fingerprint recomputation、paused/locale-ineligible target、validated-plan analyzer、candidate governance/replay lineage、atomic concurrent duplicate、collision/in-progress/release exceptions、strict timestamp、metadata totals、400 emoji code-point position、full-hash evidence locator、canonical array reorder、response/runner extra keys，以及 existing manual import fail-closed regression。
+`tests/llm-visibility-probe-engine.test.ts` 保留原有 targeted safety coverage，並新增 adversarial tests，現有 targeted suite 共 **191 direct tests**。覆蓋 planner deterministic ordering、strict exact-key/symbol/getter validation、全部 probe lineage tamper、plan fingerprint recomputation、paused/locale-ineligible target、validated-plan analyzer、candidate governance/replay lineage、atomic concurrent duplicate、collision/in-progress/release exceptions、runner-owned timeout、strict timezone offset、multiline response、canonical mention/excerpt coordinate、metadata totals、400 emoji code-point position、full-hash evidence locator、canonical array reorder、response/runner extra keys，以及 existing manual import fail-closed regression。
 
 V1 是 mocked adapter safety core，尚未接 live provider，也不代表 consumer UI 曝光。Provider API response 不等於 consumer UI visibility；candidate 不代表搜尋排名、流量、轉換、營收、ROI 或因果成效。V1 沒有 scheduler、durable idempotency persistence、API route、database persistence、dashboard wiring 或 deployment；response text 也不宣稱已完成完整語意匿名化，production admission 仍需可信的上游 data governance。
 
