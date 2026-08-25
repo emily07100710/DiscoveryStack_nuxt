@@ -358,3 +358,28 @@ artifact with vulnerability scanning, introduce explicit network and secret
 boundaries, and add tests without contacting providers. No such connection,
 runtime, optimization result, deployment, migration, or production readiness is
 claimed by this snapshot.
+
+## Integrity boundary hardening
+
+The accepted snapshot contains exactly 35 runtime Python sources, not the full
+research/training repository. LLaMA-Factory, open-r1, datasets, models,
+checkpoints, and weights remain excluded. The offline verifier now validates the
+fixed repository/commit/tree/license/selection identity, strict lock and
+manifest schemas, deterministic one-to-one path mapping, three-way license hash
+binding, exact service inventory, non-following filesystem traversal, regular
+file/directory types, size limits, forbidden binary/model/archive/LFS content,
+strict UTF-8, and Python AST syntax. It neither imports nor executes vendored
+code.
+
+This hardening does not make the snapshot connected, usable, article-optimizing,
+or production-ready. The vendored import graph still has environment, provider,
+model/download, and network side effects and must never be imported into a Nuxt,
+Astro, or PHP web process. A future Qwen/Bailian adapter must live outside
+`vendor/**`, run in an isolated Python worker/service, keep
+`trust_remote_code=False` by default, and receive credentials only at the
+service boundary.
+
+Every upstream update must repeat quarantine review, pin a commit and tree,
+review the complete diff, and perform a new security assessment. A future
+one-click update mechanism may create an inert candidate only; it must never
+execute upstream code or automatically upgrade the accepted snapshot.
