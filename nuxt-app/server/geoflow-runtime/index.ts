@@ -14,6 +14,7 @@ export type {
   GeoFlowFetch,
   GeoFlowFetchResponse,
   GeoFlowJobPollResult,
+  GeoFlowJobResultMetadata,
   GeoFlowJobValue,
   GeoFlowPollInput,
   GeoFlowRequestInit,

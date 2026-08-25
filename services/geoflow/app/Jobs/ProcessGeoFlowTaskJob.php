@@ -78,7 +78,13 @@ class ProcessGeoFlowTaskJob implements ShouldQueue
 
         $startedAt = microtime(true);
         try {
-            $result = $workerExecutionService->executeTask($taskId);
+            $rawMeta = Arr::get($job, 'meta', []);
+            $meta = is_array($rawMeta) ? $rawMeta : (is_string($rawMeta) ? json_decode($rawMeta, true) : []);
+            $jobType = is_array($meta) ? trim((string) ($meta['job_type'] ?? 'generate_article')) : 'generate_article';
+            $payload = is_array($meta) && is_array($meta['payload'] ?? null) ? $meta['payload'] : [];
+            $result = $jobType === \App\Services\GeoFlow\DiscoveryStackGenerationPayload::JOB_TYPE
+                ? $workerExecutionService->executeTask($taskId, $jobType, $payload)
+                : $workerExecutionService->executeTask($taskId);
             $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
 
             $queueService->completeJob(

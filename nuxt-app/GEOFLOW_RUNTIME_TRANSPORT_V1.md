@@ -4,7 +4,7 @@
 
 ## 1. Scope and upstream compatibility
 
-本 adapter 以 pinned GEOFlow upstream reference `9d70db04ee9c5d308f5fa29b4c65834229af9eea` 的既有 contract documentation 為相容性依據。Repository base 沒有 `services/geoflow/routes/api.php` 或 PHP route tree，因此本輪沒有偽造或修改 PHP routes；正式 transport 只依下列既有 upstream route contract。
+本 adapter 以 pinned GEOFlow upstream reference `9d70db04ee9c5d308f5fa29b4c65834229af9eea` 的既有 contract documentation，以及本 convergence branch vendored Laravel authority（`services/geoflow/routes/api.php`、controllers、services 與 models）為相容性依據。PHP routes 本身不在本輪修改範圍；正式 transport 使用已存在的 generation route contract。
 
 | Operation | Method and route | Adapter function |
 |---|---|---|
@@ -12,7 +12,7 @@
 | Poll generation job | `GET /api/v1/jobs/{job}` | `executeGeoFlowJobPoll()` |
 | Fetch generated article candidate | `GET /api/v1/articles/{article}` | `executeGeoFlowArticleFetch()` |
 
-所有 upstream requests 使用 server-side Bearer token，但 token 只可經由 injected `GeoFlowCredentialResolver` 由 opaque `credentialReference` 解析。Adapter 不讀 `process.env`、不保存 credential、不把 credential 放入 plan、result、error 或 log，也沒有 credential default、secret resolver 或 vault implementation。
+所有 upstream requests 使用 server-side Bearer token，但 token 只可經由 injected `GeoFlowCredentialResolver` 由 opaque `credentialReference` 解析。Adapter 不讀 `process.env`、不保存 credential、不把 credential 放入 plan、result、error 或 log，也沒有 credential default、secret resolver 或 vault implementation。PHP authority 端以 `api.auth` 與 `api.scope:*` middleware enforce Bearer scopes；enqueue、job detail、article detail 分別要求 `tasks:write`、`jobs:read`、`articles:read`。
 
 **Review、publish、WordPress、PHP arbitrary HTTP executor、external delivery ledger 與 client-site write 不屬於本模組。** Adapter 永遠不呼叫 `/review` 或 `/publish`，只接受 generation candidate；remote `approved`、`published`、`delivered`、`publishing` 與 `ready_to_publish` 都 fail closed。
 
@@ -59,19 +59,19 @@ Plan 只保存 header names，不保存 Authorization value。Plan、enqueue res
 
 ## 4. Response validation and lineage
 
-Adapter 只接受 JSON response，要求 `Content-Type: application/json`、bounded body bytes、HTTP status 2xx、`{ success: true, data: object }` envelope 與 matching `request_id`。所有 task/job/article IDs、request ID、request fingerprint、attempt 與 content hash 都重新驗證；不會將 remote raw payload 直接交給 downstream。
+Adapter 只接受 Laravel `ApiResponse` JSON response，要求 `Content-Type: application/json`、bounded body bytes、HTTP status 2xx、`{ success: true, data: object, error: null, meta: { request_id, timestamp } }` envelope 與 matching `meta.request_id`。所有 task/job/article IDs、request ID、request fingerprint、attempt 與 content hash 都重新驗證；不會將 remote raw payload 直接交給 downstream。
 
 ### 4.1 Enqueue
 
-Enqueue 必須回傳 matching `request_id`、positive `task_id` 與 positive `job_id`。Missing/wrong task or job identity 立即 fail closed。成功 result 只含 request fingerprint、request ID、task ID、job ID、attempt、remote request ID 與 bounded remote status。
+Enqueue 必須回傳 `data.task_id`、positive `data.job_id` 與 bounded `data.status`；request ID 位於 `meta.request_id`。PHP controller 將 body 的 `job_type` 從 payload 拆出後，回傳 enqueue record；adapter 只使用固定 DS job capability，不接受 caller 自由指定其他 route 或 operation。Missing/wrong task or job identity 立即 fail closed。成功 result 只含 request fingerprint、request ID、task ID、job ID、attempt、remote request ID 與 bounded remote status。
 
 ### 4.2 Job poll
 
-Poll URL 的 job ID 必須來自 verified enqueue result，不接受 caller 另外提供 article ID。Remote job summary 必須 matching task/job/request identity、request fingerprint、attempt、bounded status 與 positive `article_id`。只有 `completed`、`succeeded`、`success`、`draft_ready`、`review_required`、`ready` 或 `candidate` 這些 bounded terminal statuses 才能交給 article fetch；pending status 會在 bounded poll count 內等待，failed/blocked/cancelled 會停止。
+Poll URL 的 job ID 必須來自 verified enqueue result，不接受 caller 另外提供 article ID。PHP `JobController` 的 `data` 真實欄位是 `id`、`task_id`、`job_type`、`status`、`attempt_count`、`max_attempts`、`payload` 與 `task_run_summary`。`task_run_summary.meta.result.discoverystack_generation_v1` 才是 DS request/brief/evidence/content/provenance lineage 的來源；adapter 不期待任何 invented flat provenance fields。Remote job summary 必須 matching task/job/request identity、request fingerprint、attempt、bounded status 與 positive `article_id`。只有 `completed`、`succeeded`、`success`、`draft_ready`、`review_required`、`ready` 或 `candidate` 這些 bounded terminal statuses 才能交給 article fetch；pending status 會在 bounded poll count 內等待，failed/blocked/cancelled 會停止。
 
 ### 4.3 Article candidate
 
-Article URL 的 article ID 必須來自 verified job summary。Adapter 會要求 matching task/job/article/request/brief/evidence identities、exact UTF-8 `bodyHash`、bounded title/summary/body/limitations、valid provider provenance、valid completion time、valid `appliedRuleIds` 與 candidate status。結果再經既有 `validateGeoFlowResponse()` 及 `verifyGeoFlowLineage()` 驗證。
+Article URL 的 article ID 必須來自 verified job summary。PHP `ArticleController`/`ArticleGeoFlowService` 真實 `data` 欄位包括 `id`、`title`、`slug`、`content`、`excerpt`、`keywords`、`meta_description`、`status`、`review_status`、task/author/category references、timestamps 與 `images`；它不提供 DS provenance flat fields。Adapter 會從 verified job metadata 取得 lineage，再要求 real article data 的 matching task/article identity、exact UTF-8 content hash、bounded title/excerpt/content 與 candidate status。結果再經既有 `validateGeoFlowResponse()` 及 `verifyGeoFlowLineage()` 驗證。
 
 產出的 response 只允許 `draft_ready` 或 `review_required`，並以固定 external article key `article-{calendarEntryId}-{deliverableId}` 綁定 DiscoveryStack identity。它不是 approved、published、delivered 或 production-ready result。
 
@@ -117,10 +117,10 @@ validateGeoFlowTaskId(value)
 validateGeoFlowCredentialReference(value)
 ```
 
-Enqueue、poll、article fetch 保持分離，讓每一段都可在 mock fetch 下獨立測試；沒有 route handler、Nuxt API endpoint、database、queue、scheduler、UI、deploy 或 production credential configuration。
+Enqueue、poll、article fetch 保持分離，讓每一段都可在 injected mock fetch 下獨立測試；adapter 本身沒有 route handler、Nuxt API endpoint、database、queue、scheduler、UI、deploy 或 production credential configuration。PHP interoperability test 另透過真實 Laravel route/controller/queue/worker boundary 驗證同一 wire contract。
 
 ## 8. Testing and limitations
 
-`tests/geoflow-runtime-transport.test.ts` 使用 injected mock fetch、mock credential resolver、mock clock 與 mock sleep，不向真實 GEOFlow 發 request。測試涵蓋正常 enqueue → poll → article flow、固定 methods/paths/headers/body、all required identity/hash checks、malformed/oversized/content-type/redirect、401/403/404/409/422/429/5xx、timeout/network、retry bound、credential failures、SSRF guards、attempt limits、article readiness、candidate/publication separation、idempotency replay/collision/concurrency 與 secret non-disclosure。
+`tests/geoflow-runtime-transport.test.ts` 使用 injected mock fetch、mock credential resolver、mock clock 與 mock sleep，不向真實 GEOFlow 發 request；目前為 151/151 direct tests。測試涵蓋正常 enqueue → poll → article flow、真實 PHP-shaped envelope/job/task_run_summary/article fixtures、固定 methods/paths/headers/body、all required identity/hash checks、malformed/oversized/content-type/redirect、401/403/404/409/422/429/5xx、timeout/network、retry bound、credential failures、SSRF guards、attempt limits、article readiness、candidate/publication separation、idempotency replay/collision/concurrency 與 secret non-disclosure。`services/geoflow/tests/Feature/DiscoveryStackGenerationTransportTest.php` 使用真實 Laravel routes/controllers/services/worker，加上 fake provider HTTP，驗證 scope、strict payload、metadata preservation、content hash、draft-only article 與無 distribution write。
 
 本模組可在 caller 提供正式 dependency 時執行 REST transport，但本 commit 沒有 production caller、credential resolver、real fetch binding、durable idempotency store、real upstream interoperability environment 或 deployment。**因此不可宣稱 GEOFlow runtime 已在 production connected，也不可宣稱 generation quality、ranking、traffic、conversion、ROI 或 publication 已運作。**

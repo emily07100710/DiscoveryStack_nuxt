@@ -232,25 +232,53 @@ class JobQueueService
      */
     public function completeJob(int $jobId, int $taskId, ?int $articleId, int $durationMs, array $meta = []): void
     {
-        TaskRun::query()->whereKey($jobId)->update([
-            'status' => 'completed',
-            'finished_at' => now(),
-            'article_id' => $articleId,
-            'duration_ms' => $durationMs,
-            'meta' => $meta,
-            'error_message' => '',
-        ]);
+        $mergedMeta = null;
 
-        Task::query()->whereKey($taskId)->update([
-            'last_run_at' => now(),
-            'last_success_at' => now(),
-            'last_error_at' => null,
-            'last_error_message' => '',
-            'updated_at' => now(),
-        ]);
+        DB::transaction(function () use ($jobId, $taskId, $articleId, $durationMs, $meta, &$mergedMeta): void {
+            $run = TaskRun::query()
+                ->whereKey($jobId)
+                ->where('task_id', $taskId)
+                ->lockForUpdate()
+                ->first();
+            if (! $run) {
+                return;
+            }
+
+            $originalMeta = $this->normalizeMeta($run->meta);
+            $mergedMeta = array_merge($originalMeta, $meta);
+            foreach (['job_type', 'payload', 'attempt_count', 'max_attempts', 'available_at', 'worker_id'] as $preservedKey) {
+                if (array_key_exists($preservedKey, $originalMeta)) {
+                    $mergedMeta[$preservedKey] = $originalMeta[$preservedKey];
+                }
+            }
+            if (is_array($originalMeta['result'] ?? null) && is_array($meta['result'] ?? null)) {
+                $mergedMeta['result'] = array_replace_recursive($originalMeta['result'], $meta['result']);
+            }
+
+            $run->forceFill([
+                'status' => 'completed',
+                'finished_at' => now(),
+                'article_id' => $articleId,
+                'duration_ms' => $durationMs,
+                'meta' => $mergedMeta,
+                'error_message' => '',
+            ])->save();
+
+            Task::query()->whereKey($taskId)->update([
+                'last_run_at' => now(),
+                'last_success_at' => now(),
+                'last_error_at' => null,
+                'last_error_message' => '',
+                'updated_at' => now(),
+            ]);
+        });
+
+        if ($mergedMeta === null) {
+            return;
+        }
 
         $this->broadcastOverviewUpdate();
-        $this->enqueueFollowUpGenerationIfNeeded($taskId, $meta);
+        $this->enqueueFollowUpGenerationIfNeeded($taskId, $mergedMeta);
     }
 
     /**

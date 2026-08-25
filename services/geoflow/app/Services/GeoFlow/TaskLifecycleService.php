@@ -325,6 +325,10 @@ class TaskLifecycleService
             throw new ApiException('task_not_active', '任务未启用，无法入队', 409);
         }
 
+        if ($jobType === DiscoveryStackGenerationPayload::JOB_TYPE) {
+            $payload = DiscoveryStackGenerationPayload::validate($payload);
+        }
+
         $jobId = $this->queueService->enqueueTaskJob($taskId, $jobType, $payload);
         if ($jobId === null) {
             throw new ApiException('job_already_exists', '任务已处于排队或执行中', 409);

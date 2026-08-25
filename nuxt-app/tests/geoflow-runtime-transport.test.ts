@@ -25,7 +25,9 @@ import {
   IDEMPOTENCY_KEY,
   JOB_ID,
   REQUEST_ID,
+  RESPONSE_TIMESTAMP,
   TASK_ID,
+  apiResponse,
   articleResponse,
   enqueueResponse,
   jobResponse,
@@ -82,19 +84,25 @@ async function enqueueFor(request = freshRequest(), target = makeTarget(), respo
   return { ...planned, ...recorded, result }
 }
 
-async function completedJobFor(request = freshRequest(), target = makeTarget()) {
+async function pollJobWithMetadata(request = freshRequest(), target = makeTarget(), metadataOverrides: Record<string, unknown> = {}) {
   const enqueued = await enqueueFor(request, target)
   expect(enqueued.result.ok).toBe(true)
   if (!enqueued.result.ok) throw new Error('test enqueue failed')
-  const recorded = responseFor(jobResponse(request, enqueued.result.value.jobId, ARTICLE_ID, TASK_ID, 'completed', target.attempt))
+  const recorded = responseFor(jobResponse(request, enqueued.result.value.jobId, ARTICLE_ID, TASK_ID, 'completed', target.attempt, metadataOverrides))
   const result = await executeGeoFlowJobPoll({ plan: enqueued.plan, enqueue: enqueued.result.value }, recorded.dependencies)
-  expect(result.ok).toBe(true)
-  if (!result.ok) throw new Error('test poll failed')
-  return { ...enqueued, ...recorded, job: result.value, pollResult: result }
+  return { ...enqueued, ...recorded, result }
 }
 
-async function articleFor(request = freshRequest(), target = makeTarget(), articleOverrides: Record<string, unknown> = {}) {
-  const polled = await completedJobFor(request, target)
+async function completedJobFor(request = freshRequest(), target = makeTarget(), metadataOverrides: Record<string, unknown> = {}) {
+  const polled = await pollJobWithMetadata(request, target, metadataOverrides)
+  const { result } = polled
+  expect(result.ok).toBe(true)
+  if (!result.ok) throw new Error('test poll failed')
+  return { ...polled, job: result.value, pollResult: result }
+}
+
+async function articleFor(request = freshRequest(), target = makeTarget(), articleOverrides: Record<string, unknown> = {}, metadataOverrides: Record<string, unknown> = {}) {
+  const polled = await completedJobFor(request, target, metadataOverrides)
   const recorded = responseFor(articleResponse(request, polled.job.jobId, polled.job.articleId, target.taskId, articleOverrides))
   const result = await executeGeoFlowArticleFetch({ plan: polled.plan, job: polled.job }, recorded.dependencies)
   return { ...polled, ...recorded, result }
@@ -264,17 +272,17 @@ describe('GEOFlow enqueue planning and execution', () => {
 
   it('includes project identity in body', () => {
     const planned = planFor()
-    expect(JSON.parse(planned.plan.body).project_identity).toEqual({ owner_user_id: 7, client_id: 8, production_plan_id: 10 })
+    expect(JSON.parse(planned.plan.body)).toMatchObject({ owner_user_id: 7, client_id: 8, production_plan_id: 10 })
   })
 
   it('includes calendar entry identity in body', () => {
     const planned = planFor()
-    expect(JSON.parse(planned.plan.body).calendar_entry_identity).toEqual({ calendar_entry_id: 9, brief_id: 12 })
+    expect(JSON.parse(planned.plan.body)).toMatchObject({ calendar_entry_id: 9, brief_id: 12 })
   })
 
   it('includes deliverable identity in body', () => {
     const planned = planFor()
-    expect(JSON.parse(planned.plan.body).deliverable_identity).toEqual({ deliverable_id: 11, discovery_stack_job_id: 13 })
+    expect(JSON.parse(planned.plan.body)).toMatchObject({ deliverable_id: 11, discovery_stack_job_id: 13 })
   })
 
   it('includes evidence snapshot and brief fingerprint in body', () => {
@@ -291,16 +299,17 @@ describe('GEOFlow enqueue planning and execution', () => {
     expect(body.requested_capabilities).toEqual(planned.request.requestedCapabilities)
   })
 
-  it('includes target task and attempt in body', () => {
+  it('keeps target task in the route and attempt in the canonical body', () => {
     const planned = planFor(freshRequest(), makeTarget({ attempt: 10 }))
     const body = JSON.parse(planned.plan.body)
-    expect(body.task_id).toBe(TASK_ID)
+    expect(planned.plan.path).toBe(`/api/v1/tasks/${TASK_ID}/enqueue`)
+    expect(body.task_id).toBeUndefined()
     expect(body.attempt).toBe(10)
   })
 
-  it('fixes the enqueue job type to generate_article', () => {
+  it('fixes the enqueue job type to the DiscoveryStack generation job', () => {
     const planned = planFor()
-    expect(JSON.parse(planned.plan.body).job_type).toBe('generate_article')
+    expect(JSON.parse(planned.plan.body).job_type).toBe('discoverystack_generate_article_v1')
   })
 
   it('does not include credential material in plan body', () => {
@@ -376,7 +385,7 @@ describe('GEOFlow enqueue planning and execution', () => {
 
   it('rejects a missing task id in enqueue response', async () => {
     const request = freshRequest()
-    const result = await enqueueFor(request, makeTarget(), jsonResponse({ success: true, data: { request_id: request.requestId, job_id: JOB_ID } }))
+    const result = await enqueueFor(request, makeTarget(), apiResponse(request, { job_id: JOB_ID }))
     expect(result.result).toEqual({ ok: false, error: { code: 'TASK_ID_MISSING', retryable: false } })
   })
 
@@ -388,14 +397,35 @@ describe('GEOFlow enqueue planning and execution', () => {
 
   it('rejects a missing job id in enqueue response', async () => {
     const request = freshRequest()
-    const result = await enqueueFor(request, makeTarget(), jsonResponse({ success: true, data: { request_id: request.requestId, task_id: TASK_ID } }))
+    const result = await enqueueFor(request, makeTarget(), apiResponse(request, { task_id: TASK_ID }))
     expect(result.result).toEqual({ ok: false, error: { code: 'JOB_ID_MISSING', retryable: false } })
   })
 
   it('rejects a wrong request id in enqueue response', async () => {
     const request = freshRequest()
-    const result = await enqueueFor(request, makeTarget(), jsonResponse({ success: true, data: { request_id: 'other-request', task_id: TASK_ID, job_id: JOB_ID } }))
+    const result = await enqueueFor(request, makeTarget(), apiResponse(request, { task_id: TASK_ID, job_id: JOB_ID }, undefined, 'other-request'))
     expect(result.result).toEqual({ ok: false, error: { code: 'REQUEST_ID_MISMATCH', retryable: false, httpStatus: 200 } })
+  })
+
+  it('rejects request id disagreement across top-level data and meta', async () => {
+    const request = freshRequest()
+    const result = await enqueueFor(request, makeTarget(), jsonResponse({
+      success: true,
+      request_id: 'top-level-wrong',
+      data: { request_id: request.requestId, task_id: TASK_ID, job_id: JOB_ID },
+      error: null,
+      meta: { request_id: request.requestId, timestamp: RESPONSE_TIMESTAMP },
+    }))
+    expect(result.result).toEqual({ ok: false, error: { code: 'REQUEST_ID_MISMATCH', retryable: false, httpStatus: 200 } })
+  })
+
+  it('passes an AbortSignal to the injected fetch boundary', async () => {
+    const request = freshRequest()
+    const target = makeTarget()
+    const recorded = responseFor(enqueueResponse(request))
+    const result = await executeGeoFlowEnqueue({ request, target }, recorded.dependencies)
+    expect(result.ok).toBe(true)
+    expect(recorded.calls[0]?.init.signal).toBeInstanceOf(AbortSignal)
   })
 
   it('rejects a non-success envelope', async () => {
@@ -618,7 +648,7 @@ describe('GEOFlow job polling and lineage', () => {
     const enqueued = await enqueueFor(request)
     expect(enqueued.result.ok).toBe(true)
     if (!enqueued.result.ok) throw new Error('enqueue failed')
-    const recorded = responseFor(jsonResponse({ success: true, data: { request_id: request.requestId, request_fingerprint: request.requestFingerprint, task_id: TASK_ID, job_id: enqueued.result.value.jobId, status: 'completed', attempt: 1 } }))
+    const recorded = responseFor(jobResponse(request, enqueued.result.value.jobId, null, TASK_ID, 'completed', 1))
     const result = await executeGeoFlowJobPoll({ plan: enqueued.plan, enqueue: enqueued.result.value }, recorded.dependencies)
     expect(result).toEqual({ ok: false, error: { code: 'ARTICLE_ID_MISSING', retryable: false } })
   })
@@ -628,7 +658,7 @@ describe('GEOFlow job polling and lineage', () => {
     const enqueued = await enqueueFor(request)
     expect(enqueued.result.ok).toBe(true)
     if (!enqueued.result.ok) throw new Error('enqueue failed')
-    const recorded = responseFor(jsonResponse({ success: true, data: { request_id: request.requestId, request_fingerprint: request.requestFingerprint, task_id: TASK_ID, job_id: enqueued.result.value.jobId, status: 'queued', attempt: 1 } }))
+    const recorded = responseFor(jobResponse(request, enqueued.result.value.jobId, null, TASK_ID, 'queued', 1))
     const pendingPlanResult = planGeoFlowEnqueueRequest(request, makeTarget({ maxPolls: 1 }))
     expect(pendingPlanResult.ok).toBe(true)
     if (!pendingPlanResult.ok) throw new Error('pending plan failed')
@@ -643,12 +673,24 @@ describe('GEOFlow job polling and lineage', () => {
     expect(enqueued.result.ok).toBe(true)
     if (!enqueued.result.ok) throw new Error('enqueue failed')
     const recorded = responseFor([
-      jsonResponse({ success: true, data: { request_id: request.requestId, request_fingerprint: request.requestFingerprint, task_id: TASK_ID, job_id: enqueued.result.value.jobId, status: 'running', attempt: 1 } }),
+      jobResponse(request, enqueued.result.value.jobId, null, TASK_ID, 'running', 1),
       jobResponse(request, enqueued.result.value.jobId, ARTICLE_ID, TASK_ID, 'completed', 1),
     ])
     const result = await executeGeoFlowJobPoll({ plan: enqueued.plan, enqueue: enqueued.result.value }, recorded.dependencies)
     expect(result.ok).toBe(true)
-    expect(recorded.sleeps).toEqual([0])
+    expect(recorded.sleeps).toEqual([])
+  })
+
+  it('requires injected sleep when polling interval is positive', async () => {
+    const request = freshRequest()
+    const target = makeTarget({ pollIntervalMs: 10, maxPolls: 1 })
+    const enqueued = await enqueueFor(request, target)
+    expect(enqueued.result.ok).toBe(true)
+    if (!enqueued.result.ok) throw new Error('enqueue failed')
+    const dependencies = responseFor(jobResponse(request, enqueued.result.value.jobId, null, TASK_ID, 'running', 1)).dependencies
+    delete (dependencies as { sleep?: unknown }).sleep
+    const result = await executeGeoFlowJobPoll({ plan: enqueued.plan, enqueue: enqueued.result.value }, dependencies)
+    expect(result).toEqual({ ok: false, error: { code: 'SLEEP_NOT_CONFIGURED', retryable: false } })
   })
 
   it('retries a transient job poll server error', async () => {
@@ -693,7 +735,7 @@ describe('GEOFlow job polling and lineage', () => {
     const enqueued = await enqueueFor(request)
     expect(enqueued.result.ok).toBe(true)
     if (!enqueued.result.ok) throw new Error('enqueue failed')
-    const recorded = responseFor(jsonResponse({ success: true, data: { request_id: request.requestId, request_fingerprint: request.requestFingerprint, task_id: TASK_ID, job_id: enqueued.result.value.jobId, status: 'failed', attempt: 1 } }))
+    const recorded = responseFor(jobResponse(request, enqueued.result.value.jobId, null, TASK_ID, 'failed', 1))
     const result = await executeGeoFlowJobPoll({ plan: enqueued.plan, enqueue: enqueued.result.value }, recorded.dependencies)
     expect(result).toEqual({ ok: false, error: { code: 'REMOTE_REJECTED', retryable: false } })
   })
@@ -798,49 +840,49 @@ describe('GEOFlow article candidate transport and validation', () => {
   })
 
   it('accepts review-required article state', async () => {
-    const flow = await articleFor(freshRequest(), makeTarget(), { status: 'review_required' })
+    const flow = await articleFor(freshRequest(), makeTarget(), { review_status: 'review_pending' })
     expect(flow.result.ok).toBe(true)
     if (flow.result.ok) expect(flow.result.value.response.status).toBe('review_required')
   })
 
   it('rejects a wrong article id', async () => {
     const request = freshRequest()
-    const flow = await articleFor(request, makeTarget(), { article_id: ARTICLE_ID + 1 })
+    const flow = await articleFor(request, makeTarget(), { id: ARTICLE_ID + 1 })
     expect(flow.result).toEqual({ ok: false, error: { code: 'ARTICLE_ID_MISMATCH', retryable: false } })
   })
 
-  it('rejects a wrong article key', async () => {
-    const flow = await articleFor(freshRequest(), makeTarget(), { external_article_key: 'article-wrong' })
+  it('rejects a wrong article key in verified job metadata', async () => {
+    const flow = await pollJobWithMetadata(freshRequest(), makeTarget(), { external_article_key: 'article-wrong' })
     expect(flow.result).toEqual({ ok: false, error: { code: 'ARTICLE_ID_MISMATCH', retryable: false } })
   })
 
-  it('rejects a wrong evidence snapshot hash', async () => {
-    const flow = await articleFor(freshRequest(), makeTarget(), { evidence_snapshot_hash: 'a'.repeat(64) })
+  it('rejects a wrong evidence snapshot hash in verified job metadata', async () => {
+    const flow = await pollJobWithMetadata(freshRequest(), makeTarget(), { evidence_snapshot_hash: 'a'.repeat(64) })
     expect(flow.result).toEqual({ ok: false, error: { code: 'REQUEST_FINGERPRINT_MISMATCH', retryable: false } })
   })
 
-  it('rejects a wrong brief fingerprint', async () => {
-    const flow = await articleFor(freshRequest(), makeTarget(), { brief_fingerprint: 'a'.repeat(64) })
+  it('rejects a wrong brief fingerprint in verified job metadata', async () => {
+    const flow = await pollJobWithMetadata(freshRequest(), makeTarget(), { brief_fingerprint: 'a'.repeat(64) })
     expect(flow.result).toEqual({ ok: false, error: { code: 'REQUEST_FINGERPRINT_MISMATCH', retryable: false } })
   })
 
   it('rejects a wrong body hash', async () => {
-    const flow = await articleFor(freshRequest(), makeTarget(), { body_hash: 'a'.repeat(64) })
+    const flow = await articleFor(freshRequest(), makeTarget(), {}, { content_hash: 'a'.repeat(64) })
     expect(flow.result).toEqual({ ok: false, error: { code: 'CONTENT_HASH_MISMATCH', retryable: false } })
   })
 
   it('rejects an invalid provider provenance', async () => {
-    const flow = await articleFor(freshRequest(), makeTarget(), { provider_provenance: { provider: 'unknown', model: 'unknown', mode: 'unknown', fallback_reason: null } })
-    expect(flow.result).toEqual({ ok: false, error: { code: 'RESULT_INVALID', retryable: false, contractReason: 'INVALID_INPUT' } })
-  })
-
-  it('rejects an article response without body', async () => {
-    const flow = await articleFor(freshRequest(), makeTarget(), { body_markdown: '' })
+    const flow = await pollJobWithMetadata(freshRequest(), makeTarget(), { provider_provenance: { provider: 'unknown', model: 'unknown', mode: 'unknown', fallback_reason: null } })
     expect(flow.result).toEqual({ ok: false, error: { code: 'RESULT_INVALID', retryable: false } })
   })
 
+  it('rejects an article response without body', async () => {
+    const flow = await articleFor(freshRequest(), makeTarget(), { content: '' })
+    expect(flow.result).toEqual({ ok: false, error: { code: 'CONTENT_HASH_MISMATCH', retryable: false } })
+  })
+
   it('rejects an article response without completed time', async () => {
-    const flow = await articleFor(freshRequest(), makeTarget(), { completed_at: undefined })
+    const flow = await pollJobWithMetadata(freshRequest(), makeTarget(), { completed_at: undefined })
     expect(flow.result).toEqual({ ok: false, error: { code: 'RESULT_INVALID', retryable: false } })
   })
 
@@ -849,9 +891,9 @@ describe('GEOFlow article candidate transport and validation', () => {
     expect(flow.result).toEqual({ ok: false, error: { code: 'TASK_ID_MISMATCH', retryable: false } })
   })
 
-  it('rejects a wrong job identity in article response', async () => {
+  it('rejects invented job identity in article response', async () => {
     const flow = await articleFor(freshRequest(), makeTarget(), { job_id: JOB_ID + 1 })
-    expect(flow.result).toEqual({ ok: false, error: { code: 'JOB_ID_MISMATCH', retryable: false } })
+    expect(flow.result).toEqual({ ok: false, error: { code: 'RESULT_INVALID', retryable: false } })
   })
 
   it('rejects article fetch for an unverified fake plan', async () => {

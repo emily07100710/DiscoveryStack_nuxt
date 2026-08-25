@@ -45,7 +45,7 @@ class WorkerExecutionService
     /**
      * @return array{article_id:int|null, title:string, message:string, meta:array<string,mixed>}
      */
-    public function executeTask(int $taskId): array
+    public function executeTask(int $taskId, ?string $jobType = null, array $payload = []): array
     {
         /** @var Task|null $task */
         $task = Task::query()->find($taskId);
@@ -55,6 +55,10 @@ class WorkerExecutionService
 
         if (($task->status ?? 'paused') !== 'active' || (int) ($task->schedule_enabled ?? 1) !== 1) {
             throw new RuntimeException('任务未激活');
+        }
+
+        if ($jobType === DiscoveryStackGenerationPayload::JOB_TYPE) {
+            return $this->executeDiscoveryStackTask($task, $payload);
         }
 
         $publishResult = $this->publishDueDraftArticle($task);
@@ -198,6 +202,183 @@ class WorkerExecutionService
                 'model_attempts' => $generation['attempts'],
             ],
         ];
+    }
+
+    /**
+     * Execute the evidence-bound DiscoveryStack generation path.
+     *
+     * This branch deliberately does not call publishDueDraftArticle(), the
+     * distribution orchestrator, or any client-site writer.  It creates only
+     * a draft/pending article and stores server-created lineage metadata.
+     *
+     * @param array<string,mixed> $payload
+     * @return array{article_id:int, title:string, message:string, meta:array<string,mixed>}
+     */
+    private function executeDiscoveryStackTask(Task $task, array $payload): array
+    {
+        $payload = DiscoveryStackGenerationPayload::validate($payload);
+        $task->loadMissing('aiModel');
+        $aiModel = $task->aiModel;
+        if (! $aiModel instanceof AiModel) {
+            throw new RuntimeException('任务未配置 AI 模型');
+        }
+        $provider = $this->discoveryStackProviderName($aiModel, $payload);
+        $prompt = (new DiscoveryStackGenerationPromptRenderer())->render($payload);
+        $response = $this->articleContentGenerationService->generate($aiModel, $prompt);
+        $content = OpenAiRuntimeProvider::normalizeGeneratedText((string) ($response->text ?? ''));
+        if ($content === '') {
+            throw new RuntimeException('DiscoveryStack provider returned empty article content');
+        }
+
+        $title = (string) $payload['brief']['title'];
+        $excerpt = $this->buildExcerpt($content);
+        $contentHash = hash('sha256', $content);
+        $citationBindings = $this->discoveryStackCitationBindings($content, $payload['evidence_chunks']);
+        if (in_array('knowledge_rag', $payload['requested_capabilities'], true) && $citationBindings === []) {
+            throw new RuntimeException('DiscoveryStack generation requires at least one approved evidence citation');
+        }
+        $completedAt = now()->toIso8601String();
+        $limitations = ['Human review is required.'];
+        $resultMetadata = [
+            'request_id' => $payload['request_id'],
+            'request_fingerprint' => $payload['request_fingerprint'],
+            'brief_fingerprint' => $payload['brief_fingerprint'],
+            'evidence_snapshot_hash' => $payload['evidence_snapshot_hash'],
+            'external_article_key' => $payload['external_article_key'],
+            'attempt' => $payload['attempt'],
+            'content_hash' => $contentHash,
+            'citation_bindings' => $citationBindings,
+            'applied_rule_ids' => $payload['selected_rule_ids'],
+            'provider_provenance' => [
+                'provider' => $provider,
+                'model' => (string) $aiModel->model_id,
+                'mode' => 'provider',
+                'fallback_reason' => null,
+            ],
+            'limitations' => $limitations,
+            'completed_at' => $completedAt,
+        ];
+
+        $author = $this->pickAuthor($task);
+        $category = $this->pickCategory($task);
+        if ($category === null) {
+            throw new RuntimeException('任务未配置文章分类');
+        }
+
+        $articleId = DB::transaction(function () use ($task, $title, $content, $excerpt, $author, $category): int {
+            $freshTask = Task::query()
+                ->whereKey((int) $task->id)
+                ->lockForUpdate()
+                ->first(['id', 'status', 'schedule_enabled', 'created_count', 'draft_limit', 'article_limit', 'next_publish_at', 'publish_interval']);
+            if (! $freshTask || ($freshTask->status ?? 'paused') !== 'active' || (int) ($freshTask->schedule_enabled ?? 1) !== 1) {
+                throw new RuntimeException('任务未激活');
+            }
+            $generationBlockReason = $this->getGenerationBlockReason($freshTask, true);
+            if ($generationBlockReason !== null) {
+                throw new RuntimeException($generationBlockReason);
+            }
+
+            $article = Article::query()->create([
+                'title' => $title,
+                'slug' => ArticleWorkflow::generateUniqueSlug($title),
+                'excerpt' => $excerpt,
+                'content' => $content,
+                'category_id' => (int) $category->id,
+                'author_id' => (int) $author->id,
+                'task_id' => (int) $freshTask->id,
+                'source_title_id' => null,
+                'original_keyword' => '',
+                'keywords' => '',
+                'meta_description' => mb_substr($excerpt, 0, 120),
+                'status' => 'draft',
+                'review_status' => 'pending',
+                'is_ai_generated' => 1,
+                'published_at' => null,
+                'view_count' => 0,
+            ]);
+            $this->articleRiskScanner->record($article, 'discoverystack_generation');
+
+            $taskUpdate = [
+                'created_count' => DB::raw('COALESCE(created_count,0)+1'),
+                'loop_count' => DB::raw('COALESCE(loop_count,0)+1'),
+                'updated_at' => now(),
+            ];
+            if ($freshTask->next_publish_at === null || ! $freshTask->next_publish_at->greaterThan(now())) {
+                $taskUpdate['next_publish_at'] = now()->addSeconds($this->normalizePublishInterval($freshTask));
+            }
+            Task::query()->whereKey((int) $freshTask->id)->update($taskUpdate);
+
+            return (int) $article->id;
+        });
+
+        return [
+            'article_id' => $articleId,
+            'title' => $title,
+            'message' => 'DiscoveryStack 草稿生成成功，等待人工审核',
+            'meta' => [
+                'result' => [
+                    'discoverystack_generation_v1' => $resultMetadata,
+                ],
+            ],
+        ];
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function discoveryStackProviderName(AiModel $aiModel, array $payload): string
+    {
+        $apiUrl = trim((string) ($aiModel->api_url ?? ''));
+        $host = strtolower((string) (parse_url($apiUrl, PHP_URL_HOST) ?: ''));
+        $provider = match (true) {
+            str_contains($host, 'dashscope') => 'dashscope',
+            str_contains($host, 'bailian') => 'bailian',
+            str_contains($host, 'modelstudio') || str_contains($host, 'model-studio') => 'model-studio',
+            $host !== '' => preg_replace('/[^a-z0-9._:-]+/i', '-', $host) ?: 'configured-provider',
+            default => 'configured-provider',
+        };
+        if (in_array('qwen_generation', $payload['requested_capabilities'], true)
+            && ! in_array($provider, ['qwen', 'bailian', 'dashscope', 'model-studio'], true)
+        ) {
+            throw new RuntimeException('qwen_generation requires a server-configured Qwen/Bailian provider');
+        }
+        $modelId = trim((string) ($aiModel->model_id ?? ''));
+        if ($modelId === '') {
+            throw new RuntimeException('任务 AI 模型标识为空');
+        }
+
+        return $provider;
+    }
+
+    /**
+     * @param list<array<string,mixed>> $evidenceChunks
+     * @return list<array{source_id:string,artifact_id:string,chunk_id:string,chunk_hash:string,marker:string}>
+     */
+    private function discoveryStackCitationBindings(string $content, array $evidenceChunks): array
+    {
+        $byMarker = [];
+        foreach (array_values($evidenceChunks) as $index => $chunk) {
+            $byMarker['E'.($index + 1)] = $chunk;
+        }
+        preg_match_all('/\\[(E[0-9]+)\\]/u', $content, $matches);
+        $markers = array_values(array_unique($matches[1] ?? []));
+        foreach ($markers as $marker) {
+            if (! isset($byMarker[$marker])) {
+                throw new RuntimeException('Unknown DiscoveryStack evidence citation marker');
+            }
+        }
+
+        $bindings = [];
+        foreach ($markers as $marker) {
+            $chunk = $byMarker[$marker];
+            $bindings[] = [
+                'source_id' => $chunk['source_id'],
+                'artifact_id' => $chunk['artifact_id'],
+                'chunk_id' => $chunk['chunk_id'],
+                'chunk_hash' => $chunk['chunk_hash'],
+                'marker' => '['.$marker.']',
+            ];
+        }
+
+        return $bindings;
     }
 
     /**

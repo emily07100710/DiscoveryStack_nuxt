@@ -14,6 +14,8 @@ export type GeoFlowTransportErrorCode =
   | 'TASK_ID_MISSING'
   | 'JOB_ID_MISSING'
   | 'CLOCK_NOT_CONFIGURED'
+  | 'REQUEST_TIME_INVALID'
+  | 'SLEEP_NOT_CONFIGURED'
   | 'TRANSPORT_TIMEOUT'
   | 'NETWORK_FAILURE'
   | 'REMOTE_UNAUTHORIZED'
@@ -71,6 +73,7 @@ export type GeoFlowRequestInit = {
   readonly body?: string
   readonly redirect: 'manual'
   readonly timeoutMs: number
+  readonly signal: AbortSignal
 }
 
 export type GeoFlowFetchResponse = {
@@ -156,6 +159,32 @@ export type GeoFlowPollInput = {
   readonly enqueue: GeoFlowEnqueueValue
 }
 
+export type GeoFlowJobResultMetadata = {
+  readonly requestId: string
+  readonly requestFingerprint: string
+  readonly briefFingerprint: string
+  readonly evidenceSnapshotHash: string
+  readonly externalArticleKey: string
+  readonly attempt: number
+  readonly contentHash: string
+  readonly citationBindings: readonly {
+    readonly marker: string
+    readonly sourceId: string
+    readonly artifactId: string
+    readonly chunkId: string
+    readonly chunkHash: string
+  }[]
+  readonly appliedRuleIds: readonly string[]
+  readonly providerProvenance: {
+    readonly provider: string
+    readonly model: string
+    readonly mode: 'provider' | 'deterministic_scaffold' | 'reference_fallback'
+    readonly fallbackReason: string | null
+  }
+  readonly limitations: readonly string[]
+  readonly completedAt: string
+}
+
 export type GeoFlowJobValue = {
   readonly kind: 'job_completed'
   readonly requestFingerprint: string
@@ -166,6 +195,7 @@ export type GeoFlowJobValue = {
   readonly attempt: number
   readonly remoteRequestId: string
   readonly remoteStatus: string
+  readonly resultMetadata: GeoFlowJobResultMetadata
 }
 
 export type GeoFlowJobPollResult = GeoFlowTransportResult<GeoFlowJobValue>
