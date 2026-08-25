@@ -1,6 +1,8 @@
 export { buildVisibilityProbePlan } from './planner'
 export { analyzeProviderObservation } from './analyzer'
 export { executeVisibilityProbeBatch, isSupportedProbeProvider } from './runner'
+export { createEphemeralVisibilityProbeIdempotencyRegistry, executeAndPersistProviderObservations } from './runtime'
+export { createConfiguredVisibilityProviderAdapters, createEnvironmentVisibilityCredentialResolver, createVisibilityProviderAdapter } from './server-adapters'
 export { classifyVisibilityProbeFailure, retryDecisionFromFailure } from './retry-policy'
 export {
   MAX_EXCERPT_BYTES,
@@ -51,4 +53,6 @@ export type {
   VisibilityProbeIdempotencyRegistry,
   VisibilityProbePlan,
 } from './types'
+export type { PersistedProviderObservation, ProviderObservationRuntimeResult } from './runtime'
+export type { VisibilityServerAdapterConfig, VisibilityServerCredentialResolver } from './server-adapters'
 export type { CandidateValidationContext } from './normalization'

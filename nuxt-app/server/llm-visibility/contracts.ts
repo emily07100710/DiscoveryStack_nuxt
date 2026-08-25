@@ -6,6 +6,7 @@ export const visibilityRunStatuses = ['queued', 'completed', 'blocked', 'failed'
 export const visibilityLocales = ['en', 'zh-hant'] as const
 
 const boundedLabel = (max: number) => z.string().trim().min(1).max(max)
+const boundedIdentity = (max: number) => z.union([boundedLabel(max), z.number().int().positive()])
 const hash = z.string().trim().regex(/^[a-f0-9]{64}$/i, '必須是 64 字元 SHA-256 hex。').transform(value => value.toLowerCase())
 
 export const projectInputSchema = z.object({
@@ -67,10 +68,56 @@ export const ownerManualObservationImportSchema = z.object({
   verifiedByOwner: z.literal(true),
 }).strict().superRefine(validateObservationConsistency)
 
+/** Provider API observations are bounded secondary evidence and never owner-verified consumer-surface truth. */
+export const providerObservationRunInputSchema = z.object({
+  projectId: z.number().int().positive(),
+  queryIds: z.array(z.number().int().positive()).min(1).max(100),
+  observationWindowKey: boundedLabel(160),
+  maximumProbes: z.number().int().min(1).max(50).default(50),
+  providerTargets: z.array(z.object({
+    provider: z.enum(['chatgpt', 'gemini', 'perplexity']),
+    modelLabel: boundedLabel(160),
+    adapterKey: boundedLabel(160),
+    allowedLocales: z.array(z.enum(visibilityLocales)).min(1).max(2),
+    maximumResponseBytes: z.number().int().min(1).max(2_000_000).default(120_000),
+    timeoutMs: z.number().int().min(1_000).max(120_000).default(30_000),
+  }).strict()).min(1).max(12),
+}).strict()
+
+export const providerObservationCandidateSchema = z.object({
+  ...observationInputShape,
+  probeId: boundedLabel(256),
+  projectId: boundedIdentity(128),
+  queryId: boundedIdentity(128),
+  observationMode: z.literal('provider_api_observation'),
+  status: z.literal('completed'),
+  verifiedByOwner: z.literal(false),
+  metricEligibility: z.literal('secondary_only'),
+  consumerSurfaceEquivalent: z.literal(false),
+  persistenceStatus: z.literal('persisted_secondary_only'),
+  planFingerprint: hash,
+  ownerScopeKey: boundedLabel(256),
+  observationWindowKey: boundedLabel(160),
+  providerRequestId: boundedLabel(256).optional(),
+  provenance: z.object({
+    adapterKey: boundedLabel(160),
+    engineVersion: boundedLabel(120),
+    responseMetadata: z.object({
+      finishReason: boundedLabel(80).optional(),
+      inputTokens: z.number().int().min(0).max(1_000_000).optional(),
+      outputTokens: z.number().int().min(0).max(1_000_000).optional(),
+      totalTokens: z.number().int().min(0).max(1_000_000).optional(),
+    }).strict().optional(),
+  }).strict(),
+}).strict().superRefine(validateObservationConsistency)
+
 export type ProjectInput = z.infer<typeof projectInputSchema>
 export type QueryInput = z.infer<typeof queryInputSchema>
 export type ObservationInput = z.infer<typeof observationInputSchema>
 export type OwnerManualObservationImport = z.infer<typeof ownerManualObservationImportSchema>
+export type ProviderObservationRunInput = z.infer<typeof providerObservationRunInputSchema>
+export type ProviderObservationCandidate = z.infer<typeof providerObservationCandidateSchema>
+export type PersistableObservationInput = Omit<ObservationInput, 'verifiedByOwner'> & { verifiedByOwner: boolean }
 export type VisibilityProvider = typeof visibilityProviders[number]
 export type VisibilityMode = typeof visibilityModes[number]
 
@@ -82,9 +129,9 @@ export class VisibilityContractError extends Error {
 }
 
 export const VISIBILITY_LIMITATIONS = [
-  'V1 production/runtime 只接受 owner 人工核對的 manual_verified snapshot；這不等同 consumer ChatGPT、Gemini、Perplexity 或 Google AI Overviews 介面的真實曝光。',
+  'V1 primary metrics 只接受 owner 人工核對的 manual_verified snapshot；provider_api_observation 雖可保存為 secondary-only evidence，仍不等同 consumer ChatGPT、Gemini、Perplexity 或 Google AI Overviews 介面的真實曝光。',
   '此模組不量測搜尋排名，也不提供流量、轉換、營收或 ROI 保證。',
-  'provider_api_observation 只保留為未來資料契約與純 mocked metrics 測試模式；V1 runtime 不接受，dashboard 也不會注入 mocked observation。',
+  'provider_api_observation 可保存為明確標記的 secondary-only observation，但永遠不是 owner-verified evidence、consumer UI truth 或 primary manual_verified 指標。',
   '主要指標只使用符合期間的 manual_verified observation rows；observedQueries 是其中不重複的 active query 數，比例則以 observation rows 為分母。',
-  'V1 沒有 scheduler、provider executor、consumer UI scraping、自動登入或隱藏 bypass。',
+  'V1 沒有 consumer UI scraping、自動登入或隱藏 bypass；provider observation runtime 只透過明確注入的 provider adapter 執行，沒有 adapter／credential 時 fail-closed。',
 ] as const

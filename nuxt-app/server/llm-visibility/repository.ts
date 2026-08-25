@@ -1,10 +1,12 @@
-import { and, desc, eq, gte, lt } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDatabase } from '../database'
 import { llmVisibilityObservations, llmVisibilityProjects, llmVisibilityQueries, llmVisibilityRuns } from '../database/schema'
 import type { ObservationInput, ProjectInput, QueryInput } from './contracts'
 import { VisibilityContractError, VISIBILITY_LIMITATIONS } from './contracts'
 import { prepareProject, createTrackingQuery, buildSummaryProjection, type QueryWorkflowRepository, type VisibilityWorkflowRepository } from './service'
+import type { ProviderObservationRunInput } from './contracts'
+import { buildVisibilityProbePlan, createConfiguredVisibilityProviderAdapters, createEphemeralVisibilityProbeIdempotencyRegistry, executeAndPersistProviderObservations } from '../llm-visibility-probes'
 
 function requireVisibilityDatabase() {
   const database = getDatabase()
@@ -39,6 +41,31 @@ export async function createVisibilityQuery(ownerUserId: number, input: QueryInp
   return createTrackingQuery(adapter, ownerUserId, input)
 }
 
+export async function runOwnerProviderObservation(ownerUserId: number, input: ProviderObservationRunInput) {
+  const database = requireVisibilityDatabase()
+  const [projectRow, queryRows] = await Promise.all([
+    database.select().from(llmVisibilityProjects).where(and(eq(llmVisibilityProjects.id, input.projectId), eq(llmVisibilityProjects.ownerUserId, ownerUserId))).limit(1),
+    database.select().from(llmVisibilityQueries).where(and(eq(llmVisibilityQueries.ownerUserId, ownerUserId), eq(llmVisibilityQueries.projectId, input.projectId), inArray(llmVisibilityQueries.id, input.queryIds))).limit(100),
+  ])
+  const project = projectRow[0]
+  if (!project || project.status !== 'active') throw new VisibilityContractError(404, '找不到此 owner 的 active LLM visibility project。')
+  if (queryRows.length !== new Set(input.queryIds).size || queryRows.some(query => !query.active || query.projectId !== project.id)) throw new VisibilityContractError(422, 'provider observation query scope 必須全部屬於此 active project。')
+  const ownerScopeKey = `visibility-owner:${ownerUserId}`
+  const planResult = buildVisibilityProbePlan({
+    ownerScopeKey,
+    project: { projectId: String(project.id), canonicalWebsiteDomain: project.canonicalDomain, brandName: project.brandName, brandAliases: Array.isArray(project.brandAliases) ? project.brandAliases as string[] : [], competitorBrands: Array.isArray(project.competitorBrands) ? project.competitorBrands as string[] : [], locale: project.locale },
+    activeQuerySnapshots: queryRows.map(query => ({ queryId: String(query.id), projectId: String(query.projectId), promptText: query.promptText, promptHash: query.promptHash, intent: query.intent, locale: query.locale, active: query.active })),
+    providerTargets: input.providerTargets,
+    observationWindowKey: input.observationWindowKey,
+    maximumProbes: input.maximumProbes,
+    engineVersion: 'llm_visibility_probe_engine_v1',
+  })
+  if (planResult.status !== 'planned') throw new VisibilityContractError(422, `provider observation plan blocked: ${planResult.reasonCodes.join(', ')}`)
+  const adapters = createConfiguredVisibilityProviderAdapters(input.providerTargets.map(target => ({ adapterKey: target.adapterKey, provider: target.provider, modelLabel: target.modelLabel })))
+  const runtime = await executeAndPersistProviderObservations({ ownerUserId, ownerScopeKey, plan: planResult.plan, adapters, idempotencyRegistry: createEphemeralVisibilityProbeIdempotencyRegistry(), repository: createDrizzleVisibilityWorkflowRepository() })
+  return { ownerScopeKey, plan: planResult.plan, runtime }
+}
+
 export function createDrizzleVisibilityWorkflowRepository(): VisibilityWorkflowRepository {
   const database = requireVisibilityDatabase()
   return {
@@ -70,7 +97,7 @@ export function createDrizzleVisibilityWorkflowRepository(): VisibilityWorkflowR
             const runResult = await transaction.insert(llmVisibilityRuns).values({ ownerUserId: input.ownerUserId, projectId: input.projectId, provider: input.provider, modelLabel: input.modelLabel, observationMode: input.observationMode, status: input.status, observedAt: input.observedAtDate, requestFingerprint: input.requestFingerprint, limitationCode: input.limitationCode })
             runId = Number(runResult[0].insertId)
           }
-          const observationResult = await transaction.insert(llmVisibilityObservations).values({ ownerUserId: input.ownerUserId, projectId: input.projectId, runId, queryId: input.queryId, brandMentioned: input.brandMentioned, exactMentionCount: input.exactMentionCount, firstMentionPosition: input.firstMentionPosition, citedDomain: input.citedDomain, citationUrls: input.citationUrls, competitorMentions: input.competitorMentions, boundedExcerpt: input.boundedExcerpt, responseHash: input.responseHash, evidenceLocator: input.evidenceLocator, reviewerNote: input.reviewerNote, verifiedByOwner: true })
+          const observationResult = await transaction.insert(llmVisibilityObservations).values({ ownerUserId: input.ownerUserId, projectId: input.projectId, runId, queryId: input.queryId, brandMentioned: input.brandMentioned, exactMentionCount: input.exactMentionCount, firstMentionPosition: input.firstMentionPosition, citedDomain: input.citedDomain, citationUrls: input.citationUrls, competitorMentions: input.competitorMentions, boundedExcerpt: input.boundedExcerpt, responseHash: input.responseHash, evidenceLocator: input.evidenceLocator, reviewerNote: input.reviewerNote, verifiedByOwner: input.verifiedByOwner })
           return { runId, observationId: Number(observationResult[0].insertId) }
         })
       } catch (error: any) {
