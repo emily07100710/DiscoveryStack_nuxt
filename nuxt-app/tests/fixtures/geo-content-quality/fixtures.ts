@@ -90,5 +90,5 @@ export function syntheticProviderOutput(input: ContentQualityInput = syntheticIn
 }
 
 export function syntheticMarkdown(input: ContentQualityInput = syntheticInput()): string { return syntheticProviderOutput(input).body }
-export function syntheticRetrievalCandidates(input: ContentQualityInput = syntheticInput()) { return input.approvedEvidenceChunks.map(chunk => ({ chunk, limitations: ['Synthetic candidate for deterministic lexical retrieval.'] })) }
+export function syntheticRetrievalCandidates(input: ContentQualityInput = syntheticInput()) { return input.approvedEvidenceChunks.map(chunk => ({ chunk })) }
 export function withMutation<T extends object>(value: T, mutation: Partial<T>): T { return { ...value, ...mutation } }

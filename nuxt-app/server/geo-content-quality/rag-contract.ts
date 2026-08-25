@@ -111,14 +111,17 @@ export function buildRetrievalResult(inputOrPlanValue: unknown, candidateValues:
     if (scored.length === 0) return emptyResult('not_ready', 'RETRIEVAL_NOT_READY', plan, queryFingerprint)
     scored.sort((left, right) => right.relevanceRatio - left.relevanceRatio || codeUnitCompare(identity(left), identity(right)))
     const selected = scored.slice(0, plan.topK)
-    return { status: 'ready', retrievalVersion: RETRIEVAL_VERSION, queryFingerprint, retrievalFingerprint: retrievalFingerprint(queryFingerprint, selected, plan), corpusSnapshotHash: plan.corpusSnapshotHash, evidenceSnapshotHash: plan.evidenceSnapshotHash, chunks: selected, reasonCodes: [], limitations: ['This is deterministic lexical evidence retrieval V1 using bounded token overlap; it is not semantic vector retrieval, truth scoring, ranking probability, citation probability, conversion scoring, or an outcome prediction.'] }
+    return { status: 'ready', retrievalVersion: RETRIEVAL_VERSION, queryFingerprint, retrievalFingerprint: retrievalFingerprint(queryFingerprint, selected, plan), corpusSnapshotHash: plan.corpusSnapshotHash, evidenceSnapshotHash: plan.evidenceSnapshotHash, chunks: selected, reasonCodes: [], limitations: ['This is deterministic lexical evidence retrieval V1 using bounded token overlap; it is not semantic vector retrieval, truth scoring, ranking probability, citation probability, conversion scoring, or an outcome prediction.', 'Canonical retrieval limitations are server-deterministic metadata; caller-supplied limitations are not authoritative.'] }
   } catch (error: unknown) {
     if (error instanceof NormalizationIssue) return emptyResult('blocked', error.reasonCode, plan, queryFingerprint)
     return emptyResult('blocked', 'INVALID_INPUT', plan, queryFingerprint)
   }
 }
 
-export function verifyRetrievalResult(value: unknown, input: ContentQualityInput): RetrievalResult | null {
+export function verifyRetrievalResult(value: unknown, inputValue: unknown): RetrievalResult | null {
+  const normalizedInput = normalizeContentQualityInput(inputValue)
+  if (normalizedInput.status !== 'valid') return null
+  const input = normalizedInput.input
   if (!isRecord(value) || !hasExactKeys(value, RETRIEVAL_RESULT_KEYS)) return null
   try {
     if (readField(value, 'status') !== 'ready' || readField(value, 'retrievalVersion') !== RETRIEVAL_VERSION) return null
@@ -143,10 +146,10 @@ export function verifyRetrievalResult(value: unknown, input: ContentQualityInput
       return { ...candidate.chunk, matchedTokenCount, queryTokenCount, relevanceRatio, scoreBasis: LEXICAL_RETRIEVAL_SCORE_BASIS, limitations: candidate.limitations || [] }
     })
     const presented: RetrievalResult = { status: 'ready', retrievalVersion: RETRIEVAL_VERSION, queryFingerprint: normalizedQueryFingerprint, retrievalFingerprint: normalizedRetrievalFingerprint, corpusSnapshotHash: normalizedCorpusSnapshotHash, evidenceSnapshotHash: normalizedEvidenceSnapshotHash, chunks: normalizedChunks, reasonCodes: [], limitations: [...rawLimitations] }
-    if (normalizedQueryFingerprint !== input.retrievalPlan.queryFingerprint || normalizedCorpusSnapshotHash !== input.retrievalPlan.corpusSnapshotHash || normalizedEvidenceSnapshotHash !== input.evidenceSnapshotHash) return null
-    const recomputed = buildRetrievalResult(input, normalizedChunks.map(chunk => ({ chunk: { sourceId: chunk.sourceId, artifactId: chunk.artifactId, chunkId: chunk.chunkId, sourceType: chunk.sourceType, title: chunk.title, locator: chunk.locator, artifactHash: chunk.artifactHash, chunkHash: chunk.chunkHash, corpusSnapshotHash: chunk.corpusSnapshotHash, evidenceSnapshotHash: chunk.evidenceSnapshotHash, reviewedText: chunk.reviewedText, approvedPurposes: chunk.approvedPurposes, capturedAt: chunk.capturedAt, reviewStatus: chunk.reviewStatus }, limitations: chunk.limitations })))
-    if (recomputed.status !== 'ready' || canonicalizeQualityValue(presented) !== canonicalizeQualityValue(recomputed)) return null
-    return recomputed
+    const canonical = buildRetrievalResult(input, input.approvedEvidenceChunks.map(chunk => ({ chunk })))
+    if (canonical.status !== 'ready') return null
+    if (canonicalizeQualityValue(presented) !== canonicalizeQualityValue(canonical)) return null
+    return canonical
   } catch { return null }
 }
 

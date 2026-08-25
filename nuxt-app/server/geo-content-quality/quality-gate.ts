@@ -1,13 +1,12 @@
 import { resolveCanonicalGeoRules } from '../geo/rules'
-import { normalizeContentQualityInput, isRecord, readField, hasExactKeys, normalizeSha256, normalizeWhitespaceText } from './normalization'
+import { normalizeContentQualityInput, isRecord, readField, normalizeWhitespaceText } from './normalization'
 import { validateProviderOutput, prohibitedClaimReasonCodes } from './provider-output'
 import { parseMarkdownStructure } from './markdown-structure'
-import { buildRetrievalResult, tokenizeLexical } from './rag-contract'
+import { buildRetrievalResult, tokenizeLexical, verifyRetrievalResult } from './rag-contract'
 import { isReasonCode, type ReasonCode } from './reason-codes'
 import type { ContentQualityInput, CoverageMetric, QualityGateResult, QualityStatus, RetrievalResult, StructureChecks, ProviderOutput, PromptPack } from './types'
 
 const RETRIEVAL_RESULT_KEYS = ['status', 'retrievalVersion', 'queryFingerprint', 'retrievalFingerprint', 'corpusSnapshotHash', 'evidenceSnapshotHash', 'chunks', 'reasonCodes', 'limitations'] as const
-const CHUNK_KEYS = ['sourceId', 'artifactId', 'chunkId', 'sourceType', 'title', 'locator', 'artifactHash', 'chunkHash', 'corpusSnapshotHash', 'evidenceSnapshotHash', 'reviewedText', 'approvedPurposes', 'capturedAt', 'reviewStatus', 'matchedTokenCount', 'queryTokenCount', 'relevanceRatio', 'scoreBasis', 'limitations'] as const
 const QUALITY_KEYS = ['qualityInput', 'providerOutput', 'markdown', 'retrievalResult', 'promptPack'] as const
 const BLOCKING_REASONS = new Set<ReasonCode>(['INVALID_INPUT', 'UNKNOWN_FIELD', 'LIMIT_EXCEEDED', 'INVALID_HASH', 'INVALID_TIMESTAMP', 'FUTURE_EVIDENCE', 'EVIDENCE_CHUNK_HASH_MISMATCH', 'EVIDENCE_NOT_APPROVED', 'EVIDENCE_PURPOSE_NOT_ALLOWED', 'EVIDENCE_SNAPSHOT_MISMATCH', 'DUPLICATE_EVIDENCE', 'STALE_EVIDENCE', 'QUERY_FINGERPRINT_MISMATCH', 'RETRIEVAL_NOT_READY', 'RETRIEVAL_CORPUS_MISMATCH', 'RETRIEVAL_OUTSIDE_ALLOWLIST', 'PROMPT_INPUT_LIMIT_EXCEEDED', 'PROVIDER_OUTPUT_MALFORMED', 'CONTENT_HASH_MISMATCH', 'CITATION_OUTSIDE_APPROVED_EVIDENCE', 'CLAIM_WITHOUT_CITATION', 'UNSUPPORTED_QUANTITATIVE_CLAIM', 'FABRICATED_CASE_CLAIM', 'PROHIBITED_PERFORMANCE_GUARANTEE', 'INVALID_CITATION_BINDING', 'UNUSED_CITATION', 'FAQ_BODY_MISMATCH', 'RESPONSE_HASH_MISMATCH', 'RETRIEVAL_FINGERPRINT_MISMATCH'])
 
@@ -24,8 +23,8 @@ function blockedResult(reasonCodes: ReasonCode[]): QualityGateResult { return { 
 function emptyRetrieval(status: 'blocked' | 'not_ready', reason: ReasonCode): RetrievalResult { return { status, retrievalVersion: 'geo-content-quality-retrieval-v1', queryFingerprint: '', retrievalFingerprint: null, corpusSnapshotHash: '', evidenceSnapshotHash: '', chunks: [], reasonCodes: [reason], limitations: [] } }
 
 function normalizeRetrievalForQuality(value: unknown, input: ContentQualityInput): RetrievalResult {
-  if (value === undefined) return buildRetrievalResult(input, input.approvedEvidenceChunks.map(chunk => ({ chunk })), input)
-  if (!isRecord(value) || !hasExactKeys(value, RETRIEVAL_RESULT_KEYS)) return emptyRetrieval('blocked', 'INVALID_INPUT')
+  if (value === undefined) return buildRetrievalResult(input, input.approvedEvidenceChunks.map(chunk => ({ chunk })))
+  if (!isRecord(value)) return emptyRetrieval('blocked', 'INVALID_INPUT')
   try {
     const status = readField(value, 'status')
     if (status === 'blocked' || status === 'not_ready') {
@@ -33,26 +32,10 @@ function normalizeRetrievalForQuality(value: unknown, input: ContentQualityInput
       const reasonCodes: ReasonCode[] = Array.isArray(reasonValues) ? reasonValues.filter(isReasonCode) : ['INVALID_INPUT']
       return emptyRetrieval(status, reasonCodes[0] || 'RETRIEVAL_NOT_READY')
     }
-    if (status !== 'ready' || readField(value, 'retrievalVersion') !== 'geo-content-quality-retrieval-v1') return emptyRetrieval('blocked', 'INVALID_INPUT')
-    const presentedQueryFingerprint = normalizeSha256(readField(value, 'queryFingerprint'))
-    const presentedRetrievalFingerprint = normalizeSha256(readField(value, 'retrievalFingerprint'))
-    if (presentedQueryFingerprint !== input.retrievalPlan.queryFingerprint) return emptyRetrieval('blocked', 'QUERY_FINGERPRINT_MISMATCH')
-    if (normalizeSha256(readField(value, 'corpusSnapshotHash')) !== input.retrievalPlan.corpusSnapshotHash) return emptyRetrieval('blocked', 'RETRIEVAL_CORPUS_MISMATCH')
-    if (normalizeSha256(readField(value, 'evidenceSnapshotHash')) !== input.evidenceSnapshotHash) return emptyRetrieval('blocked', 'EVIDENCE_SNAPSHOT_MISMATCH')
-    const chunks = readField(value, 'chunks')
-    if (!Array.isArray(chunks)) return emptyRetrieval('blocked', 'INVALID_INPUT')
-    const candidates = chunks.map(chunk => {
-      if (!isRecord(chunk) || !hasExactKeys(chunk, CHUNK_KEYS)) throw new Error('INVALID_INPUT')
-      const baseChunk: Record<string, unknown> = {}
-      for (const key of CHUNK_KEYS.slice(0, 14)) baseChunk[key] = readField(chunk, key)
-      return { chunk: baseChunk, limitations: readField(chunk, 'limitations') }
-    })
-    const recomputed = buildRetrievalResult(input, candidates, input)
-    if (recomputed.status !== 'ready' || recomputed.retrievalFingerprint !== presentedRetrievalFingerprint) return emptyRetrieval('blocked', 'RETRIEVAL_FINGERPRINT_MISMATCH')
-    return recomputed
-  } catch (error: unknown) {
-    const reason = error instanceof Error && BLOCKING_REASONS.has(error.message as ReasonCode) ? error.message as ReasonCode : 'INVALID_INPUT'
-    return emptyRetrieval('blocked', reason)
+    if (status !== 'ready') return emptyRetrieval('blocked', 'INVALID_INPUT')
+    return verifyRetrievalResult(value, input) ?? emptyRetrieval('blocked', 'RETRIEVAL_FINGERPRINT_MISMATCH')
+  } catch {
+    return emptyRetrieval('blocked', 'RETRIEVAL_FINGERPRINT_MISMATCH')
   }
 }
 
