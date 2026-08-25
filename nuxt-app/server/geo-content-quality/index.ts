@@ -7,6 +7,7 @@ export {
   PROMPT_PACK_VERSION,
   PROVIDER_OUTPUT_VERSION,
   RETRIEVAL_VERSION,
+  LEXICAL_RETRIEVAL_SCORE_BASIS,
   CLAIM_TYPES,
   PROMPT_SECTION_IDS,
   type ApprovedEvidenceChunk,
@@ -26,12 +27,15 @@ export {
   type MarkdownStructureResult,
   type QualityGateResult,
   type CoverageMetric,
+  type ParagraphIdentity,
+  type ParagraphBinding,
+  type ProviderOutputValidationContext,
 } from './types'
 export { REASON_CODES, isReasonCode, type ReasonCode } from './reason-codes'
-export { normalizeContentQualityInput, normalizeApprovedEvidenceChunk, normalizeRetrievalPlan, normalizeSha256, normalizeTimestamp, codeUnitCompare, uniqueSorted, type NormalizationResult } from './normalization'
+export { normalizeContentQualityInput, normalizeApprovedEvidenceChunk, normalizeRetrievalPlan, normalizeSha256, normalizeTimestamp, normalizeWhitespaceText, canonicalQueryPayload, queryFingerprintForFields, codeUnitCompare, uniqueSorted, sha256Utf8, type NormalizationResult } from './normalization'
 export { canonicalizeQualityValue, sha256Text, fingerprintContentQualityInput, contentQualityFingerprintForNormalizedInput, type FingerprintResult } from './fingerprint'
 export { buildEvidenceDataEnvelope, buildPromptPack, decodeDataEnvelope } from './prompt-pack'
-export { buildRetrievalResult, isRetrievalResult, retrievalPlanSnapshotHash } from './rag-contract'
+export { buildRetrievalResult, isRetrievalResult, retrievalPlanSnapshotHash, tokenizeLexical } from './rag-contract'
 export { validateProviderOutput, providerOutputText, prohibitedClaimReasonCodes, providerOutputContractVersion } from './provider-output'
 export { parseMarkdownStructure } from './markdown-structure'
 export { evaluateContentQuality, qualityGateIsPublishApproval, qualityMetricLabel } from './quality-gate'

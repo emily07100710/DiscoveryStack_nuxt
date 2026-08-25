@@ -5,6 +5,7 @@ export const PROMPT_PACK_VERSION = 'geo-content-quality-prompt-pack-v1' as const
 export const PROVIDER_OUTPUT_VERSION = 'geo-content-quality-output-v1' as const
 export const RETRIEVAL_VERSION = 'geo-content-quality-retrieval-v1' as const
 export const GOVERNANCE_RULES_VERSION = 'geo-content-quality-governance-v1' as const
+export const LEXICAL_RETRIEVAL_SCORE_BASIS = 'deterministic_lexical_overlap_v1' as const
 
 export const CONTENT_TYPES = ['article', 'faq', 'service_page'] as const
 export type ContentType = typeof CONTENT_TYPES[number]
@@ -14,20 +15,22 @@ export const INDUSTRY_RISKS = ['general', 'medical', 'legal', 'financial'] as co
 export type IndustryRisk = typeof INDUSTRY_RISKS[number]
 export const REVIEW_STATUS = ['approved'] as const
 export type ReviewStatus = typeof REVIEW_STATUS[number]
-export const CLAIM_TYPES = ['factual', 'quantitative', 'comparative', 'medical', 'legal', 'financial', 'opinion', 'process'] as const
+export const CLAIM_TYPES = ['factual', 'quantitative', 'comparative', 'high_risk', 'interpretation', 'opinion', 'process', 'call_to_action'] as const
 export type ClaimType = typeof CLAIM_TYPES[number]
 export const SOURCE_TYPES = ['first_party', 'authority', 'research', 'documentation', 'regulatory', 'other'] as const
 export type SourceType = typeof SOURCE_TYPES[number]
 export const QUALITY_STATUSES = ['passed', 'needs_human_review', 'blocked'] as const
 export type QualityStatus = typeof QUALITY_STATUSES[number]
-export const PROMPT_SECTION_IDS = ['SYSTEM_GOVERNANCE', 'CONTENT_BRIEF', 'BRAND_CONTEXT', 'APPROVED_EVIDENCE', 'AUTHORITY_SOURCES', 'SELECTED_GEO_RULES', 'PROHIBITED_CLAIMS', 'OUTPUT_CONTRACT', 'FINAL_INSTRUCTION'] as const
+export const PROMPT_SECTION_IDS = ['ROLE_AND_NON_NEGOTIABLE_RULES', 'CONTENT_BRIEF_JSON', 'SELECTED_GEO_RULES_JSON', 'RETRIEVED_APPROVED_EVIDENCE_JSON', 'CLAIM_AND_CITATION_CONTRACT', 'CONTENT_STRUCTURE_REQUIREMENTS', 'OUTPUT_JSON_SCHEMA', 'QUALITY_AND_HUMAN_REVIEW_BOUNDARY', 'REQUEST_FINGERPRINTS'] as const
 export type PromptSectionId = typeof PROMPT_SECTION_IDS[number]
 
 export type ProviderProvenance = {
   provider: string
   model: string
+  requestId: string
   providerVersion: string
   generationMode: string
+  requestedAt: string
   generatedAt: string
 }
 
@@ -75,6 +78,9 @@ export type ContentQualityInput = {
   clientId: string
   briefId: string
   jobId: string
+  topic: string
+  workingTitle: string
+  primaryQuestion: string
   contentType: ContentType
   language: ContentLanguage
   industryRisk: IndustryRisk
@@ -91,11 +97,7 @@ export type ContentQualityInput = {
   requestedAt: string
 }
 
-export type PromptSection = {
-  id: PromptSectionId
-  content: string
-  contentHash: string
-}
+export type PromptSection = { id: PromptSectionId, content: string, contentHash: string }
 
 export type PromptPack = {
   packVersion: typeof PROMPT_PACK_VERSION
@@ -111,48 +113,15 @@ export type PromptPackResult =
   | { status: 'ready', promptPack: PromptPack, reasonCodes: [] }
   | { status: 'blocked', promptPack: null, reasonCodes: ReasonCode[] }
 
-export type RetrievalCandidate = {
-  chunk: ApprovedEvidenceChunk
-  scoreBasis: string
-  limitations: string[]
-}
+export type RetrievalCandidate = { chunk: ApprovedEvidenceChunk, limitations?: string[] }
+export type RetrievedEvidenceChunk = ApprovedEvidenceChunk & { matchedTokenCount: number, queryTokenCount: number, relevanceRatio: number, scoreBasis: typeof LEXICAL_RETRIEVAL_SCORE_BASIS, limitations: string[] }
+export type RetrievalResult = { status: 'ready' | 'not_ready' | 'blocked', retrievalVersion: typeof RETRIEVAL_VERSION, queryFingerprint: string, retrievalFingerprint: string | null, corpusSnapshotHash: string, evidenceSnapshotHash: string, chunks: RetrievedEvidenceChunk[], reasonCodes: ReasonCode[], limitations: string[] }
 
-export type RetrievedEvidenceChunk = ApprovedEvidenceChunk & {
-  scoreBasis: string
-  limitations: string[]
-}
-
-export type RetrievalResult = {
-  status: 'ready' | 'not_ready' | 'blocked'
-  retrievalVersion: typeof RETRIEVAL_VERSION
-  corpusSnapshotHash: string
-  evidenceSnapshotHash: string
-  chunks: RetrievedEvidenceChunk[]
-  reasonCodes: ReasonCode[]
-  limitations: string[]
-}
-
-export type ProviderClaim = {
-  claimId: string
-  text: string
-  claimType: ClaimType
-  bodyLocator: string
-  citationIds: string[]
-}
-
-export type ProviderCitation = {
-  citationId: string
-  sourceId: string
-  artifactId: string
-  chunkId: string
-  chunkHash: string
-}
-
-export type FaqPair = {
-  question: string
-  answer: string
-  citationIds: string[]
-}
+export type ProviderClaim = { claimId: string, text: string, claimType: ClaimType, bodyLocator: string, citationIds: string[] }
+export type ProviderCitation = { citationId: string, sourceId: string, artifactId: string, chunkId: string, chunkHash: string, artifactHash: string, sourceLocator: string }
+export type FaqPair = { question: string, answer: string, citationIds: string[] }
+export type ParagraphIdentity = { paragraphIndex: number, normalizedText: string, paragraphHash: string, citationMarkerIds: string[] }
+export type ParagraphBinding = { paragraphIndex: number, paragraphHash: string, claimType: ClaimType, citationIds: string[] }
 
 export type ProviderOutput = {
   outputVersion: typeof PROVIDER_OUTPUT_VERSION
@@ -165,14 +134,24 @@ export type ProviderOutput = {
   citations: ProviderCitation[]
   appliedRuleIds: string[]
   limitations: string[]
+  paragraphBindings: ParagraphBinding[]
+  provider: string
+  model: string
+  requestId: string
+  requestedAt: string
+  generatedAt: string
+  promptFingerprint: string
+  contentQualityFingerprint: string
+  retrievalFingerprint: string
+  responseHash: string
 }
 
+export type ProviderOutputValidationContext = { promptPack?: PromptPack, retrievalResult?: RetrievalResult }
 export type ProviderOutputValidationResult =
   | { status: 'valid', output: ProviderOutput, reasonCodes: [] }
   | { status: 'invalid', output: null, reasonCodes: ReasonCode[] }
 
 export type MarkdownFaqPair = { question: string, answer: string }
-
 export type MarkdownStructureReport = {
   titleHeading: string | null
   headingLevels: number[]
@@ -193,43 +172,13 @@ export type MarkdownStructureReport = {
   templateFillerFound: boolean
   simplifiedChineseFound: boolean
   meaningfulParagraphCount: number
+  paragraphs: ParagraphIdentity[]
 }
-
 export type MarkdownStructureResult =
   | { status: 'valid', report: MarkdownStructureReport, reasonCodes: [] }
   | { status: 'invalid', report: MarkdownStructureReport, reasonCodes: ReasonCode[] }
 
-export type CoverageMetric = {
-  metricName: 'deterministic heuristic / coverage metric'
-  numerator: number
-  denominator: number
-  ratio: number
-}
-
-export type StructureChecks = {
-  directAnswer: boolean
-  headingHierarchy: boolean
-  emptySections: boolean
-  duplicateHeadings: boolean
-  duplicateParagraphs: boolean
-  faqIntegrity: boolean
-  citationPlacement: boolean
-  conclusionOrCta: boolean
-}
-
-export type QualityGateResult = {
-  status: QualityStatus
-  reasonCodes: ReasonCode[]
-  sourceCoverage: CoverageMetric
-  claimCoverage: CoverageMetric
-  citationCoverage: CoverageMetric
-  structureChecks: StructureChecks
-  limitations: string[]
-}
-
-export type QualityGateInput = {
-  qualityInput: unknown
-  providerOutput: unknown
-  markdown: unknown
-  retrievalResult?: unknown
-}
+export type CoverageMetric = { metricName: 'deterministic heuristic / coverage metric', applicable: boolean, numerator: number, denominator: number, ratio: number | null, reasonCodes: string[] }
+export type StructureChecks = { directAnswer: boolean, headingHierarchy: boolean, emptySections: boolean, duplicateHeadings: boolean, duplicateParagraphs: boolean, faqIntegrity: boolean, citationPlacement: boolean, conclusionOrCta: boolean, workingTitleMatchesH1: boolean, topicOverlap: boolean, paragraphBindings: boolean, claimSafety: boolean, selectedRuleChecks: boolean }
+export type QualityGateResult = { status: QualityStatus, reasonCodes: ReasonCode[], sourceCoverage: CoverageMetric, claimCoverage: CoverageMetric, citationCoverage: CoverageMetric, goalCoverage: CoverageMetric, structureChecks: StructureChecks, limitations: string[], humanReviewRequired: true }
+export type QualityGateInput = { qualityInput: unknown, providerOutput: unknown, markdown?: unknown, retrievalResult?: unknown, promptPack?: unknown }

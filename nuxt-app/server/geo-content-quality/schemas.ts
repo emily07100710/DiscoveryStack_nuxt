@@ -6,22 +6,27 @@ export const ISO_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?
 
 const boundedId = z.string().min(1).max(160).regex(/^[A-Za-z0-9._:-]+$/u)
 const safeText = z.string().min(1).max(10000)
+const topicText = z.string().min(1).max(500)
+const titleText = z.string().min(1).max(300)
+const questionText = z.string().min(1).max(500)
 const strictTimestamp = z.string().regex(ISO_TIMESTAMP)
 const sha256 = z.string().regex(SHA256_HEX)
 const publicHttpsLocator = z.string().url().refine(value => {
   try {
     const url = new URL(value)
-    return url.protocol === 'https:' && !url.username && !url.password && !url.hash
+    return url.protocol === 'https:' && !url.username && !url.password && !url.hash && (!url.port || url.port === '443')
   } catch {
     return false
   }
-}, { message: 'locator must be a public HTTPS URL without credentials or fragment' })
+}, { message: 'locator must be a public HTTPS URL without credentials, fragment, or non-443 port' })
 
 export const providerProvenanceSchema = z.object({
   provider: boundedId,
   model: boundedId,
+  requestId: boundedId,
   providerVersion: boundedId,
   generationMode: boundedId,
+  requestedAt: strictTimestamp,
   generatedAt: strictTimestamp,
 }).strict()
 
@@ -71,6 +76,9 @@ export const contentQualityInputSchema = z.object({
   clientId: boundedId,
   briefId: boundedId,
   jobId: boundedId,
+  topic: topicText,
+  workingTitle: titleText,
+  primaryQuestion: questionText,
   contentType: z.enum(CONTENT_TYPES),
   language: z.enum(LANGUAGES),
   industryRisk: z.enum(INDUSTRY_RISKS),
