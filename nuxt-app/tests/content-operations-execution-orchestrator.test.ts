@@ -235,4 +235,17 @@ describe('content operations execution orchestrator', () => {
     expect(page).toContain('dry-run')
     expect(page).toContain('executeEntry(entry, \'execute\')')
   })
+
+  it('propagates server-side production runtime dependencies into the governed generation runner', async () => {
+    const fixture = new ContentOperationsFixture()
+    fixture.addClient(1)
+    const calendar = await fixture.addCalendar(1, '2026-01-10', 1)
+    const entry = fixture.entries.find(item => item.calendarId === calendar.id)!
+    entry.status = 'materialized'
+    const runtime = { baseDraftGenerator: { id: 'qwen-test', version: 'test', generate: async () => ({ title: 'unused', body: 'unused', mode: 'provider_draft' as const, provider: 'qwen', providerVersion: 'test', provenance: {}, limitations: [] }) } }
+    let received: unknown
+    const result = await executeContentOperationEntry({ ownerUserId: 1, entryId: entry.id, trigger: 'owner_manual', now: NOW, value: { idempotencyKey: 'runtime-propagation', mode: 'dry_run' }, dependencies: { repository: fixture.repository, productionRuntime: runtime, productionDeliverableRunner: async input => { received = input.dependencies; return { job: { id: 701 } } } } })
+    expect(result.outcome).toBe('blocked')
+    expect(received).toBe(runtime)
+  })
 })

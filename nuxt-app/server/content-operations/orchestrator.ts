@@ -39,6 +39,7 @@ type FirstPartyPublicationExecutor = (input: {
 
 export type ContentOperationOrchestratorDependencies = {
   repository?: ContentOperationsRepository
+  productionRuntime?: ProductionRuntimeDependencies
   productionDeliverableRunner?: (input: { ownerUserId: number; planId: number; deliverableId: number; dependencies?: ProductionRuntimeDependencies }) => Promise<ContentDraftResult>
   publicationExecutor?: FirstPartyPublicationExecutor
   fetchImpl?: FirstPartyFetch
@@ -491,9 +492,10 @@ async function executeGeneration(ownerUserId: number, entry: ContentOperationCal
   const token = randomUUID()
   const leased = await repository.acquireRunLease(ownerUserId, run.id, token, now, leaseMsFor(dependencies.leaseMs))
   if (!leased) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: run.id, stage: 'generation', outcome: 'replayed', retryAt: run.retryEligibleAt, limitations: ['another worker currently owns the generation lease'] }
+  const productionRuntime = dependencies.productionRuntime || {}
   const runner = dependencies.productionDeliverableRunner || (async input => runOwnerProductionDeliverable(input))
   try {
-    const result = await runner({ ownerUserId, planId: (await repository.findCalendar(ownerUserId, entry.calendarId))?.productionPlanId || 0, deliverableId: entry.productionDeliverableId, dependencies: dependencies as unknown as ProductionRuntimeDependencies })
+    const result = await runner({ ownerUserId, planId: (await repository.findCalendar(ownerUserId, entry.calendarId))?.productionPlanId || 0, deliverableId: entry.productionDeliverableId, dependencies: productionRuntime })
     const jobId = result.job?.id || entry.jobId
     if (!jobId) badRequest('Generation did not return a persisted job.')
     const draft = await repository.findLatestOptimizedDraft(ownerUserId, jobId)
@@ -673,7 +675,7 @@ export async function runContentOperationsExecutionTick(input: { ownerUserId?: n
         continue
       }
       const mode = run.stage === 'publication' ? 'execute' : 'dry_run'
-      const result = await executeContentOperationEntry({ ownerUserId: run.ownerUserId, entryId: entry.id, trigger: 'scheduler', expectedRunId: run.id, now, value: { idempotencyKey: `scheduler:publication:${run.id}:attempt:${run.attemptNumber + 1}`, mode }, dependencies: { ...input.dependencies, repository } })
+      const result = await executeContentOperationEntry({ ownerUserId: run.ownerUserId, entryId: entry.id, trigger: 'scheduler', expectedRunId: run.id, now, value: { idempotencyKey: `scheduler:publication:${run.id}:attempt:${run.attemptNumber + 1}`, mode }, dependencies: { ...input.dependencies, repository, productionRuntime: input.dependencies?.productionRuntime || {} } })
       results.push({ runId: run.id, ownerUserId: run.ownerUserId, status: result.resultingStatus, outcome: result.outcome })
     } catch (error) {
       results.push({ runId: run.id, ownerUserId: run.ownerUserId, status: 'blocked', errorSummary: sanitizeErrorSummary(error) })
