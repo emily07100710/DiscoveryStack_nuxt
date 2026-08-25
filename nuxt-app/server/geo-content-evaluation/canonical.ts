@@ -18,9 +18,8 @@ import type {
   EvaluationReasonCode,
   GeoContentEvaluationCase,
 } from './types'
-import { EVALUATION_SUITE_VERSION } from './types'
-
-const CANDIDATE_KEYS = ['caseId', 'candidateId', 'variantLabel', 'qualityInput', 'providerOutput', 'markdown'] as const
+import { EVALUATION_METRIC_NAMES, EVALUATION_STATUSES, EVALUATION_SUITE_VERSION } from './types'
+import { validateRawCandidateEnvelope } from './raw-candidate'
 
 type CanonicalContext = {
   input: ContentQualityInput
@@ -39,18 +38,19 @@ type ContextResult = {
   reasonCodes: EvaluationReasonCode[]
 }
 
+type CanonicalInputContext = {
+  input: ContentQualityInput
+  retrieval: RetrievalResult | null
+  promptResult: ReturnType<typeof buildPromptPack>
+  promptFingerprint: string | null
+  baseReasonCodes: EvaluationReasonCode[]
+}
+
+export type CanonicalEvaluationCache = WeakMap<object, CanonicalInputContext>
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   try {
     return typeof value === 'object' && value !== null && !Array.isArray(value)
-  } catch {
-    return false
-  }
-}
-
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  try {
-    const actual = Object.keys(value)
-    return actual.length === keys.length && actual.every(key => keys.includes(key))
   } catch {
     return false
   }
@@ -62,10 +62,6 @@ function safeRead(value: Record<string, unknown>, key: string): unknown {
   } catch {
     return undefined
   }
-}
-
-function stringField(value: unknown, maxLength = 256): string | null {
-  return typeof value === 'string' && value.length > 0 && value.length <= maxLength ? value : null
 }
 
 function safeCanonicalHash(value: unknown): string | null {
@@ -119,45 +115,53 @@ function normalizeInputReason(reason: string): EvaluationReasonCode {
   return reason === 'UNKNOWN_FIELD' ? 'EVALUATION_UNKNOWN_FIELD' : reason as EvaluationReasonCode
 }
 
-function contextForCandidate(candidate: Record<string, unknown>): ContextResult {
+function contextForCandidate(candidate: Record<string, unknown>, cache?: WeakMap<object, CanonicalInputContext>): ContextResult {
   try {
-    const normalizedInput = normalizeContentQualityInput(safeRead(candidate, 'qualityInput'))
-    if (normalizedInput.status !== 'valid') {
-      return { context: null, reasonCodes: ['EVALUATION_INVALID_INPUT', ...normalizedInput.reasonCodes.map(normalizeInputReason)] }
+    const qualityInputValue = safeRead(candidate, 'qualityInput')
+    let inputContext: CanonicalInputContext | null = null
+    if (isRecord(qualityInputValue) && cache?.has(qualityInputValue)) inputContext = cache.get(qualityInputValue) ?? null
+    if (inputContext === null) {
+      const normalizedInput = normalizeContentQualityInput(qualityInputValue)
+      if (normalizedInput.status !== 'valid') return { context: null, reasonCodes: ['EVALUATION_INVALID_INPUT', ...normalizedInput.reasonCodes.map(normalizeInputReason)] }
+      const input = normalizedInput.input
+      const retrieval = buildRetrievalResult(input, input.approvedEvidenceChunks.map(chunk => ({ chunk })))
+      const promptResult = buildPromptPack(input, retrieval)
+      inputContext = {
+        input,
+        retrieval,
+        promptResult,
+        promptFingerprint: promptResult.status === 'ready' ? promptResult.promptPack.promptFingerprint : null,
+        baseReasonCodes: retrieval.status !== 'ready' || promptResult.status !== 'ready' ? ['EVALUATION_DATA_INSUFFICIENT'] : [],
+      }
+      if (isRecord(qualityInputValue) && cache) cache.set(qualityInputValue, inputContext)
     }
 
-    const input = normalizedInput.input
+    const { input, retrieval } = inputContext
     const markdownValue = safeRead(candidate, 'markdown')
-    const markdownMissing = typeof markdownValue !== 'string'
+    const markdownMissing = markdownValue === null
     const markdown = typeof markdownValue === 'string' ? markdownValue : null
     const providerValue = safeRead(candidate, 'providerOutput')
-    const providerMissing = providerValue === null || providerValue === undefined || !isRecord(providerValue)
-    const providerInvalid = !providerMissing
-
-    const retrieval = buildRetrievalResult(input, input.approvedEvidenceChunks.map(chunk => ({ chunk })))
-    const prompt = buildPromptPack(input, retrieval)
-    const promptFingerprint = prompt.status === 'ready' ? prompt.promptPack.promptFingerprint : null
-    const reasons: EvaluationReasonCode[] = []
-    if (retrieval.status !== 'ready' || prompt.status !== 'ready') reasons.push('EVALUATION_DATA_INSUFFICIENT')
-    if (markdownMissing) reasons.push('EVALUATION_DATA_INSUFFICIENT')
+    const providerMissing = providerValue === null
+    const providerInvalid = !providerMissing && !isRecord(providerValue)
+    const reasons: EvaluationReasonCode[] = [...inputContext.baseReasonCodes]
+    if (markdownMissing || providerMissing) reasons.push('EVALUATION_DATA_INSUFFICIENT')
 
     if (providerMissing) {
-      reasons.push('EVALUATION_DATA_INSUFFICIENT')
       return {
-        context: { input, providerOutput: null, markdown, retrieval, promptFingerprint, qualityGateResult: null, providerMissing: true, providerInvalid: false, markdownMissing },
+        context: { input, providerOutput: null, markdown, retrieval, promptFingerprint: inputContext.promptFingerprint, qualityGateResult: null, providerMissing: true, providerInvalid: false, markdownMissing },
         reasonCodes: [...new Set(reasons)],
       }
     }
 
     const providerResult = validateProviderOutput(input, providerValue, {
-      retrievalResult: retrieval,
-      promptPack: prompt.status === 'ready' ? prompt.promptPack : undefined,
+      retrievalResult: retrieval ?? undefined,
+      promptPack: inputContext.promptResult.status === 'ready' ? inputContext.promptResult.promptPack : undefined,
     })
     if (providerResult.status !== 'valid') {
       reasons.push(...providerResult.reasonCodes.map(reason => reason as EvaluationReasonCode))
       if (providerResult.reasonCodes.length === 0) reasons.push('EVALUATION_INVALID_INPUT')
       return {
-        context: { input, providerOutput: null, markdown, retrieval, promptFingerprint, qualityGateResult: null, providerMissing: false, providerInvalid: true, markdownMissing },
+        context: { input, providerOutput: null, markdown, retrieval, promptFingerprint: inputContext.promptFingerprint, qualityGateResult: null, providerMissing: false, providerInvalid: true, markdownMissing },
         reasonCodes: [...new Set(reasons)],
       }
     }
@@ -165,10 +169,10 @@ function contextForCandidate(candidate: Record<string, unknown>): ContextResult 
     const providerOutput = providerResult.output
     const qualityGateResult = markdownMissing
       ? null
-      : evaluateContentQuality({ qualityInput: input, providerOutput, markdown, retrievalResult: retrieval, promptPack: prompt.status === 'ready' ? prompt.promptPack : undefined })
+      : evaluateContentQuality({ qualityInput: input, providerOutput, markdown, retrievalResult: retrieval, promptPack: inputContext.promptResult.status === 'ready' ? inputContext.promptResult.promptPack : undefined })
     if (qualityGateResult !== null) reasons.push(...qualityGateResult.reasonCodes.map(reason => reason as EvaluationReasonCode))
     return {
-      context: { input, providerOutput, markdown, retrieval, promptFingerprint, qualityGateResult, providerMissing: false, providerInvalid: false, markdownMissing },
+      context: { input, providerOutput, markdown, retrieval, promptFingerprint: inputContext.promptFingerprint, qualityGateResult, providerMissing: false, providerInvalid, markdownMissing },
       reasonCodes: [...new Set(reasons)],
     }
   } catch {
@@ -255,19 +259,20 @@ function buildCase(context: CanonicalContext, identity: { caseId: string, candid
   }
 }
 
-export function createGeoContentEvaluationCase(value: unknown): GeoContentEvaluationCase {
+export function createGeoContentEvaluationCaseWithCache(value: unknown, cache: CanonicalEvaluationCache): GeoContentEvaluationCase {
   try {
-    if (!isRecord(value) || !exactKeys(value, CANDIDATE_KEYS)) return emptyCase('', '', '', ['EVALUATION_INVALID_INPUT', 'EVALUATION_UNKNOWN_FIELD'])
-    const caseId = stringField(safeRead(value, 'caseId'), 160)
-    const candidateId = stringField(safeRead(value, 'candidateId'), 160)
-    const variantLabel = stringField(safeRead(value, 'variantLabel'), 160)
-    if (caseId === null || candidateId === null || variantLabel === null) return emptyCase(caseId ?? '', candidateId ?? '', variantLabel ?? '', ['EVALUATION_INVALID_INPUT'])
-    const result = contextForCandidate(value)
-    if (result.context === null) return emptyCase(caseId, candidateId, variantLabel, result.reasonCodes)
-    return buildCase(result.context, { caseId, candidateId, variantLabel }, result.reasonCodes)
+    const raw = validateRawCandidateEnvelope(value)
+    if (raw.status !== 'valid') return emptyCase(raw.caseId, raw.candidateId, raw.variantLabel, raw.reasonCodes)
+    const result = contextForCandidate(raw.value, cache)
+    if (result.context === null) return emptyCase(raw.value.caseId, raw.value.candidateId, raw.value.variantLabel, result.reasonCodes)
+    return buildCase(result.context, { caseId: raw.value.caseId, candidateId: raw.value.candidateId, variantLabel: raw.value.variantLabel }, result.reasonCodes)
   } catch {
     return emptyCase('', '', '', ['EVALUATION_INVALID_INPUT'])
   }
+}
+
+export function createGeoContentEvaluationCase(value: unknown): GeoContentEvaluationCase {
+  return createGeoContentEvaluationCaseWithCache(value, new WeakMap<object, CanonicalInputContext>())
 }
 
 export function computeEvaluationFingerprint(value: unknown): EvaluationFingerprintResult {
@@ -280,29 +285,127 @@ export function computeEvaluationFingerprint(value: unknown): EvaluationFingerpr
   }
 }
 
+const EVALUATION_CASE_FINGERPRINT_KEYS = [
+  'suiteVersion', 'status', 'caseId', 'contentType', 'locale', 'topic', 'briefFingerprint', 'promptPackFingerprint',
+  'retrievalFingerprint', 'evidenceSnapshotHash', 'selectedRuleIds', 'candidateId', 'variantLabel', 'exactMarkdown',
+  'contentHash', 'providerProvenance', 'qualityInput', 'providerOutput', 'qualityGateResult', 'metrics', 'reasonCodes',
+] as const
+
+function readEvaluationCaseFields(value: Record<string, unknown>): Record<string, unknown> | null {
+  try {
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) return null
+    const ownKeys = Reflect.ownKeys(value)
+    if (ownKeys.some(key => typeof key !== 'string')) return null
+    const stringKeys = ownKeys as string[]
+    if (stringKeys.length !== EVALUATION_CASE_FINGERPRINT_KEYS.length || EVALUATION_CASE_FINGERPRINT_KEYS.some(key => !stringKeys.includes(key))) return null
+    for (const key of stringKeys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor || descriptor.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined) return null
+    }
+    const fields: Record<string, unknown> = {}
+    for (const key of EVALUATION_CASE_FINGERPRINT_KEYS) fields[key] = value[key]
+    return fields
+  } catch {
+    return null
+  }
+}
+
+function validNullableString(value: unknown): boolean { return value === null || typeof value === 'string' }
+function validStringList(value: unknown): boolean { return value === null || Array.isArray(value) && value.every(item => typeof item === 'string') }
+function validMetricCatalog(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length !== EVALUATION_METRIC_NAMES.length) return false
+  return value.every((item, index) => {
+    if (!isRecord(item) || item.metricName !== EVALUATION_METRIC_NAMES[index]) return false
+    const applicable = item.applicable
+    const numerator = item.numerator
+    const denominator = item.denominator
+    const ratio = item.ratio
+    if (typeof applicable !== 'boolean' || typeof numerator !== 'number' || typeof denominator !== 'number' || !Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) || !Array.isArray(item.reasonCodes) || !item.reasonCodes.every(reason => typeof reason === 'string') || !Array.isArray(item.evidenceLocator) || !item.evidenceLocator.every(locator => typeof locator === 'string')) return false
+    if (!applicable) return numerator === 0 && denominator === 0 && ratio === null && item.reasonCodes.some(reason => reason === 'METRIC_NOT_APPLICABLE' || reason === 'EVALUATION_NON_FINITE_METRIC' || reason === 'EVALUATION_METRIC_BOUNDS')
+    return denominator > 0 && numerator >= 0 && numerator <= denominator && typeof ratio === 'number' && ratio === numerator / denominator
+  })
+}
+
+function evaluationCaseIsCoherent(fields: Record<string, unknown>): boolean {
+  const status = fields.status
+  if (fields.suiteVersion !== EVALUATION_SUITE_VERSION || !EVALUATION_STATUSES.includes(status as typeof EVALUATION_STATUSES[number])) return false
+  if (![fields.caseId, fields.candidateId, fields.variantLabel].every(value => typeof value === 'string' && value.length > 0)) return false
+  if (![fields.contentType, fields.locale, fields.topic, fields.briefFingerprint, fields.promptPackFingerprint, fields.retrievalFingerprint, fields.evidenceSnapshotHash].every(validNullableString)) return false
+  if (!validStringList(fields.selectedRuleIds) || !Array.isArray(fields.metrics) || fields.metrics.length > 0 && !validMetricCatalog(fields.metrics) || !Array.isArray(fields.reasonCodes) || !fields.reasonCodes.every(reason => typeof reason === 'string')) return false
+  const markdown = fields.exactMarkdown
+  const contentHash = fields.contentHash
+  if (typeof markdown !== 'string' && markdown !== null) return false
+  if (markdown === null ? contentHash !== null : contentHash !== sha256Text(markdown)) return false
+  const qualityInput = fields.qualityInput
+  let normalizedInput: ContentQualityInput | null = null
+  let expectedRetrieval: RetrievalResult | null = null
+  let expectedPromptResult: ReturnType<typeof buildPromptPack> | null = null
+  if (qualityInput !== null) {
+    if (!isRecord(qualityInput)) return false
+    const normalized = normalizeContentQualityInput(qualityInput)
+    if (normalized.status !== 'valid') return false
+    normalizedInput = normalized.input
+    if (fields.contentType !== normalizedInput.contentType || fields.locale !== normalizedInput.language || fields.topic !== normalizedInput.topic || fields.briefFingerprint !== briefFingerprint(normalizedInput) || fields.evidenceSnapshotHash !== normalizedInput.evidenceSnapshotHash) return false
+    if (!Array.isArray(fields.selectedRuleIds) || fields.selectedRuleIds.length !== normalizedInput.selectedRuleIds.length || fields.selectedRuleIds.some((rule, index) => rule !== normalizedInput!.selectedRuleIds[index])) return false
+    expectedRetrieval = buildRetrievalResult(normalizedInput, normalizedInput.approvedEvidenceChunks.map(chunk => ({ chunk })))
+    const expectedRetrievalFingerprint = expectedRetrieval.status === 'ready' ? expectedRetrieval.retrievalFingerprint : null
+    if (fields.retrievalFingerprint !== expectedRetrievalFingerprint) return false
+    expectedPromptResult = buildPromptPack(normalizedInput, expectedRetrieval)
+    const expectedPromptFingerprint = expectedPromptResult.status === 'ready' ? expectedPromptResult.promptPack.promptFingerprint : null
+    if (fields.promptPackFingerprint !== expectedPromptFingerprint) return false
+  } else return false
+  const providerOutput = fields.providerOutput
+  if (providerOutput !== null && !isRecord(providerOutput)) return false
+  const providerValidation = providerOutput !== null && normalizedInput !== null
+    ? validateProviderOutput(normalizedInput, providerOutput, { retrievalResult: expectedRetrieval ?? undefined, promptPack: expectedPromptResult?.status === 'ready' ? expectedPromptResult.promptPack : undefined })
+    : null
+  if (providerOutput !== null && providerValidation?.status !== 'valid') return false
+  if (fields.providerProvenance !== null && !isRecord(fields.providerProvenance)) return false
+  if ((providerOutput === null) !== (fields.providerProvenance === null)) return false
+  if (providerOutput !== null && normalizedInput !== null && fields.providerProvenance !== null) {
+    const expectedProvenance = {
+      provider: providerOutput.provider,
+      model: providerOutput.model,
+      requestId: providerOutput.requestId,
+      providerVersion: normalizedInput.providerProvenance.providerVersion,
+      generationMode: normalizedInput.providerProvenance.generationMode,
+      requestedAt: providerOutput.requestedAt,
+      generatedAt: providerOutput.generatedAt,
+    }
+    if (canonicalizeQualityValue(fields.providerProvenance) !== canonicalizeQualityValue(expectedProvenance)) return false
+  }
+  const qualityGateResult = fields.qualityGateResult
+  if (qualityGateResult !== null && !isRecord(qualityGateResult)) return false
+  if (qualityGateResult !== null && providerOutput === null) return false
+  let expectedQualityGateResult: QualityGateResult | null = null
+  if (providerValidation?.status === 'valid' && markdown !== null && normalizedInput !== null) {
+    const gateInput = {
+      qualityInput: normalizedInput,
+      providerOutput: providerValidation.output,
+      markdown,
+      retrievalResult: expectedRetrieval,
+      ...(expectedPromptResult?.status === 'ready' ? { promptPack: expectedPromptResult.promptPack } : {}),
+    }
+    expectedQualityGateResult = evaluateContentQuality(gateInput)
+  }
+  if (qualityGateResult === null ? expectedQualityGateResult !== null : expectedQualityGateResult === null || canonicalizeQualityValue(qualityGateResult) !== canonicalizeQualityValue(expectedQualityGateResult)) return false
+  if (status === 'review_ready') {
+    if (qualityInput === null || providerOutput === null || markdown === null || qualityGateResult === null || qualityGateResult.status === 'blocked' || fields.reasonCodes.includes('EVALUATION_CASE_BLOCKED') || !Array.isArray(fields.metrics) || fields.metrics.length !== EVALUATION_METRIC_NAMES.length) return false
+  }
+  if (status === 'insufficient_data') {
+    if (qualityGateResult !== null || (providerOutput !== null && markdown !== null) || !fields.reasonCodes.includes('EVALUATION_DATA_INSUFFICIENT')) return false
+  }
+  if (status === 'blocked' && qualityGateResult !== null && qualityGateResult.status !== 'blocked') return false
+  return true
+}
+
 export function evaluationCaseFingerprint(value: unknown): EvaluationFingerprintResult {
   try {
     if (!isRecord(value)) return { status: 'invalid', fingerprint: null, canonicalValue: null, reasonCodes: ['EVALUATION_INVALID_INPUT'] }
-    return computeEvaluationFingerprint({
-      suiteVersion: safeRead(value, 'suiteVersion'),
-      caseId: safeRead(value, 'caseId'),
-      contentType: safeRead(value, 'contentType'),
-      locale: safeRead(value, 'locale'),
-      topic: safeRead(value, 'topic'),
-      briefFingerprint: safeRead(value, 'briefFingerprint'),
-      promptPackFingerprint: safeRead(value, 'promptPackFingerprint'),
-      retrievalFingerprint: safeRead(value, 'retrievalFingerprint'),
-      evidenceSnapshotHash: safeRead(value, 'evidenceSnapshotHash'),
-      selectedRuleIds: safeRead(value, 'selectedRuleIds'),
-      candidateId: safeRead(value, 'candidateId'),
-      variantLabel: safeRead(value, 'variantLabel'),
-      exactMarkdown: safeRead(value, 'exactMarkdown'),
-      contentHash: safeRead(value, 'contentHash'),
-      providerProvenance: safeRead(value, 'providerProvenance'),
-      qualityGateResult: safeRead(value, 'qualityGateResult'),
-      metrics: safeRead(value, 'metrics'),
-      reasonCodes: safeRead(value, 'reasonCodes'),
-    })
+    const fields = readEvaluationCaseFields(value)
+    if (fields === null || !evaluationCaseIsCoherent(fields)) return { status: 'invalid', fingerprint: null, canonicalValue: null, reasonCodes: ['EVALUATION_INVALID_INPUT'] }
+    return computeEvaluationFingerprint(fields)
   } catch {
     return { status: 'invalid', fingerprint: null, canonicalValue: null, reasonCodes: ['EVALUATION_INVALID_INPUT'] }
   }

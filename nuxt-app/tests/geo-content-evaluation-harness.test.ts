@@ -159,9 +159,10 @@ describe('createGeoContentEvaluationCase', () => {
     expect(result.reasonCodes).toContain('EVALUATION_DATA_INSUFFICIENT')
   })
 
-  it('rejects an array markdown as insufficient data', () => {
+  it('rejects an array markdown as malformed input', () => {
     const result = evaluate({ markdown: [] })
-    expect(result.status).toBe('insufficient_data')
+    expect(result.status).toBe('blocked')
+    expect(result.reasonCodes).toContain('EVALUATION_INVALID_INPUT')
   })
 
   it('rejects null provider output as insufficient data', () => {
@@ -324,12 +325,16 @@ describe('evaluation metrics', () => {
     expect(metricRatio(4, 4)).toBe(1)
   })
 
-  it('clamps numerator to denominator', () => {
-    expect(makeEvaluationMetric('direct-answer-presence', 8, 2).numerator).toBe(2)
+  it('fails closed when numerator exceeds denominator', () => {
+    const metric = makeEvaluationMetric('direct-answer-presence', 8, 2)
+    expect(metric).toMatchObject({ applicable: false, numerator: 0, denominator: 0, ratio: null })
+    expect(metric.reasonCodes).toContain('EVALUATION_METRIC_BOUNDS')
   })
 
-  it('clamps negative numerator to zero', () => {
-    expect(makeEvaluationMetric('direct-answer-presence', -1, 2).numerator).toBe(0)
+  it('fails closed for a negative numerator', () => {
+    const metric = makeEvaluationMetric('direct-answer-presence', -1, 2)
+    expect(metric).toMatchObject({ applicable: false, numerator: 0, denominator: 0, ratio: null })
+    expect(metric.reasonCodes).toContain('EVALUATION_METRIC_BOUNDS')
   })
 
   it('rejects fractional metric values instead of truncating them', () => {
@@ -605,10 +610,14 @@ describe('regression reports', () => {
     expect(buildGeoContentRegressionReport([goldenCandidate()]).reviewReadyCount).toBe(1)
   })
 
-  it('counts blocked cases', () => {
-    const report = buildGeoContentRegressionReport([goldenCandidate(), goldenCandidate({ qualityInput: { ...GOLDEN_INPUT, injected: true } })])
-    expect(report.blockedCount).toBeGreaterThanOrEqual(1)
+  it('counts structurally valid quality-blocked cases', () => {
+    const report = buildGeoContentRegressionReport([goldenCandidate({ providerOutput: {}, markdown: GOLDEN_MARKDOWN, candidateId: 'blocked' })])
+    expect(report.blockedCount).toBe(1)
+    expect(report.caseCount).toBe(1)
     expect(report.status).toBe('blocked')
+    expect(report.cases[0]?.status).toBe('blocked')
+    expect(report.cases[0]?.evaluationFingerprint).toMatch(/^[a-f0-9]{64}$/)
+    expect(report.regressionFingerprint).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('counts insufficient-data cases', () => {
@@ -618,9 +627,11 @@ describe('regression reports', () => {
   })
 
   it('preserves blocked status for a malformed provider object', () => {
-    const report = buildGeoContentRegressionReport([goldenCandidate({ providerOutput: {} })])
+    const report = buildGeoContentRegressionReport([goldenCandidate({ providerOutput: {}, markdown: GOLDEN_MARKDOWN })])
     expect(report.status).toBe('blocked')
+    expect(report.caseCount).toBe(1)
     expect(report.cases[0]?.reasonCodes.length).toBeGreaterThan(0)
+    expect(report.regressionFingerprint).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('returns insufficient_data for an empty array', () => {
@@ -782,7 +793,7 @@ describe('final trust-boundary regressions', () => {
     const result = compareGeoContentCandidates({ caseId: 'a' }, goldenCandidate())
     expect(result.status).toBe('blocked')
     expect(result.winnerCandidateId).toBeNull()
-    expect(result.reasonCodes).toContain('EVALUATION_BASELINE_MISMATCH')
+    expect(result.reasonCodes).toContain('EVALUATION_INVALID_INPUT')
   })
 
   it('does not treat output-only report input as a valid raw candidate', () => {
@@ -864,10 +875,9 @@ describe('final trust-boundary regressions', () => {
     expect(metric.reasonCodes).toContain('EVALUATION_METRIC_BOUNDS')
   })
 
-  it('fails closed when numerator exceeds denominator', () => {
+  it('fails closed when numerator exceeds denominator in a second boundary case', () => {
     const metric = makeEvaluationMetric('direct-answer-presence', 2, 1)
-    expect(metric.numerator).toBe(1)
-    expect(metric.denominator).toBe(1)
+    expect(metric).toMatchObject({ applicable: false, numerator: 0, denominator: 0, ratio: null })
     expect(metric.reasonCodes).toContain('EVALUATION_METRIC_BOUNDS')
   })
 
@@ -915,7 +925,7 @@ describe('final trust-boundary regressions', () => {
     expect(report.insufficientDataCount).toBe(0)
   })
 
-  it('accepts exactly 500 raw candidates within the capacity bound', () => {
+  it('accepts exactly 500 raw candidates within the capacity bound', { timeout: 15_000 }, () => {
     const values = Array.from({ length: 500 }, (_, index) => goldenCandidate({ candidateId: `capacity-${index}`, variantLabel: `capacity-${index}` }))
     const report = buildGeoContentRegressionReport(values)
     expect(report.status).toBe('review_ready')

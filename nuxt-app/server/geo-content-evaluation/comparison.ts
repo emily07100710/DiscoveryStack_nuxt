@@ -6,9 +6,12 @@ import {
 import {
   computeEvaluationFingerprint,
   createGeoContentEvaluationCase,
+  createGeoContentEvaluationCaseWithCache,
   evaluationCaseFingerprint,
+  type CanonicalEvaluationCache,
 } from './canonical'
-import { aggregateEvaluationMetrics, metricByName } from './metrics'
+import { aggregateEvaluationMetrics, isValidApplicableMetric, metricByName } from './metrics'
+import { rawCandidateIdentityTuple, validateRawCandidateEnvelope, type NormalizedRawCandidateEnvelope } from './raw-candidate'
 import {
   EVALUATION_METRIC_NAMES,
   EVALUATION_SUITE_VERSION,
@@ -57,7 +60,7 @@ function stableCaseCompare(left: GeoContentEvaluationCase, right: GeoContentEval
 }
 
 function metricComparable(left: EvaluationMetric, right: EvaluationMetric): boolean {
-  return left.applicable && right.applicable && left.denominator > 0 && right.denominator > 0 && left.ratio !== null && right.ratio !== null
+  return isValidApplicableMetric(left) && isValidApplicableMetric(right)
 }
 
 function metricDirection(metricName: EvaluationMetric['metricName']): 'higher_is_better' | 'lower_is_better' {
@@ -90,25 +93,31 @@ function invalidComparison(leftCandidateId: string, rightCandidateId: string, re
     decision: 'blocked',
     metricComparisons: [],
     reasonCodes: uniqueReasons(reasonCodes),
-    limitations: ['Comparison requires raw candidate envelopes and re-evaluates both candidates; no winner is computed for malformed or output-only input.'],
+    limitations: ['Comparison requires exact raw candidate envelopes, unique candidate identities, and server-side re-evaluation; no winner is computed for malformed or output-only input.'],
   }
 }
 
-function hasOutputOnlyFields(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  try {
-    return Object.keys(value).some(key => ['status', 'metrics', 'contentHash', 'qualityGateResult', 'providerProvenance', 'briefFingerprint', 'promptPackFingerprint', 'retrievalFingerprint', 'regressionFingerprint'].includes(key))
-  } catch {
-    return true
-  }
+function normalizedRaw(value: unknown): { value: NormalizedRawCandidateEnvelope } | { reasonCodes: EvaluationReasonCode[], caseId: string, candidateId: string, variantLabel: string } {
+  const result = validateRawCandidateEnvelope(value)
+  if (result.status === 'valid') return { value: result.value }
+  return { reasonCodes: result.reasonCodes, caseId: result.caseId, candidateId: result.candidateId, variantLabel: result.variantLabel }
 }
 
 export function compareGeoContentCandidates(leftInput: unknown, rightInput: unknown): GeoContentCandidateComparison {
   try {
-    const left = createGeoContentEvaluationCase(leftInput)
-    const right = createGeoContentEvaluationCase(rightInput)
-    if (hasOutputOnlyFields(leftInput) || hasOutputOnlyFields(rightInput)) {
-      return invalidComparison(left.candidateId, right.candidateId, ['EVALUATION_RAW_INPUT_REQUIRED', 'EVALUATION_UNKNOWN_FIELD'])
+    const leftRaw = normalizedRaw(leftInput)
+    const rightRaw = normalizedRaw(rightInput)
+    if (!('value' in leftRaw) || !('value' in rightRaw)) {
+      return invalidComparison('value' in leftRaw ? leftRaw.value.candidateId : leftRaw.candidateId, 'value' in rightRaw ? rightRaw.value.candidateId : rightRaw.candidateId, uniqueReasons([
+        ...('value' in leftRaw ? [] : leftRaw.reasonCodes),
+        ...('value' in rightRaw ? [] : rightRaw.reasonCodes),
+      ]))
+    }
+
+    const left = createGeoContentEvaluationCase(leftRaw.value)
+    const right = createGeoContentEvaluationCase(rightRaw.value)
+    if (left.caseId === right.caseId && left.candidateId === right.candidateId) {
+      return invalidComparison(left.candidateId, right.candidateId, ['EVALUATION_DUPLICATE_COMPARISON_IDENTITY'])
     }
 
     const leftFingerprint = computeEvaluationFingerprint(baseline(left))
@@ -187,14 +196,19 @@ export function buildGeoContentRegressionReport(values: unknown): GeoContentRegr
     if (values.length === 0) return emptyReport(['EVALUATION_DATA_INSUFFICIENT'])
     if (values.length > MAX_REPORT_CASES) return emptyReport(['EVALUATION_LIMIT_EXCEEDED'])
 
-    const cases = values.map(value => createGeoContentEvaluationCase(value)).sort(stableCaseCompare)
+    const rawCandidates: NormalizedRawCandidateEnvelope[] = []
     const identities = new Set<string>()
-    for (const value of cases) {
-      const identity = `${value.caseId}\u0000${value.candidateId}\u0000${value.variantLabel}`
+    for (const value of values) {
+      const raw = validateRawCandidateEnvelope(value)
+      if (raw.status !== 'valid') return emptyReport(raw.reasonCodes)
+      const identity = rawCandidateIdentityTuple(raw.value)
       if (identities.has(identity)) return emptyReport(['EVALUATION_DUPLICATE_IDENTITY'])
       identities.add(identity)
+      rawCandidates.push(raw.value)
     }
 
+    const cache: CanonicalEvaluationCache = new WeakMap()
+    const cases = rawCandidates.map(value => createGeoContentEvaluationCaseWithCache(value, cache)).sort(stableCaseCompare)
     const reviewReadyCount = cases.filter(value => value.status === 'review_ready').length
     const blockedCount = cases.filter(value => value.status === 'blocked').length
     const insufficientDataCount = cases.filter(value => value.status === 'insufficient_data').length
@@ -238,8 +252,8 @@ function emptyReport(reasonCodes: EvaluationReasonCode[]): GeoContentRegressionR
     status: insufficient ? 'insufficient_data' : 'blocked',
     caseCount: 0,
     reviewReadyCount: 0,
-    blockedCount: insufficient ? 0 : 1,
-    insufficientDataCount: insufficient ? 1 : 0,
+    blockedCount: 0,
+    insufficientDataCount: 0,
     cases: [],
     metricAggregates: aggregateEvaluationMetrics([]),
     regressionFingerprint: null,

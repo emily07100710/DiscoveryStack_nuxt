@@ -20,5 +20,6 @@ export {
 } from './types'
 export { createGeoContentEvaluationCase, evaluationCaseFingerprint, computeEvaluationFingerprint } from './canonical'
 export { evaluateGeoContentCandidate } from './evaluator'
-export { metricRatio, makeEvaluationMetric, emptyEvaluationMetric, metricByName, aggregateEvaluationMetrics, metricNames } from './metrics'
+export { metricRatio, makeEvaluationMetric, emptyEvaluationMetric, isValidApplicableMetric, metricByName, aggregateEvaluationMetrics, metricNames } from './metrics'
 export { compareGeoContentCandidates, buildGeoContentRegressionReport } from './comparison'
+export { rawCandidateIdentityTuple, rawCandidateKeys, validateRawCandidateEnvelope, type NormalizedRawCandidateEnvelope, type RawCandidateValidation } from './raw-candidate'

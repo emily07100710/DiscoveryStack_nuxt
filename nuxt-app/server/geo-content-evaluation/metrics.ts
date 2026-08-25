@@ -8,7 +8,7 @@ import type {
 import { EVALUATION_METRIC_NAMES } from './types'
 
 export function metricRatio(numerator: number, denominator: number): number | null {
-  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) return null
+  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) || denominator <= 0 || numerator < 0 || numerator > denominator) return null
   return numerator / denominator
 }
 
@@ -22,18 +22,25 @@ export function makeEvaluationMetric(
   const reasons = [...reasonCodes]
   const finite = Number.isFinite(numerator) && Number.isFinite(denominator)
   if (!finite) reasons.push('EVALUATION_NON_FINITE_METRIC')
-  if (finite && (!Number.isInteger(numerator) || !Number.isInteger(denominator) || numerator < 0 || denominator < 0 || numerator > denominator)) reasons.push('EVALUATION_METRIC_BOUNDS')
 
-  const safeDenominator = finite && Number.isInteger(denominator) && denominator > 0 ? denominator : 0
-  const safeNumerator = finite && Number.isInteger(numerator) && numerator >= 0 ? Math.min(numerator, safeDenominator) : 0
-  if (safeDenominator === 0) reasons.push('METRIC_NOT_APPLICABLE')
+  const safeIntegers = Number.isSafeInteger(numerator) && Number.isSafeInteger(denominator)
+  const isZeroOverZero = finite && numerator === 0 && denominator === 0
+  const valid = finite && safeIntegers && denominator > 0 && numerator >= 0 && numerator <= denominator
+  if (!finite) {
+    // The non-finite reason is the authoritative invalidity reason.
+  } else if (isZeroOverZero) {
+    reasons.push('METRIC_NOT_APPLICABLE')
+  } else if (!valid) {
+    reasons.push('EVALUATION_METRIC_BOUNDS')
+  }
+
   const uniqueReasons = [...new Set(reasons)]
   return {
     metricName,
-    applicable: safeDenominator > 0,
-    numerator: safeNumerator,
-    denominator: safeDenominator,
-    ratio: metricRatio(safeNumerator, safeDenominator),
+    applicable: valid,
+    numerator: valid ? numerator : 0,
+    denominator: valid ? denominator : 0,
+    ratio: valid ? numerator / denominator : null,
     reasonCodes: uniqueReasons,
     evidenceLocator: [...new Set(evidenceLocator)],
   }
@@ -43,6 +50,16 @@ export function emptyEvaluationMetric(metricName: EvaluationMetricName, reasonCo
   return makeEvaluationMetric(metricName, 0, 0, [reasonCode], [`metric:${metricName}`])
 }
 
+export function isValidApplicableMetric(metric: EvaluationMetric): boolean {
+  return metric.applicable === true
+    && Number.isSafeInteger(metric.numerator)
+    && Number.isSafeInteger(metric.denominator)
+    && metric.denominator > 0
+    && metric.numerator >= 0
+    && metric.numerator <= metric.denominator
+    && metric.ratio === metric.numerator / metric.denominator
+}
+
 export function metricByName(value: GeoContentEvaluationCase, metricName: EvaluationMetricName): EvaluationMetric {
   return value.metrics.find(metric => metric.metricName === metricName) ?? emptyEvaluationMetric(metricName)
 }
@@ -50,7 +67,7 @@ export function metricByName(value: GeoContentEvaluationCase, metricName: Evalua
 export function aggregateEvaluationMetrics(cases: readonly GeoContentEvaluationCase[]): EvaluationMetricAggregate[] {
   return EVALUATION_METRIC_NAMES.map(metricName => {
     const metrics = cases.map(value => metricByName(value, metricName))
-    const applicableMetrics = metrics.filter(metric => metric.applicable)
+    const applicableMetrics = metrics.filter(isValidApplicableMetric)
     const numerator = applicableMetrics.reduce((total, metric) => total + metric.numerator, 0)
     const denominator = applicableMetrics.reduce((total, metric) => total + metric.denominator, 0)
     return {
