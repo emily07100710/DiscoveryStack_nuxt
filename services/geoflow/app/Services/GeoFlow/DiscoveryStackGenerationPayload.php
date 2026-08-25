@@ -57,6 +57,9 @@ final class DiscoveryStackGenerationPayload
     private const HASH_PATTERN = '/^[0-9a-f]{64}$/';
     private const OPAQUE_PATTERN = '/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/';
     private const CONTROL_CHARACTERS = '/[\x00-\x1f\x7f-\x9f]/u';
+    private const SENSITIVE_QUERY_TOKEN_PATTERN = '/(?:authorization|bearer|cookie|credential|password|secret|token|api_key|api-key|access_token|access-token|signature|private_key)/iu';
+    private const MALFORMED_PERCENT_ENCODING = '/%(?![0-9a-f]{2})/i';
+    private const SPECIAL_USE_HOST_SUFFIXES = ['alt', 'arpa', 'example', 'example.com', 'example.net', 'example.org', 'invalid', 'local', 'localhost', 'onion', 'test'];
 
     /**
      * @param array<string,mixed> $payload
@@ -346,15 +349,26 @@ final class DiscoveryStackGenerationPayload
         if (! is_string($value) || preg_match(self::CONTROL_CHARACTERS, $value)) {
             self::invalid($path, 'invalid text');
         }
-        if (class_exists(Normalizer::class)) {
-            $value = Normalizer::normalize($value, Normalizer::FORM_KC) ?: $value;
+        if (! class_exists(Normalizer::class)) {
+            self::invalid($path, 'Unicode normalization is unavailable');
         }
-        $value = preg_replace('/\s+/u', ' ', trim($value)) ?? trim($value);
-        if ($value === '' || mb_strlen($value, 'UTF-8') > $max) {
+        $normalized = Normalizer::normalize($value, Normalizer::FORM_KC);
+        if (! is_string($normalized)) {
+            self::invalid($path, 'Unicode normalization failed');
+        }
+        $normalized = preg_replace('/\s+/u', ' ', trim($normalized));
+        if (! is_string($normalized) || $normalized === '' || self::utf16Length($normalized) > $max) {
             self::invalid($path, 'text is empty or exceeds bound');
         }
 
-        return $value;
+        return $normalized;
+    }
+
+    private static function utf16Length(string $value): int
+    {
+        $encoded = mb_convert_encoding($value, 'UTF-16LE', 'UTF-8');
+
+        return intdiv(strlen($encoded), 2);
     }
 
     private static function opaque(mixed $value, string $path): string
@@ -377,8 +391,20 @@ final class DiscoveryStackGenerationPayload
 
     private static function timestamp(mixed $value, string $path): string
     {
-        if (! is_string($value) || ! preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/', $value)) {
+        if (! is_string($value) || ! preg_match('/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/', $value, $matches)) {
             self::invalid($path, 'invalid ISO timestamp');
+        }
+        $year = (int) $matches[1];
+        $month = (int) $matches[2];
+        $day = (int) $matches[3];
+        $hour = (int) $matches[4];
+        $minute = (int) $matches[5];
+        $second = (int) $matches[6];
+        $offset = (string) $matches[7];
+        $offsetHour = $offset === 'Z' ? 0 : (int) substr($offset, 1, 2);
+        $offsetMinute = $offset === 'Z' ? 0 : (int) substr($offset, 4, 2);
+        if (! checkdate($month, $day, $year) || $hour > 23 || $minute > 59 || $second > 59 || ($offset !== 'Z' && ($offset === '-00:00' || $offsetHour > 14 || $offsetMinute > 59 || ($offsetHour === 14 && $offsetMinute !== 0)))) {
+            self::invalid($path, 'invalid timestamp');
         }
         try {
             $date = new DateTimeImmutable($value);
@@ -394,22 +420,85 @@ final class DiscoveryStackGenerationPayload
 
     private static function publicHttpsUrl(mixed $value, string $path): string
     {
-        if (! is_string($value) || strlen($value) > 2_048 || preg_match(self::CONTROL_CHARACTERS, $value)) {
+        if (! is_string($value) || self::utf16Length($value) > 2_048 || preg_match(self::CONTROL_CHARACTERS, $value) || preg_match(self::MALFORMED_PERCENT_ENCODING, $value)) {
             self::invalid($path, 'invalid locator');
         }
         $parts = parse_url($value);
-        if (! is_array($parts) || ($parts['scheme'] ?? '') !== 'https' || empty($parts['host']) || isset($parts['user'], $parts['pass'], $parts['fragment'])) {
-            self::invalid($path, 'locator must be public HTTPS');
+        if (! is_array($parts)) {
+            self::invalid($path, 'invalid locator');
         }
-        $host = strtolower((string) $parts['host']);
-        if (filter_var($host, FILTER_VALIDATE_IP) !== false || $host === 'localhost' || str_ends_with($host, '.local') || str_ends_with($host, '.internal') || str_ends_with($host, '.test') || ! str_contains($host, '.')) {
-            self::invalid($path, 'locator target is not a public hostname');
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        if ($scheme !== 'https' || empty($parts['host']) || array_key_exists('user', $parts) || array_key_exists('pass', $parts) || array_key_exists('fragment', $parts)) {
+            self::invalid($path, 'locator must be public HTTPS');
         }
         if (isset($parts['port']) && (int) $parts['port'] !== 443) {
             self::invalid($path, 'locator port is not public HTTPS');
         }
+        $host = strtolower((string) $parts['host']);
+        $ipHost = trim($host, '[]');
+        $specialUseHost = false;
+        foreach (self::SPECIAL_USE_HOST_SUFFIXES as $suffix) {
+            if ($ipHost === $suffix || str_ends_with($ipHost, '.'.$suffix)) {
+                $specialUseHost = true;
+                break;
+            }
+        }
+        $specialUseHost = $specialUseHost || $ipHost === 'home.arpa' || str_ends_with($ipHost, '.home.arpa');
+        if ($ipHost === '' || $specialUseHost || $ipHost === 'localhost' || $ipHost === 'local' || $ipHost === 'internal' || $ipHost === 'onion' || str_ends_with($ipHost, '.local') || str_ends_with($ipHost, '.internal') || str_ends_with($ipHost, '.localhost') || str_ends_with($ipHost, '.onion')) {
+            self::invalid($path, 'locator target is not a public hostname');
+        }
+        if (isset($parts['query'])) {
+            foreach (explode('&', (string) $parts['query']) as $pair) {
+                [$rawName, $rawValue] = array_pad(explode('=', $pair, 2), 2, '');
+                $name = str_replace('+', ' ', rawurldecode($rawName));
+                $queryValue = str_replace('+', ' ', rawurldecode($rawValue));
+                if (preg_match(self::SENSITIVE_QUERY_TOKEN_PATTERN, $name) || preg_match(self::SENSITIVE_QUERY_TOKEN_PATTERN, $queryValue)) {
+                    self::invalid($path, 'locator query contains a credential-like value');
+                }
+            }
+        }
+        if (filter_var($ipHost, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false || filter_var($ipHost, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+            self::invalid($path, 'locator target must use a public hostname, not an IP literal');
+        }
+        if (! str_contains($ipHost, '.')) {
+            self::invalid($path, 'locator target is not a public hostname');
+        }
 
-        return $value;
+        $canonical = 'https://'.$ipHost;
+        $canonical .= (($parts['path'] ?? '') !== '') ? (string) $parts['path'] : '/';
+        if (array_key_exists('query', $parts)) {
+            $canonical .= '?'.(string) $parts['query'];
+        }
+
+        return $canonical;
+    }
+
+    private static function isSpecialIPv4(string $host): bool
+    {
+        $parts = array_map('intval', explode('.', $host));
+        if (count($parts) !== 4) {
+            return true;
+        }
+        [$a, $b, $c] = $parts;
+
+        return $a === 0 || $a === 10 || $a === 127 || ($a === 100 && $b >= 64 && $b <= 127) || ($a === 169 && $b === 254) || ($a === 172 && $b >= 16 && $b <= 31) || ($a === 192 && ($b === 0 || $b === 168)) || ($a === 198 && ($b === 18 || $b === 19 || ($b === 51 && $c === 100))) || ($a === 203 && $b === 0 && $c === 113) || $a >= 224;
+    }
+
+    private static function isSpecialIPv6(string $host): bool
+    {
+        $normalized = strtolower(trim($host, '[]'));
+        if ($normalized === '::' || $normalized === '::1' || str_starts_with($normalized, 'fc') || str_starts_with($normalized, 'fd') || str_starts_with($normalized, 'fe8') || str_starts_with($normalized, 'fe9') || str_starts_with($normalized, 'fea') || str_starts_with($normalized, 'feb') || str_starts_with($normalized, '100:') || str_starts_with($normalized, '2002:') || str_starts_with($normalized, '3fff:') || str_starts_with($normalized, '5f00:') || preg_match('/^(?:2001:0?db8:|2001:0{3,4}:|2001:0002:|2001:0010:|2001:0020:|2001:0030:)/', $normalized)) {
+            return true;
+        }
+        if (preg_match('/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/', $normalized, $matches)) {
+            $high = (int) hexdec($matches[1]);
+            $low = (int) hexdec($matches[2]);
+            $ipv4 = (($high >> 8) & 255).'.'.($high & 255).'.'.(($low >> 8) & 255).'.'.($low & 255);
+
+            return self::isSpecialIPv4($ipv4);
+        }
+
+        return false;
     }
 
     /** @param array<string,mixed> $record */

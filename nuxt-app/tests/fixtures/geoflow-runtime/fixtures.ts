@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { buildGeoFlowRequest, GEOFLOW_PROTOCOL_VERSION } from '../../../server/geoflow-integration'
 import type { GeoFlowRequest, ValidationResult } from '../../../server/geoflow-integration'
+import { normalizeGeoFlowRuntimeTarget } from '../../../server/geoflow-runtime'
 import type { GeoFlowFetchResponse, GeoFlowRuntimeTarget } from '../../../server/geoflow-runtime'
 
 function sha256Text(value: string): string {
@@ -14,7 +15,7 @@ export const ARTICLE_ID = 2718
 export const REQUEST_ID = 'request-runtime-1'
 export const IDEMPOTENCY_KEY = 'idempotency-runtime-1'
 export const SNAPSHOT_HASH = sha256Text('runtime-snapshot-v1')
-export const BODY_MARKDOWN = '# Runtime transport test\n\nThis is the verified candidate body.'
+export const BODY_MARKDOWN = '# Runtime transport test\n\nThis is the verified base draft body.'
 export const BODY_HASH = sha256Text(BODY_MARKDOWN)
 export const CREDENTIAL_REFERENCE = 'geoflow-production-main'
 export const RESPONSE_TIMESTAMP = '2026-08-26T01:03:03.000Z'
@@ -37,7 +38,7 @@ export function makeRequest(overrides: Record<string, unknown> = {}): GeoFlowReq
     brief: {
       title: 'Runtime transport test',
       audience: 'Reviewers',
-      goals: ['Generate a candidate'],
+      goals: ['Generate a base draft'],
       constraints: ['Preserve approved facts'],
     },
     contentType: 'article',
@@ -79,28 +80,9 @@ export function makeTarget(overrides: Record<string, unknown> = {}): GeoFlowRunt
     maxRetryAfterSeconds: 60,
   }
   Object.assign(input, overrides)
-  const result = planTarget(input)
+  const result = normalizeGeoFlowRuntimeTarget(input)
   if (!result.ok) throw new Error(`fixture target failed: ${result.error.code}`)
   return result.value
-}
-
-function planTarget(input: Record<string, unknown>): { ok: true; value: GeoFlowRuntimeTarget } | { ok: false; error: { code: string } } {
-  if (typeof input.baseUrl !== 'string' || typeof input.taskId !== 'number' || typeof input.credentialReference !== 'string' || typeof input.attempt !== 'number') return { ok: false, error: { code: 'TARGET_INVALID' } }
-  return {
-    ok: true,
-    value: {
-      baseUrl: input.baseUrl,
-      taskId: input.taskId,
-      credentialReference: input.credentialReference,
-      attempt: input.attempt,
-      timeoutMs: input.timeoutMs as number,
-      maxResponseBodyBytes: input.maxResponseBodyBytes as number,
-      maxAttempts: input.maxAttempts as number,
-      maxPolls: input.maxPolls as number,
-      pollIntervalMs: input.pollIntervalMs as number,
-      maxRetryAfterSeconds: input.maxRetryAfterSeconds as number,
-    },
-  }
 }
 
 export function jsonResponse(data: unknown, status = 200, headers: Record<string, string> = { 'content-type': 'application/json' }): GeoFlowFetchResponse {
@@ -169,15 +151,17 @@ function resultMetadata(request: GeoFlowRequest, attempt = 1, overrides: Record<
     external_article_key: `article-${request.calendarEntryId}-${request.deliverableId}`,
     attempt,
     content_hash: BODY_HASH,
+    requested_rule_ids: request.selectedRuleIds,
+    autogeo_execution: false,
     citation_bindings: [],
-    applied_rule_ids: request.selectedRuleIds,
+    applied_rule_ids: [],
     provider_provenance: {
       provider: 'deterministic_scaffold',
       model: 'none',
       mode: 'deterministic_scaffold',
       fallback_reason: null,
     },
-    limitations: ['No external provider generation was executed.', 'Human review is required.'],
+    limitations: ['No external provider generation was executed.', 'Human review is required.', 'AutoGEO optimization has not been executed; this is a base draft.'],
     completed_at: RESPONSE_TIMESTAMP,
   }
   Object.assign(metadata, overrides)
@@ -227,9 +211,9 @@ export function articleResponse(request: GeoFlowRequest, _jobId = JOB_ID, articl
     title: request.brief.title,
     slug: 'runtime-transport-test',
     content: BODY_MARKDOWN,
-    excerpt: 'This is the verified candidate body.',
+    excerpt: 'This is the verified base draft body.',
     keywords: '',
-    meta_description: 'This is the verified candidate body.',
+    meta_description: 'This is the verified base draft body.',
     status: 'draft',
     review_status: 'pending',
     task_id: taskId,

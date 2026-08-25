@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Jobs\ProcessGeoFlowTaskJob;
+use App\Models\Article;
+use App\Models\Author;
+use App\Models\Category;
 use App\Models\Task;
 use App\Models\TaskRun;
 use App\Services\GeoFlow\JobQueueService;
@@ -401,6 +404,163 @@ class TaskTransactionSafetyTest extends TestCase
         Exceptions::assertReported(
             fn (\RuntimeException $exception): bool => $exception->getMessage() === 'redis recovery publish failed'
         );
+    }
+
+    public function test_job_queue_claim_stamps_worker_and_attempt_proof(): void
+    {
+        $task = Task::query()->create([
+            'name' => 'Claim proof task',
+            'status' => 'active',
+            'schedule_enabled' => 1,
+        ]);
+        $run = TaskRun::query()->create([
+            'task_id' => $task->id,
+            'status' => 'pending',
+            'meta' => ['available_at' => now()->subMinute()->toDateTimeString(), 'attempt_count' => 0, 'max_attempts' => 3],
+            'started_at' => null,
+        ]);
+
+        $claimed = app(JobQueueService::class)->claimPendingJobById((int) $run->id, 'worker-claim-a');
+
+        $this->assertIsArray($claimed);
+        $this->assertSame('worker-claim-a', $claimed['worker_id']);
+        $this->assertSame(1, $claimed['claim_attempt']);
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertSame('worker-claim-a', $run->fresh()->meta['worker_id']);
+        $this->assertSame(1, $run->fresh()->meta['claim_attempt']);
+    }
+
+    public function test_running_cancel_then_late_complete_or_fail_cannot_restore_success(): void
+    {
+        Queue::fake();
+        [$task, $run] = $this->makeRunningRun();
+        $queue = app(JobQueueService::class);
+
+        $this->assertTrue($queue->cancelJob((int) $run->id, (int) $task->id, 'test cancellation'));
+        $this->assertFalse($queue->completeJob((int) $run->id, (int) $task->id, null, 10, [], 'worker-a', 1));
+        $this->assertFalse($queue->failJob((int) $run->id, (int) $task->id, 'late failure', 10, 1, 'worker-a', 1));
+
+        $freshTask = $task->fresh();
+        $this->assertSame('cancelled', $run->fresh()->status);
+        $this->assertNull($freshTask->last_success_at);
+        $this->assertSame(0, TaskRun::query()->where('task_id', $task->id)->whereIn('status', ['pending', 'running'])->count());
+        $this->assertSame(0, $this->app['db']->table('article_distributions')->count());
+        Queue::assertNothingPushed();
+    }
+
+    public function test_running_complete_then_late_fail_is_terminal_and_idempotent(): void
+    {
+        Queue::fake();
+        [$task, $run] = $this->makeRunningRun();
+        $queue = app(JobQueueService::class);
+
+        $this->assertTrue($queue->completeJob((int) $run->id, (int) $task->id, null, 10, [], 'worker-a', 1));
+        $successAt = $task->fresh()->last_success_at;
+        $this->assertNotNull($successAt);
+        $this->assertFalse($queue->failJob((int) $run->id, (int) $task->id, 'late failure', 10, 1, 'worker-a', 1));
+        $this->assertFalse($queue->completeJob((int) $run->id, (int) $task->id, null, 10, [], 'worker-a', 1));
+
+        $this->assertSame('completed', $run->fresh()->status);
+        $this->assertEquals($successAt, $task->fresh()->last_success_at);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_wrong_worker_stale_attempt_and_task_mismatch_fail_closed_without_last_success(): void
+    {
+        Queue::fake();
+        [$task, $run] = $this->makeRunningRun();
+        $queue = app(JobQueueService::class);
+
+        $this->assertFalse($queue->completeJob((int) $run->id, (int) $task->id, null, 10, [], 'worker-b', 1));
+        $this->assertFalse($queue->completeJob((int) $run->id, (int) $task->id, null, 10, [], 'worker-a', 2));
+        $otherTask = Task::query()->create(['name' => 'Mismatched task', 'status' => 'active', 'schedule_enabled' => 1]);
+        $this->assertFalse($queue->completeJob((int) $run->id, (int) $otherTask->id, null, 10, [], 'worker-a', 1));
+        $this->assertFalse($queue->failJob((int) $run->id, (int) $task->id, 'stale failure', 10, 1, 'worker-a', 2));
+
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertNull($task->fresh()->last_success_at);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_duplicate_complete_dispatches_follow_up_only_once(): void
+    {
+        Queue::fake();
+        config(['queue.default' => 'database']);
+        [$task, $run] = $this->makeRunningRun(['action' => 'generate_draft'], [
+            'article_limit' => 5,
+            'draft_limit' => 5,
+            'created_count' => 0,
+        ]);
+        $queue = app(JobQueueService::class);
+
+        $this->assertTrue($queue->completeJob((int) $run->id, (int) $task->id, null, 10, [], 'worker-a', 1));
+        $this->assertFalse($queue->completeJob((int) $run->id, (int) $task->id, null, 10, [], 'worker-a', 1));
+
+        Queue::assertPushed(ProcessGeoFlowTaskJob::class, 1);
+        $this->assertSame(1, TaskRun::query()->where('task_id', $task->id)->whereIn('status', ['pending', 'running'])->count());
+    }
+
+    public function test_duplicate_fail_dispatches_retry_only_once(): void
+    {
+        Queue::fake();
+        [$task, $run] = $this->makeRunningRun(['max_attempts' => 2]);
+        $queue = app(JobQueueService::class);
+
+        $this->assertTrue($queue->failJob((int) $run->id, (int) $task->id, 'retryable failure', 10, 60, 'worker-a', 1));
+        $this->assertFalse($queue->failJob((int) $run->id, (int) $task->id, 'duplicate failure', 10, 60, 'worker-a', 1));
+
+        Queue::assertPushed(ProcessGeoFlowTaskJob::class, 1);
+        $this->assertSame('pending', $run->fresh()->status);
+        $this->assertSame('retryable failure', $task->fresh()->last_error_message);
+    }
+
+    public function test_completion_cas_loss_marks_generated_article_superseded_as_orphan(): void
+    {
+        [$task, $run] = $this->makeRunningRun();
+        $category = Category::query()->create(['name' => 'CAS category', 'slug' => 'cas-category-'.$run->id]);
+        $author = Author::query()->create(['name' => 'CAS author']);
+        $article = Article::query()->create([
+            'task_id' => $task->id,
+            'title' => 'Orphan draft',
+            'slug' => 'orphan-draft-'.$run->id,
+            'excerpt' => 'Orphan draft excerpt',
+            'content' => 'Generated before completion race',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'draft',
+            'review_status' => 'pending',
+        ]);
+
+        $completed = app(JobQueueService::class)->completeJob((int) $run->id, (int) $task->id, (int) $article->id, 10, [], 'wrong-worker', 1);
+
+        $this->assertFalse($completed);
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertSame('superseded', $article->fresh()->review_status);
+        $this->assertSame((int) $article->id, $run->fresh()->meta['orphaned_article']['article_id']);
+        $this->assertNull($task->fresh()->last_success_at);
+    }
+
+    private function makeRunningRun(array $runMeta = [], array $taskAttributes = []): array
+    {
+        $task = Task::query()->create(array_merge([
+            'name' => 'CAS task',
+            'status' => 'active',
+            'schedule_enabled' => 1,
+        ], $taskAttributes));
+        $run = TaskRun::query()->create([
+            'task_id' => $task->id,
+            'status' => 'running',
+            'meta' => array_merge([
+                'worker_id' => 'worker-a',
+                'claim_attempt' => 1,
+                'attempt_count' => 0,
+                'max_attempts' => 3,
+                'available_at' => now()->subMinute()->toDateTimeString(),
+            ], $runMeta),
+            'started_at' => now(),
+        ]);
+
+        return [$task, $run];
     }
 
     public function test_scheduler_isolates_stale_running_publish_failure_and_continues_recovery_and_normal_scheduling(): void

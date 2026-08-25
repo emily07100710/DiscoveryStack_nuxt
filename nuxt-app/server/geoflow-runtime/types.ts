@@ -9,6 +9,7 @@ export type GeoFlowTransportErrorCode =
   | 'IDEMPOTENCY_COLLISION'
   | 'CREDENTIAL_REFERENCE_INVALID'
   | 'CREDENTIAL_RESOLUTION_FAILED'
+  | 'CREDENTIAL_TARGET_MISMATCH'
   | 'FETCH_NOT_CONFIGURED'
   | 'REMOTE_REQUEST_ID_MISSING'
   | 'TASK_ID_MISSING'
@@ -87,7 +88,13 @@ export type GeoFlowClock = { readonly now: () => string }
 export type GeoFlowSleep = (milliseconds: number) => Promise<void>
 
 export type GeoFlowCredentialResolution =
-  | { readonly ok: true; readonly value: string }
+  | {
+      readonly ok: true
+      readonly value: {
+        readonly token: string
+        readonly allowedBaseUrl: string
+      }
+    }
   | { readonly ok: false }
 export type GeoFlowCredentialResolver = (credentialReference: string) => GeoFlowCredentialResolution | Promise<GeoFlowCredentialResolution>
 
@@ -106,6 +113,7 @@ export type GeoFlowRuntimeTargetInput = {
 
 export type GeoFlowRuntimeTarget = {
   readonly baseUrl: string
+  readonly targetFingerprint: string
   readonly taskId: number
   readonly credentialReference: string
   readonly attempt: number
@@ -145,6 +153,7 @@ export type GeoFlowEnqueueValue = {
   readonly kind: 'enqueued'
   readonly requestFingerprint: string
   readonly requestId: string
+  readonly targetFingerprint: string
   readonly taskId: number
   readonly jobId: number
   readonly attempt: number
@@ -167,6 +176,8 @@ export type GeoFlowJobResultMetadata = {
   readonly externalArticleKey: string
   readonly attempt: number
   readonly contentHash: string
+  readonly requestedRuleIds: readonly string[]
+  readonly autogeoExecution: boolean
   readonly citationBindings: readonly {
     readonly marker: string
     readonly sourceId: string
@@ -189,6 +200,7 @@ export type GeoFlowJobValue = {
   readonly kind: 'job_completed'
   readonly requestFingerprint: string
   readonly requestId: string
+  readonly targetFingerprint: string
   readonly taskId: number
   readonly jobId: number
   readonly articleId: number
@@ -206,9 +218,10 @@ export type GeoFlowArticleInput = {
 }
 
 export type GeoFlowArticleValue = {
-  readonly kind: 'article_candidate'
+  readonly kind: 'article_base_draft' | 'article_candidate'
   readonly requestFingerprint: string
   readonly requestId: string
+  readonly targetFingerprint: string
   readonly taskId: number
   readonly jobId: number
   readonly articleId: number

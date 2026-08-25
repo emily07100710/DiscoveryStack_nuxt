@@ -238,7 +238,7 @@ class WorkerExecutionService
             throw new RuntimeException('DiscoveryStack generation requires at least one approved evidence citation');
         }
         $completedAt = now()->toIso8601String();
-        $limitations = ['Human review is required.'];
+        $limitations = ['Human review is required.', 'AutoGEO optimization has not been executed; this is a base draft.'];
         $resultMetadata = [
             'request_id' => $payload['request_id'],
             'request_fingerprint' => $payload['request_fingerprint'],
@@ -247,8 +247,10 @@ class WorkerExecutionService
             'external_article_key' => $payload['external_article_key'],
             'attempt' => $payload['attempt'],
             'content_hash' => $contentHash,
+            'requested_rule_ids' => $payload['selected_rule_ids'],
+            'applied_rule_ids' => [],
+            'autogeo_execution' => false,
             'citation_bindings' => $citationBindings,
-            'applied_rule_ids' => $payload['selected_rule_ids'],
             'provider_provenance' => [
                 'provider' => $provider,
                 'model' => (string) $aiModel->model_id,

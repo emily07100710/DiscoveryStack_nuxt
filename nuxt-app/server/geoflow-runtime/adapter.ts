@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import {
+  AUTO_GEO_NOT_EXECUTED_LIMITATION,
   deriveExternalArticleKey,
   validateGeoFlowRequest,
   validateGeoFlowResponse,
@@ -38,9 +39,14 @@ const JSON_CONTENT_TYPE = /^application\/json(?:\s*;|$)/iu
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
 const MAX_REMOTE_STATUS_LENGTH = 80
 const CLOCK_SKEW_MS = 5 * 60 * 1_000
+const MAX_REPLAY_ENTRIES = 1024
+const REPLAY_TTL_MS = 15 * 60 * 1_000
 const IN_FLIGHT_ENQUEUES = new Map<string, Promise<GeoFlowEnqueueResult>>()
-const ENQUEUE_REPLAYS = new Map<string, GeoFlowEnqueueResult>()
-const ENQUEUE_KEY_FINGERPRINTS = new Map<string, string>()
+type ReplayRecord = { readonly result: GeoFlowEnqueueResult; readonly expiresAtMs: number }
+type TargetBindingRecord = { readonly targetFingerprint: string; readonly expiresAtMs: number }
+const ENQUEUE_REPLAYS = new Map<string, ReplayRecord>()
+const ENQUEUE_KEY_FINGERPRINTS = new Map<string, { readonly requestFingerprint: string; readonly expiresAtMs: number }>()
+const ENQUEUE_IDEMPOTENCY_TARGET_BINDINGS = new Map<string, TargetBindingRecord>()
 const VERIFIED_PLANS = new WeakSet<object>()
 const VERIFIED_ENQUEUES = new WeakSet<object>()
 const VERIFIED_JOBS = new WeakSet<object>()
@@ -54,6 +60,7 @@ const JOB_PAYLOAD_KEYS = [
 ] as const
 const JOB_RESULT_KEYS = [
   'request_id', 'request_fingerprint', 'brief_fingerprint', 'evidence_snapshot_hash', 'external_article_key',
+  'requested_rule_ids', 'autogeo_execution',
   'attempt', 'content_hash', 'citation_bindings', 'applied_rule_ids', 'provider_provenance', 'limitations', 'completed_at',
 ] as const
 const CITATION_KEYS = ['marker', 'source_id', 'artifact_id', 'chunk_id', 'chunk_hash'] as const
@@ -121,6 +128,27 @@ function hasExactKeys(record: JsonRecord, expected: readonly string[]): boolean 
     return keys.length === expected.length && keys.every((key, index) => key === [...expected].sort()[index])
   } catch {
     return false
+  }
+}
+
+function pruneEnqueueState(nowMs: number): void {
+  for (const [key, record] of ENQUEUE_REPLAYS) if (record.expiresAtMs <= nowMs) ENQUEUE_REPLAYS.delete(key)
+  for (const [key, record] of ENQUEUE_KEY_FINGERPRINTS) if (record.expiresAtMs <= nowMs) ENQUEUE_KEY_FINGERPRINTS.delete(key)
+  for (const [key, record] of ENQUEUE_IDEMPOTENCY_TARGET_BINDINGS) if (record.expiresAtMs <= nowMs) ENQUEUE_IDEMPOTENCY_TARGET_BINDINGS.delete(key)
+  while (ENQUEUE_REPLAYS.size > MAX_REPLAY_ENTRIES) {
+    const oldest = ENQUEUE_REPLAYS.keys().next().value
+    if (typeof oldest !== 'string') break
+    ENQUEUE_REPLAYS.delete(oldest)
+  }
+  while (ENQUEUE_KEY_FINGERPRINTS.size > MAX_REPLAY_ENTRIES) {
+    const oldest = ENQUEUE_KEY_FINGERPRINTS.keys().next().value
+    if (typeof oldest !== 'string') break
+    ENQUEUE_KEY_FINGERPRINTS.delete(oldest)
+  }
+  while (ENQUEUE_IDEMPOTENCY_TARGET_BINDINGS.size > MAX_REPLAY_ENTRIES) {
+    const oldest = ENQUEUE_IDEMPOTENCY_TARGET_BINDINGS.keys().next().value
+    if (typeof oldest !== 'string') break
+    ENQUEUE_IDEMPOTENCY_TARGET_BINDINGS.delete(oldest)
   }
 }
 
@@ -366,6 +394,7 @@ function enqueueValueFromData(data: JsonRecord, plan: GeoFlowEnqueuePlan): GeoFl
     kind: 'enqueued',
     requestFingerprint: plan.request.requestFingerprint,
     requestId: plan.request.requestId,
+    targetFingerprint: plan.target.targetFingerprint,
     taskId,
     jobId,
     attempt: plan.target.attempt,
@@ -378,8 +407,8 @@ function enqueueValueFromData(data: JsonRecord, plan: GeoFlowEnqueuePlan): GeoFl
 }
 
 async function performEnqueue(plan: GeoFlowEnqueuePlan, dependencies: GeoFlowAdapterDependencies): Promise<GeoFlowEnqueueResult> {
-  const credential = await resolveGeoFlowCredentialForTransport(plan.target.credentialReference, dependencies.credentialResolver)
-  if (!credential.ok) return credential.error.code === 'CREDENTIAL_REFERENCE_INVALID' ? failure('CREDENTIAL_REFERENCE_INVALID') : failure('CREDENTIAL_RESOLUTION_FAILED')
+  const credential = await resolveGeoFlowCredentialForTransport(plan.target.credentialReference, dependencies.credentialResolver, plan.target.baseUrl)
+  if (!credential.ok) return failure(credential.error.code)
   const response = await callWithRetries(
     plan.url,
     { method: 'POST', headers: credentialHeaders(credential.token, plan.request), body: plan.body, timeoutMs: plan.target.timeoutMs },
@@ -399,17 +428,28 @@ export async function executeGeoFlowEnqueue(input: GeoFlowEnqueueInput, dependen
   if (!plan.ok) return plan
   const dependencyCheck = ensureDependencies(dependencies)
   if (!dependencyCheck.ok) return dependencyCheck
-  const requestKey = plan.value.request.idempotencyKey
+  const nowMs = clockMilliseconds(dependencies)
+  if (!nowMs.ok) return nowMs
+  pruneEnqueueState(nowMs.value)
+  const requestKey = `${plan.value.target.targetFingerprint}\u0000${plan.value.request.idempotencyKey}`
+  const globalBindingKey = `${plan.value.request.idempotencyKey}\u0000${plan.value.request.requestFingerprint}`
   const pairKey = `${requestKey}\u0000${plan.value.request.requestFingerprint}`
+  const targetBinding = ENQUEUE_IDEMPOTENCY_TARGET_BINDINGS.get(globalBindingKey)
+  if (targetBinding !== undefined && targetBinding.targetFingerprint !== plan.value.target.targetFingerprint) return failure('IDEMPOTENCY_COLLISION')
   const existingFingerprint = ENQUEUE_KEY_FINGERPRINTS.get(requestKey)
-  if (existingFingerprint !== undefined && existingFingerprint !== plan.value.request.requestFingerprint) return failure('IDEMPOTENCY_COLLISION')
+  if (existingFingerprint !== undefined && existingFingerprint.requestFingerprint !== plan.value.request.requestFingerprint) return failure('IDEMPOTENCY_COLLISION')
   const replay = ENQUEUE_REPLAYS.get(pairKey)
-  if (replay) return replay
+  if (replay) return replay.result
   const existing = IN_FLIGHT_ENQUEUES.get(pairKey)
   if (existing) return existing
-  ENQUEUE_KEY_FINGERPRINTS.set(requestKey, plan.value.request.requestFingerprint)
+  const expiresAtMs = nowMs.value + REPLAY_TTL_MS
+  ENQUEUE_IDEMPOTENCY_TARGET_BINDINGS.set(globalBindingKey, { targetFingerprint: plan.value.target.targetFingerprint, expiresAtMs })
+  ENQUEUE_KEY_FINGERPRINTS.set(requestKey, { requestFingerprint: plan.value.request.requestFingerprint, expiresAtMs })
   const promise = performEnqueue(plan.value, dependencies).then((result) => {
-    if (result.ok) ENQUEUE_REPLAYS.set(pairKey, result)
+    if (result.ok) {
+      ENQUEUE_REPLAYS.set(pairKey, { result, expiresAtMs })
+      pruneEnqueueState(nowMs.value)
+    }
     return result
   })
   IN_FLIGHT_ENQUEUES.set(pairKey, promise)
@@ -424,6 +464,7 @@ function validateEnqueueValue(value: unknown, plan: GeoFlowEnqueuePlan): GeoFlow
   if (!isRecord(value) || safeField(value, 'kind') !== 'enqueued' || !VERIFIED_ENQUEUES.has(value)) return failure('RESULT_INVALID')
   if (safeField(value, 'requestFingerprint') !== plan.request.requestFingerprint) return failure('REQUEST_FINGERPRINT_MISMATCH')
   if (safeField(value, 'requestId') !== plan.request.requestId) return failure('REQUEST_ID_MISMATCH')
+  if (safeField(value, 'targetFingerprint') !== plan.target.targetFingerprint) return failure('IDENTITY_MISMATCH')
   if (safeField(value, 'taskId') !== plan.target.taskId) return failure('TASK_ID_MISMATCH')
   if (!positiveInteger(safeField(value, 'jobId'))) return failure('JOB_ID_MISSING')
   if (!attempt(safeField(value, 'attempt')) || safeField(value, 'attempt') !== plan.target.attempt) return failure('ATTEMPT_MISMATCH')
@@ -550,12 +591,14 @@ function parseResultMetadata(context: JobContext, plan: GeoFlowEnqueuePlan, nowM
   const externalArticleKey = asString(raw, 'external_article_key')
   const contentHash = asString(raw, 'content_hash')
   const completedAt = asString(raw, 'completed_at')
+  const requestedRuleIds = stringArray(raw, 'requested_rule_ids')
   const appliedRuleIds = stringArray(raw, 'applied_rule_ids')
+  const autogeoExecution = safeField(raw, 'autogeo_execution')
   const limitations = stringArray(raw, 'limitations')
   const attemptValue = safeField(raw, 'attempt')
   const citationsRaw = safeField(raw, 'citation_bindings')
   const providerRaw = safeField(raw, 'provider_provenance')
-  if (!requestId || !requestFingerprint || !briefFingerprint || !evidenceSnapshotHash || !externalArticleKey || !contentHash || !completedAt || !appliedRuleIds || !limitations || !attempt(attemptValue) || !Array.isArray(citationsRaw) || !isRecord(providerRaw)) return failure('RESULT_INVALID')
+  if (!requestId || !requestFingerprint || !briefFingerprint || !evidenceSnapshotHash || !externalArticleKey || !contentHash || !completedAt || !requestedRuleIds || !appliedRuleIds || typeof autogeoExecution !== 'boolean' || !limitations || !attempt(attemptValue) || !Array.isArray(citationsRaw) || !isRecord(providerRaw)) return failure('RESULT_INVALID')
   if (!HASH_PATTERN.test(contentHash) || !HASH_PATTERN.test(requestFingerprint) || !HASH_PATTERN.test(briefFingerprint) || !HASH_PATTERN.test(evidenceSnapshotHash)) return failure('RESULT_INVALID')
   if (requestId !== plan.request.requestId || requestFingerprint !== plan.request.requestFingerprint) return failure('REQUEST_FINGERPRINT_MISMATCH')
   if (briefFingerprint !== plan.request.briefFingerprint || evidenceSnapshotHash !== plan.request.evidenceSnapshotHash) return failure('REQUEST_FINGERPRINT_MISMATCH')
@@ -564,7 +607,10 @@ function parseResultMetadata(context: JobContext, plan: GeoFlowEnqueuePlan, nowM
   const completedMs = Date.parse(completedAt)
   const requestMs = Date.parse(plan.request.createdAt)
   if (!Number.isFinite(completedMs) || !Number.isFinite(requestMs) || completedMs < requestMs || completedMs > nowMs + CLOCK_SKEW_MS) return failure('REQUEST_TIME_INVALID')
-  if (JSON.stringify(appliedRuleIds) !== JSON.stringify(plan.request.selectedRuleIds)) return failure('RESULT_INVALID')
+  if (JSON.stringify(requestedRuleIds) !== JSON.stringify(plan.request.selectedRuleIds)) return failure('RESULT_INVALID')
+  // DS transport is the base-generation boundary. AutoGEO is a separate future worker and
+  // must never be represented as executed by this response, even when it was requested.
+  if (autogeoExecution !== false || appliedRuleIds.length !== 0 || !limitations.includes(AUTO_GEO_NOT_EXECUTED_LIMITATION)) return failure('RESULT_INVALID')
 
   const evidenceByIdentity = new Set(plan.request.evidenceChunks.map((chunk) => `${chunk.sourceId}\u0000${chunk.artifactId}\u0000${chunk.chunkId}\u0000${chunk.chunkHash}`))
   const citationBindings: GeoFlowJobResultMetadata['citationBindings'][number][] = []
@@ -598,6 +644,8 @@ function parseResultMetadata(context: JobContext, plan: GeoFlowEnqueuePlan, nowM
     externalArticleKey,
     attempt: attemptValue,
     contentHash,
+    requestedRuleIds,
+    autogeoExecution,
     citationBindings,
     appliedRuleIds,
     providerProvenance: { provider, model, mode: mode as GeoFlowJobResultMetadata['providerProvenance']['mode'], fallbackReason: fallback as string | null },
@@ -617,6 +665,7 @@ function jobValueFromData(data: JsonRecord, plan: GeoFlowEnqueuePlan, enqueue: G
     kind: 'job_completed',
     requestFingerprint: plan.request.requestFingerprint,
     requestId: plan.request.requestId,
+    targetFingerprint: plan.target.targetFingerprint,
     taskId: plan.target.taskId,
     jobId: enqueue.jobId,
     articleId: identity.value.articleId,
@@ -637,8 +686,8 @@ async function performJobPoll(plan: GeoFlowEnqueuePlan, enqueue: GeoFlowEnqueueV
   const dependencyCheck = ensureDependencies(dependencies)
   if (!dependencyCheck.ok) return dependencyCheck
   if (plan.target.pollIntervalMs > 0 && typeof dependencies.sleep !== 'function') return failure('SLEEP_NOT_CONFIGURED')
-  const credential = await resolveGeoFlowCredentialForTransport(plan.target.credentialReference, dependencies.credentialResolver)
-  if (!credential.ok) return failure('CREDENTIAL_RESOLUTION_FAILED')
+  const credential = await resolveGeoFlowCredentialForTransport(plan.target.credentialReference, dependencies.credentialResolver, plan.target.baseUrl)
+  if (!credential.ok) return failure(credential.error.code)
   let transportAttempt = 1
   let pollCount = 0
   while (pollCount < plan.target.maxPolls) {
@@ -688,6 +737,7 @@ function validateJobValue(value: unknown, plan: GeoFlowEnqueuePlan): GeoFlowTran
   if (!isRecord(value) || !VERIFIED_JOBS.has(value) || safeField(value, 'kind') !== 'job_completed') return failure('RESULT_INVALID')
   if (safeField(value, 'requestFingerprint') !== plan.request.requestFingerprint) return failure('REQUEST_FINGERPRINT_MISMATCH')
   if (safeField(value, 'requestId') !== plan.request.requestId) return failure('REQUEST_ID_MISMATCH')
+  if (safeField(value, 'targetFingerprint') !== plan.target.targetFingerprint) return failure('IDENTITY_MISMATCH')
   if (safeField(value, 'taskId') !== plan.target.taskId) return failure('TASK_ID_MISMATCH')
   if (!positiveInteger(safeField(value, 'jobId'))) return failure('JOB_ID_MISSING')
   if (!positiveInteger(safeField(value, 'articleId'))) return failure('ARTICLE_ID_MISSING')
@@ -736,6 +786,38 @@ function candidateResponseFromData(data: JsonRecord, plan: GeoFlowEnqueuePlan, j
     bodyMarkdown,
     bodyHash,
   }
+  if (!job.resultMetadata.autogeoExecution) {
+    const baseResponse: GeoFlowResponse = {
+      protocolVersion: plan.request.protocolVersion,
+      requestId: plan.request.requestId,
+      idempotencyKey: plan.request.idempotencyKey,
+      requestFingerprint: plan.request.requestFingerprint,
+      ownerUserId: plan.request.ownerUserId,
+      clientId: plan.request.clientId,
+      jobId: plan.request.jobId,
+      externalProjectKey: `project-${plan.request.productionPlanId}`,
+      externalTaskKey: `task-${plan.target.taskId}`,
+      externalJobKey: `job-${job.jobId}`,
+      externalArticleKey: job.resultMetadata.externalArticleKey,
+      attempt: job.resultMetadata.attempt,
+      status: 'base_draft_ready',
+      draftIdentity: { externalArticleKey: job.resultMetadata.externalArticleKey, briefFingerprint: job.resultMetadata.briefFingerprint },
+      contentArtifact,
+      evidenceSnapshotHash: job.resultMetadata.evidenceSnapshotHash,
+      citationBindings: citationBindings as Array<{ sourceId: string; artifactId: string; chunkId: string; chunkHash: string }>,
+      requestedRuleIds: [...job.resultMetadata.requestedRuleIds],
+      appliedRuleIds: [],
+      autogeoExecution: false,
+      providerProvenance: { ...job.resultMetadata.providerProvenance },
+      limitations: [...job.resultMetadata.limitations],
+      completedAt: job.resultMetadata.completedAt,
+    }
+    const validatedBase = validateGeoFlowResponse(baseResponse, plan.request)
+    if (!validatedBase.ok) return failure('RESULT_INVALID', { contractReason: validatedBase.reason })
+    const baseLineage = verifyGeoFlowLineage(plan.request, validatedBase.value)
+    if (!baseLineage.ok) return failure('RESULT_INVALID', { contractReason: baseLineage.reason })
+    return { ok: true, value: validatedBase.value }
+  }
   const response: GeoFlowResponse = {
     protocolVersion: plan.request.protocolVersion,
     requestId: plan.request.requestId,
@@ -772,8 +854,8 @@ async function performArticleFetch(plan: GeoFlowEnqueuePlan, job: GeoFlowJobValu
   if (!isTerminalJobStatus(job.remoteStatus)) return failure('ARTICLE_NOT_READY')
   const dependencyCheck = ensureDependencies(dependencies)
   if (!dependencyCheck.ok) return dependencyCheck
-  const credential = await resolveGeoFlowCredentialForTransport(plan.target.credentialReference, dependencies.credentialResolver)
-  if (!credential.ok) return failure('CREDENTIAL_RESOLUTION_FAILED')
+  const credential = await resolveGeoFlowCredentialForTransport(plan.target.credentialReference, dependencies.credentialResolver, plan.target.baseUrl)
+  if (!credential.ok) return failure(credential.error.code)
   const response = await callWithRetries(
     joinGeoFlowPath(plan.target.baseUrl, ARTICLE_PATH(job.articleId)),
     { method: 'GET', headers: getHeaders(credential.token, plan.request), timeoutMs: plan.target.timeoutMs },
@@ -788,9 +870,10 @@ async function performArticleFetch(plan: GeoFlowEnqueuePlan, job: GeoFlowJobValu
   const candidate = candidateResponseFromData(envelope.value, plan, job)
   if (!candidate.ok) return candidate
   const value = {
-    kind: 'article_candidate' as const,
+    kind: candidate.value.status === 'base_draft_ready' ? 'article_base_draft' as const : 'article_candidate' as const,
     requestFingerprint: plan.request.requestFingerprint,
     requestId: plan.request.requestId,
+    targetFingerprint: plan.target.targetFingerprint,
     taskId: plan.target.taskId,
     jobId: job.jobId,
     articleId: job.articleId,
@@ -814,13 +897,29 @@ export function validateGeoFlowTransportResult(input: GeoFlowTransportValidation
   if (!isRecord(input)) return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$', code: 'INVALID_INPUT' }] }
   const requestResult = validateGeoFlowRequest(safeField(input, 'request'))
   if (!requestResult.ok) return requestResult
+  const plan = safeField(input, 'plan')
+  if (plan !== undefined) {
+    if (!isRecord(plan) || safeField(plan, 'kind') !== 'enqueue_plan' || !VERIFIED_PLANS.has(plan)) return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.plan', code: 'INVALID_INPUT' }] }
+    const planRequest = safeField(plan, 'request')
+    if (!isRecord(planRequest) || safeField(planRequest, 'requestFingerprint') !== requestResult.value.requestFingerprint) return { ok: false, reason: 'REQUEST_FINGERPRINT_MISMATCH', issues: [{ path: '$.plan.request.requestFingerprint', code: 'REQUEST_FINGERPRINT_MISMATCH' }] }
+  }
   const result = safeField(input, 'result')
-  if (!isRecord(result) || safeField(result, 'kind') !== 'article_candidate') return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.result', code: 'INVALID_INPUT' }] }
+  const resultKind = isRecord(result) ? safeField(result, 'kind') : undefined
+  if (!isRecord(result) || (resultKind !== 'article_candidate' && resultKind !== 'article_base_draft')) return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.result', code: 'INVALID_INPUT' }] }
   const response = safeField(result, 'response')
   const responseResult = validateGeoFlowResponse(response, requestResult.value)
   if (!responseResult.ok) return responseResult
   const lineage = verifyGeoFlowLineage(requestResult.value, responseResult.value)
   if (!lineage.ok) return lineage
   if (safeField(result, 'requestFingerprint') !== requestResult.value.requestFingerprint) return { ok: false, reason: 'REQUEST_FINGERPRINT_MISMATCH', issues: [{ path: '$.result.requestFingerprint', code: 'REQUEST_FINGERPRINT_MISMATCH' }] }
+  const resultTargetFingerprint = safeField(result, 'targetFingerprint')
+  if (typeof resultTargetFingerprint !== 'string' || !HASH_PATTERN.test(resultTargetFingerprint)) return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.result.targetFingerprint', code: 'INVALID_INPUT' }] }
+  if (plan !== undefined && isRecord(plan)) {
+    const planTarget = safeField(plan, 'target')
+    const planTargetFingerprint = isRecord(planTarget) ? safeField(planTarget, 'targetFingerprint') : undefined
+    if (resultTargetFingerprint !== planTargetFingerprint) return { ok: false, reason: 'IDENTITY_MISMATCH', issues: [{ path: '$.result.targetFingerprint', code: 'IDENTITY_MISMATCH' }] }
+  }
+  if (resultKind === 'article_base_draft' && responseResult.value.status !== 'base_draft_ready') return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.result.response.status', code: 'INVALID_INPUT' }] }
+  if (resultKind === 'article_candidate' && responseResult.value.status === 'base_draft_ready') return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.result.response.status', code: 'INVALID_INPUT' }] }
   return responseResult
 }

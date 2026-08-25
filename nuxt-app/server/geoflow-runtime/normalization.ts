@@ -1,7 +1,7 @@
 import { validateGeoFlowRequest } from '../geoflow-integration'
 import type { GeoFlowRequest, ReasonCode, ValidationResult } from '../geoflow-integration'
 import { validateGeoFlowAttempt } from './retry-policy'
-import { validateGeoFlowBaseUrl, validateGeoFlowTaskId } from './target-guard'
+import { deriveGeoFlowTargetFingerprint, validateGeoFlowBaseUrl, validateGeoFlowTaskId } from './target-guard'
 import { validateGeoFlowCredentialReference } from './credential-contract'
 import type { GeoFlowRuntimeTarget, GeoFlowRuntimeTargetInput, GeoFlowTransportResult } from './types'
 
@@ -16,7 +16,7 @@ const MAX_RESPONSE_BODY_BYTES = 10 * 1024 * 1024
 const MAX_POLLS = 100
 const MAX_POLL_INTERVAL_MS = 60_000
 const MAX_RETRY_AFTER_SECONDS = 3_600
-const TARGET_KEYS = ['baseUrl', 'taskId', 'credentialReference', 'attempt', 'timeoutMs', 'maxResponseBodyBytes', 'maxAttempts', 'maxPolls', 'pollIntervalMs', 'maxRetryAfterSeconds'] as const
+const TARGET_KEYS = ['baseUrl', 'taskId', 'credentialReference', 'attempt', 'timeoutMs', 'maxResponseBodyBytes', 'maxAttempts', 'maxPolls', 'pollIntervalMs', 'maxRetryAfterSeconds', 'targetFingerprint'] as const
 const REQUIRED_TARGET_KEYS = ['baseUrl', 'taskId', 'credentialReference', 'attempt'] as const
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u
 
@@ -69,19 +69,26 @@ export function normalizeGeoFlowRuntimeTarget(input: unknown): GeoFlowTransportR
   const maxPolls = boundedInteger(safeValue(input, 'maxPolls'), DEFAULT_MAX_POLLS, 1, MAX_POLLS); if (!maxPolls.ok) return maxPolls
   const pollIntervalMs = boundedInteger(safeValue(input, 'pollIntervalMs'), DEFAULT_POLL_INTERVAL_MS, 0, MAX_POLL_INTERVAL_MS); if (!pollIntervalMs.ok) return pollIntervalMs
   const maxRetryAfterSeconds = boundedInteger(safeValue(input, 'maxRetryAfterSeconds'), DEFAULT_MAX_RETRY_AFTER_SECONDS, 0, MAX_RETRY_AFTER_SECONDS); if (!maxRetryAfterSeconds.ok) return maxRetryAfterSeconds
+  const normalizedTarget = {
+    baseUrl: baseUrl.value,
+    taskId: taskId.value,
+    credentialReference: credentialReference.value,
+    attempt: attempt.value,
+    timeoutMs: timeoutMs.value,
+    maxResponseBodyBytes: maxResponseBodyBytes.value,
+    maxAttempts: maxAttempts.value,
+    maxPolls: maxPolls.value,
+    pollIntervalMs: pollIntervalMs.value,
+    maxRetryAfterSeconds: maxRetryAfterSeconds.value,
+  }
+  const targetFingerprint = deriveGeoFlowTargetFingerprint(normalizedTarget)
+  const suppliedFingerprint = safeValue(input, 'targetFingerprint')
+  if (suppliedFingerprint !== undefined && (typeof suppliedFingerprint !== 'string' || suppliedFingerprint !== targetFingerprint)) return failure('TARGET_INVALID')
   return {
     ok: true,
     value: {
-      baseUrl: baseUrl.value,
-      taskId: taskId.value,
-      credentialReference: credentialReference.value,
-      attempt: attempt.value,
-      timeoutMs: timeoutMs.value,
-      maxResponseBodyBytes: maxResponseBodyBytes.value,
-      maxAttempts: maxAttempts.value,
-      maxPolls: maxPolls.value,
-      pollIntervalMs: pollIntervalMs.value,
-      maxRetryAfterSeconds: maxRetryAfterSeconds.value,
+      ...normalizedTarget,
+      targetFingerprint,
     },
   }
 }

@@ -1,0 +1,77 @@
+{
+  "text": [
+    {
+      "input": "  ＡＢＣ\u00a0中文   👩‍🔬  ",
+      "expected": "ABC 中文 👩‍🔬",
+      "accepted": true
+    },
+    {
+      "input": "e\u0301   combining",
+      "expected": "é combining",
+      "accepted": true
+    }
+  ],
+  "timestamps": [
+    {
+      "input": "2026-08-26T14:00:00+14:00",
+      "expected": "2026-08-26T00:00:00.000Z",
+      "accepted": true
+    },
+    {
+      "input": "2026-08-26T00:00:00-00:00",
+      "accepted": false
+    },
+    {
+      "input": "2026-08-26T14:00:00+14:01",
+      "accepted": false
+    }
+  ],
+  "urls": [
+    {
+      "input": "https://evidence.routing.discoverystack.dev",
+      "expected": "https://evidence.routing.discoverystack.dev/",
+      "accepted": true
+    },
+    {
+      "input": "https://[2001:4860:4860::8888]/evidence",
+      "accepted": false
+    },
+    {
+      "input": "https://evidence.routing.discoverystack.dev/evidence?ref=%",
+      "accepted": false
+    },
+    {
+      "input": "https://evidence.routing.discoverystack.dev/evidence?%61%70%69%5F%6B%65%79=value",
+      "accepted": false
+    },
+    {
+      "input": "https://user@evidence.routing.discoverystack.dev/evidence",
+      "accepted": false
+    },
+    {
+      "input": "https://evidence.routing.discoverystack.dev/evidence?section=one",
+      "expected": "https://evidence.routing.discoverystack.dev/evidence?section=one",
+      "accepted": true
+    }
+  ],
+  "hashes": [
+    {
+      "input": "2cb99061354797447165ae149bbcc4bb405d0dc188f2f1e11ddebea2f9e64b61",
+      "accepted": true
+    },
+    {
+      "input": "2cb99061354797447165ae149bbcc4bb405d0dc188f2f1e11ddebea2f9e64b6",
+      "accepted": false
+    }
+  ],
+  "duplicates": [
+    {
+      "values": ["rule-a", "rule-a"],
+      "accepted": false
+    },
+    {
+      "values": ["rule-a", "rule-b"],
+      "accepted": true
+    }
+  ]
+}

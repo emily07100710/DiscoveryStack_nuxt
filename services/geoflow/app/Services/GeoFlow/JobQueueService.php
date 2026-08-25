@@ -3,6 +3,7 @@
 namespace App\Services\GeoFlow;
 
 use App\Jobs\ProcessGeoFlowTaskJob;
+use App\Models\Article;
 use App\Models\Task;
 use App\Models\TaskRun;
 use Illuminate\Support\Carbon;
@@ -147,6 +148,10 @@ class JobQueueService
      */
     public function claimPendingJobById(int $jobId, string $workerId): ?array
     {
+        if (trim($workerId) === '') {
+            return null;
+        }
+
         $claimedJob = DB::transaction(function () use ($jobId, $workerId): ?array {
             // 使用悲观锁 + 状态条件，确保同一条记录只会被一个 worker 成功 claim。
             $run = TaskRun::query()
@@ -181,13 +186,15 @@ class JobQueueService
                 return null;
             }
 
+            $claimAttempt = max(1, (int) ($meta['attempt_count'] ?? 0) + 1);
+            $claimedMeta = array_merge($meta, ['worker_id' => $workerId, 'claim_attempt' => $claimAttempt]);
             $affected = TaskRun::query()
                 ->whereKey($jobId)
                 ->where('status', 'pending')
                 ->update([
                     'status' => 'running',
                     'started_at' => now(),
-                    'meta' => array_merge($meta, ['worker_id' => $workerId]),
+                    'meta' => $claimedMeta,
                 ]);
 
             if ($affected !== 1) {
@@ -197,7 +204,9 @@ class JobQueueService
             // 返回轻量执行上下文，供 ProcessGeoFlowTaskJob 使用。
             $row = $run->getAttributes();
             $row['status'] = 'running';
+            $row['meta'] = $claimedMeta;
             $row['worker_id'] = $workerId;
+            $row['claim_attempt'] = $claimAttempt;
             $row['publish_interval'] = (int) ($task->publish_interval ?? 0);
             $row['task_status'] = (string) ($task->status ?? 'paused');
 
@@ -230,23 +239,36 @@ class JobQueueService
      *
      * @param  array<string,mixed>  $meta  执行产物元数据（如模型信息、trace 信息等）
      */
-    public function completeJob(int $jobId, int $taskId, ?int $articleId, int $durationMs, array $meta = []): void
+    public function completeJob(int $jobId, int $taskId, ?int $articleId, int $durationMs, array $meta = [], ?string $workerId = null, ?int $expectedAttempt = null): bool
     {
         $mergedMeta = null;
+        $transitioned = false;
+        $shouldMarkOrphan = false;
 
-        DB::transaction(function () use ($jobId, $taskId, $articleId, $durationMs, $meta, &$mergedMeta): void {
+        DB::transaction(function () use ($jobId, $taskId, $articleId, $durationMs, $meta, $workerId, $expectedAttempt, &$mergedMeta, &$transitioned, &$shouldMarkOrphan): void {
             $run = TaskRun::query()
                 ->whereKey($jobId)
                 ->where('task_id', $taskId)
                 ->lockForUpdate()
                 ->first();
             if (! $run) {
+                $shouldMarkOrphan = $articleId !== null;
                 return;
             }
 
+            $storedArticleId = $run->article_id !== null ? (int) $run->article_id : null;
+            if (($run->status ?? '') !== 'running') {
+                $shouldMarkOrphan = $articleId !== null && $storedArticleId !== $articleId;
+                return;
+            }
             $originalMeta = $this->normalizeMeta($run->meta);
+            if (! $this->claimMatches($originalMeta, $workerId, $expectedAttempt)) {
+                $shouldMarkOrphan = $articleId !== null && $storedArticleId !== $articleId;
+                return;
+            }
+
             $mergedMeta = array_merge($originalMeta, $meta);
-            foreach (['job_type', 'payload', 'attempt_count', 'max_attempts', 'available_at', 'worker_id'] as $preservedKey) {
+            foreach (['job_type', 'payload', 'attempt_count', 'max_attempts', 'available_at', 'worker_id', 'claim_attempt'] as $preservedKey) {
                 if (array_key_exists($preservedKey, $originalMeta)) {
                     $mergedMeta[$preservedKey] = $originalMeta[$preservedKey];
                 }
@@ -255,14 +277,26 @@ class JobQueueService
                 $mergedMeta['result'] = array_replace_recursive($originalMeta['result'], $meta['result']);
             }
 
-            $run->forceFill([
-                'status' => 'completed',
-                'finished_at' => now(),
-                'article_id' => $articleId,
-                'duration_ms' => $durationMs,
-                'meta' => $mergedMeta,
-                'error_message' => '',
-            ])->save();
+            $affected = TaskRun::query()
+                ->whereKey($jobId)
+                ->where('task_id', $taskId)
+                ->where('status', 'running')
+                ->where('meta->worker_id', (string) $workerId)
+                ->where('meta->claim_attempt', (int) $expectedAttempt)
+                ->update([
+                    'status' => 'completed',
+                    'finished_at' => now(),
+                    'article_id' => $articleId,
+                    'duration_ms' => $durationMs,
+                    'meta' => $mergedMeta,
+                    'error_message' => '',
+                ]);
+            if ($affected !== 1) {
+                $mergedMeta = null;
+                $shouldMarkOrphan = $articleId !== null && $storedArticleId !== $articleId;
+                return;
+            }
+            $transitioned = true;
 
             Task::query()->whereKey($taskId)->update([
                 'last_run_at' => now(),
@@ -273,12 +307,44 @@ class JobQueueService
             ]);
         });
 
-        if ($mergedMeta === null) {
-            return;
+        if (! $transitioned) {
+            if ($shouldMarkOrphan && $articleId !== null) {
+                $this->markOrphanedArticle($articleId, $jobId, 'task run completion claim was lost');
+            }
+
+            return false;
         }
 
         $this->broadcastOverviewUpdate();
-        $this->enqueueFollowUpGenerationIfNeeded($taskId, $mergedMeta);
+        $this->enqueueFollowUpGenerationIfNeeded($taskId, $mergedMeta ?? []);
+
+        return true;
+    }
+
+    private function claimMatches(array $meta, ?string $workerId, ?int $expectedAttempt): bool
+    {
+        $storedWorkerId = $meta['worker_id'] ?? null;
+
+        return $workerId !== null && trim($workerId) !== '' && is_string($storedWorkerId) && $expectedAttempt !== null && $expectedAttempt > 0 && hash_equals($storedWorkerId, $workerId) && (int) ($meta['claim_attempt'] ?? 0) === $expectedAttempt;
+    }
+
+    private function markOrphanedArticle(int $articleId, int $jobId, string $reason): void
+    {
+        try {
+            DB::transaction(function () use ($articleId, $jobId, $reason): void {
+                Article::query()->whereKey($articleId)->where('status', 'draft')->whereIn('review_status', ['pending', 'review_pending', 'needs_review'])->update([
+                    'review_status' => 'superseded',
+                ]);
+                $run = TaskRun::query()->whereKey($jobId)->lockForUpdate()->first();
+                if ($run) {
+                    $meta = $this->normalizeMeta($run->meta);
+                    $meta['orphaned_article'] = ['article_id' => $articleId, 'reason' => $reason, 'marked_at' => now()->toIso8601String()];
+                    $run->forceFill(['meta' => $meta])->save();
+                }
+            });
+        } catch (Throwable) {
+            // Orphan marking must never turn an already-lost completion into a second write error.
+        }
     }
 
     /**
@@ -288,68 +354,123 @@ class JobQueueService
      * - attempt_count < max_attempts: 状态重置为 pending，写入下次 available_at，并再次 dispatch；
      * - 否则：状态置为 failed，结束本次执行生命周期。
      */
-    public function failJob(int $jobId, int $taskId, string $errorMessage, int $durationMs, int $retryDelaySeconds = 60): void
+    public function failJob(int $jobId, int $taskId, string $errorMessage, int $durationMs, int $retryDelaySeconds = 60, ?string $workerId = null, ?int $expectedAttempt = null): bool
     {
-        $run = TaskRun::query()->whereKey($jobId)->first();
-        if (! $run) {
-            return;
+        $transitioned = false;
+        $shouldRetry = false;
+        $nextAvailableAt = null;
+
+        DB::transaction(function () use ($jobId, $taskId, $errorMessage, $durationMs, $retryDelaySeconds, $workerId, $expectedAttempt, &$transitioned, &$shouldRetry, &$nextAvailableAt): void {
+            $run = TaskRun::query()
+                ->whereKey($jobId)
+                ->where('task_id', $taskId)
+                ->lockForUpdate()
+                ->first();
+            if (! $run || ($run->status ?? '') !== 'running') {
+                return;
+            }
+            $runMeta = $this->normalizeMeta($run->meta);
+            if (! $this->claimMatches($runMeta, $workerId, $expectedAttempt)) {
+                return;
+            }
+
+            $attemptCount = (int) ($runMeta['attempt_count'] ?? 0) + 1;
+            $maxAttempts = max(1, (int) ($runMeta['max_attempts'] ?? 3));
+            $shouldRetry = $attemptCount < $maxAttempts;
+            $nextAvailableAt = now()->addSeconds(max(1, $retryDelaySeconds));
+            $newMeta = array_merge($runMeta, [
+                'attempt_count' => $attemptCount,
+                'max_attempts' => $maxAttempts,
+                'last_error' => $errorMessage,
+                'available_at' => $shouldRetry ? $nextAvailableAt->toDateTimeString() : ($runMeta['available_at'] ?? ''),
+            ]);
+            unset($newMeta['worker_id'], $newMeta['claim_attempt']);
+
+            $affected = TaskRun::query()
+                ->whereKey($jobId)
+                ->where('task_id', $taskId)
+                ->where('status', 'running')
+                ->where('meta->worker_id', (string) $workerId)
+                ->where('meta->claim_attempt', (int) $expectedAttempt)
+                ->update([
+                    'status' => $shouldRetry ? 'pending' : 'failed',
+                    'error_message' => $errorMessage,
+                    'duration_ms' => $durationMs,
+                    'finished_at' => $shouldRetry ? null : now(),
+                    'meta' => $newMeta,
+                ]);
+            if ($affected !== 1) {
+                return;
+            }
+            $transitioned = true;
+
+            Task::query()->whereKey($taskId)->update([
+                'last_run_at' => now(),
+                'last_error_at' => now(),
+                'last_error_message' => $errorMessage,
+                'updated_at' => now(),
+            ]);
+        });
+
+        if (! $transitioned) {
+            return false;
         }
-
-        $runMeta = $this->normalizeMeta($run->meta);
-        $attemptCount = (int) ($runMeta['attempt_count'] ?? 0) + 1;
-        $maxAttempts = max(1, (int) ($runMeta['max_attempts'] ?? 3));
-        $shouldRetry = $attemptCount < $maxAttempts;
-        $nextAvailableAt = now()->addSeconds(max(1, $retryDelaySeconds));
-
-        $newMeta = array_merge($runMeta, [
-            'attempt_count' => $attemptCount,
-            'max_attempts' => $maxAttempts,
-            'last_error' => $errorMessage,
-            'available_at' => $shouldRetry ? $nextAvailableAt->toDateTimeString() : ($runMeta['available_at'] ?? ''),
-        ]);
-
-        TaskRun::query()->whereKey($jobId)->update([
-            'status' => $shouldRetry ? 'pending' : 'failed',
-            'error_message' => $errorMessage,
-            'duration_ms' => $durationMs,
-            'finished_at' => $shouldRetry ? null : now(),
-            'meta' => $newMeta,
-        ]);
-
-        Task::query()->whereKey($taskId)->update([
-            'last_run_at' => now(),
-            'last_error_at' => now(),
-            'last_error_message' => $errorMessage,
-            'updated_at' => now(),
-        ]);
-
-        if ($shouldRetry) {
+        if ($shouldRetry && $nextAvailableAt instanceof Carbon) {
             $this->dispatchLaravelQueueJob($jobId, $nextAvailableAt);
         }
-
         $this->broadcastOverviewUpdate();
+
+        return true;
     }
 
     /**
      * 主动取消执行（如管理员手动停止任务）。
      */
-    public function cancelJob(int $jobId, int $taskId, string $reason = '管理员手动停止'): void
+    public function cancelJob(int $jobId, int $taskId, string $reason = '管理员手动停止', ?string $workerId = null, ?int $expectedAttempt = null): bool
     {
-        TaskRun::query()->whereKey($jobId)->update([
-            'status' => 'cancelled',
-            'finished_at' => now(),
-            'error_message' => $reason,
-            'duration_ms' => 0,
-        ]);
+        $transitioned = false;
+        DB::transaction(function () use ($jobId, $taskId, $reason, $workerId, $expectedAttempt, &$transitioned): void {
+            $run = TaskRun::query()
+                ->whereKey($jobId)
+                ->where('task_id', $taskId)
+                ->whereIn('status', ['pending', 'running'])
+                ->lockForUpdate()
+                ->first();
+            if (! $run) {
+                return;
+            }
+            $runMeta = $this->normalizeMeta($run->meta);
+            if ($workerId !== null && ! $this->claimMatches($runMeta, $workerId, $expectedAttempt)) {
+                return;
+            }
+            $affected = TaskRun::query()
+                ->whereKey($jobId)
+                ->where('task_id', $taskId)
+                ->whereIn('status', ['pending', 'running'])
+                ->update([
+                    'status' => 'cancelled',
+                    'finished_at' => now(),
+                    'error_message' => $reason,
+                    'duration_ms' => 0,
+                ]);
+            if ($affected !== 1) {
+                return;
+            }
+            $transitioned = true;
+            Task::query()->whereKey($taskId)->update([
+                'last_run_at' => now(),
+                'last_error_at' => now(),
+                'last_error_message' => $reason,
+                'updated_at' => now(),
+            ]);
+        });
 
-        Task::query()->whereKey($taskId)->update([
-            'last_run_at' => now(),
-            'last_error_at' => now(),
-            'last_error_message' => $reason,
-            'updated_at' => now(),
-        ]);
-
+        if (! $transitioned) {
+            return false;
+        }
         $this->broadcastOverviewUpdate();
+
+        return true;
     }
 
     /**

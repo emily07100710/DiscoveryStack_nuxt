@@ -65,7 +65,8 @@ class ProcessGeoFlowTaskJob implements ShouldQueue
         }
 
         $taskId = (int) Arr::get($job, 'task_id', 0);
-        if ($taskId <= 0) {
+        $claimAttempt = (int) Arr::get($job, 'claim_attempt', 0);
+        if ($taskId <= 0 || $claimAttempt <= 0) {
             return;
         }
 
@@ -92,16 +93,18 @@ class ProcessGeoFlowTaskJob implements ShouldQueue
                 taskId: $taskId,
                 articleId: Arr::get($result, 'article_id') !== null ? (int) Arr::get($result, 'article_id') : null,
                 durationMs: $durationMs,
-                meta: is_array(Arr::get($result, 'meta')) ? Arr::get($result, 'meta') : []
+                meta: is_array(Arr::get($result, 'meta')) ? Arr::get($result, 'meta') : [],
+                workerId: $workerId,
+                expectedAttempt: $claimAttempt,
             );
         } catch (Throwable $exception) {
             $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
             $message = $exception->getMessage();
 
             if ($this->shouldCancel($taskId, $message)) {
-                $queueService->cancelJob($this->taskRunId, $taskId, '管理员手动停止');
+                $queueService->cancelJob($this->taskRunId, $taskId, '管理员手动停止', $workerId, $claimAttempt);
             } else {
-                $queueService->failJob($this->taskRunId, $taskId, $message, $durationMs);
+                $queueService->failJob($this->taskRunId, $taskId, $message, $durationMs, 60, $workerId, $claimAttempt);
             }
         } finally {
             $this->heartbeat($workerId, 'idle', [
@@ -119,7 +122,7 @@ class ProcessGeoFlowTaskJob implements ShouldQueue
     public function failed(?Throwable $exception = null): void
     {
         try {
-            $run = TaskRun::query()->whereKey($this->taskRunId)->first(['id', 'task_id', 'status']);
+            $run = TaskRun::query()->whereKey($this->taskRunId)->first(['id', 'task_id', 'status', 'meta']);
             if (! $run || ($run->status ?? '') !== 'running') {
                 return;
             }
@@ -129,11 +132,21 @@ class ProcessGeoFlowTaskJob implements ShouldQueue
                 $message = '队列任务异常退出';
             }
 
+            $rawMeta = $run->meta;
+            $meta = is_array($rawMeta) ? $rawMeta : (is_string($rawMeta) ? json_decode($rawMeta, true) : []);
+            $workerId = is_array($meta) ? trim((string) ($meta['worker_id'] ?? '')) : '';
+            $claimAttempt = is_array($meta) ? (int) ($meta['claim_attempt'] ?? 0) : 0;
+            if ($workerId === '' || $claimAttempt <= 0) {
+                return;
+            }
             app(JobQueueService::class)->failJob(
                 (int) $run->id,
                 (int) $run->task_id,
                 '队列中断: '.$message,
-                0
+                0,
+                60,
+                $workerId,
+                $claimAttempt
             );
         } catch (Throwable) {
             // 避免失败回调自身再抛错导致 Horizon 日志刷屏

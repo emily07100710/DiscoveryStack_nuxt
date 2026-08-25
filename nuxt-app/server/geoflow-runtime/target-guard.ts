@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto'
 import { validatePublicHttpsUrl } from '../geoflow-integration'
+import type { GeoFlowRuntimeTarget } from './types'
 import type { GeoFlowTransportResult } from './types'
 
 const TASK_ID_MAX = 2_147_483_647
@@ -22,6 +24,15 @@ export function validateGeoFlowBaseUrl(value: unknown): GeoFlowTransportResult<s
 export function validateGeoFlowTaskId(value: unknown): GeoFlowTransportResult<number> {
   if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > TASK_ID_MAX) return failure('TASK_ID_INVALID')
   return { ok: true, value: value as number }
+}
+
+export function deriveGeoFlowTargetFingerprint(target: Omit<GeoFlowRuntimeTarget, 'targetFingerprint'>): string {
+  const canonical = JSON.stringify({
+    baseUrl: target.baseUrl,
+    taskId: target.taskId,
+    credentialReference: target.credentialReference,
+  })
+  return createHash('sha256').update(Buffer.from(canonical, 'utf8')).digest('hex')
 }
 
 export function joinGeoFlowPath(baseUrl: string, path: string): string {

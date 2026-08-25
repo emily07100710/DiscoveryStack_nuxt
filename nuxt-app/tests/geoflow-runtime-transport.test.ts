@@ -45,7 +45,7 @@ function freshRequest(overrides: Record<string, unknown> = {}) {
   return makeRequest({ requestId: `runtime-request-${id}`, idempotencyKey: `runtime-idempotency-${id}`, ...overrides })
 }
 
-function responseFor(value: GeoFlowFetchResponse | GeoFlowFetchResponse[], options: { readonly resolver?: (reference: string) => GeoFlowCredentialResolution | Promise<GeoFlowCredentialResolution>; readonly clock?: string } = {}) {
+function responseFor(value: GeoFlowFetchResponse | GeoFlowFetchResponse[], options: { readonly resolver?: (reference: string) => GeoFlowCredentialResolution | Promise<GeoFlowCredentialResolution>; readonly clock?: string | (() => string) } = {}) {
   const responses = Array.isArray(value) ? value : [value]
   const calls: Array<{ url: string; init: GeoFlowRequestInit }> = []
   const resolverCalls: string[] = []
@@ -62,9 +62,9 @@ function responseFor(value: GeoFlowFetchResponse | GeoFlowFetchResponse[], optio
     fetch,
     credentialResolver: async (reference: string) => {
       resolverCalls.push(reference)
-      return options.resolver === undefined ? { ok: true as const, value: 'C'.repeat(32) } : options.resolver(reference)
+      return options.resolver === undefined ? { ok: true as const, value: { token: 'C'.repeat(32), allowedBaseUrl: BASE_URL } } : options.resolver(reference)
     },
-    clock: { now: () => options.clock ?? '2026-08-26T01:02:03Z' },
+    clock: { now: () => typeof options.clock === 'function' ? options.clock() : options.clock ?? '2026-08-26T01:02:03Z' },
     sleep: async (milliseconds: number) => { sleeps.push(milliseconds) },
   }
   return { dependencies, calls, resolverCalls, sleeps }
@@ -184,7 +184,7 @@ describe('GEOFlow runtime target and credential boundary', () => {
 
   it('resolves a credential only through the injected resolver', async () => {
     const request = freshRequest()
-    const recorded = responseFor(enqueueResponse(request), { resolver: async (reference) => ({ ok: reference === CREDENTIAL_REFERENCE, value: 'C'.repeat(32) }) })
+    const recorded = responseFor(enqueueResponse(request), { resolver: async (reference) => ({ ok: reference === CREDENTIAL_REFERENCE, value: { token: 'C'.repeat(32), allowedBaseUrl: BASE_URL } }) })
     const result = await executeGeoFlowEnqueue({ request, target: makeTarget() }, recorded.dependencies)
     expect(result.ok).toBe(true)
     expect(recorded.resolverCalls).toEqual([CREDENTIAL_REFERENCE])
@@ -214,7 +214,7 @@ describe('GEOFlow runtime target and credential boundary', () => {
   it('never returns the resolved credential', async () => {
     const request = freshRequest()
     const privateValue = 'C'.repeat(32)
-    const recorded = responseFor(enqueueResponse(request), { resolver: async () => ({ ok: true, value: privateValue }) })
+    const recorded = responseFor(enqueueResponse(request), { resolver: async () => ({ ok: true as const, value: { token: privateValue, allowedBaseUrl: BASE_URL } }) })
     const result = await executeGeoFlowEnqueue({ request, target: makeTarget() }, recorded.dependencies)
     expect(JSON.stringify(result)).not.toContain(privateValue)
   })
@@ -235,7 +235,7 @@ describe('GEOFlow runtime target and credential boundary', () => {
   })
 
   it('accepts attempt ten at the target boundary', () => {
-    expect(normalizeGeoFlowRuntimeTarget({ ...makeTarget(), attempt: 10 }).ok).toBe(true)
+    expect(normalizeGeoFlowRuntimeTarget(makeTarget({ attempt: 10 })).ok).toBe(true)
   })
 
   it('rejects attempt eleven at the target boundary', () => {
@@ -655,11 +655,12 @@ describe('GEOFlow job polling and lineage', () => {
 
   it('does not fetch article while job is pending', async () => {
     const request = freshRequest()
-    const enqueued = await enqueueFor(request)
+    const pendingTarget = makeTarget({ maxPolls: 1 })
+    const enqueued = await enqueueFor(request, pendingTarget)
     expect(enqueued.result.ok).toBe(true)
     if (!enqueued.result.ok) throw new Error('enqueue failed')
     const recorded = responseFor(jobResponse(request, enqueued.result.value.jobId, null, TASK_ID, 'queued', 1))
-    const pendingPlanResult = planGeoFlowEnqueueRequest(request, makeTarget({ maxPolls: 1 }))
+    const pendingPlanResult = planGeoFlowEnqueueRequest(request, pendingTarget)
     expect(pendingPlanResult.ok).toBe(true)
     if (!pendingPlanResult.ok) throw new Error('pending plan failed')
     const result = await executeGeoFlowJobPoll({ plan: pendingPlanResult.value, enqueue: enqueued.result.value }, recorded.dependencies)
@@ -743,7 +744,7 @@ describe('GEOFlow job polling and lineage', () => {
   it('rejects a fake unverified enqueue object', async () => {
     const request = freshRequest()
     const planned = planFor(request)
-    const result = await executeGeoFlowJobPoll({ plan: planned.plan, enqueue: { kind: 'enqueued', requestFingerprint: request.requestFingerprint, requestId: request.requestId, taskId: TASK_ID, jobId: JOB_ID, attempt: 1, remoteRequestId: request.requestId, remoteStatus: 'accepted' } }, responseFor(jobResponse(request)).dependencies)
+    const result = await executeGeoFlowJobPoll({ plan: planned.plan, enqueue: { kind: 'enqueued', requestFingerprint: request.requestFingerprint, requestId: request.requestId, targetFingerprint: planned.target.targetFingerprint, taskId: TASK_ID, jobId: JOB_ID, attempt: 1, remoteRequestId: request.requestId, remoteStatus: 'accepted' } }, responseFor(jobResponse(request)).dependencies)
     expect(result).toEqual({ ok: false, error: { code: 'RESULT_INVALID', retryable: false } })
   })
 
@@ -758,7 +759,7 @@ describe('GEOFlow job polling and lineage', () => {
   })
 })
 
-describe('GEOFlow article candidate transport and validation', () => {
+describe('GEOFlow article base-draft transport and validation', () => {
   it('fetches only the fixed article GET route', async () => {
     const flow = await articleFor()
     expect(flow.calls[0]?.url).toBe(`${BASE_URL}/api/v1/articles/${flow.job.articleId}`)
@@ -770,43 +771,43 @@ describe('GEOFlow article candidate transport and validation', () => {
     expect(flow.calls[0]?.init.redirect).toBe('manual')
   })
 
-  it('returns a candidate response', async () => {
+  it('returns a base-draft response', async () => {
     const flow = await articleFor()
     expect(flow.result.ok).toBe(true)
-    if (flow.result.ok) expect(flow.result.value.response.status).toBe('draft_ready')
+    if (flow.result.ok) expect(flow.result.value.response.status).toBe('base_draft_ready')
   })
 
-  it('preserves candidate body Unicode and exact hash', async () => {
+  it('preserves base-draft body Unicode and exact hash', async () => {
     const flow = await articleFor()
     expect(flow.result.ok).toBe(true)
     if (flow.result.ok) {
-      expect(['draft_ready', 'review_required']).toContain(flow.result.value.response.status)
-      if (flow.result.value.response.status === 'draft_ready' || flow.result.value.response.status === 'review_required') {
+      expect(flow.result.value.response.status).toBe('base_draft_ready')
+      if (flow.result.value.response.status === 'base_draft_ready') {
         expect(flow.result.value.response.contentArtifact.bodyMarkdown).toBe(BODY_MARKDOWN)
         expect(flow.result.value.response.contentArtifact.bodyHash).toBe(BODY_HASH)
       }
     }
   })
 
-  it('binds candidate request fingerprint', async () => {
+  it('binds base-draft request fingerprint', async () => {
     const flow = await articleFor()
     expect(flow.result.ok).toBe(true)
     if (flow.result.ok) expect(flow.result.value.requestFingerprint).toBe(flow.request.requestFingerprint)
   })
 
-  it('binds candidate task identity', async () => {
+  it('binds base-draft task identity', async () => {
     const flow = await articleFor()
     expect(flow.result.ok).toBe(true)
     if (flow.result.ok) expect(flow.result.value.taskId).toBe(TASK_ID)
   })
 
-  it('binds candidate job identity', async () => {
+  it('binds base-draft job identity', async () => {
     const flow = await articleFor()
     expect(flow.result.ok).toBe(true)
     if (flow.result.ok) expect(flow.result.value.jobId).toBe(flow.job.jobId)
   })
 
-  it('binds candidate article identity from verified job only', async () => {
+  it('binds base-draft article identity from verified job only', async () => {
     const flow = await articleFor()
     expect(flow.result.ok).toBe(true)
     if (flow.result.ok) expect(flow.result.value.articleId).toBe(flow.job.articleId)
@@ -818,10 +819,10 @@ describe('GEOFlow article candidate transport and validation', () => {
     if (flow.result.ok) expect(flow.result.value.response.externalArticleKey).toBe(deriveExternalArticleKey(flow.request))
   })
 
-  it('keeps candidate requires-human-review semantics in response', async () => {
+  it('keeps base draft pending-review semantics in response', async () => {
     const flow = await articleFor()
     expect(flow.result.ok).toBe(true)
-    if (flow.result.ok) expect(flow.result.value.response.status).toBe('draft_ready')
+    if (flow.result.ok) expect(flow.result.value.response.status).toBe('base_draft_ready')
   })
 
   it('rejects approved article state', async () => {
@@ -839,10 +840,10 @@ describe('GEOFlow article candidate transport and validation', () => {
     expect(flow.result).toEqual({ ok: false, error: { code: 'PUBLICATION_STATE_REJECTED', retryable: false } })
   })
 
-  it('accepts review-required article state', async () => {
+  it('does not upgrade a base draft merely because its article is review-pending', async () => {
     const flow = await articleFor(freshRequest(), makeTarget(), { review_status: 'review_pending' })
     expect(flow.result.ok).toBe(true)
-    if (flow.result.ok) expect(flow.result.value.response.status).toBe('review_required')
+    if (flow.result.ok) expect(flow.result.value.response.status).toBe('base_draft_ready')
   })
 
   it('rejects a wrong article id', async () => {
@@ -952,6 +953,15 @@ describe('GEOFlow article candidate transport and validation', () => {
     if (flow.result.ok) {
       const validated = validateGeoFlowTransportResult({ request: flow.request, result: { ...flow.result.value, requestFingerprint: 'a'.repeat(64) } })
       expect(validated).toEqual({ ok: false, reason: 'REQUEST_FINGERPRINT_MISMATCH', issues: [{ path: '$.result.requestFingerprint', code: 'REQUEST_FINGERPRINT_MISMATCH' }] })
+    }
+  })
+
+  it('rejects an article result bound to a different target than its verified plan', async () => {
+    const flow = await articleFor()
+    expect(flow.result.ok).toBe(true)
+    if (flow.result.ok) {
+      const validated = validateGeoFlowTransportResult({ request: flow.request, plan: flow.plan, result: { ...flow.result.value, targetFingerprint: 'b'.repeat(64) } })
+      expect(validated).toEqual({ ok: false, reason: 'IDENTITY_MISMATCH', issues: [{ path: '$.result.targetFingerprint', code: 'IDENTITY_MISMATCH' }] })
     }
   })
 
@@ -1069,7 +1079,7 @@ describe('GEOFlow retry, idempotency, and result helpers', () => {
         await gate
         return enqueueResponse(request)
       },
-      credentialResolver: async () => ({ ok: true as const, value: 'C'.repeat(32) }),
+      credentialResolver: async () => ({ ok: true as const, value: { token: 'C'.repeat(32), allowedBaseUrl: BASE_URL } }),
       clock: { now: () => '2026-08-26T01:02:03Z' },
     }
     const firstPromise = executeGeoFlowEnqueue({ request, target }, dependencies)
@@ -1103,5 +1113,179 @@ describe('GEOFlow retry, idempotency, and result helpers', () => {
     const result = await executeGeoFlowArticleFetch({ plan: enqueued.plan, job: pending }, recorded.dependencies)
     expect(result).toEqual({ ok: false, error: { code: 'RESULT_INVALID', retryable: false } })
     expect(recorded.calls).toHaveLength(0)
+  })
+})
+
+
+describe('GEOFlow runtime convergence hardening', () => {
+  it('rejects a credential whose allowedBaseUrl does not match the target', async () => {
+    const request = freshRequest()
+    const recorded = responseFor(enqueueResponse(request), { resolver: async () => ({ ok: true as const, value: { token: 'C'.repeat(32), allowedBaseUrl: 'https://other.routing.discoverystack.dev' } }) })
+    const result = await executeGeoFlowEnqueue({ request, target: makeTarget() }, recorded.dependencies)
+    expect(result).toEqual({ ok: false, error: { code: 'CREDENTIAL_TARGET_MISMATCH', retryable: false } })
+    expect(recorded.calls).toHaveLength(0)
+  })
+
+  it('collides when the same idempotency key is used on a different target scope', async () => {
+    const request = freshRequest({ idempotencyKey: 'cross-target-idempotency' })
+    const firstTarget = makeTarget()
+    const secondTarget = makeTarget({ taskId: TASK_ID + 1 })
+    const first = responseFor(enqueueResponse(request, JOB_ID, TASK_ID))
+    const second = responseFor(enqueueResponse(request, JOB_ID + 1, TASK_ID + 1), { resolver: async () => ({ ok: true as const, value: { token: 'C'.repeat(32), allowedBaseUrl: BASE_URL } }) })
+    const firstResult = await executeGeoFlowEnqueue({ request, target: firstTarget }, first.dependencies)
+    const secondResult = await executeGeoFlowEnqueue({ request, target: secondTarget }, second.dependencies)
+    expect(firstResult.ok).toBe(true)
+    expect(secondResult).toEqual({ ok: false, error: { code: 'IDEMPOTENCY_COLLISION', retryable: false } })
+    expect(first.calls).toHaveLength(1)
+    expect(second.calls).toHaveLength(0)
+    expect(second.resolverCalls).toHaveLength(0)
+  })
+
+  it('expires replay entries using the injected clock', async () => {
+    const request = freshRequest()
+    let now = '2026-08-26T01:02:03Z'
+    const recorded = responseFor(enqueueResponse(request), { clock: () => now })
+    const first = await executeGeoFlowEnqueue({ request, target: makeTarget() }, recorded.dependencies)
+    const second = await executeGeoFlowEnqueue({ request, target: makeTarget() }, recorded.dependencies)
+    expect(first).toEqual(second)
+    expect(recorded.calls).toHaveLength(1)
+    now = '2026-08-26T01:18:04Z'
+    const third = await executeGeoFlowEnqueue({ request, target: makeTarget() }, recorded.dependencies)
+    expect(third.ok).toBe(true)
+    expect(recorded.calls).toHaveLength(2)
+  })
+
+  it('represents a provider-free job as an explicit base draft', async () => {
+    const request = freshRequest({ requestedCapabilities: ['human_review'], selectedRuleIds: [] })
+    const target = makeTarget()
+    const enqueued = await enqueueFor(request, target)
+    expect(enqueued.result.ok).toBe(true)
+    if (!enqueued.result.ok) throw new Error('enqueue failed')
+    const polled = await executeGeoFlowJobPoll({ plan: enqueued.plan, enqueue: enqueued.result.value }, responseFor(jobResponse(request, enqueued.result.value.jobId, ARTICLE_ID, TASK_ID, 'completed', 1, { requested_rule_ids: [], applied_rule_ids: [], autogeo_execution: false, limitations: ['No external provider generation was executed.', 'AutoGEO optimization has not been executed; this is a base draft.'] })).dependencies)
+    expect(polled.ok).toBe(true)
+    if (!polled.ok) throw new Error('poll failed')
+    const article = await executeGeoFlowArticleFetch({ plan: enqueued.plan, job: polled.value }, responseFor(articleResponse(request)).dependencies)
+    expect(article.ok).toBe(true)
+    if (!article.ok) throw new Error('article failed')
+    expect(article.value.kind).toBe('article_base_draft')
+    if (article.value.response.status !== 'base_draft_ready') throw new Error('expected base draft response')
+    expect(article.value.response.appliedRuleIds).toEqual([])
+    expect(article.value.response.autogeoExecution).toBe(false)
+    expect(article.value.response.limitations).toContain('AutoGEO optimization has not been executed; this is a base draft.')
+  })
+
+  it('aborts a hanging fetch through the injected timeout signal', async () => {
+    const request = freshRequest()
+    const target = makeTarget({ timeoutMs: 5, maxAttempts: 1 })
+    let aborted = false
+    const result = await executeGeoFlowEnqueue({ request, target }, {
+      fetch: async (_url, init) => new Promise<GeoFlowFetchResponse>((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => { aborted = true; const error = new Error('aborted'); error.name = 'AbortError'; reject(error) }, { once: true })
+      }),
+      credentialResolver: async () => ({ ok: true as const, value: { token: 'C'.repeat(32), allowedBaseUrl: BASE_URL } }),
+      clock: { now: () => '2026-08-26T01:02:03Z' },
+    })
+    expect(result).toEqual({ ok: false, error: { code: 'TRANSPORT_TIMEOUT', retryable: true } })
+    expect(aborted).toBe(true)
+  })
+})
+
+
+describe('GEOFlow runtime credential contract hardening', () => {
+  it('rejects credential resolution objects with extra fields', async () => {
+    const request = freshRequest()
+    const recorded = responseFor(enqueueResponse(request), { resolver: async () => ({ ok: true as const, value: { token: 'C'.repeat(32), allowedBaseUrl: BASE_URL }, extra: 'not-allowed' } as never) })
+    const result = await executeGeoFlowEnqueue({ request, target: makeTarget() }, recorded.dependencies)
+    expect(result).toEqual({ ok: false, error: { code: 'CREDENTIAL_RESOLUTION_FAILED', retryable: false } })
+  })
+})
+
+
+describe('GEOFlow runtime public result hardening', () => {
+  it('rejects an article result without a target fingerprint', async () => {
+    const request = freshRequest()
+    const enqueued = await enqueueFor(request)
+    expect(enqueued.result.ok).toBe(true)
+    if (!enqueued.result.ok) throw new Error('enqueue failed')
+    const polled = await executeGeoFlowJobPoll({ plan: enqueued.plan, enqueue: enqueued.result.value }, responseFor(jobResponse(request, enqueued.result.value.jobId)).dependencies)
+    expect(polled.ok).toBe(true)
+    if (!polled.ok) throw new Error('poll failed')
+    const article = await executeGeoFlowArticleFetch({ plan: enqueued.plan, job: polled.value }, responseFor(articleResponse(request)).dependencies)
+    expect(article.ok).toBe(true)
+    if (!article.ok) throw new Error('article failed')
+    const { targetFingerprint: _targetFingerprint, ...withoutTarget } = article.value
+    expect(validateGeoFlowTransportResult({ request, result: withoutTarget })).toEqual({ ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.result.targetFingerprint', code: 'INVALID_INPUT' }] })
+  })
+})
+
+
+
+describe('GEOFlow runtime target binding across all transport phases', () => {
+  it('rejects a poll credential mismatch before any job fetch', async () => {
+    const request = freshRequest()
+    const target = makeTarget()
+    const enqueued = await enqueueFor(request, target)
+    expect(enqueued.result.ok).toBe(true)
+    if (!enqueued.result.ok) throw new Error('enqueue failed')
+    const recorded = responseFor(jobResponse(request, enqueued.result.value.jobId), { resolver: async () => ({ ok: true as const, value: { token: 'C'.repeat(32), allowedBaseUrl: 'https://other.routing.discoverystack.dev' } }) })
+    const result = await executeGeoFlowJobPoll({ plan: enqueued.plan, enqueue: enqueued.result.value }, recorded.dependencies)
+    expect(result).toEqual({ ok: false, error: { code: 'CREDENTIAL_TARGET_MISMATCH', retryable: false } })
+    expect(recorded.calls).toHaveLength(0)
+  })
+
+  it('rejects an article credential mismatch before any article fetch', async () => {
+    const request = freshRequest()
+    const target = makeTarget()
+    const completed = await completedJobFor(request, target)
+    const recorded = responseFor(articleResponse(request, completed.job.jobId, completed.job.articleId, target.taskId), { resolver: async () => ({ ok: true as const, value: { token: 'C'.repeat(32), allowedBaseUrl: 'https://other.routing.discoverystack.dev' } }) })
+    const result = await executeGeoFlowArticleFetch({ plan: completed.plan, job: completed.job }, recorded.dependencies)
+    expect(result).toEqual({ ok: false, error: { code: 'CREDENTIAL_TARGET_MISMATCH', retryable: false } })
+    expect(recorded.calls).toHaveLength(0)
+  })
+
+  it('treats an origin-equivalent terminal slash as the same target scope', async () => {
+    const request = freshRequest()
+    const first = responseFor(enqueueResponse(request))
+    const firstResult = await executeGeoFlowEnqueue({ request, target: makeTarget() }, first.dependencies)
+    const second = responseFor(enqueueResponse(request, JOB_ID + 1))
+    const secondResult = await executeGeoFlowEnqueue({ request, target: makeTarget({ baseUrl: `${BASE_URL}/` }) }, second.dependencies)
+    expect(firstResult).toEqual(secondResult)
+    expect(first.calls).toHaveLength(1)
+    expect(second.calls).toHaveLength(0)
+  })
+
+  it('rejects forged AutoGEO execution and applied rules at the DS transport boundary', async () => {
+    const request = freshRequest()
+    const result = await pollJobWithMetadata(request, makeTarget(), {
+      autogeo_execution: true,
+      applied_rule_ids: ['direct-answer-first'],
+      limitations: [AUTO_GEO_LIMITATION_FIXTURE],
+    })
+    expect(result.result).toEqual({ ok: false, error: { code: 'RESULT_INVALID', retryable: false } })
+  })
+})
+
+const AUTO_GEO_LIMITATION_FIXTURE = 'AutoGEO optimization has not been executed; this is a base draft.'
+
+
+describe('GEOFlow runtime replay capacity', () => {
+  it('evicts the oldest replay deterministically at the bounded capacity', async () => {
+    const oldest = freshRequest({ idempotencyKey: 'replay-capacity-oldest' })
+    const target = makeTarget()
+    const first = responseFor(enqueueResponse(oldest))
+    const firstResult = await executeGeoFlowEnqueue({ request: oldest, target }, first.dependencies)
+    expect(firstResult.ok).toBe(true)
+
+    for (let index = 0; index < 2_048; index += 1) {
+      const request = freshRequest({ idempotencyKey: `replay-capacity-${index}` })
+      const recorded = responseFor(enqueueResponse(request))
+      const result = await executeGeoFlowEnqueue({ request, target }, recorded.dependencies)
+      expect(result.ok).toBe(true)
+    }
+
+    const replay = responseFor(enqueueResponse(oldest, JOB_ID + 2))
+    const replayResult = await executeGeoFlowEnqueue({ request: oldest, target }, replay.dependencies)
+    expect(replayResult.ok).toBe(true)
+    expect(replay.calls).toHaveLength(1)
   })
 })

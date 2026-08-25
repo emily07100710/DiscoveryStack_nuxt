@@ -32,7 +32,7 @@ final class DiscoveryStackGenerationTransportTest extends TestCase
                     'index' => 0,
                     'message' => [
                         'role' => 'assistant',
-                        'content' => "# DS Candidate\n\nApproved fact [E1].",
+                        'content' => "# DS Base Draft\n\nApproved fact [E1].",
                     ],
                     'finish_reason' => 'stop',
                 ]],
@@ -88,10 +88,14 @@ final class DiscoveryStackGenerationTransportTest extends TestCase
             ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.brief_fingerprint', $payload['brief_fingerprint'])
             ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.evidence_snapshot_hash', $payload['evidence_snapshot_hash'])
             ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.external_article_key', $payload['external_article_key'])
-            ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.content_hash', hash('sha256', "# DS Candidate\n\nApproved fact [E1]."))
-            ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.applied_rule_ids.0', 'direct-answer-first')
+            ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.content_hash', hash('sha256', "# DS Base Draft\n\nApproved fact [E1]."))
+            ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.requested_rule_ids.0', 'direct-answer-first')
+            ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.applied_rule_ids', [])
+            ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.autogeo_execution', false)
             ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.citation_bindings.0.marker', '[E1]')
             ->assertJsonPath('data.task_run_summary.meta.result.discoverystack_generation_v1.provider_provenance.mode', 'provider');
+
+        $this->assertContains('AutoGEO optimization has not been executed; this is a base draft.', $job->json('data.task_run_summary.meta.result.discoverystack_generation_v1.limitations'));
 
         $articleId = (int) $job->json('data.task_run_summary.article_id');
         $article = $this->withHeaders([
@@ -107,7 +111,7 @@ final class DiscoveryStackGenerationTransportTest extends TestCase
             ->assertJsonPath('data.status', 'draft')
             ->assertJsonPath('data.review_status', 'pending')
             ->assertJsonPath('data.title', $payload['brief']['title'])
-            ->assertJsonPath('data.content', "# DS Candidate\n\nApproved fact [E1].");
+            ->assertJsonPath('data.content', "# DS Base Draft\n\nApproved fact [E1].");
         $this->assertArrayNotHasKey('provider_provenance', $article->json('data'));
         $this->assertArrayNotHasKey('request_fingerprint', $article->json('data'));
         $this->assertSame(0, $this->app['db']->table('article_distributions')->count());
@@ -348,6 +352,147 @@ final class DiscoveryStackGenerationTransportTest extends TestCase
         $this->assertSame(0, (int) Article::query()->where('task_id', $task->id)->count());
     }
 
+    public function test_shared_typescript_php_normalization_parity_fixture(): void
+    {
+        $fixturePath = dirname(__DIR__, 4).'/nuxt-app/tests/fixtures/geoflow-runtime/normalization-parity.json';
+        $fixture = json_decode((string) file_get_contents($fixturePath), true, 512, JSON_THROW_ON_ERROR);
+        [, $basePayload] = $this->seedDiscoveryStackTaskAndPayload();
+
+        foreach ($fixture['text'] as $case) {
+            $payload = $this->recomputePayloadForParity($basePayload, ['brief' => array_merge($basePayload['brief'], ['title' => $case['input']])], $case['expected'] ?? null, null, null);
+            $normalized = $this->validateParityPayload($payload, (bool) $case['accepted']);
+            if ($case['accepted']) {
+                $this->assertSame($case['expected'], $normalized['brief']['title']);
+            }
+        }
+
+        foreach ($fixture['timestamps'] as $case) {
+            $payload = $case['accepted']
+                ? $this->recomputePayloadForParity($basePayload, ['created_at' => $case['input']], null, $case['expected'], null)
+                : array_replace($basePayload, ['created_at' => $case['input']]);
+            $normalized = $this->validateParityPayload($payload, (bool) $case['accepted']);
+            if ($case['accepted']) {
+                $this->assertSame($case['expected'], $normalized['created_at']);
+            }
+        }
+
+        foreach ($fixture['urls'] as $case) {
+            $evidence = $basePayload['evidence_chunks'][0];
+            $evidence['locator'] = $case['input'];
+            $payload = $case['accepted']
+                ? $this->recomputePayloadForParity($basePayload, ['evidence_chunks' => [$evidence]], null, null, $case['expected'])
+                : array_replace($basePayload, ['evidence_chunks' => [$evidence]]);
+            $normalized = $this->validateParityPayload($payload, (bool) $case['accepted']);
+            if ($case['accepted']) {
+                $this->assertSame($case['expected'], $normalized['evidence_chunks'][0]['locator']);
+            }
+        }
+
+        foreach ($fixture['hashes'] as $case) {
+            $evidence = $basePayload['evidence_chunks'][0];
+            $evidence['chunk_hash'] = $case['input'];
+            $this->validateParityPayload(array_replace($basePayload, ['evidence_chunks' => [$evidence]]), (bool) $case['accepted']);
+        }
+
+        foreach ($fixture['duplicates'] as $case) {
+            $payload = $case['accepted']
+                ? $this->recomputePayloadForParity($basePayload, ['selected_rule_ids' => $case['values']], null, null, null, $case['values'])
+                : array_replace($basePayload, ['selected_rule_ids' => $case['values']]);
+            $this->validateParityPayload($payload, (bool) $case['accepted']);
+        }
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function validateParityPayload(array $payload, bool $accepted): array
+    {
+        try {
+            $normalized = DiscoveryStackGenerationPayload::validate($payload);
+            if (! $accepted) {
+                $this->fail('PHP accepted a parity case marked rejected.');
+            }
+
+            return $normalized;
+        } catch (\Throwable $exception) {
+            if ($accepted) {
+                throw $exception;
+            }
+
+            return [];
+        }
+    }
+
+    /**
+     * Rebuild only the two public fingerprints after a parity input mutation.
+     * The raw mutation remains in the payload so the public validator still owns
+     * normalization and rejection; expected values are used only for the hash
+     * material that the validator recomputes after normalization.
+     *
+     * @param array<string,mixed> $basePayload
+     * @param array<string,mixed> $overrides
+     * @param string|null $expectedTitle
+     * @param string|null $expectedCreatedAt
+     * @param string|null $expectedLocator
+     * @param list<string>|null $expectedSelectedRuleIds
+     * @return array<string,mixed>
+     */
+    private function recomputePayloadForParity(array $basePayload, array $overrides, ?string $expectedTitle, ?string $expectedCreatedAt, ?string $expectedLocator, ?array $expectedSelectedRuleIds = null): array
+    {
+        $payload = array_replace_recursive($basePayload, $overrides);
+        $brief = $payload['brief'];
+        $briefForHash = array_merge($brief, ['title' => $expectedTitle ?? $brief['title']]);
+        $briefFingerprint = hash('sha256', $this->canonicalJson([
+            'title' => $briefForHash['title'],
+            'audience' => $briefForHash['audience'],
+            'contentType' => $payload['content_type'],
+            'language' => $payload['language'],
+            'goals' => $briefForHash['goals'],
+            'constraints' => $briefForHash['constraints'],
+        ]));
+        $evidence = array_map(static function (array $chunk) use ($expectedLocator): array {
+            return [
+                'sourceId' => $chunk['source_id'],
+                'artifactId' => $chunk['artifact_id'],
+                'chunkId' => $chunk['chunk_id'],
+                'chunkHash' => $chunk['chunk_hash'],
+                'reviewedText' => $chunk['reviewed_text'],
+                'locator' => $expectedLocator ?? $chunk['locator'],
+            ];
+        }, $payload['evidence_chunks']);
+        $draft = [
+            'protocolVersion' => $payload['protocol_version'],
+            'requestId' => $payload['request_id'],
+            'idempotencyKey' => $payload['idempotency_key'],
+            'ownerUserId' => $payload['owner_user_id'],
+            'clientId' => $payload['client_id'],
+            'calendarEntryId' => $payload['calendar_entry_id'],
+            'productionPlanId' => $payload['production_plan_id'],
+            'deliverableId' => $payload['deliverable_id'],
+            'briefId' => $payload['brief_id'],
+            'jobId' => $payload['discovery_stack_job_id'],
+            'evidenceSnapshotHash' => $payload['evidence_snapshot_hash'],
+            'brief' => [
+                'title' => $briefForHash['title'],
+                'audience' => $briefForHash['audience'],
+                'goals' => $briefForHash['goals'],
+                'constraints' => $briefForHash['constraints'],
+            ],
+            'contentType' => $payload['content_type'],
+            'language' => $payload['language'],
+            'generationMode' => $payload['generation_mode'],
+            'revisionContext' => $payload['revision_context'],
+            'requestedCapabilities' => $payload['requested_capabilities'],
+            'selectedRuleIds' => $expectedSelectedRuleIds ?? $payload['selected_rule_ids'],
+            'authoritySourceIds' => $payload['authority_source_ids'],
+            'evidenceChunks' => $evidence,
+            'createdAt' => $expectedCreatedAt ?? $payload['created_at'],
+            'briefFingerprint' => $briefFingerprint,
+        ];
+        $payload['brief_fingerprint'] = $briefFingerprint;
+        $payload['request_fingerprint'] = hash('sha256', $this->canonicalJson($draft));
+
+        return $payload;
+    }
+
     private function createTestAuthor(string $name): int
     {
         return (int) Author::query()->create(['name' => $name, 'bio' => 'Test author'])->id;
@@ -451,7 +596,7 @@ final class DiscoveryStackGenerationTransportTest extends TestCase
 
         $reviewedText = 'Approved fact text.';
         $brief = [
-            'title' => 'DiscoveryStack candidate',
+            'title' => 'DiscoveryStack base draft',
             'audience' => 'Reviewers',
             'goals' => ['Answer the brief directly'],
             'constraints' => ['Use approved facts only'],

@@ -38,5 +38,5 @@ export {
 } from './adapter'
 export { classifyGeoFlowTransportFailure, parseGeoFlowRetryAfter, retryAllowedForAttempt, validateGeoFlowAttempt } from './retry-policy'
 export { normalizeGeoFlowRuntimeTarget, validateGeoFlowRuntimeTargetInput, validateGeoFlowTransportRequest, validateGeoFlowTransportText } from './normalization'
-export { joinGeoFlowPath, validateGeoFlowBaseUrl, validateGeoFlowTaskId } from './target-guard'
+export { deriveGeoFlowTargetFingerprint, joinGeoFlowPath, validateGeoFlowBaseUrl, validateGeoFlowTaskId } from './target-guard'
 export { validateGeoFlowCredentialReference } from './credential-contract'
