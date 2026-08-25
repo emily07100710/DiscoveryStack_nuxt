@@ -48,7 +48,8 @@ function normalizeCandidate(value: unknown, evidenceSnapshotHash: string): Retri
   const chunk = normalizeApprovedEvidenceChunk(readField(value, 'chunk'), evidenceSnapshotHash)
   const limitations = readField(value, 'limitations')
   if (limitations !== undefined && (!Array.isArray(limitations) || limitations.length > 10 || limitations.some(item => typeof item !== 'string' || item.length > 500))) throw new NormalizationIssue('INVALID_INPUT')
-  return { chunk, limitations: limitations === undefined ? [] : [...limitations] as string[] }
+  if (Array.isArray(limitations) && limitations.length > 0) throw new NormalizationIssue('RETRIEVAL_FINGERPRINT_MISMATCH')
+  return { chunk, limitations: [] }
 }
 
 function asPlan(value: unknown): RetrievalPlan | null {

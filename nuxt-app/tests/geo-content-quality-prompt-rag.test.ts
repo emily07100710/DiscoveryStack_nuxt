@@ -540,6 +540,12 @@ describe('final canonical retrieval corpus enforcement', () => {
     }
   })
 
+  it('fails closed before building a ready result from caller-supplied chunk limitations', () => {
+    const current = corpusInput(1, [syntheticChunk({ sourceId: 'source-a', artifactId: 'artifact-a', chunkId: 'chunk-a', reviewedText: 'synthetic service scope' })])
+    const result = buildRetrievalResult(current.retrievalPlan, [{ chunk: current.approvedEvidenceChunks[0]!, limitations: ['caller limitation'] }], current)
+    expect(result).toMatchObject({ status: 'blocked', reasonCodes: ['RETRIEVAL_FINGERPRINT_MISMATCH'], chunks: [] })
+  })
+
   it('rejects caller deletion, reorder, or modification of top-level limitations', () => {
     const current = corpusInput(1, [syntheticChunk({ sourceId: 'source-a', artifactId: 'artifact-a', chunkId: 'chunk-a', reviewedText: 'synthetic service scope' })])
     const canonical = retrieval(current)
