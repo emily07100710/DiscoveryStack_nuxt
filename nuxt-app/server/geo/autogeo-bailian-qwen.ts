@@ -75,7 +75,7 @@ export function createAutoGeoBailianQwenAdapter(options: AutoGeoBailianQwenAdapt
       return {
         provider: 'autogeo-bailian-qwen', providerVersion: `autogeo-framework-bailian-qwen@${AUTOGEO_UPSTREAM.revision.slice(0, 12)}+${actualModel}`, optimizedTitle: document.title, optimizedContent, appliedRuleIds: rules.map(rule => rule.id),
         safetyNotes: ['本次內容以 AutoGEO 官方 prompt／Researchy-GEO ruleset，透過設定的百煉 Qwen API 產生；這不是 AutoGEO Mini，也不是 upstream Gemini execution。', '輸出是草稿；發布前仍須由內容 owner 查核事實、引用、時效性、商標與法規主張。', 'Workbench 不會將原文寫入資料庫或用於訓練；原文僅會在本次 request 中傳送至設定的百煉 provider。'],
-        provenance: { requestedProvider: 'autogeo-bailian-qwen', execution: 'autogeo-framework-bailian-qwen', upstreamRepository: AUTOGEO_UPSTREAM.repository, upstreamRevision: AUTOGEO_UPSTREAM.revision, rewriteMethod: AUTOGEO_UPSTREAM.rewriteMethod, ruleset: AUTOGEO_UPSTREAM.ruleset, model: actualModel, usage: nonSensitiveUsage(payload.usage) },
+        provenance: { requestedProvider: 'autogeo-bailian-qwen', execution: 'autogeo-framework-bailian-qwen', providerExecution: true, upstreamRepository: AUTOGEO_UPSTREAM.repository, upstreamRevision: AUTOGEO_UPSTREAM.revision, rewriteMethod: AUTOGEO_UPSTREAM.rewriteMethod, ruleset: AUTOGEO_UPSTREAM.ruleset, model: actualModel, usage: nonSensitiveUsage(payload.usage) },
       } satisfies GeoRewriteCandidate
     },
   }

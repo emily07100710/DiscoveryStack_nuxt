@@ -90,7 +90,7 @@ export function createAutoGeoApiAdapter(options: AutoGeoApiAdapterOptions = {}):
       return {
         provider: 'autogeo-api', providerVersion: `autogeo-api@${AUTOGEO_UPSTREAM.revision.slice(0, 12)}+${AUTOGEO_UPSTREAM.model}`, optimizedTitle: document.title, optimizedContent, appliedRuleIds: rules.map(rule => rule.id),
         safetyNotes: ['本次內容透過完整 AutoGEO 官方 prompt/API 路徑產生，並使用其 Researchy-GEO／Gemini 預設 ruleset。', '輸出是草稿；發布前仍須由內容 owner 查核事實、引用、時效性、商標與法規主張。', '此 API request 僅在本次 owner request 期間處理，Workbench 不會將原文寫入資料庫或用於訓練。'],
-        provenance: { requestedProvider: 'autogeo-api', execution: 'official-autogeo-api', upstreamRepository: AUTOGEO_UPSTREAM.repository, upstreamRevision: AUTOGEO_UPSTREAM.revision, rewriteMethod: AUTOGEO_UPSTREAM.rewriteMethod, ruleset: AUTOGEO_UPSTREAM.ruleset, model: AUTOGEO_UPSTREAM.model },
+        provenance: { requestedProvider: 'autogeo-api', execution: 'official-autogeo-api', providerExecution: true, upstreamRepository: AUTOGEO_UPSTREAM.repository, upstreamRevision: AUTOGEO_UPSTREAM.revision, rewriteMethod: AUTOGEO_UPSTREAM.rewriteMethod, ruleset: AUTOGEO_UPSTREAM.ruleset, model: AUTOGEO_UPSTREAM.model },
       } satisfies GeoRewriteCandidate
     },
   }
