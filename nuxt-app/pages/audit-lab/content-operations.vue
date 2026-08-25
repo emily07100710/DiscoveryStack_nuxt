@@ -59,10 +59,10 @@ type ContentEntry = {
 }
 
 type Run = { id: string | number, entryId?: string | number, state: string, retryEligibleAt?: string | null }
-type PublicationTarget = { id: string | number, clientId: string | number, targetId: string, framework: Framework | string, transport: PublicationTransport | string, targetOrigin: string, contentRoot: string, defaultBranch: string, status: string, executionEnabled: boolean, credentialConfigured: boolean, repositoryOwner?: string | null, repositoryName?: string | null, endpointPath?: string | null, allowedContentTypes?: string[], allowedLanguages?: string[] }
+type PublicationTarget = { id: string | number, clientId: string | number, targetId: string, framework: Framework | string, transport: PublicationTransport | string, targetOrigin: string, contentRoot: string, defaultBranch: string | null, status: string, activeSlot?: number | null, executionEnabled: boolean, credentialConfigured: boolean, repositoryOwner?: string | null, repositoryName?: string | null, endpointPath?: string | null, allowedContentTypes?: string[], allowedLanguages?: string[] }
 type OutcomeAssessment = { id?: string | number, entryId?: string | number, assessmentStatus: string, learningReady?: boolean, validPairCount?: number, measuredAt?: string | null }
 type Capabilities = { schedulerAvailable: boolean, generationExecutorConfigured: boolean, firstPartyPublisherConfigured: boolean, outcomeCollectionConfigured: boolean }
-type Readiness = { schedulerAvailable: boolean, generationExecutorAvailable: boolean, publicationTargetConfigured: boolean, publicationExecutionEnabled: boolean, credentialReferenceConfigured: boolean, outcomeCollectionConfigured: boolean }
+type Readiness = { schedulerAvailable: boolean, generationExecutorAvailable: boolean, publicationTargetConfigured: boolean, publicationExecutionEnabled: boolean, credentialReferenceConfigured: boolean, runtimeCredentialResolverAvailable: boolean, outcomeCollectionConfigured: boolean }
 type Workspace = {
   clients: Client[]
   calendars: Calendar[]
@@ -102,7 +102,7 @@ type CalendarForm = {
 const emptyWorkspace = (): Workspace => ({
   clients: [], calendars: [], entries: [], runs: [], outcomeAssessments: [], publicationTargets: [],
   capabilities: { schedulerAvailable: false, generationExecutorConfigured: false, firstPartyPublisherConfigured: false, outcomeCollectionConfigured: false },
-  readiness: { schedulerAvailable: false, generationExecutorAvailable: false, publicationTargetConfigured: false, publicationExecutionEnabled: false, credentialReferenceConfigured: false, outcomeCollectionConfigured: false },
+  readiness: { schedulerAvailable: false, generationExecutorAvailable: false, publicationTargetConfigured: false, publicationExecutionEnabled: false, credentialReferenceConfigured: false, runtimeCredentialResolverAvailable: false, outcomeCollectionConfigured: false },
   limitations: [],
 })
 
@@ -159,6 +159,7 @@ const capabilityItems = computed(() => [
   { key: 'generationExecutorAvailable', label: '自動內容生成', falseMessage: '自動內容生成尚未接通', trueMessage: '自動內容生成已接通', available: workspace.value.readiness.generationExecutorAvailable },
   { key: 'publicationTargetConfigured', label: '第一方發布 target', falseMessage: '第一方網站發布器尚未設定', trueMessage: '第一方 target 已設定', available: workspace.value.readiness.publicationTargetConfigured },
   { key: 'publicationExecutionEnabled', label: '發布 execute gate', falseMessage: '目前只允許 dry-run 或尚未啟用', trueMessage: 'target execution flag 已啟用', available: workspace.value.readiness.publicationExecutionEnabled },
+  { key: 'runtimeCredentialResolverAvailable', label: 'Server credential resolver', falseMessage: 'runtime credential registry 尚未可用', trueMessage: 'runtime credential registry parser 已可用（不代表 reference 有效）', available: workspace.value.readiness.runtimeCredentialResolverAvailable },
   { key: 'outcomeCollectionConfigured', label: '成效資料回收', falseMessage: '成效資料尚未自動回收', trueMessage: '成效資料回收已接通', available: workspace.value.capabilities.outcomeCollectionConfigured },
 ])
 

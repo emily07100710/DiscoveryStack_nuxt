@@ -763,6 +763,8 @@ export const contentOperationPublicationTargets = mysqlTable('contentOperationPu
   maximumPayloadBytes: int('maximumPayloadBytes').notNull(),
   status: mysqlEnum('status', ['active', 'paused', 'revoked']).default('active').notNull(),
   executionEnabled: boolean('executionEnabled').default(false).notNull(),
+  /** Exactly one active target may occupy owner/client slot; paused and revoked targets use NULL. */
+  activeSlot: int('activeSlot'),
   configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
@@ -771,6 +773,7 @@ export const contentOperationPublicationTargets = mysqlTable('contentOperationPu
 }, table => [
   uniqueIndex('content_operation_targets_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('content_operation_targets_owner_target_unique').on(table.ownerUserId, table.targetId),
+  uniqueIndex('content_operation_targets_owner_client_active_slot_unique').on(table.ownerUserId, table.clientId, table.activeSlot),
   index('content_operation_targets_owner_client_status_idx').on(table.ownerUserId, table.clientId, table.status),
 ])
 

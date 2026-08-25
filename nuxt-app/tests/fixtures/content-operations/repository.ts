@@ -49,9 +49,9 @@ export class ContentOperationsFixture {
       listClients: async owner => this.clients.filter(row => row.ownerUserId === owner),
       findPublicationTargetByIdempotency: async (owner, key) => this.targets.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       findPublicationTarget: async (owner, id) => this.targets.find(row => row.ownerUserId === owner && row.id === id) || null,
-      findActivePublicationTarget: async (owner, clientId) => this.targets.find(row => row.ownerUserId === owner && row.clientId === clientId && row.status === 'active') || null,
-      insertPublicationTarget: async input => { const row = { ...input, id: ++this.nextId, createdAt: now(), updatedAt: now() } as ContentOperationPublicationTargetRow; this.targets.push(row); return row },
-      updatePublicationTarget: async (owner, id, patch) => { const row = this.targets.find(item => item.ownerUserId === owner && item.id === id); if (!row) throw new Error('missing target'); Object.assign(row, patch, { updatedAt: now() }); return row },
+      findActivePublicationTarget: async (owner, clientId) => this.targets.find(row => row.ownerUserId === owner && row.clientId === clientId && row.status === 'active' && row.activeSlot === 1) || null,
+      insertPublicationTarget: async input => { if (input.activeSlot === 1 && this.targets.some(row => row.ownerUserId === input.ownerUserId && row.clientId === input.clientId && row.activeSlot === 1)) throw Object.assign(new Error('active slot duplicate'), { code: 'ER_DUP_ENTRY' }); const row = { ...input, id: ++this.nextId, createdAt: now(), updatedAt: now() } as ContentOperationPublicationTargetRow; this.targets.push(row); return row },
+      updatePublicationTarget: async (owner, id, patch) => { const row = this.targets.find(item => item.ownerUserId === owner && item.id === id); if (!row) throw new Error('missing target'); if (patch.activeSlot === 1 && this.targets.some(item => item.ownerUserId === owner && item.clientId === row.clientId && item.activeSlot === 1 && item.id !== id)) throw Object.assign(new Error('active slot duplicate'), { code: 'ER_DUP_ENTRY' }); Object.assign(row, patch, { updatedAt: now() }); return row },
       listPublicationTargets: async owner => this.targets.filter(row => row.ownerUserId === owner),
       findCalendarByIdempotency: async (owner, key) => this.calendars.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       findCalendar: async (owner, id) => this.calendars.find(row => row.ownerUserId === owner && row.id === id) || null,
@@ -84,7 +84,30 @@ export class ContentOperationsFixture {
       findLatestReview: async () => null,
       findPublicationAttemptByIdempotency: async (owner, key) => this.attempts.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       listPublicationAttempts: async (owner, entryId) => this.attempts.filter(row => row.ownerUserId === owner && (entryId === undefined || row.entryId === entryId)),
-      insertPublicationAttempt: async input => { const row = { ...input, id: ++this.nextId, createdAt: now() } as ContentOperationPublicationAttemptRow; this.attempts.push(row); return row },
+      insertPublicationAttempt: async input => { if (this.attempts.some(row => row.ownerUserId === input.ownerUserId && row.idempotencyKey === input.idempotencyKey)) throw Object.assign(new Error('duplicate attempt'), { code: 'ER_DUP_ENTRY' }); const row = { ...input, id: ++this.nextId, createdAt: now() } as ContentOperationPublicationAttemptRow; this.attempts.push(row); return row },
+      reservePublicationAttempt: async input => {
+        const existing = this.attempts.find(row => row.ownerUserId === input.ownerUserId && row.idempotencyKey === input.idempotencyKey)
+        if (existing) {
+          if (existing.entryId !== input.entryId || existing.runId !== input.runId || existing.targetId !== input.targetId || existing.mode !== input.mode || existing.inputFingerprint !== input.inputFingerprint) throw Object.assign(new Error('attempt idempotency collision'), { statusCode: 409 })
+          const run = this.runs.find(row => row.ownerUserId === input.ownerUserId && row.id === input.runId && row.stage === 'publication' && row.state === 'processing' && row.leaseOwner === input.leaseToken)
+          const entry = this.entries.find(row => row.ownerUserId === input.ownerUserId && row.id === input.entryId)
+          if (!run || !entry || !['ready_to_publish', 'publishing'].includes(entry.status)) throw new Error('missing run or entry')
+          entry.status = 'publishing'
+          return { attempt: existing, run, replayed: true }
+        }
+        const run = this.runs.find(row => row.ownerUserId === input.ownerUserId && row.id === input.runId && row.stage === 'publication' && row.state === 'processing' && row.leaseOwner === input.leaseToken)
+        const entry = this.entries.find(row => row.ownerUserId === input.ownerUserId && row.id === input.entryId)
+        if (!run || !entry || !['ready_to_publish', 'publishing'].includes(entry.status)) throw Object.assign(new Error('publication lease or entry missing'), { statusCode: 409 })
+        entry.status = 'publishing'
+        const nextAttemptNumber = run.attemptNumber + 1
+        if (nextAttemptNumber > 3) throw Object.assign(new Error('Publication retry limit has been reached.'), { statusCode: 422 })
+        run.attemptNumber = nextAttemptNumber
+        run.updatedAt = input.startedAt
+        const attempt = { ...input, attemptNumber: nextAttemptNumber, artifactFingerprint: null, status: 'planned' as const, remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null, id: ++this.nextId, createdAt: now() } as ContentOperationPublicationAttemptRow
+        this.attempts.push(attempt)
+        return { attempt, run, replayed: false }
+      },
+      finalizePublicationAttempt: async (owner, id, patch) => { const row = this.attempts.find(item => item.ownerUserId === owner && item.id === id && item.status === 'planned'); if (!row) return null; Object.assign(row, patch); return row },
       findOutcomeByIdempotency: async (owner, key) => this.outcomes.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       insertOutcome: async input => { const row = { ...input, id: ++this.nextId, createdAt: now() } as ContentOperationOutcomeAssessmentRow; this.outcomes.push(row); return row },
       listOutcomes: async owner => this.outcomes.filter(row => row.ownerUserId === owner),

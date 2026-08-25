@@ -41,6 +41,9 @@ export type WorkspaceEntryLineage = { entry: ContentOperationCalendarEntryRow; c
 export type OutcomeInsert = Omit<ContentOperationOutcomeAssessmentRow, 'id' | 'createdAt'>
 export type PublicationTargetInsert = Omit<ContentOperationPublicationTargetRow, 'id' | 'createdAt' | 'updatedAt'>
 export type PublicationAttemptInsert = Omit<ContentOperationPublicationAttemptRow, 'id' | 'createdAt'>
+export type PublicationAttemptReservationInput = Omit<PublicationAttemptInsert, 'attemptNumber' | 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'> & { startedAt: Date }
+export type PublicationAttemptReservation = { attempt: ContentOperationPublicationAttemptRow; run: ContentOperationRunRow; replayed: boolean }
+export type PublicationAttemptFinalization = Pick<ContentOperationPublicationAttemptRow, 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'>
 
 export type CanonicalContext = Awaited<ReturnType<typeof resolveProductionContext>>
 
@@ -83,6 +86,8 @@ export type ContentOperationsRepository = {
   findPublicationAttemptByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationPublicationAttemptRow | null>
   listPublicationAttempts(ownerUserId: number, entryId?: number): Promise<ContentOperationPublicationAttemptRow[]>
   insertPublicationAttempt(input: PublicationAttemptInsert): Promise<ContentOperationPublicationAttemptRow>
+  reservePublicationAttempt(input: PublicationAttemptReservationInput & { ownerUserId: number; runId: number; leaseToken: string; entryId: number }): Promise<PublicationAttemptReservation>
+  finalizePublicationAttempt(ownerUserId: number, attemptId: number, patch: PublicationAttemptFinalization): Promise<ContentOperationPublicationAttemptRow | null>
   findOutcomeByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationOutcomeAssessmentRow | null>
   insertOutcome(input: OutcomeInsert): Promise<ContentOperationOutcomeAssessmentRow>
   listOutcomes(ownerUserId: number): Promise<ContentOperationOutcomeAssessmentRow[]>
@@ -144,7 +149,7 @@ function makeRepository(database: any): ContentOperationsRepository {
       return row || null
     },
     async findActivePublicationTarget(ownerUserId, clientId) {
-      const [row] = await database.select().from(contentOperationPublicationTargets).where(and(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId), eq(contentOperationPublicationTargets.clientId, clientId), eq(contentOperationPublicationTargets.status, 'active'))).orderBy(desc(contentOperationPublicationTargets.updatedAt)).limit(1)
+      const [row] = await database.select().from(contentOperationPublicationTargets).where(and(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId), eq(contentOperationPublicationTargets.clientId, clientId), eq(contentOperationPublicationTargets.status, 'active'), eq(contentOperationPublicationTargets.activeSlot, 1))).orderBy(desc(contentOperationPublicationTargets.updatedAt)).limit(1)
       return row || null
     },
     async insertPublicationTarget(input) {
@@ -158,11 +163,16 @@ function makeRepository(database: any): ContentOperationsRepository {
         const replay = await repository.findPublicationTargetByIdempotency(input.ownerUserId, input.idempotencyKey)
         if (replay && replay.configurationFingerprint === input.configurationFingerprint) return replay
         if (replay) throw createError({ statusCode: 409, statusMessage: 'Publication target idempotency key is associated with a different configuration.' })
-        throw error
+        throw createError({ statusCode: 409, statusMessage: 'Publication target active slot is already occupied.' })
       }
     },
     async updatePublicationTarget(ownerUserId, targetRowId, patch) {
-      await database.update(contentOperationPublicationTargets).set(patch as any).where(and(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId), eq(contentOperationPublicationTargets.id, targetRowId)))
+      try {
+        await database.update(contentOperationPublicationTargets).set(patch as any).where(and(eq(contentOperationPublicationTargets.ownerUserId, ownerUserId), eq(contentOperationPublicationTargets.id, targetRowId)))
+      } catch (error) {
+        if (isDuplicateError(error)) throw createError({ statusCode: 409, statusMessage: 'Publication target active slot is already occupied.' })
+        throw error
+      }
       const row = await repository.findPublicationTarget(ownerUserId, targetRowId)
       if (!row) throw createError({ statusCode: 404, statusMessage: 'Publication target was not found.' })
       return row
@@ -302,8 +312,8 @@ function makeRepository(database: any): ContentOperationsRepository {
       return database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, ownerUserId), entryId ? eq(contentOperationEvents.entryId, entryId) : undefined)).orderBy(desc(contentOperationEvents.occurredAt)).limit(500)
     },
     async findLatestOptimizedDraft(ownerUserId, jobId) {
-      const [row] = await database.select({ id: seoGeoContentDrafts.id, jobId: seoGeoContentDrafts.jobId, version: seoGeoContentDrafts.version, title: seoGeoContentDrafts.title, body: seoGeoContentDrafts.body, contentHash: seoGeoContentDrafts.contentHash, provenance: seoGeoContentDrafts.provenance, safetyStatus: seoGeoContentDrafts.safetyStatus }).from(seoGeoContentDrafts).innerJoin(seoGeoContentJobs, eq(seoGeoContentDrafts.jobId, seoGeoContentJobs.id)).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentDrafts.jobId, jobId))).orderBy(desc(seoGeoContentDrafts.version)).limit(10)
-      const optimized = row && typeof row.provenance === 'object' && row.provenance !== null && !Array.isArray(row.provenance) && (row.provenance as { stage?: unknown }).stage === 'optimized' ? row : null
+      const rows = await database.select({ id: seoGeoContentDrafts.id, jobId: seoGeoContentDrafts.jobId, version: seoGeoContentDrafts.version, title: seoGeoContentDrafts.title, body: seoGeoContentDrafts.body, contentHash: seoGeoContentDrafts.contentHash, provenance: seoGeoContentDrafts.provenance, safetyStatus: seoGeoContentDrafts.safetyStatus }).from(seoGeoContentDrafts).innerJoin(seoGeoContentJobs, eq(seoGeoContentDrafts.jobId, seoGeoContentJobs.id)).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentDrafts.jobId, jobId))).orderBy(desc(seoGeoContentDrafts.version)).limit(50)
+      const optimized = rows.find((row: { provenance: unknown }) => typeof row.provenance === 'object' && row.provenance !== null && !Array.isArray(row.provenance) && (row.provenance as { stage?: unknown }).stage === 'optimized')
       return optimized ? optimized as Record<string, unknown> & { id: number; jobId: number; version: number; title: string; body: string; contentHash: string; provenance: unknown; safetyStatus: string } : null
     },
     async findRiskGate(ownerUserId, draftId, evidenceSnapshotHash) {
@@ -334,6 +344,37 @@ function makeRepository(database: any): ContentOperationsRepository {
         throw error
       }
     },
+    async reservePublicationAttempt(input) {
+      return database.transaction(async (transaction: any) => {
+        const txRepository = makeRepository(transaction)
+        const existing = await txRepository.findPublicationAttemptByIdempotency(input.ownerUserId, input.idempotencyKey)
+        if (existing) {
+          if (existing.entryId !== input.entryId || existing.runId !== input.runId || existing.targetId !== input.targetId || existing.mode !== input.mode || existing.inputFingerprint !== input.inputFingerprint) throw createError({ statusCode: 409, statusMessage: 'Publication attempt idempotency key is associated with a different publication.' })
+          const [run] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId), eq(contentOperationRuns.stage, 'publication'), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, input.leaseToken))).limit(1)
+          if (!run) throw createError({ statusCode: 409, statusMessage: 'Publication attempt run is missing or is not leased by this worker.' })
+          await transaction.update(contentOperationCalendarEntries).set({ status: 'publishing', updatedAt: input.startedAt }).where(and(eq(contentOperationCalendarEntries.ownerUserId, input.ownerUserId), eq(contentOperationCalendarEntries.id, input.entryId), or(eq(contentOperationCalendarEntries.status, 'ready_to_publish'), eq(contentOperationCalendarEntries.status, 'publishing'))))
+          return { attempt: existing, run, replayed: true } satisfies PublicationAttemptReservation
+        }
+        const [current] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId), eq(contentOperationRuns.stage, 'publication'), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, input.leaseToken))).limit(1)
+        if (!current) throw createError({ statusCode: 409, statusMessage: 'Publication run lease is no longer held.' })
+        const claimedEntry = await transaction.update(contentOperationCalendarEntries).set({ status: 'publishing', updatedAt: input.startedAt }).where(and(eq(contentOperationCalendarEntries.ownerUserId, input.ownerUserId), eq(contentOperationCalendarEntries.id, input.entryId), or(eq(contentOperationCalendarEntries.status, 'ready_to_publish'), eq(contentOperationCalendarEntries.status, 'publishing'))))
+        if (Number(claimedEntry?.[0]?.affectedRows || 0) !== 1) throw createError({ statusCode: 409, statusMessage: 'Publication entry is no longer executable.' })
+        const nextAttemptNumber = current.attemptNumber + 1
+        if (!Number.isSafeInteger(nextAttemptNumber) || nextAttemptNumber > 3) throw createError({ statusCode: 422, statusMessage: 'Publication retry limit has been reached.' })
+        const updated = await transaction.update(contentOperationRuns).set({ attemptNumber: sql`${contentOperationRuns.attemptNumber} + 1`, updatedAt: input.startedAt }).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId), eq(contentOperationRuns.stage, 'publication'), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, input.leaseToken), eq(contentOperationRuns.attemptNumber, current.attemptNumber)))
+        if (Number(updated?.[0]?.affectedRows || 0) !== 1) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter was claimed by another worker.' })
+        const [run] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId))).limit(1)
+        if (!run || run.attemptNumber !== nextAttemptNumber) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter could not be verified.' })
+        const attempt = await txRepository.insertPublicationAttempt({ ...input, attemptNumber: nextAttemptNumber, artifactFingerprint: null, status: 'planned', remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null })
+        return { attempt, run, replayed: false } satisfies PublicationAttemptReservation
+      })
+    },
+    async finalizePublicationAttempt(ownerUserId, attemptId, patch) {
+      const result = await database.update(contentOperationPublicationAttempts).set({ ...patch as any }).where(and(eq(contentOperationPublicationAttempts.ownerUserId, ownerUserId), eq(contentOperationPublicationAttempts.id, attemptId), eq(contentOperationPublicationAttempts.status, 'planned')))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      const [row] = await database.select().from(contentOperationPublicationAttempts).where(and(eq(contentOperationPublicationAttempts.ownerUserId, ownerUserId), eq(contentOperationPublicationAttempts.id, attemptId))).limit(1)
+      return row || null
+    },
     async findOutcomeByIdempotency(ownerUserId, idempotencyKey) {
       const [row] = await database.select().from(contentOperationOutcomeAssessments).where(and(eq(contentOperationOutcomeAssessments.ownerUserId, ownerUserId), eq(contentOperationOutcomeAssessments.idempotencyKey, idempotencyKey))).limit(1)
       return row || null
@@ -363,8 +404,8 @@ function makeRepository(database: any): ContentOperationsRepository {
       if (!calendar || !client || !deliverable) return null
       const [job] = entry.jobId ? await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentJobs.id, entry.jobId), eq(seoGeoContentJobs.productionPlanId, calendar.productionPlanId), eq(seoGeoContentJobs.productionDeliverableId, entry.productionDeliverableId), eq(seoGeoContentJobs.strategyRecommendationId, entry.strategyRecommendationId), eq(seoGeoContentJobs.evidenceSnapshotHash, entry.evidenceSnapshotHash))).limit(1) : [null]
       const [draft] = job && entry.draftId ? await database.select().from(seoGeoContentDrafts).where(and(eq(seoGeoContentDrafts.id, entry.draftId), eq(seoGeoContentDrafts.jobId, job.id))).limit(1) : [null]
-      const [review] = job && draft && entry.reviewId ? await database.select().from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.id, entry.reviewId), eq(seoGeoContentReviews.jobId, job.id), eq(seoGeoContentReviews.draftId, draft.id), eq(seoGeoContentReviews.reviewerUserId, ownerUserId), eq(seoGeoContentReviews.evidenceSnapshotHash, entry.evidenceSnapshotHash))).limit(1) : [null]
-      const [riskGate] = draft ? await database.select().from(seoGeoContentRiskGates).where(and(eq(seoGeoContentRiskGates.draftId, draft.id), eq(seoGeoContentRiskGates.status, 'passed'), eq(seoGeoContentRiskGates.evidenceSnapshotHash, entry.evidenceSnapshotHash))).orderBy(desc(seoGeoContentRiskGates.createdAt)).limit(1) : [null]
+      const [review] = job && draft ? await database.select().from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.jobId, job.id), eq(seoGeoContentReviews.draftId, draft.id), eq(seoGeoContentReviews.reviewerUserId, ownerUserId), eq(seoGeoContentReviews.evidenceSnapshotHash, entry.evidenceSnapshotHash))).orderBy(desc(seoGeoContentReviews.id)).limit(1) : [null]
+      const [riskGate] = draft ? await database.select().from(seoGeoContentRiskGates).where(and(eq(seoGeoContentRiskGates.draftId, draft.id), eq(seoGeoContentRiskGates.evidenceSnapshotHash, entry.evidenceSnapshotHash))).orderBy(desc(seoGeoContentRiskGates.id)).limit(1) : [null]
       return { entry, calendar, client, target: target || null, deliverable, job: job || null, draft: draft || null, review: review || null, riskGate: riskGate || null }
     },
     async resolveDeliveredPublication(ownerUserId, entryId) {

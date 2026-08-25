@@ -166,7 +166,7 @@ export type WorkspacePayload = {
   entries: WorkspaceEntryProjection[]
   runs: ContentOperationRunRow[]
   outcomeAssessments: WorkspaceOutcomeProjection[]
-  publicationTargets: Array<Record<string, unknown> & { id: number; clientId: number; targetId: string; framework: string; transport: string; targetOrigin: string; contentRoot: string; defaultBranch: string | null; status: string; executionEnabled: boolean; credentialConfigured: boolean }>
+  publicationTargets: Array<Record<string, unknown> & { id: number; clientId: number; targetId: string; framework: string; transport: string; targetOrigin: string; contentRoot: string; defaultBranch: string | null; status: string; activeSlot: number | null; executionEnabled: boolean; credentialConfigured: boolean }>
   capabilities: {
     schedulerAvailable: boolean
     generationExecutorConfigured: false
@@ -179,6 +179,7 @@ export type WorkspacePayload = {
     publicationTargetConfigured: boolean
     publicationExecutionEnabled: boolean
     credentialReferenceConfigured: boolean
+    runtimeCredentialResolverAvailable: boolean
     outcomeCollectionConfigured: boolean
   }
   limitations: string[]

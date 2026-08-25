@@ -18,6 +18,8 @@ import {
   seoGeoDeliveryTargets,
   seoGeoDiagnoses,
   seoGeoEvidenceApprovals,
+  contentOperationCalendarEntries,
+  contentOperationPublicationAttempts,
 } from '../database/schema'
 import type { AutoGeoStrategyRecommendation, ContentBriefInput, ContentJobStatus, ContentRiskGateResult, DiagnosisResult, EvidenceMaterial, EvidenceRef, ProductionDeliverableStatus, ProductionPlanStatus } from './contracts'
 import { canTransitionContentJob } from './contracts'
@@ -758,6 +760,17 @@ export async function createContentReview(input: { ownerUserId: number, jobId: n
   const next: ContentJobStatus = input.decision.startsWith('approved') ? 'approved' : input.decision === 'changes_requested' ? 'needs_human_review' : 'blocked'
   if (!approvalUpgrade && !canTransitionContentJob(job.status, next) && job.status !== next) throw createError({ statusCode: 409, statusMessage: `Invalid content job transition: ${job.status} -> ${next}` })
   const review = await database.transaction(async tx => {
+    if (input.decision === 'changes_requested' || input.decision === 'rejected') {
+      const [publishingAttempt] = await tx.select({ id: contentOperationPublicationAttempts.id }).from(contentOperationPublicationAttempts).innerJoin(contentOperationCalendarEntries, eq(contentOperationPublicationAttempts.entryId, contentOperationCalendarEntries.id)).where(and(
+        eq(contentOperationPublicationAttempts.ownerUserId, input.ownerUserId),
+        eq(contentOperationPublicationAttempts.status, 'planned'),
+        eq(contentOperationCalendarEntries.ownerUserId, input.ownerUserId),
+        eq(contentOperationCalendarEntries.jobId, job.id),
+        eq(contentOperationCalendarEntries.draftId, draft.id),
+        eq(contentOperationCalendarEntries.evidenceSnapshotHash, job.evidenceSnapshotHash),
+      )).limit(1)
+      if (publishingAttempt) throw createError({ statusCode: 409, statusMessage: 'Publication has already started for this draft; wait for the attempt to finish before changing the review.' })
+    }
     const [reviewId] = await tx.insert(seoGeoContentReviews).values({ jobId: job.id, draftId: draft.id, reviewerUserId: input.ownerUserId, decision: input.decision, reviewNote: input.reviewNote?.trim() || null, evidenceSnapshotHash: job.evidenceSnapshotHash }).$returningId()
     await tx.update(seoGeoContentJobs).set({ status: next, completedAt: ['candidate_ready', 'needs_human_review', 'approved', 'blocked', 'failed', 'delivered'].includes(next) ? new Date() : null }).where(eq(seoGeoContentJobs.id, job.id))
     if (job.productionDeliverableId) {

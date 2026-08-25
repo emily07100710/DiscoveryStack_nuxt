@@ -98,6 +98,27 @@ function buildPath(contentRoot: string, input: PublicationIdentityInput, slug: s
   return artifact.status === 'ok' ? artifact.artifact.path : null
 }
 
+function buildIdentityForSlug(input: PublicationIdentityInput, slug: string): PublicationIdentity | null {
+  if (!isValidSlug(slug)) return null
+  const path = buildPath(input.contentRoot, input, slug)
+  if (!path) return null
+  const fingerprint = createHash('sha256').update(stableStringify({ clientId: input.clientId, entryId: input.entryId, language: input.language, contentType: input.contentType, targetId: input.targetId, targetOrigin: input.targetOrigin, slug, path }), 'utf8').digest('hex')
+  return { publicationId: `publication-${input.entryId}`, slug, path, identityFingerprint: fingerprint }
+}
+
+export function validatePersistedPublicationIdentity(input: Omit<PublicationIdentityInput, 'existingIdentity'> & { existingIdentity: PublicationIdentity }): { ok: true; identity: PublicationIdentity } | { ok: false; reason: string } {
+  try {
+    if (!Number.isSafeInteger(input.clientId) || input.clientId < 1 || !Number.isSafeInteger(input.entryId) || input.entryId < 1) return { ok: false, reason: 'clientId and entryId must be positive safe integers' }
+    if (!isOpaqueReference(input.targetId) || !isOpaqueReference(input.ownerScopeKey)) return { ok: false, reason: 'target and owner scope identities must be opaque' }
+    if (!['article', 'faq', 'service_page'].includes(input.contentType) || !['en', 'zh-hant'].includes(input.language)) return { ok: false, reason: 'content type or language is unsupported' }
+    if (!validIdentity(input.existingIdentity)) return { ok: false, reason: 'persisted publication identity is malformed' }
+    if (input.existingIdentity.publicationId !== `publication-${input.entryId}`) return { ok: false, reason: 'persisted publicationId is not bound to this entry' }
+    const expected = buildIdentityForSlug(input, input.existingIdentity.slug)
+    if (!expected || input.existingIdentity.path !== expected.path || input.existingIdentity.identityFingerprint !== expected.identityFingerprint) return { ok: false, reason: 'persisted publication path or fingerprint does not match current target binding' }
+    return { ok: true, identity: input.existingIdentity }
+  } catch { return { ok: false, reason: 'persisted publication identity could not be safely validated' } }
+}
+
 export function buildPublicationIdentity(input: PublicationIdentityInput): { ok: true; identity: PublicationIdentity } | { ok: false; reason: string } {
   try {
     if (!Number.isSafeInteger(input.clientId) || input.clientId < 1 || !Number.isSafeInteger(input.entryId) || input.entryId < 1) return { ok: false, reason: 'clientId and entryId must be positive safe integers' }
@@ -110,10 +131,9 @@ export function buildPublicationIdentity(input: PublicationIdentityInput): { ok:
     const shortHash = createHash('sha256').update(suffixSeed, 'utf8').digest('hex').slice(0, 10)
     const slug = `${base}-${input.entryId}-${shortHash}`.slice(0, 160).replace(/-+$/g, '')
     if (!isValidSlug(slug)) return { ok: false, reason: 'generated publication slug is invalid' }
-    const path = buildPath(input.contentRoot, input, slug)
-    if (!path) return { ok: false, reason: 'formal publisher path could not be generated' }
-    const fingerprint = createHash('sha256').update(stableStringify({ clientId: input.clientId, entryId: input.entryId, language: input.language, contentType: input.contentType, targetId: input.targetId, targetOrigin: input.targetOrigin, slug, path }), 'utf8').digest('hex')
-    return { ok: true, identity: { publicationId: `publication-${input.entryId}`, slug, path, identityFingerprint: fingerprint } }
+    const identity = buildIdentityForSlug(input, slug)
+    if (!identity) return { ok: false, reason: 'formal publisher path or identity could not be generated' }
+    return { ok: true, identity }
   } catch { return { ok: false, reason: 'publication identity input could not be safely read' } }
 }
 

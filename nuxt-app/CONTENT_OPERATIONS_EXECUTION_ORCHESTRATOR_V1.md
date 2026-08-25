@@ -61,3 +61,16 @@ entry、run、event、review binding、publication attempt 與 durable identity 
 本 branch 的 tests 使用 synthetic repository、mocked production deliverable runner、mocked publication executor 與 route/workbench source contracts；不會呼叫真實 LLM/provider、GitHub Contents、signed API 或 customer site。Production build 只驗證 compile/prerender contract，不代表 credentials、external publisher endpoint 或 customer site 已驗證。
 
 Migration 僅由既有 Drizzle generate workflow 產生，內容必須是 DDL-only；本 branch 不執行 migration、不套用 production database、不 deploy，也不建立或合併 PR。Full Vitest 依任務要求不執行，因既有 suite 包含需要外部 credentials 或 production origin environment 的測試。`READY FOR REVIEW` 不表示已合併或部署。
+
+
+## Repair hardening notes
+
+本輪退修將正式 execute attempt 與 dry-run ledger 序號分離。只有取得同一 publication run lease 的 execute reservation 才會原子增加 `run.attemptNumber`、先建立 `planned` attempt 並把 entry claim 為 `publishing`；dry-run 只建立自己的 append-only result、保持 publication run `queued`，不建立 `retry_wait`。scheduler 使用 `scheduler:publication:<runId>:attempt:<executeAttemptNumber>`，最多執行三次正式 attempt；planned row 可在 lease 到期後以相同 publication identity 恢復，terminal row 則不可改寫。
+
+Publication 前會重新解析 owner/job/draft/evidence 綁定的最新 review 與最新 risk gate；`entry.reviewId` 只是同步 reference。較新的 `changes_requested` 會清除舊 review reference、取消尚未完成的 publication run 並回到 `awaiting_review`；`rejected`、`approved_for_preview`、malformed decision 或非 passed 最新 gate 都 fail closed。若 job 出現較新的 optimized draft，review-wait 會重新綁定 draft/content hash、建立新的 review run，不會自動核准。`createContentReview` 在 transaction 內禁止同一 draft 已有 durable planned publication attempt 時新增負向 review。
+
+Target execution 會重算 persisted publication identity 的正式 artifact path 與 fingerprint，並要求 `publication-<entryId>`、目前 target row、origin、root、content type、language、slug/path 全部一致。active target 由 nullable `activeSlot=1` 與 owner/client/slot unique index 序列化；paused 可釋放後再啟用，revoked 為 terminal。configuration fingerprint 包含 normalized credential-reference SHA-256 及 canonical sorted allowlists，但不包含 raw reference 或 credential value。
+
+Owner execute API 與明確 Nitro task invocation 會使用 server-only credential registry、CSPRNG nonce 與 AbortController-based bounded fetch；沒有可用 registry 時 execute fail closed，dry-run 仍可完成。runtime capability 的 `runtimeCredentialResolverAvailable` 只表示 parser/registry 可用，不代表指定 credential reference 有效；`credentialConfigured` 只表示 server-side reference 存在。測試中的 publisher、fetch、credential 與 nonce 均為 mock 或 synthetic，不能作為 production credential/site connectivity 證據。
+
+本輪 migration 為 `0016_brief_morg.sql`，只由 Drizzle workflow 產生 activeSlot 欄位與 unique index DDL，未執行 migration runtime validation，未套用 production migration。Full Vitest 依任務要求 NOT RUN；production build 只代表 compile/prerender 可通過，不代表已部署或已對客戶網站寫入。
