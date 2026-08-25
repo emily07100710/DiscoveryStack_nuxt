@@ -7,9 +7,9 @@ import { canonicalizeTimestamp, normalizeGeoFlowRequest, normalizeGeoFlowRequest
 const REQUEST_DRAFT_KEYS = ['protocolVersion', 'requestId', 'idempotencyKey', 'ownerUserId', 'clientId', 'calendarEntryId', 'productionPlanId', 'deliverableId', 'briefId', 'jobId', 'brief', 'contentType', 'language', 'generationMode', 'revisionContext', 'requestedCapabilities', 'selectedRuleIds', 'authoritySourceIds', 'evidenceChunks', 'createdAt'] as const
 const REQUEST_KEYS = [...REQUEST_DRAFT_KEYS, 'briefFingerprint', 'requestFingerprint'] as const
 const RESPONSE_IDENTITY_KEYS = ['protocolVersion', 'requestId', 'idempotencyKey', 'requestFingerprint', 'ownerUserId', 'clientId', 'jobId', 'externalProjectKey', 'externalTaskKey', 'externalJobKey', 'externalArticleKey'] as const
-const PROGRESS_KEYS = [...RESPONSE_IDENTITY_KEYS, 'status', 'observedAt', 'limitations', 'retry'] as const
-const FAILURE_KEYS = [...RESPONSE_IDENTITY_KEYS, 'status', 'observedAt', 'failure', 'limitations'] as const
-const DRAFT_RESULT_KEYS = [...RESPONSE_IDENTITY_KEYS, 'status', 'draftIdentity', 'contentArtifact', 'evidenceSnapshotHash', 'citationBindings', 'appliedRuleIds', 'providerProvenance', 'limitations', 'completedAt'] as const
+const PROGRESS_KEYS = [...RESPONSE_IDENTITY_KEYS, 'attempt', 'status', 'observedAt', 'limitations', 'retry'] as const
+const FAILURE_KEYS = [...RESPONSE_IDENTITY_KEYS, 'attempt', 'status', 'observedAt', 'failure', 'limitations'] as const
+const DRAFT_RESULT_KEYS = [...RESPONSE_IDENTITY_KEYS, 'attempt', 'status', 'draftIdentity', 'contentArtifact', 'evidenceSnapshotHash', 'citationBindings', 'appliedRuleIds', 'providerProvenance', 'limitations', 'completedAt'] as const
 const DRAFT_IDENTITY_KEYS = ['externalArticleKey', 'briefFingerprint'] as const
 const ARTIFACT_KEYS = ['schemaVersion', 'contentType', 'language', 'title', 'summary', 'bodyMarkdown', 'bodyHash'] as const
 const CITATION_KEYS = ['sourceId', 'artifactId', 'chunkId', 'chunkHash'] as const
@@ -18,7 +18,7 @@ const FAILURE_KEYS_INNER = ['code', 'retryable'] as const
 const RETRY_KEYS = ['attempt', 'retryAt'] as const
 const GEO_STATUSES = ['queued', 'running', 'draft_ready', 'review_required', 'blocked', 'failed', 'retry_wait'] as const
 const PROVIDER_MODES = ['provider', 'deterministic_scaffold', 'reference_fallback'] as const
-const REASON_CODES = ['INVALID_PROTOCOL_VERSION', 'INVALID_INPUT', 'UNKNOWN_FIELD', 'LIMIT_EXCEEDED', 'INVALID_HASH', 'INVALID_TIMESTAMP', 'INVALID_PUBLIC_URL', 'PRIVATE_OR_SPECIAL_TARGET', 'INVALID_OPAQUE_IDENTIFIER', 'UNKNOWN_STATE', 'REQUEST_FINGERPRINT_MISMATCH', 'IDEMPOTENCY_COLLISION', 'IDENTITY_MISMATCH', 'EVIDENCE_SNAPSHOT_MISMATCH', 'BRIEF_FINGERPRINT_MISMATCH', 'CITATION_OUTSIDE_APPROVED_EVIDENCE', 'APPLIED_RULE_OUTSIDE_SELECTION', 'PROVIDER_PROVENANCE_MISSING', 'INVALID_STATUS_TRANSITION', 'UNTRUSTED_PUBLISHED_RESULT', 'EVIDENCE_CHUNK_HASH_MISMATCH', 'DUPLICATE_EVIDENCE_IDENTITY', 'DUPLICATE_IDENTIFIER', 'REQUIRED_EVIDENCE_MISSING', 'REQUIRED_RULE_MISSING', 'CONTENT_HASH_MISMATCH', 'RESPONSE_TIME_INVALID', 'UNTRUSTED_DELIVERY_STATE', 'SIGNATURE_CONTEXT_MISMATCH', 'SIGNATURE_EXPIRED', 'NONCE_REPLAYED'] as const
+const REASON_CODES = ['INVALID_PROTOCOL_VERSION', 'INVALID_INPUT', 'UNKNOWN_FIELD', 'LIMIT_EXCEEDED', 'INVALID_HASH', 'INVALID_TIMESTAMP', 'INVALID_PUBLIC_URL', 'PRIVATE_OR_SPECIAL_TARGET', 'INVALID_OPAQUE_IDENTIFIER', 'UNKNOWN_STATE', 'REQUEST_FINGERPRINT_MISMATCH', 'IDEMPOTENCY_COLLISION', 'IDENTITY_MISMATCH', 'EVIDENCE_SNAPSHOT_MISMATCH', 'BRIEF_FINGERPRINT_MISMATCH', 'CITATION_OUTSIDE_APPROVED_EVIDENCE', 'APPLIED_RULE_OUTSIDE_SELECTION', 'PROVIDER_PROVENANCE_MISSING', 'INVALID_STATUS_TRANSITION', 'UNTRUSTED_PUBLISHED_RESULT', 'EVIDENCE_CHUNK_HASH_MISMATCH', 'DUPLICATE_EVIDENCE_IDENTITY', 'DUPLICATE_IDENTIFIER', 'REQUIRED_EVIDENCE_MISSING', 'REQUIRED_RULE_MISSING', 'CONTENT_HASH_MISMATCH', 'RESPONSE_TIME_INVALID', 'UNTRUSTED_DELIVERY_STATE', 'SIGNATURE_CONTEXT_MISMATCH', 'SIGNATURE_EXPIRED', 'NONCE_REPLAYED', 'RETRY_ATTEMPT_INVALID', 'CANDIDATE_LINEAGE_MISMATCH'] as const
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
 const OPAQUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u
@@ -42,6 +42,7 @@ function text(value: unknown, max: number, path: string): ValidationResult<strin
 }
 function opaque(value: unknown, path: string): ValidationResult<string> { return typeof value === 'string' && value.length > 0 && value.length <= 160 && !CONTROL_CHARACTERS.test(value) && OPAQUE_PATTERN.test(value) ? success(value) : failure(typeof value === 'string' && value.length > 160 ? 'LIMIT_EXCEEDED' : 'INVALID_OPAQUE_IDENTIFIER', path) }
 function positiveInteger(value: unknown, path: string): ValidationResult<number> { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? success(value) : failure('INVALID_INPUT', path) }
+function attempt(value: unknown, path: string): ValidationResult<number> { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= 10 ? success(value) : failure('RETRY_ATTEMPT_INVALID', path) }
 function hash(value: unknown, path: string): ValidationResult<string> { return typeof value === 'string' && HASH_PATTERN.test(value) ? success(value) : failure('INVALID_HASH', path) }
 function knownReason(value: unknown, path: string): ValidationResult<ReasonCode> { return typeof value === 'string' && REASON_CODES.includes(value as Reason) ? success(value as ReasonCode) : failure('INVALID_INPUT', path) }
 function setIds(value: unknown, max: number, path: string): ValidationResult<string[]> {
@@ -66,10 +67,11 @@ function normalizeResponseIdentity(input: Record<string, unknown>): ValidationRe
   const requestId = opaque(values.requestId, '$.requestId'); if (!requestId.ok) return requestId
   const idempotencyKey = opaque(values.idempotencyKey, '$.idempotencyKey'); if (!idempotencyKey.ok) return idempotencyKey
   const requestFingerprint = hash(values.requestFingerprint, '$.requestFingerprint'); if (!requestFingerprint.ok) return requestFingerprint
+  const responseAttempt = attempt(safeValue(input, 'attempt'), '$.attempt'); if (!responseAttempt.ok) return responseAttempt
   const ownerUserId = positiveInteger(values.ownerUserId, '$.ownerUserId'); if (!ownerUserId.ok) return ownerUserId
   const clientId = positiveInteger(values.clientId, '$.clientId'); if (!clientId.ok) return clientId
   const jobId = positiveInteger(values.jobId, '$.jobId'); if (!jobId.ok) return jobId
-  const result = { protocolVersion: protocolVersion.value, requestId: requestId.value, idempotencyKey: idempotencyKey.value, requestFingerprint: requestFingerprint.value, ownerUserId: ownerUserId.value, clientId: clientId.value, jobId: jobId.value } as Record<string, unknown>
+  const result = { protocolVersion: protocolVersion.value, requestId: requestId.value, idempotencyKey: idempotencyKey.value, requestFingerprint: requestFingerprint.value, ownerUserId: ownerUserId.value, clientId: clientId.value, jobId: jobId.value, attempt: responseAttempt.value } as Record<string, unknown>
   for (const key of ['externalProjectKey', 'externalTaskKey', 'externalJobKey', 'externalArticleKey'] as const) { const item = opaque(values[key], `$.${key}`); if (!item.ok) return item; result[key] = item.value }
   return success(result)
 }
@@ -119,10 +121,9 @@ function normalizeFailure(value: unknown): ValidationResult<{ code: ReasonCode; 
 }
 function normalizeRetry(value: unknown): ValidationResult<{ attempt: number; retryAt: string }> {
   if (!isPlainRecord(value) || !exactKeys(value, RETRY_KEYS)) return failure('UNKNOWN_FIELD', '$.retry')
-  const attempt = positiveInteger(safeValue(value, 'attempt'), '$.retry.attempt'); if (!attempt.ok) return attempt
-  if (attempt.value > 10) return failure('LIMIT_EXCEEDED', '$.retry.attempt')
+  const retryAttempt = attempt(safeValue(value, 'attempt'), '$.retry.attempt'); if (!retryAttempt.ok) return retryAttempt
   const retryAt = canonicalizeTimestamp(safeValue(value, 'retryAt'), '$.retry.retryAt'); if (!retryAt.ok) return retryAt
-  return success({ attempt: attempt.value, retryAt: retryAt.value })
+  return success({ attempt: retryAttempt.value, retryAt: retryAt.value })
 }
 
 export function buildGeoFlowRequest(input: unknown): ValidationResult<GeoFlowRequest> {
@@ -155,6 +156,7 @@ export function normalizeGeoFlowResponse(input: unknown): ValidationResult<GeoFl
     const identity = normalizeResponseIdentity(input); if (!identity.ok) return identity
     const observedAt = canonicalizeTimestamp(safeValue(input, 'observedAt'), '$.observedAt'); if (!observedAt.ok) return observedAt
     const retry = normalizeRetry(safeValue(input, 'retry')); if (!retry.ok) return retry
+    if (retry.value.attempt !== identity.value.attempt) return failure('RETRY_ATTEMPT_INVALID', '$.retry.attempt')
     const limitationValues = limitations(safeValue(input, 'limitations')); if (!limitationValues.ok) return limitationValues
     return success({ ...identity.value, status: 'retry_wait', observedAt: observedAt.value, retry: retry.value, limitations: limitationValues.value } as RetryWaitResponse)
   }

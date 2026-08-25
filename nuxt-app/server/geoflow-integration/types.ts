@@ -47,6 +47,8 @@ export type ReasonCode =
   | 'SIGNATURE_CONTEXT_MISMATCH'
   | 'SIGNATURE_EXPIRED'
   | 'NONCE_REPLAYED'
+  | 'RETRY_ATTEMPT_INVALID'
+  | 'CANDIDATE_LINEAGE_MISMATCH'
 
 export type ValidationIssue = { path: string; code: ReasonCode }
 export type ValidationFailure = { ok: false; reason: ReasonCode; issues: ValidationIssue[] }
@@ -137,7 +139,7 @@ type ResponseIdentity = {
   externalArticleKey: string
 }
 
-type ResponseCommon = ResponseIdentity & { limitations: string[] }
+type ResponseCommon = ResponseIdentity & { attempt: number; limitations: string[] }
 export type RetryMetadata = { attempt: number; retryAt: string }
 export type ProgressResponse = ResponseCommon & {
   status: 'queued' | 'running'

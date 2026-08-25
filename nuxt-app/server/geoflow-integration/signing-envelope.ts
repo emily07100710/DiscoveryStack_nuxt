@@ -98,11 +98,11 @@ export async function verifySigningEnvelope(input: unknown, signature: unknown, 
   if (computedBodyHash.value !== envelope.value.bodyHash) return failure('CONTENT_HASH_MISMATCH', '$.bodyHash')
   const difference = Math.abs(Date.parse(envelope.value.timestamp) - Date.parse(parsedContext.value.verificationTime))
   if (!Number.isFinite(difference) || difference > parsedContext.value.maxClockSkewSeconds * 1000) return failure('SIGNATURE_EXPIRED', '$.timestamp')
-  let signatureValid: boolean
+  let signatureValid: unknown
   try { signatureValid = await parsedContext.value.signatureVerifier(envelope.value.canonicalSigningInput, signature) } catch { return failure('IDENTITY_MISMATCH', '$.signature') }
-  if (!signatureValid) return failure('IDENTITY_MISMATCH', '$.signature')
+  if (signatureValid !== true) return failure('IDENTITY_MISMATCH', '$.signature')
   const claimInput: NonceClaimInput = { nonce: envelope.value.nonce, sender: envelope.value.sender, receiver: envelope.value.receiver, keyId: envelope.value.keyId, timestamp: envelope.value.timestamp }
-  let claimed: boolean
+  let claimed: unknown
   try { claimed = await parsedContext.value.nonceClaimVerifier(claimInput) } catch { return failure('NONCE_REPLAYED', '$.nonce') }
-  return claimed ? success(true) : failure('NONCE_REPLAYED', '$.nonce')
+  return claimed === true ? success(true) : failure('NONCE_REPLAYED', '$.nonce')
 }

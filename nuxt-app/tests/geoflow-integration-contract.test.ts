@@ -26,7 +26,7 @@ import {
   verifySigningEnvelope,
   verifyStatusTransition,
 } from '../server/geoflow-integration'
-import type { ContentArtifact, GeoFlowRequest, GeoFlowRequestDraft, GeoFlowResponse, NonceClaimInput, SigningEnvelope } from '../server/geoflow-integration/types'
+import type { ContentArtifact, DraftResultResponse, GeoFlowRequest, GeoFlowRequestDraft, GeoFlowResponse, NonceClaimInput, SigningEnvelope, ValidationResult } from '../server/geoflow-integration/types'
 import { BODY_HASH, BODY_MARKDOWN, CHUNK_HASH, HASH_A, HASH_B, HASH_C, makeDraftResponse, makeFailureResponse, makeProgressResponse, makeRequest, makeRetryResponse, validContentArtifact, validRequest, validRequestDraft, validResponse, validRevisionDraft, validEnvelopeInput } from './fixtures/geoflow-integration/fixtures'
 
 function expectFailure(result: { ok: boolean; reason?: string }, reason: string): void { expect(result.ok).toBe(false); if (!result.ok) expect(result.reason).toBe(reason) }
@@ -39,11 +39,11 @@ function artifactWith(overrides: Partial<ContentArtifact>): ContentArtifact { re
 async function expectAsyncFailure(result: Promise<{ ok: boolean; reason?: string }>, reason: string): Promise<void> { const resolved = await result; expectFailure(resolved, reason) }
 function storedEvent(response: unknown, previousResponse: unknown = null, explicitRetry = false, request: GeoFlowRequest = validRequest): Record<string, unknown> { return { previousResponse, request, response, explicitRetry } }
 function atTime<T extends GeoFlowResponse>(response: T, time: string): T { return ('observedAt' in response ? { ...response, observedAt: time } : { ...response, completedAt: time }) as T }
-function responseForStatus(status: GeoFlowResponse['status'], time = '2026-08-25T04:00:30.000Z'): GeoFlowResponse {
-  if (status === 'queued' || status === 'running') return atTime(makeProgressResponse(validRequest, status), time)
-  if (status === 'retry_wait') return makeRetryResponse()
-  if (status === 'blocked' || status === 'failed') return atTime(makeFailureResponse(validRequest, status), time)
-  return atTime(makeDraftResponse(validRequest, { status }), time)
+function responseForStatus(status: GeoFlowResponse['status'], time = '2026-08-25T04:00:30.000Z', attempt = 1): GeoFlowResponse {
+  if (status === 'queued' || status === 'running') return atTime(makeProgressResponse(validRequest, status, attempt), time)
+  if (status === 'retry_wait') return atTime(makeRetryResponse(validRequest, attempt), time)
+  if (status === 'blocked' || status === 'failed') return atTime(makeFailureResponse(validRequest, status, attempt), time)
+  return atTime(makeDraftResponse(validRequest, { status, attempt }), time)
 }
 
 
@@ -204,7 +204,7 @@ describe('GEOFlow generation contract V1 — idempotency and response union', ()
 })
 
 describe('GEOFlow generation contract V1 — URL and status policy', () => {
-  it('accepts a public HTTPS URL', () => { expect(validatePublicHttpsUrl('https://example.com/evidence')).toEqual({ ok: true, value: 'https://example.com/evidence' }) })
+  it('accepts a public HTTPS URL', () => { expect(validatePublicHttpsUrl('https://evidence.routing.discoverystack.dev/evidence')).toEqual({ ok: true, value: 'https://evidence.routing.discoverystack.dev/evidence' }) })
   it('rejects HTTP', () => { expectFailure(validatePublicHttpsUrl('http://example.com/evidence'), 'INVALID_PUBLIC_URL') })
   it('rejects FTP', () => { expectFailure(validatePublicHttpsUrl('ftp://example.com/evidence'), 'INVALID_PUBLIC_URL') })
   it('rejects file URLs', () => { expectFailure(validatePublicHttpsUrl('file:///tmp/evidence'), 'INVALID_PUBLIC_URL') })
@@ -238,8 +238,8 @@ describe('GEOFlow generation contract V1 — URL and status policy', () => {
   it('rejects IPv4-mapped loopback IPv6', () => { expectFailure(validatePublicHttpsUrl('https://[::ffff:7f00:1]/evidence'), 'PRIVATE_OR_SPECIAL_TARGET') })
   it('rejects encoded token query parameter name', () => { expectFailure(validatePublicHttpsUrl('https://example.com/evidence?%74oken=value'), 'INVALID_PUBLIC_URL') })
   it('rejects encoded api_key query parameter name', () => { expectFailure(validatePublicHttpsUrl('https://example.com/evidence?api%5Fkey=value'), 'INVALID_PUBLIC_URL') })
-  it('accepts a benign query parameter', () => { expect(validatePublicHttpsUrl('https://example.com/evidence?section=one').ok).toBe(true) })
-  it('does not perform DNS lookup for URL policy', () => { expect(validatePublicHttpsUrl('https://does-not-resolve.example/evidence').ok).toBe(true) })
+  it('accepts a benign query parameter', () => { expect(validatePublicHttpsUrl('https://evidence.routing.discoverystack.dev/evidence?section=one').ok).toBe(true) })
+  it('does not perform DNS lookup for URL policy', () => { expect(validatePublicHttpsUrl('https://does-not-resolve.routing.discoverystack.dev/evidence').ok).toBe(true) })
   it('maps queued to awaiting_generation', () => { expect(mapGeoFlowStatusToDiscoveryStack('queued')).toEqual({ ok: true, value: 'awaiting_generation' }) })
   it('maps running to awaiting_generation', () => { expect(mapGeoFlowStatusToDiscoveryStack('running')).toEqual({ ok: true, value: 'awaiting_generation' }) })
   it('maps draft_ready to awaiting_review', () => { expect(mapGeoFlowStatusToDiscoveryStack('draft_ready')).toEqual({ ok: true, value: 'awaiting_review' }) })
@@ -282,8 +282,8 @@ describe('GEOFlow generation contract V1 — combined status events and lineage'
   it('accepts running to review_required event', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(validResponse, responseForStatus('running'))).ok).toBe(true) })
   it('accepts draft_ready to review_required event', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(validResponse, responseForStatus('draft_ready'))).ok).toBe(true) })
   it('accepts review_required to blocked event', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(makeFailureResponse(validRequest, 'blocked'), responseForStatus('review_required'))).ok).toBe(true) })
-  it('accepts retry_wait to queued with explicit retry', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued'), '2026-08-25T04:06:00.000Z'), makeRetryResponse(), true)).ok).toBe(true) })
-  it('accepts failed to queued with explicit retry', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued'), '2026-08-25T04:02:00.000Z'), makeFailureResponse(validRequest, 'failed'), true)).ok).toBe(true) })
+  it('accepts retry_wait to queued with explicit retry', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued', 2), '2026-08-25T04:06:00.000Z'), makeRetryResponse(validRequest, 1), true)).ok).toBe(true) })
+  it('accepts failed to queued with explicit retry', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued', 2), '2026-08-25T04:02:00.000Z'), makeFailureResponse(validRequest, 'failed', 1, true), true)).ok).toBe(true) })
   it('rejects retry_wait to queued without explicit retry', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued'), '2026-08-25T04:06:00.000Z'), makeRetryResponse(), false)), 'INVALID_STATUS_TRANSITION') })
   it('rejects running to queued', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'queued'), responseForStatus('running'))), 'INVALID_STATUS_TRANSITION') })
   it('rejects an event with invalid previous response state', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'queued'), { ...makeProgressResponse(), status: 'unknown' })), 'UNKNOWN_STATE') })
@@ -361,8 +361,6 @@ describe('GEOFlow generation contract V1 — fixed HMAC envelope planner', () =>
   it('fails closed when atomic nonce claim rejects', async () => { await expectAsyncFailure(verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ nonceClaimVerifier: async () => Promise.reject(new Error('store unavailable')) })), 'NONCE_REPLAYED') })
   it('records signature before nonce claim', async () => { const calls: string[] = []; const result = await verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ signatureVerifier: async () => { calls.push('signature'); return true }, nonceClaimVerifier: async () => { calls.push('nonce-claim'); return true } })); expect(result.ok).toBe(true); expect(calls).toEqual(['signature', 'nonce-claim']) })
 })
-
-
 describe('GEOFlow generation contract V1 — combined status events and lineage', () => {
   it('accepts initial queued event without previous response', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'queued'))).ok).toBe(true) })
   it('rejects initial running event without previous response', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'running'))), 'INVALID_STATUS_TRANSITION') })
@@ -371,8 +369,8 @@ describe('GEOFlow generation contract V1 — combined status events and lineage'
   it('accepts running to review_required event', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(validResponse, responseForStatus('running'))).ok).toBe(true) })
   it('accepts draft_ready to review_required event', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(validResponse, responseForStatus('draft_ready'))).ok).toBe(true) })
   it('accepts review_required to blocked event', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(makeFailureResponse(validRequest, 'blocked'), responseForStatus('review_required'))).ok).toBe(true) })
-  it('accepts retry_wait to queued with explicit retry', () => { const current = atTime(makeProgressResponse(validRequest, 'queued'), '2026-08-25T04:06:00.000Z'); expect(validateGeoFlowStatusEventForStoredState(storedEvent(current, makeRetryResponse(), true)).ok).toBe(true) })
-  it('accepts failed to queued with explicit retry', () => { const current = atTime(makeProgressResponse(validRequest, 'queued'), '2026-08-25T04:02:00.000Z'); expect(validateGeoFlowStatusEventForStoredState(storedEvent(current, makeFailureResponse(validRequest, 'failed'), true)).ok).toBe(true) })
+  it('accepts retry_wait to queued with explicit retry', () => { const current = atTime(makeProgressResponse(validRequest, 'queued', 2), '2026-08-25T04:06:00.000Z'); expect(validateGeoFlowStatusEventForStoredState(storedEvent(current, makeRetryResponse(validRequest, 1), true)).ok).toBe(true) })
+  it('accepts failed to queued with explicit retry', () => { const current = atTime(makeProgressResponse(validRequest, 'queued', 2), '2026-08-25T04:02:00.000Z'); expect(validateGeoFlowStatusEventForStoredState(storedEvent(current, makeFailureResponse(validRequest, 'failed', 1, true), true)).ok).toBe(true) })
   it('rejects retry_wait to queued without explicit retry', () => { const current = atTime(makeProgressResponse(validRequest, 'queued'), '2026-08-25T04:06:00.000Z'); expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(current, makeRetryResponse(), false)), 'INVALID_STATUS_TRANSITION') })
   it('rejects running to queued', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'queued'), responseForStatus('running'))), 'INVALID_STATUS_TRANSITION') })
   it('rejects an invalid previous response state', () => { const previous = { ...makeProgressResponse(), status: 'unknown' }; expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'queued'), previous)), 'UNKNOWN_STATE') })
@@ -433,16 +431,104 @@ describe('GEOFlow generation contract V1 — combined status events and lineage'
   it('rejects review_required completedAt before request createdAt', () => { expectFailure(validateGeoFlowResponse(atTime(validResponse, '2026-08-24T19:59:59Z'), validRequest), 'RESPONSE_TIME_INVALID') })
   it('rejects retryAt equal to observedAt', () => { const retry = { ...makeRetryResponse(), observedAt: '2026-08-25T04:01:00Z', retry: { attempt: 1, retryAt: '2026-08-25T04:01:00Z' } }; expectFailure(validateGeoFlowResponse(retry, validRequest), 'RESPONSE_TIME_INVALID') })
   it('rejects retryAt before observedAt', () => { const retry = { ...makeRetryResponse(), observedAt: '2026-08-25T04:01:00Z', retry: { attempt: 1, retryAt: '2026-08-25T04:00:59Z' } }; expectFailure(validateGeoFlowResponse(retry, validRequest), 'RESPONSE_TIME_INVALID') })
-  it('rejects retry attempt zero', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), retry: { attempt: 0, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'INVALID_INPUT') })
-  it('rejects negative retry attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), retry: { attempt: -1, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'INVALID_INPUT') })
-  it('rejects retry attempt eleven', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), retry: { attempt: 11, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'LIMIT_EXCEEDED') })
-  it('rejects infinite retry attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), retry: { attempt: Number.POSITIVE_INFINITY, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'INVALID_INPUT') })
-  it('rejects NaN retry attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), retry: { attempt: Number.NaN, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'INVALID_INPUT') })
-  it('rejects fractional retry attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), retry: { attempt: 1.5, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'INVALID_INPUT') })
+  it('rejects retry attempt zero', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), attempt: 0, retry: { attempt: 0, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects negative retry attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), attempt: -1, retry: { attempt: -1, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects retry attempt eleven', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), attempt: 11, retry: { attempt: 11, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects infinite retry attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), attempt: Number.POSITIVE_INFINITY, retry: { attempt: Number.POSITIVE_INFINITY, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects NaN retry attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), attempt: Number.NaN, retry: { attempt: Number.NaN, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects fractional retry attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), attempt: 1.5, retry: { attempt: 1.5, retryAt: '2026-08-25T04:05:00Z' } }, validRequest), 'RETRY_ATTEMPT_INVALID') })
   it('rejects blocked response with retryable true', () => { expectFailure(validateGeoFlowResponse({ ...makeFailureResponse(validRequest, 'blocked'), failure: { code: 'INVALID_INPUT', retryable: true } }, validRequest), 'INVALID_INPUT') })
   it('rejects duplicate requested capabilities', () => { expectFailure(buildGeoFlowRequest({ ...validRequestDraft, requestedCapabilities: ['human_review', 'human_review'] } as unknown), 'DUPLICATE_IDENTIFIER') })
   it('rejects duplicate selected rule IDs', () => { expectFailure(buildGeoFlowRequest({ ...validRequestDraft, selectedRuleIds: ['direct-answer-first', 'direct-answer-first'] }), 'DUPLICATE_IDENTIFIER') })
   it('rejects duplicate authority source IDs', () => { expectFailure(buildGeoFlowRequest({ ...validRequestDraft, authoritySourceIds: ['source-1', 'source-1'] }), 'DUPLICATE_IDENTIFIER') })
   it('rejects duplicate applied rule IDs', () => { expectFailure(validateGeoFlowResponse(responseWith({ appliedRuleIds: ['direct-answer-first', 'direct-answer-first'] }), validRequest), 'DUPLICATE_IDENTIFIER') })
   it('rejects duplicate citation identity', () => { const citation = validResponse.citationBindings[0]; expectFailure(validateGeoFlowResponse(responseWith({ citationBindings: [citation, citation] }), validRequest), 'DUPLICATE_EVIDENCE_IDENTITY') })
+})
+describe('GEOFlow generation contract V1 — exact verifier return types', () => {
+  it('accepts a synchronous exact boolean true signature', async () => { expect((await verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ signatureVerifier: () => true }))).ok).toBe(true) })
+  it('accepts an asynchronous exact boolean true signature', async () => { expect((await verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ signatureVerifier: async () => true }))).ok).toBe(true) })
+  it('rejects a truthy string signature without claiming nonce', async () => { let calls = 0; const result = await verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ signatureVerifier: () => 'yes', nonceClaimVerifier: () => { calls += 1; return true } })); expectFailure(result, 'IDENTITY_MISMATCH'); expect(calls).toBe(0) })
+  it('rejects a numeric one signature without claiming nonce', async () => { let calls = 0; const result = await verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ signatureVerifier: () => 1, nonceClaimVerifier: () => { calls += 1; return true } })); expectFailure(result, 'IDENTITY_MISMATCH'); expect(calls).toBe(0) })
+  it('rejects an object signature without claiming nonce', async () => { let calls = 0; const result = await verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ signatureVerifier: () => ({}), nonceClaimVerifier: () => { calls += 1; return true } })); expectFailure(result, 'IDENTITY_MISMATCH'); expect(calls).toBe(0) })
+  it('rejects a promised truthy string signature without claiming nonce', async () => { let calls = 0; const result = await verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ signatureVerifier: () => Promise.resolve('yes'), nonceClaimVerifier: () => { calls += 1; return true } })); expectFailure(result, 'IDENTITY_MISMATCH'); expect(calls).toBe(0) })
+  it('rejects a truthy string nonce claim as replayed', async () => { await expectAsyncFailure(verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ nonceClaimVerifier: () => 'yes' })), 'NONCE_REPLAYED') })
+  it('rejects a numeric one nonce claim as replayed', async () => { await expectAsyncFailure(verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ nonceClaimVerifier: () => 1 })), 'NONCE_REPLAYED') })
+  it('rejects an object nonce claim as replayed', async () => { await expectAsyncFailure(verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ nonceClaimVerifier: () => ({ claimed: false }) })), 'NONCE_REPLAYED') })
+  it('rejects a promised object nonce claim as replayed', async () => { await expectAsyncFailure(verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), signingContext({ nonceClaimVerifier: () => Promise.resolve({}) })), 'NONCE_REPLAYED') })
+})
+
+describe('GEOFlow generation contract V1 — attempt lineage', () => {
+  it('requires a top-level attempt on every response family', () => { expect(makeProgressResponse().attempt).toBe(1); expect(makeRetryResponse().attempt).toBe(1); expect(makeFailureResponse().attempt).toBe(1); expect(makeDraftResponse().attempt).toBe(1) })
+  it('accepts retry metadata when nested attempt equals top-level attempt', () => { expect(validateGeoFlowResponse(makeRetryResponse(validRequest, 2), validRequest).ok).toBe(true) })
+  it('rejects retry metadata when nested attempt differs from top-level attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeRetryResponse(), attempt: 2 }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('accepts initial queued attempt one', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'queued', 1))).ok).toBe(true) })
+  it('rejects initial queued attempt two', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'queued', 2))), 'RETRY_ATTEMPT_INVALID') })
+  it('accepts queued attempt one to running attempt one', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'running', 1), responseForStatus('queued', undefined, 1))).ok).toBe(true) })
+  it('rejects queued attempt one to running attempt two', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'running', 2), responseForStatus('queued', undefined, 1))), 'RETRY_ATTEMPT_INVALID') })
+  it('accepts running attempt one to retry_wait attempt one', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(makeRetryResponse(validRequest, 1), responseForStatus('running', undefined, 1))).ok).toBe(true) })
+  it('accepts retry_wait attempt one to queued attempt two with explicit retry', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued', 2), '2026-08-25T04:06:00Z'), makeRetryResponse(validRequest, 1), true)).ok).toBe(true) })
+  it('rejects retry_wait attempt one to queued attempt one', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued', 1), '2026-08-25T04:06:00Z'), makeRetryResponse(validRequest, 1), true)), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects retry_wait attempt one to queued attempt three', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued', 3), '2026-08-25T04:06:00Z'), makeRetryResponse(validRequest, 1), true)), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects retry_wait attempt ten to queued attempt eleven', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued', 11), '2026-08-25T04:06:00Z'), makeRetryResponse(validRequest, 10), true)), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects retry_wait attempt ten to queued attempt one', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued', 1), '2026-08-25T04:06:00Z'), makeRetryResponse(validRequest, 10), true)), 'RETRY_ATTEMPT_INVALID') })
+  it('accepts retryable failed attempt one to queued attempt two', () => { expect(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued', 2), '2026-08-25T04:02:00Z'), makeFailureResponse(validRequest, 'failed', 1, true), true)).ok).toBe(true) })
+  it('rejects non-retryable failed to queued', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued', 2), '2026-08-25T04:02:00Z'), makeFailureResponse(validRequest, 'failed', 1, false), true)), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects retryable failed without explicit retry', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(atTime(makeProgressResponse(validRequest, 'queued', 2), '2026-08-25T04:02:00Z'), makeFailureResponse(validRequest, 'failed', 1, true), false)), 'INVALID_STATUS_TRANSITION') })
+  it('rejects ordinary queued to running with explicit retry', () => { expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(makeProgressResponse(validRequest, 'running', 1), responseForStatus('queued', undefined, 1), true)), 'INVALID_STATUS_TRANSITION') })
+  it('accepts the maximum ordinary attempt ten', () => { expect(validateGeoFlowResponse(makeProgressResponse(validRequest, 'running', 10), validRequest).ok).toBe(true) })
+  it('rejects top-level attempt zero', () => { expectFailure(validateGeoFlowResponse({ ...makeProgressResponse(), attempt: 0 }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects top-level negative attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeProgressResponse(), attempt: -1 }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects top-level attempt eleven', () => { expectFailure(validateGeoFlowResponse({ ...makeProgressResponse(), attempt: 11 }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects top-level infinite attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeProgressResponse(), attempt: Number.POSITIVE_INFINITY }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects top-level NaN attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeProgressResponse(), attempt: Number.NaN }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+  it('rejects top-level fractional attempt', () => { expectFailure(validateGeoFlowResponse({ ...makeProgressResponse(), attempt: 1.5 }, validRequest), 'RETRY_ATTEMPT_INVALID') })
+})
+
+describe('GEOFlow generation contract V1 — immutable candidate lineage', () => {
+  function candidateEvent(current: DraftResultResponse, previous: DraftResultResponse): ValidationResult<unknown> { return validateGeoFlowStatusEventForStoredState(storedEvent(current, previous)) }
+  function priorCandidate(status: 'draft_ready' | 'review_required' = 'draft_ready'): DraftResultResponse { return atTime(makeDraftResponse(validRequest, { status }), '2026-08-25T04:01:00Z') }
+  function laterCandidate(overrides: Partial<DraftResultResponse> = {}): DraftResultResponse { return atTime(makeDraftResponse(validRequest, { status: 'review_required', ...overrides }), '2026-08-25T04:02:00Z') }
+  it('accepts an exact draft_ready to review_required candidate', () => { expect(candidateEvent(laterCandidate(), priorCandidate()).ok).toBe(true) })
+  it('rejects body mutation even with a recomputed valid body hash', () => { const body = 'Changed body'; expectFailure(candidateEvent(laterCandidate({ contentArtifact: artifactWith({ bodyMarkdown: body, bodyHash: sha256(body) }) }), priorCandidate()), 'CANDIDATE_LINEAGE_MISMATCH') })
+  it('rejects title mutation', () => { expectFailure(candidateEvent(laterCandidate({ contentArtifact: artifactWith({ title: 'Changed title', bodyHash: BODY_HASH }) }), priorCandidate()), 'CANDIDATE_LINEAGE_MISMATCH') })
+  it('rejects summary mutation', () => { expectFailure(candidateEvent(laterCandidate({ contentArtifact: artifactWith({ summary: 'Changed summary', bodyHash: BODY_HASH }) }), priorCandidate()), 'CANDIDATE_LINEAGE_MISMATCH') })
+  it('rejects citation mutation', () => { const request = makeRequest({ requestedCapabilities: ['prompt_pack'], selectedRuleIds: [], authoritySourceIds: [], evidenceChunks: [] }); const previous = atTime(makeDraftResponse(request, { status: 'draft_ready' }), '2026-08-25T04:01:00Z'); const current = atTime(makeDraftResponse(request, { status: 'review_required', citationBindings: [{ sourceId: 'source-1', artifactId: 'other-artifact', chunkId: 'chunk-1', chunkHash: CHUNK_HASH }] }), '2026-08-25T04:02:00Z'); expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(current, previous, false, request)), 'CANDIDATE_LINEAGE_MISMATCH') })
+  it('rejects applied rule mutation', () => { const request = makeRequest({ requestedCapabilities: ['prompt_pack'], selectedRuleIds: ['direct-answer-first', 'heading-structure'] }); const previous = atTime(makeDraftResponse(request, { status: 'draft_ready' }), '2026-08-25T04:01:00Z'); const current = atTime(makeDraftResponse(request, { status: 'review_required', appliedRuleIds: ['direct-answer-first', 'changed-rule'] }), '2026-08-25T04:02:00Z'); expectFailure(validateGeoFlowStatusEventForStoredState(storedEvent(current, previous, false, request)), 'CANDIDATE_LINEAGE_MISMATCH') })
+  it('rejects provider or model mutation', () => { expectFailure(candidateEvent(laterCandidate({ providerProvenance: { provider: 'provider', model: 'changed-model', mode: 'provider', fallbackReason: null } }), priorCandidate()), 'CANDIDATE_LINEAGE_MISMATCH') })
+  it('rejects limitations mutation', () => { expectFailure(candidateEvent(laterCandidate({ limitations: [DETERMINISTIC_SCAFFOLD_LIMITATION, 'Changed limitation'] }), priorCandidate()), 'CANDIDATE_LINEAGE_MISMATCH') })
+  it('accepts a later timestamp with exact candidate content', () => { expect(candidateEvent(laterCandidate(), priorCandidate()).ok).toBe(true) })
+  it('keeps draft_ready self-events immutable', () => { expectFailure(candidateEvent(laterCandidate({ status: 'draft_ready', contentArtifact: artifactWith({ summary: 'changed' }) }), priorCandidate()), 'CANDIDATE_LINEAGE_MISMATCH') })
+  it('keeps review_required self-events immutable', () => { expectFailure(candidateEvent(laterCandidate({ status: 'review_required', contentArtifact: artifactWith({ summary: 'changed' }) }), priorCandidate('review_required')), 'CANDIDATE_LINEAGE_MISMATCH') })
+  it('allows a new revision request to carry a new candidate lineage', () => { const revisionRequest = makeRequest({ generationMode: 'revision', revisionContext: validRevisionDraft.revisionContext }); const candidate = makeDraftResponse(revisionRequest); expect(verifyGeoFlowLineage(revisionRequest, candidate).ok).toBe(true) })
+})
+
+describe('GEOFlow generation contract V1 — timestamp offset policy', () => {
+  it('accepts Z and normalizes to UTC', () => { expect(buildGeoFlowRequest({ ...validRequestDraft, createdAt: '2026-08-25T04:00:00Z' }).ok).toBe(true) })
+  it('accepts explicit positive zero offset', () => { const result = buildGeoFlowRequest({ ...validRequestDraft, createdAt: '2026-08-25T04:00:00+00:00' }); expect(result.ok).toBe(true); if (result.ok) expect(result.value.createdAt).toBe('2026-08-25T04:00:00.000Z') })
+  it('converts a negative half-hour offset correctly', () => { const result = buildGeoFlowRequest({ ...validRequestDraft, createdAt: '2026-08-25T12:00:00-05:30' }); expect(result.ok).toBe(true); if (result.ok) expect(result.value.createdAt).toBe('2026-08-25T17:30:00.000Z') })
+  it('accepts the practical positive fourteen-hour boundary', () => { expect(buildGeoFlowRequest({ ...validRequestDraft, createdAt: '2026-08-25T04:00:00+14:00' }).ok).toBe(true) })
+  it('accepts the practical negative fourteen-hour boundary', () => { expect(buildGeoFlowRequest({ ...validRequestDraft, createdAt: '2026-08-25T04:00:00-14:00' }).ok).toBe(true) })
+  it('rejects positive fourteen hours and one minute', () => { expectFailure(buildGeoFlowRequest({ ...validRequestDraft, createdAt: '2026-08-25T04:00:00+14:01' }), 'INVALID_TIMESTAMP') })
+  it('rejects negative fourteen hours and one minute', () => { expectFailure(buildGeoFlowRequest({ ...validRequestDraft, createdAt: '2026-08-25T04:00:00-14:01' }), 'INVALID_TIMESTAMP') })
+  it('rejects a twenty-three-hour offset', () => { expectFailure(buildGeoFlowRequest({ ...validRequestDraft, createdAt: '2026-08-25T04:00:00+23:59' }), 'INVALID_TIMESTAMP') })
+  it('rejects the unknown negative zero offset', () => { expectFailure(buildGeoFlowRequest({ ...validRequestDraft, createdAt: '2026-08-25T04:00:00-00:00' }), 'INVALID_TIMESTAMP') })
+})
+
+describe('GEOFlow generation contract V1 — expanded public URL policy', () => {
+  it('rejects source.test and its subdomain', () => { expectFailure(validatePublicHttpsUrl('https://source.test/evidence'), 'INVALID_PUBLIC_URL'); expectFailure(validatePublicHttpsUrl('https://api.source.test/evidence'), 'INVALID_PUBLIC_URL') })
+  it('rejects example domains and subdomains', () => { for (const hostname of ['example.com', 'example.net', 'example.org', 'api.example.com']) expectFailure(validatePublicHttpsUrl(`https://${hostname}/evidence`), 'INVALID_PUBLIC_URL') })
+  it('rejects home.arpa and its subdomain', () => { expectFailure(validatePublicHttpsUrl('https://home.arpa/evidence'), 'INVALID_PUBLIC_URL'); expectFailure(validatePublicHttpsUrl('https://router.home.arpa/evidence'), 'INVALID_PUBLIC_URL') })
+  it('rejects a sensitive query value', () => { expectFailure(validatePublicHttpsUrl('https://evidence.routing.discoverystack.dev/evidence?ref=Bearer-secret'), 'INVALID_PUBLIC_URL') })
+  it('rejects an encoded sensitive query value', () => { expectFailure(validatePublicHttpsUrl('https://evidence.routing.discoverystack.dev/evidence?ref=%42earer-%73ecret'), 'INVALID_PUBLIC_URL') })
+  it('rejects case-variant sensitive query names', () => { expectFailure(validatePublicHttpsUrl('https://evidence.routing.discoverystack.dev/evidence?ToKeN=value'), 'INVALID_PUBLIC_URL') })
+  it('rejects an encoded sensitive query name', () => { expectFailure(validatePublicHttpsUrl('https://evidence.routing.discoverystack.dev/evidence?%61%70%69%5F%6B%65%79=value'), 'INVALID_PUBLIC_URL') })
+  it('rejects the additional 2002 IPv6 range', () => { expectFailure(validatePublicHttpsUrl('https://[2002::1]/evidence'), 'PRIVATE_OR_SPECIAL_TARGET') })
+  it('rejects the additional 3fff IPv6 range', () => { expectFailure(validatePublicHttpsUrl('https://[3fff::1]/evidence'), 'PRIVATE_OR_SPECIAL_TARGET') })
+  it('rejects the additional 5f00 IPv6 range', () => { expectFailure(validatePublicHttpsUrl('https://[5f00::1]/evidence'), 'PRIVATE_OR_SPECIAL_TARGET') })
+  it('accepts a normal global IPv6 address', () => { expect(validatePublicHttpsUrl('https://[2001:4860:4860::8888]/evidence').ok).toBe(true) })
+  it('keeps a benign encoded query value accepted', () => { expect(validatePublicHttpsUrl('https://evidence.routing.discoverystack.dev/evidence?ref=section%2Done').ok).toBe(true) })
+})
+
+describe('GEOFlow generation contract V1 — nonce uniqueness scope', () => {
+  it('treats the same nonce scope with a different timestamp as replayed', async () => { const claimed = new Set<string>(); const claim = (input: NonceClaimInput) => { const scope = [input.sender, input.receiver, input.keyId, input.nonce].join('\u0000'); if (claimed.has(scope)) return false; claimed.add(scope); return true }; const context = signingContext({ nonceClaimVerifier: claim }); expect((await verifySigningEnvelope(plannedEnvelope(), 'a'.repeat(64), context)).ok).toBe(true); await expectAsyncFailure(verifySigningEnvelope(plannedEnvelope({ timestamp: '2026-08-25T04:03:00Z' }), 'a'.repeat(64), { ...context, verificationTime: '2026-08-25T04:03:00Z' }), 'NONCE_REPLAYED') })
 })
