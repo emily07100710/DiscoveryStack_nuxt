@@ -1,14 +1,17 @@
-import type { EnvelopeVerifier, GeoFlowRequest, ReasonCode, SigningEnvelope, ValidationFailure, ValidationResult, ValidationSuccess } from './types'
-import { GEOFLOW_PROTOCOL_VERSION } from './types'
-import { canonicalizeTimestamp } from './normalization'
+import { createHash } from 'node:crypto'
+import type { GeoFlowRequest, NonceFreshnessVerifier, ReasonCode, SigningEnvelope, SignatureVerifier, ValidationFailure, ValidationResult, ValidationSuccess } from './types'
+import { GEOFLOW_PROTOCOL_VERSION, SIGNING_ALGORITHM, SIGNING_METHOD, SIGNING_PATH } from './types'
+import { canonicalizeTimestamp, normalizeNonce, normalizeOpaqueIdentifier, normalizeHashValue } from './normalization'
+import { canonicalizeContractValue } from './fingerprint'
 import { validateGeoFlowRequest } from './schemas'
 
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
-const OPAQUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u
-const ENVELOPE_KEYS = ['request', 'bodyHash', 'timestamp', 'nonce', 'sender', 'receiver'] as const
-const SIGNING_ENVELOPE_KEYS = ['protocolVersion', 'requestId', 'idempotencyKey', 'requestFingerprint', 'bodyHash', 'timestamp', 'nonce', 'sender', 'receiver', 'canonicalSigningInput'] as const
+const SIGNATURE_PATTERN = /^[0-9a-f]{64}$/u
+const PLANNER_KEYS = ['request', 'timestamp', 'nonce', 'sender', 'receiver', 'keyId'] as const
+const ENVELOPE_KEYS = ['algorithm', 'method', 'path', 'protocolVersion', 'requestId', 'idempotencyKey', 'requestFingerprint', 'bodyHash', 'timestamp', 'nonce', 'sender', 'receiver', 'keyId', 'canonicalSigningInput'] as const
+const CONTEXT_KEYS = ['request', 'verificationTime', 'maxClockSkewSeconds', 'expectedSender', 'expectedReceiver', 'expectedKeyId', 'nonceFreshnessVerifier', 'signatureVerifier'] as const
 const READ_FAILED = Symbol('read-failed')
-type EnvelopeKey = typeof SIGNING_ENVELOPE_KEYS[number]
+
 type SafeValue = unknown | typeof READ_FAILED
 
 function success<T>(value: T): ValidationSuccess<T> { return { ok: true, value } }
@@ -19,55 +22,82 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 function exactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean { try { const keys = Object.keys(record); return keys.length === expected.length && keys.every(key => expected.includes(key)) } catch { return false } }
 function safeValue(record: Record<string, unknown>, key: string): SafeValue { try { return record[key] } catch { return READ_FAILED } }
-function opaque(value: unknown, path: string): ValidationResult<string> { return typeof value === 'string' && OPAQUE_PATTERN.test(value) ? success(value) : failure('INVALID_INPUT', path) }
 function hash(value: unknown, path: string): ValidationResult<string> { return typeof value === 'string' && HASH_PATTERN.test(value) ? success(value) : failure('INVALID_HASH', path) }
-
-function parsePlannerInput(input: unknown): ValidationResult<{ request: GeoFlowRequest; bodyHash: string; timestamp: string; nonce: string; sender: string; receiver: string }> {
-  if (!isPlainRecord(input) || !exactKeys(input, ENVELOPE_KEYS)) return failure(isPlainRecord(input) ? 'UNKNOWN_FIELD' : 'INVALID_INPUT')
-  const requestValue = safeValue(input, 'request'); const bodyHashValue = safeValue(input, 'bodyHash'); const timestampValue = safeValue(input, 'timestamp'); const nonceValue = safeValue(input, 'nonce'); const senderValue = safeValue(input, 'sender'); const receiverValue = safeValue(input, 'receiver')
-  if ([requestValue, bodyHashValue, timestampValue, nonceValue, senderValue, receiverValue].some(value => value === READ_FAILED)) return failure('INVALID_INPUT')
-  const request = validateGeoFlowRequest(requestValue); if (!request.ok) return request
-  const bodyHash = hash(bodyHashValue, '$.bodyHash'); if (!bodyHash.ok) return bodyHash
-  const timestamp = canonicalizeTimestamp(timestampValue, '$.timestamp'); if (!timestamp.ok) return timestamp
-  const nonce = opaque(nonceValue, '$.nonce'); if (!nonce.ok) return nonce
-  const sender = opaque(senderValue, '$.sender'); if (!sender.ok) return sender
-  const receiver = opaque(receiverValue, '$.receiver'); if (!receiver.ok) return receiver
-  return success({ request: request.value, bodyHash: bodyHash.value, timestamp: timestamp.value, nonce: nonce.value, sender: sender.value, receiver: receiver.value })
+function bodyHash(request: unknown): ValidationResult<string> {
+  const canonical = canonicalizeContractValue(request); if (!canonical.ok) return canonical
+  return success(createHash('sha256').update(Buffer.from(canonical.value, 'utf8')).digest('hex'))
+}
+function parsePlannerInput(input: unknown): ValidationResult<{ request: GeoFlowRequest; timestamp: string; nonce: string; sender: string; receiver: string; keyId: string }> {
+  if (!isPlainRecord(input) || !exactKeys(input, PLANNER_KEYS)) return failure(isPlainRecord(input) ? 'UNKNOWN_FIELD' : 'INVALID_INPUT')
+  const request = safeValue(input, 'request'); const timestamp = safeValue(input, 'timestamp'); const nonce = safeValue(input, 'nonce'); const sender = safeValue(input, 'sender'); const receiver = safeValue(input, 'receiver'); const keyId = safeValue(input, 'keyId')
+  if ([request, timestamp, nonce, sender, receiver, keyId].some(value => value === READ_FAILED)) return failure('INVALID_INPUT')
+  const timestampValue = canonicalizeTimestamp(timestamp, '$.timestamp'); if (!timestampValue.ok) return timestampValue
+  const nonceValue = normalizeNonce(nonce); if (!nonceValue.ok) return nonceValue
+  const senderValue = normalizeOpaqueIdentifier(sender, '$.sender'); if (!senderValue.ok) return senderValue
+  const receiverValue = normalizeOpaqueIdentifier(receiver, '$.receiver'); if (!receiverValue.ok) return receiverValue
+  const keyIdValue = normalizeOpaqueIdentifier(keyId, '$.keyId'); if (!keyIdValue.ok) return keyIdValue
+  const validatedRequest = validateGeoFlowRequest(request); if (!validatedRequest.ok) return validatedRequest
+  return success({ request: validatedRequest.value, timestamp: timestampValue.value, nonce: nonceValue.value, sender: senderValue.value, receiver: receiverValue.value, keyId: keyIdValue.value })
 }
 
-export function buildCanonicalSigningInput(input: Pick<SigningEnvelope, 'protocolVersion' | 'requestId' | 'idempotencyKey' | 'requestFingerprint' | 'bodyHash' | 'timestamp' | 'nonce' | 'sender' | 'receiver'>): string {
-  return [input.protocolVersion, input.requestId, input.idempotencyKey, input.requestFingerprint, input.bodyHash, input.timestamp, input.nonce, input.sender, input.receiver].join('\n')
+export function buildCanonicalSigningInput(input: Pick<SigningEnvelope, 'algorithm' | 'method' | 'path' | 'protocolVersion' | 'requestId' | 'idempotencyKey' | 'requestFingerprint' | 'bodyHash' | 'timestamp' | 'nonce' | 'sender' | 'receiver' | 'keyId'>): string {
+  return [input.algorithm, input.method, input.path, input.protocolVersion, input.requestId, input.idempotencyKey, input.requestFingerprint, input.bodyHash, input.timestamp, input.nonce, input.sender, input.receiver, input.keyId].join('\n')
 }
 
 export function planSigningEnvelope(input: unknown): ValidationResult<SigningEnvelope> {
   const parsed = parsePlannerInput(input); if (!parsed.ok) return parsed
-  const { request, bodyHash, timestamp, nonce, sender, receiver } = parsed.value
-  const core = { protocolVersion: GEOFLOW_PROTOCOL_VERSION, requestId: request.requestId, idempotencyKey: request.idempotencyKey, requestFingerprint: request.requestFingerprint, bodyHash, timestamp, nonce, sender, receiver }
+  const computedBodyHash = bodyHash(parsed.value.request); if (!computedBodyHash.ok) return computedBodyHash
+  const request = parsed.value.request
+  const core = { algorithm: SIGNING_ALGORITHM, method: SIGNING_METHOD, path: SIGNING_PATH, protocolVersion: GEOFLOW_PROTOCOL_VERSION, requestId: request.requestId, idempotencyKey: request.idempotencyKey, requestFingerprint: request.requestFingerprint, bodyHash: computedBodyHash.value, timestamp: parsed.value.timestamp, nonce: parsed.value.nonce, sender: parsed.value.sender, receiver: parsed.value.receiver, keyId: parsed.value.keyId }
   return success({ ...core, canonicalSigningInput: buildCanonicalSigningInput(core) })
 }
 
 function parseEnvelope(input: unknown): ValidationResult<SigningEnvelope> {
-  if (!isPlainRecord(input) || !exactKeys(input, SIGNING_ENVELOPE_KEYS)) return failure(isPlainRecord(input) ? 'UNKNOWN_FIELD' : 'INVALID_INPUT')
-  const values = {} as Record<EnvelopeKey, SafeValue>
-  for (const key of SIGNING_ENVELOPE_KEYS) { const value = safeValue(input, key); if (value === READ_FAILED) return failure('INVALID_INPUT', `$.${key}`); values[key] = value }
+  if (!isPlainRecord(input) || !exactKeys(input, ENVELOPE_KEYS)) return failure(isPlainRecord(input) ? 'UNKNOWN_FIELD' : 'INVALID_INPUT')
+  const values = {} as Record<string, SafeValue>
+  for (const key of ENVELOPE_KEYS) { const value = safeValue(input, key); if (value === READ_FAILED) return failure('INVALID_INPUT', `$.${key}`); values[key] = value }
+  if (values.algorithm !== SIGNING_ALGORITHM || values.method !== SIGNING_METHOD || values.path !== SIGNING_PATH) return failure('SIGNATURE_CONTEXT_MISMATCH', '$')
   if (values.protocolVersion !== GEOFLOW_PROTOCOL_VERSION) return failure('INVALID_PROTOCOL_VERSION', '$.protocolVersion')
-  const requestId = opaque(values.requestId, '$.requestId'); if (!requestId.ok) return requestId
-  const idempotencyKey = opaque(values.idempotencyKey, '$.idempotencyKey'); if (!idempotencyKey.ok) return idempotencyKey
-  const requestFingerprint = hash(values.requestFingerprint, '$.requestFingerprint'); if (!requestFingerprint.ok) return requestFingerprint
-  const bodyHash = hash(values.bodyHash, '$.bodyHash'); if (!bodyHash.ok) return bodyHash
-  const nonce = opaque(values.nonce, '$.nonce'); if (!nonce.ok) return nonce
-  const sender = opaque(values.sender, '$.sender'); if (!sender.ok) return sender
-  const receiver = opaque(values.receiver, '$.receiver'); if (!receiver.ok) return receiver
+  const requestId = normalizeOpaqueIdentifier(values.requestId, '$.requestId'); if (!requestId.ok) return requestId
+  const idempotencyKey = normalizeOpaqueIdentifier(values.idempotencyKey, '$.idempotencyKey'); if (!idempotencyKey.ok) return idempotencyKey
+  const requestFingerprint = normalizeHashValue(values.requestFingerprint, '$.requestFingerprint'); if (!requestFingerprint.ok) return requestFingerprint
+  const bodyHashValue = normalizeHashValue(values.bodyHash, '$.bodyHash'); if (!bodyHashValue.ok) return bodyHashValue
   const timestamp = canonicalizeTimestamp(values.timestamp, '$.timestamp'); if (!timestamp.ok) return timestamp
-  if (typeof values.canonicalSigningInput !== 'string' || values.canonicalSigningInput.length > 2_000 || values.canonicalSigningInput.includes('\r')) return failure('INVALID_INPUT', '$.canonicalSigningInput')
-  const core = { protocolVersion: GEOFLOW_PROTOCOL_VERSION, requestId: requestId.value, idempotencyKey: idempotencyKey.value, requestFingerprint: requestFingerprint.value, bodyHash: bodyHash.value, timestamp: timestamp.value, nonce: nonce.value, sender: sender.value, receiver: receiver.value }
-  if (values.canonicalSigningInput !== buildCanonicalSigningInput(core)) return failure('INVALID_INPUT', '$.canonicalSigningInput')
+  const nonce = normalizeNonce(values.nonce); if (!nonce.ok) return nonce
+  const sender = normalizeOpaqueIdentifier(values.sender, '$.sender'); if (!sender.ok) return sender
+  const receiver = normalizeOpaqueIdentifier(values.receiver, '$.receiver'); if (!receiver.ok) return receiver
+  const keyId = normalizeOpaqueIdentifier(values.keyId, '$.keyId'); if (!keyId.ok) return keyId
+  if (typeof values.canonicalSigningInput !== 'string' || values.canonicalSigningInput.length > 4_000 || values.canonicalSigningInput.includes('\r')) return failure('INVALID_INPUT', '$.canonicalSigningInput')
+  const core = { algorithm: SIGNING_ALGORITHM, method: SIGNING_METHOD, path: SIGNING_PATH, protocolVersion: GEOFLOW_PROTOCOL_VERSION, requestId: requestId.value, idempotencyKey: idempotencyKey.value, requestFingerprint: requestFingerprint.value, bodyHash: bodyHashValue.value, timestamp: timestamp.value, nonce: nonce.value, sender: sender.value, receiver: receiver.value, keyId: keyId.value }
+  if (values.canonicalSigningInput !== buildCanonicalSigningInput(core)) return failure('SIGNATURE_CONTEXT_MISMATCH', '$.canonicalSigningInput')
   return success({ ...core, canonicalSigningInput: values.canonicalSigningInput })
 }
 
-export function verifySigningEnvelope(input: unknown, signature: unknown, verifier: EnvelopeVerifier): ValidationResult<true> {
-  const envelope = parseEnvelope(input)
-  if (!envelope.ok) return envelope
-  if (typeof signature !== 'string' || !signature || signature.length > 512) return failure('INVALID_INPUT', '$.signature')
-  try { return verifier(envelope.value.canonicalSigningInput, signature) ? success(true) : failure('IDENTITY_MISMATCH', '$.signature') } catch { return failure('IDENTITY_MISMATCH', '$.signature') }
+function parseContext(input: unknown): ValidationResult<{ request: GeoFlowRequest; verificationTime: string; maxClockSkewSeconds: number; expectedSender: string; expectedReceiver: string; expectedKeyId: string; nonceFreshnessVerifier: NonceFreshnessVerifier; signatureVerifier: SignatureVerifier }> {
+  if (!isPlainRecord(input) || !exactKeys(input, CONTEXT_KEYS)) return failure(isPlainRecord(input) ? 'UNKNOWN_FIELD' : 'INVALID_INPUT')
+  const request = safeValue(input, 'request'); const verificationTime = safeValue(input, 'verificationTime'); const maxClockSkewSeconds = safeValue(input, 'maxClockSkewSeconds'); const expectedSender = safeValue(input, 'expectedSender'); const expectedReceiver = safeValue(input, 'expectedReceiver'); const expectedKeyId = safeValue(input, 'expectedKeyId'); const nonceFreshnessVerifier = safeValue(input, 'nonceFreshnessVerifier'); const signatureVerifier = safeValue(input, 'signatureVerifier')
+  if ([request, verificationTime, maxClockSkewSeconds, expectedSender, expectedReceiver, expectedKeyId, nonceFreshnessVerifier, signatureVerifier].some(value => value === READ_FAILED)) return failure('INVALID_INPUT')
+  const timestamp = canonicalizeTimestamp(verificationTime, '$.verificationTime'); if (!timestamp.ok) return timestamp
+  if (typeof maxClockSkewSeconds !== 'number' || !Number.isSafeInteger(maxClockSkewSeconds) || maxClockSkewSeconds < 1 || maxClockSkewSeconds > 300) return failure('INVALID_INPUT', '$.maxClockSkewSeconds')
+  const sender = normalizeOpaqueIdentifier(expectedSender, '$.expectedSender'); if (!sender.ok) return sender
+  const receiver = normalizeOpaqueIdentifier(expectedReceiver, '$.expectedReceiver'); if (!receiver.ok) return receiver
+  const keyId = normalizeOpaqueIdentifier(expectedKeyId, '$.expectedKeyId'); if (!keyId.ok) return keyId
+  if (typeof nonceFreshnessVerifier !== 'function' || typeof signatureVerifier !== 'function') return failure('INVALID_INPUT', '$.verifier')
+  const requestResult = validateGeoFlowRequest(request); if (!requestResult.ok) return requestResult
+  return success({ request: requestResult.value, verificationTime: timestamp.value, maxClockSkewSeconds, expectedSender: sender.value, expectedReceiver: receiver.value, expectedKeyId: keyId.value, nonceFreshnessVerifier: nonceFreshnessVerifier as NonceFreshnessVerifier, signatureVerifier: signatureVerifier as SignatureVerifier })
+}
+
+export function verifySigningEnvelope(input: unknown, signature: unknown, context: unknown): ValidationResult<true> {
+  const envelope = parseEnvelope(input); if (!envelope.ok) return envelope
+  if (typeof signature !== 'string' || !SIGNATURE_PATTERN.test(signature)) return failure('INVALID_INPUT', '$.signature')
+  const parsedContext = parseContext(context); if (!parsedContext.ok) return parsedContext
+  const request = parsedContext.value.request
+  if (envelope.value.protocolVersion !== request.protocolVersion || envelope.value.requestId !== request.requestId || envelope.value.idempotencyKey !== request.idempotencyKey || envelope.value.requestFingerprint !== request.requestFingerprint) return failure('SIGNATURE_CONTEXT_MISMATCH', '$')
+  if (envelope.value.sender !== parsedContext.value.expectedSender || envelope.value.receiver !== parsedContext.value.expectedReceiver || envelope.value.keyId !== parsedContext.value.expectedKeyId) return failure('SIGNATURE_CONTEXT_MISMATCH', '$')
+  const computedBodyHash = bodyHash(parsedContext.value.request); if (!computedBodyHash.ok) return computedBodyHash
+  if (computedBodyHash.value !== envelope.value.bodyHash) return failure('CONTENT_HASH_MISMATCH', '$.bodyHash')
+  const difference = Math.abs(Date.parse(envelope.value.timestamp) - Date.parse(parsedContext.value.verificationTime))
+  if (!Number.isFinite(difference) || difference > parsedContext.value.maxClockSkewSeconds * 1000) return failure('SIGNATURE_EXPIRED', '$.timestamp')
+  try { if (!parsedContext.value.nonceFreshnessVerifier(envelope.value.nonce)) return failure('NONCE_REPLAYED', '$.nonce') } catch { return failure('NONCE_REPLAYED', '$.nonce') }
+  try { return parsedContext.value.signatureVerifier(envelope.value.canonicalSigningInput, signature) ? success(true) : failure('IDENTITY_MISMATCH', '$.signature') } catch { return failure('IDENTITY_MISMATCH', '$.signature') }
 }
