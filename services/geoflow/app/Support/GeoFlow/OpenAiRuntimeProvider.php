@@ -87,6 +87,10 @@ final class OpenAiRuntimeProvider
             return 'gemini';
         }
 
+        if (BailianRuntimeProvider::requiresBailianPolicy($apiUrl, $modelId)) {
+            return 'openai-compatible';
+        }
+
         if ($host === 'api.openai.com') {
             return 'openai';
         }
@@ -114,6 +118,14 @@ final class OpenAiRuntimeProvider
         $host = strtolower((string) (parse_url(trim($apiUrl), PHP_URL_HOST) ?? ''));
 
         return $host === 'api.openai.com' ? 'openai' : 'openai-compatible';
+    }
+
+    /**
+     * Bailian/Qwen 由治理 helper 识别，但仍使用既有 OpenAI-compatible driver。
+     */
+    public static function isBailianProviderUrl(string $apiUrl, string $modelId = ''): bool
+    {
+        return BailianRuntimeProvider::requiresBailianPolicy($apiUrl, $modelId);
     }
 
     /**

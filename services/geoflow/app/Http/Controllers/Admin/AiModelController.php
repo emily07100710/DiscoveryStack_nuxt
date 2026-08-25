@@ -14,6 +14,7 @@ use App\Services\Outbound\OutboundRequestFailedException;
 use App\Services\Outbound\SafeOutboundHttpClient;
 use App\Support\AdminWeb;
 use App\Support\GeoFlow\ApiKeyCrypto;
+use App\Support\GeoFlow\BailianRuntimeProvider;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Response;
@@ -217,9 +218,10 @@ class AiModelController extends Controller
 
         try {
             $modelType = $this->normalizeModelType((string) ($model->model_type ?? 'chat'));
+            $modelName = trim((string) ($model->model_id ?? ''));
+            $isBailian = OpenAiRuntimeProvider::isBailianProviderUrl((string) ($model->api_url ?? ''), $modelName);
             $endpoint = $this->resolveTestEndpoint($model, $modelType);
             $apiKey = $this->decryptApiKey((string) ($model->getRawOriginal('api_key') ?? ''));
-            $modelName = trim((string) ($model->model_id ?? ''));
             $isGemini = OpenAiRuntimeProvider::isGeminiProviderUrl($endpoint);
             $usesOpenAiResponses = $modelType === 'chat'
                 && OpenAiRuntimeProvider::resolveChatDriver((string) ($model->api_url ?? ''), $modelName) === 'openai';
@@ -258,7 +260,7 @@ class AiModelController extends Controller
             $response = $this->safeHttp->post(
                 $request,
                 $endpoint,
-                $this->buildTestPayload($modelName, $modelType, $isGemini, $usesOpenAiResponses),
+                $this->buildTestPayload($modelName, $modelType, $isGemini, $usesOpenAiResponses, $isBailian),
                 (int) config('geoflow.outbound_ai_max_bytes', 8 * 1024 * 1024),
             );
 
@@ -281,7 +283,18 @@ class AiModelController extends Controller
                 );
             }
 
-            if (! $this->isValidTestResponse($json, $modelType, $isGemini, $usesOpenAiResponses)) {
+            $bailianResponse = null;
+            if ($isBailian) {
+                try {
+                    $bailianResponse = BailianRuntimeProvider::validateChatResponse($json);
+                } catch (\InvalidArgumentException) {
+                    $bailianResponse = null;
+                }
+            }
+            $validResponse = $isBailian
+                ? is_array($bailianResponse)
+                : $this->isValidTestResponse($json, $modelType, $isGemini, $usesOpenAiResponses);
+            if (! $validResponse) {
                 if ($reservation instanceof AiUsageReservation) {
                     $this->recordModelTestAttempt($reservation);
                 }
@@ -312,7 +325,17 @@ class AiModelController extends Controller
                 $startedAt,
                 $modelType,
                 $endpoint,
-                $response->status()
+                $response->status(),
+                $isBailian && is_array($bailianResponse)
+                    ? BailianRuntimeProvider::buildProvenance(
+                        BailianRuntimeProvider::assertAllowedConfiguration((string) ($model->api_url ?? ''), $modelName),
+                        $bailianResponse['requestId'],
+                        $bailianResponse['finishReason'],
+                        $bailianResponse['usage'],
+                        now()->utc()->format('Y-m-d\\TH:i:s.v\\Z'),
+                        $response->status(),
+                    )
+                    : null,
             );
         } catch (Throwable $exception) {
             if ($reservation instanceof AiUsageReservation) {
@@ -543,7 +566,24 @@ class AiModelController extends Controller
             $rules['status'] = ['nullable', 'in:active,inactive'];
         }
 
-        return $request->validate($rules);
+        $payload = $request->validate($rules);
+        $apiUrl = trim((string) ($payload['api_url'] ?? ''));
+        $modelId = trim((string) ($payload['model_id'] ?? ''));
+        if (BailianRuntimeProvider::requiresBailianPolicy($apiUrl, $modelId)) {
+            try {
+                $configuration = BailianRuntimeProvider::assertAllowedConfiguration($apiUrl, $modelId);
+                $payload['api_url'] = $configuration['baseUrl'];
+                $payload['model_id'] = $configuration['modelId'];
+            } catch (\InvalidArgumentException $exception) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'api_url' => $exception->getMessage() === 'unsupported_model'
+                        ? 'The configured Bailian model must be a supported Qwen model identifier.'
+                        : 'The configured Bailian base URL is not an approved canonical endpoint.',
+                ]);
+            }
+        }
+
+        return $payload;
     }
 
     /**
@@ -670,6 +710,11 @@ class AiModelController extends Controller
     private function resolveTestEndpoint(AiModel $model, string $modelType): string
     {
         $apiUrl = (string) ($model->api_url ?? '');
+        $modelId = trim((string) ($model->model_id ?? ''));
+        if ($modelType === 'chat' && BailianRuntimeProvider::requiresBailianPolicy($apiUrl, $modelId)) {
+            return BailianRuntimeProvider::assertAllowedConfiguration($apiUrl, $modelId)['endpoint'];
+        }
+
         $providerBaseUrl = $modelType === 'embedding'
             ? OpenAiRuntimeProvider::resolveEmbeddingBaseUrl($apiUrl)
             : OpenAiRuntimeProvider::resolveChatBaseUrl($apiUrl);
@@ -699,7 +744,8 @@ class AiModelController extends Controller
         string $modelName,
         string $modelType,
         bool $isGemini = false,
-        bool $usesOpenAiResponses = false
+        bool $usesOpenAiResponses = false,
+        bool $isBailian = false
     ): array {
         if ($isGemini) {
             if ($modelType === 'embedding') {
@@ -758,14 +804,26 @@ class AiModelController extends Controller
             ];
         }
 
-        return [
+        return array_filter([
             'model' => $modelName,
             'messages' => [
                 ['role' => 'user', 'content' => 'Reply with OK.'],
             ],
+            'stream' => $isBailian ? false : null,
             'temperature' => 0,
             'max_tokens' => 8,
-        ];
+        ], static fn (mixed $value): bool => $value !== null);
+    }
+
+    private function isValidBailianResponse(mixed $json): bool
+    {
+        try {
+            BailianRuntimeProvider::validateChatResponse($json);
+
+            return true;
+        } catch (\InvalidArgumentException) {
+            return false;
+        }
     }
 
     private function isValidTestResponse(
@@ -877,7 +935,8 @@ class AiModelController extends Controller
         float $startedAt,
         string $modelType,
         string $endpoint = '',
-        ?int $httpStatus = null
+        ?int $httpStatus = null,
+        ?array $provenance = null
     ): JsonResponse {
         return response()->json([
             'success' => $success,
@@ -887,6 +946,7 @@ class AiModelController extends Controller
                 'http_status' => $httpStatus,
                 'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
                 'endpoint' => $success ? $endpoint : '',
+                'provenance' => $success ? $provenance : null,
             ],
         ], $success ? 200 : 422);
     }

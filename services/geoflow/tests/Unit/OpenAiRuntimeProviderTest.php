@@ -207,4 +207,45 @@ class OpenAiRuntimeProviderTest extends TestCase
     {
         $this->assertSame('openai-compatible', OpenAiRuntimeProvider::resolveChatDriver('https://api.unknown-provider.com/v1', 'some-model'));
     }
+
+    public function test_it_identifies_official_bailian_provider_without_creating_a_new_driver(): void
+    {
+        $this->assertTrue(OpenAiRuntimeProvider::isBailianProviderUrl(
+            'https://dashscope-us.aliyuncs.com/compatible-mode/v1',
+            'qwen-plus'
+        ));
+        $this->assertSame(
+            'openai-compatible',
+            OpenAiRuntimeProvider::resolveChatDriver(
+                'https://dashscope-us.aliyuncs.com/compatible-mode/v1',
+                'qwen-plus'
+            )
+        );
+    }
+
+    public function test_it_keeps_bailian_full_chat_endpoint_at_canonical_base(): void
+    {
+        $this->assertSame(
+            'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            OpenAiRuntimeProvider::resolveChatBaseUrl(
+                'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+            )
+        );
+    }
+
+    public function test_it_does_not_treat_an_attacker_suffix_as_bailian(): void
+    {
+        $this->assertFalse(OpenAiRuntimeProvider::isBailianProviderUrl(
+            'https://dashscope-us.aliyuncs.com.attacker.example/compatible-mode/v1',
+            'gpt-5'
+        ));
+    }
+
+    public function test_qwen_on_arbitrary_host_is_routed_to_existing_compatible_driver_for_policy_validation(): void
+    {
+        $this->assertSame(
+            'openai-compatible',
+            OpenAiRuntimeProvider::resolveChatDriver('https://api.example.com/v1', 'qwen-plus')
+        );
+    }
 }

@@ -5,6 +5,7 @@ namespace App\Services\GeoFlow;
 use App\Ai\Agents\MarkdownContentWriterAgent;
 use App\Models\AiModel;
 use App\Support\GeoFlow\ApiKeyCrypto;
+use App\Support\GeoFlow\BailianRuntimeProvider;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
@@ -150,7 +151,19 @@ final class ArticleContentGenerationService
      */
     private function resolveRuntime(AiModel $aiModel, string $registrySlot): array
     {
-        $providerUrl = OpenAiRuntimeProvider::resolveChatBaseUrl((string) ($aiModel->api_url ?? ''));
+        $configuredUrl = (string) ($aiModel->api_url ?? '');
+        $configuredModel = trim((string) ($aiModel->model_id ?? ''));
+        if (BailianRuntimeProvider::requiresBailianPolicy($configuredUrl, $configuredModel)) {
+            try {
+                $providerConfiguration = BailianRuntimeProvider::assertAllowedConfiguration($configuredUrl, $configuredModel);
+            } catch (\InvalidArgumentException $exception) {
+                throw new RuntimeException('AI 模型 Bailian 配置无效: '.$exception->getMessage(), 0, $exception);
+            }
+            $providerUrl = $providerConfiguration['baseUrl'];
+            $configuredModel = $providerConfiguration['modelId'];
+        } else {
+            $providerUrl = OpenAiRuntimeProvider::resolveChatBaseUrl($configuredUrl);
+        }
         if ($providerUrl === '') {
             throw new RuntimeException('AI 模型 API 地址为空');
         }
@@ -160,7 +173,7 @@ final class ArticleContentGenerationService
             throw new RuntimeException('AI 模型密钥为空');
         }
 
-        $modelId = trim((string) ($aiModel->model_id ?? ''));
+        $modelId = $configuredModel;
         if ($modelId === '') {
             throw new RuntimeException('AI 模型标识为空');
         }
