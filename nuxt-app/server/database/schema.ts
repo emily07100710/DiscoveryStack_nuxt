@@ -1662,3 +1662,29 @@ export type ManagedSiteDomainIntent = typeof managedSiteDomainIntents.$inferSele
 export type ManagedSiteProvisioningPlan = typeof managedSiteProvisioningPlans.$inferSelect
 export type ManagedSiteProvisioningStep = typeof managedSiteProvisioningSteps.$inferSelect
 export type ManagedSiteProvisioningEvent = typeof managedSiteProvisioningEvents.$inferSelect
+
+
+/** Provider-neutral module integration intent. Tokens, secrets, and external writes are intentionally excluded. */
+export const managedSiteIntegrations = mysqlTable('managedSiteIntegrations', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  moduleKey: mysqlEnum('moduleKey', ['bounded_ai_assistant', 'shopify_commerce', 'line_assisted_integration', 'google_booking_assisted_integration', 'payment', 'invoice', 'membership', 'pwa_reference_only']).notNull(),
+  providerKey: varchar('providerKey', { length: 96 }).notNull(),
+  status: mysqlEnum('status', ['not_configured', 'awaiting_authorization', 'mock_verified', 'active', 'blocked', 'revoked']).default('not_configured').notNull(),
+  authorizationMode: mysqlEnum('authorizationMode', ['none', 'customer_oauth', 'customer_api_key', 'owner_configured', 'manual_assistance']).notNull(),
+  requiredScopes: json('requiredScopes').notNull(),
+  redactedConfig: json('redactedConfig').notNull(),
+  intentFingerprint: varchar('intentFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  externalReference: varchar('externalReference', { length: 160 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_integrations_project_module_unique').on(table.projectId, table.moduleKey),
+  uniqueIndex('managed_site_integrations_intent_unique').on(table.intentFingerprint),
+  uniqueIndex('managed_site_integrations_idempotency_unique').on(table.idempotencyKey),
+  index('managed_site_integrations_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+])
+
+export type ManagedSiteIntegration = typeof managedSiteIntegrations.$inferSelect

@@ -6,12 +6,17 @@ useHead({ meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 const loading = ref(true)
 const errorMessage = ref('')
 const projection = ref<any>(null)
+const moduleWorkspace = ref<any>(null)
+const assistantQuestion = ref('')
+const assistantResult = ref<any>(null)
+const assistantLoading = ref(false)
 
 async function loadCustomerSite() {
   loading.value = true
   errorMessage.value = ''
   try {
     projection.value = await $fetch('/api/managed-sites/customer/session')
+    try { moduleWorkspace.value = await $fetch('/api/managed-sites/customer/modules') } catch { moduleWorkspace.value = null }
   } catch (error: any) {
     projection.value = null
     errorMessage.value = error?.data?.message || '此客戶入口需要有效的邀請工作階段。'
@@ -22,6 +27,15 @@ async function loadCustomerSite() {
 
 async function exportData() {
   window.location.href = '/api/managed-sites/customer/export'
+}
+
+async function askAssistant() {
+  if (!assistantQuestion.value.trim() || assistantLoading.value) return
+  assistantLoading.value = true
+  assistantResult.value = null
+  try { assistantResult.value = await $fetch('/api/managed-sites/customer/assistant', { method: 'POST', body: { question: assistantQuestion.value } }) }
+  catch (error: any) { assistantResult.value = { status: 'blocked', answer: null, limitation: error?.data?.message || '目前無法使用助手。' } }
+  finally { assistantLoading.value = false }
 }
 
 onMounted(loadCustomerSite)
@@ -61,6 +75,19 @@ onMounted(loadCustomerSite)
         <h2>受控代管</h2>
         <p>網域屬於客戶；平台負責部署、維護與 GEO 營運。原始碼不提供下載。</p>
       </article>
+      <article v-if="moduleWorkspace" class="card card--wide">
+        <p class="card__label">MODULES & GEO OPERATIONS</p>
+        <h2>模組與持續營運</h2>
+        <p class="muted">{{ moduleWorkspace.canonicalContentOperations.message }}</p>
+        <div class="module-list"><div v-for="module in moduleWorkspace.modules" :key="module.moduleKey"><strong>{{ module.moduleKey }}</strong><span>{{ module.status }} · {{ module.externalCalls ? '外部執行' : '尚未外部執行' }}</span></div></div>
+      </article>
+      <article class="card card--wide">
+        <p class="card__label">BOUNDED AI ASSISTANT</p>
+        <h2>問問你的網站助手</h2>
+        <p class="muted">助手只會使用已授權且可引用的專案內容；若 provider 尚未連線，會明確回報尚未啟用，不會編造答案。</p>
+        <form class="assistant-form" @submit.prevent="askAssistant"><textarea v-model="assistantQuestion" rows="3" maxlength="2000" placeholder="例如：目前網站有哪些版本？"></textarea><button class="button" type="submit" :disabled="assistantLoading">{{ assistantLoading ? '處理中…' : '詢問' }}</button></form>
+        <div v-if="assistantResult" class="assistant-result" :class="{ 'assistant-result--blocked': assistantResult.status !== 'answered' }"><strong>{{ assistantResult.status === 'answered' ? '助手回覆' : '尚未啟用' }}</strong><p>{{ assistantResult.answer || assistantResult.limitation }}</p></div>
+      </article>
       <article class="card card--wide">
         <p class="card__label">VERSIONS</p>
         <p v-if="!projection.versions.length" class="muted">目前尚未建立網站版本。</p>
@@ -91,5 +118,15 @@ dt { color: #777d8b; font-size: .78rem; } dd { margin: .25rem 0 0; overflow-wrap
 .version-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .55rem; }
 .version-list li { display: flex; justify-content: space-between; gap: 1rem; padding: .7rem 0; border-bottom: 1px solid #eeeae2; }
 .version-list span { color: #777d8b; }
-@media (max-width: 42rem) { .managed-site-portal { padding: 2rem 1rem; } .managed-site-portal__header { display: block; } .button { margin-top: 1rem; } .managed-site-portal__grid { grid-template-columns: 1fr; } .card--wide { grid-column: auto; } dl { grid-template-columns: 1fr; } }
+.module-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; margin-top: 1rem; }
+.module-list div { display: grid; gap: .2rem; padding: .7rem; border: 1px solid #eeeae2; border-radius: .55rem; }
+.module-list strong { font-size: .75rem; }
+.module-list span { color: #777d8b; font-size: .68rem; }
+.assistant-form { display: grid; gap: .7rem; margin-top: 1rem; }
+.assistant-form textarea { width: 100%; border: 1px solid #e7e2d8; border-radius: .55rem; padding: .8rem; resize: vertical; }
+.assistant-form .button { justify-self: start; }
+.assistant-result { margin-top: 1rem; padding: .8rem; border-radius: .55rem; background: #edf6ef; color: #236241; }
+.assistant-result--blocked { background: #fff4e5; color: #875215; }
+.assistant-result p { margin: .35rem 0 0; line-height: 1.6; }
+@media (max-width: 42rem) { .managed-site-portal { padding: 2rem 1rem; } .managed-site-portal__header { display: block; } .button { margin-top: 1rem; } .managed-site-portal__grid { grid-template-columns: 1fr; } .card--wide { grid-column: auto; } dl { grid-template-columns: 1fr; } .module-list { grid-template-columns: 1fr; } }
 </style>
