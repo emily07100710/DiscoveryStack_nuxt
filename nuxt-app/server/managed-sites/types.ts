@@ -137,7 +137,7 @@ export type ManagedSiteCustomerProjection = {
   subscription: Pick<ManagedSiteSubscription, 'planKey' | 'status' | 'gracePeriodEndsAt' | 'termEndsAt' | 'createdAt' | 'updatedAt'> | null
   capabilities: {
     sourceCodeExport: false
-    customerDataExport: true
+    customerDataExport: boolean
     domainOwnership: 'customer'
     platformSourceAccess: false
   }

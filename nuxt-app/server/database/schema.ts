@@ -1575,7 +1575,7 @@ export type ManagedSiteSubscriptionIntent = typeof managedSiteSubscriptionIntent
 /** Customer domain ownership and purchase intent; provider execution is deliberately separate. */
 export const managedSiteDomainIntents = mysqlTable('managedSiteDomainIntents', {
   id: int('id').autoincrement().primaryKey(),
-  ownerUserId: int('ownerUserId').references(() => users.id),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
   draftOrderId: int('draftOrderId').references(() => managedSiteDraftOrders.id),
   mode: mysqlEnum('mode', ['customer_owned', 'new_registration', 'assisted']).notNull(),
@@ -1592,7 +1592,7 @@ export const managedSiteDomainIntents = mysqlTable('managedSiteDomainIntents', {
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
   uniqueIndex('managed_site_domain_intents_project_unique').on(table.projectId),
-  uniqueIndex('managed_site_domain_intents_idempotency_unique').on(table.idempotencyKey),
+  uniqueIndex('managed_site_domain_intents_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   index('managed_site_domain_intents_owner_status_idx').on(table.ownerUserId, table.purchaseStatus, table.dnsStatus),
 ])
 
@@ -1623,8 +1623,8 @@ export const managedSiteProvisioningPlans = mysqlTable('managedSiteProvisioningP
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
   uniqueIndex('managed_site_provisioning_plans_project_version_unique').on(table.projectId, table.versionId),
-  uniqueIndex('managed_site_provisioning_plans_intent_unique').on(table.intentFingerprint),
-  uniqueIndex('managed_site_provisioning_plans_idempotency_unique').on(table.idempotencyKey),
+  uniqueIndex('managed_site_provisioning_plans_owner_intent_unique').on(table.ownerUserId, table.intentFingerprint),
+  uniqueIndex('managed_site_provisioning_plans_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   index('managed_site_provisioning_plans_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
 ])
 
@@ -1697,23 +1697,23 @@ export const managedSiteIntegrations = mysqlTable('managedSiteIntegrations', {
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
   uniqueIndex('managed_site_integrations_project_module_unique').on(table.projectId, table.moduleKey),
-  uniqueIndex('managed_site_integrations_intent_unique').on(table.intentFingerprint),
-  uniqueIndex('managed_site_integrations_idempotency_unique').on(table.idempotencyKey),
-  uniqueIndex('managed_site_integrations_shop_domain_unique').on(table.shopDomain),
+  uniqueIndex('managed_site_integrations_owner_intent_unique').on(table.ownerUserId, table.intentFingerprint),
+  uniqueIndex('managed_site_integrations_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('managed_site_integrations_owner_shop_domain_unique').on(table.ownerUserId, table.shopDomain),
   index('managed_site_integrations_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
 ])
 
 export type ManagedSiteIntegration = typeof managedSiteIntegrations.$inferSelect
 
-/** Shopify OAuth state ledger; state, nonce, and PKCE verifier are stored only as hashes. */
+/** Shopify OAuth state ledger; only state is used by the official V1 authorization-code flow. Legacy nonce/PKCE hashes remain nullable for compatibility. */
 export const managedSiteShopifyAuthorizations = mysqlTable('managedSiteShopifyAuthorizations', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
   integrationId: int('integrationId').notNull().references(() => managedSiteIntegrations.id),
   stateHash: varchar('stateHash', { length: 128 }).notNull(),
-  nonceHash: varchar('nonceHash', { length: 128 }).notNull(),
-  codeVerifierHash: varchar('codeVerifierHash', { length: 128 }).notNull(),
+  nonceHash: varchar('nonceHash', { length: 128 }),
+  codeVerifierHash: varchar('codeVerifierHash', { length: 128 }),
   shopDomain: varchar('shopDomain', { length: 253 }).notNull(),
   redirectUri: varchar('redirectUri', { length: 2048 }).notNull(),
   status: mysqlEnum('status', ['pending', 'consumed', 'expired', 'revoked']).default('pending').notNull(),

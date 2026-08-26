@@ -8,11 +8,14 @@ export function createIntegrationMemoryRepository() {
   const make = (): IntegrationRepository => ({
     async transaction(work) { return work(make()) },
     async findById(id) { return state.integrations.find(row => row.id === id) || null },
-    async findByProjectModule(projectId, moduleKey: ManagedSiteModuleKey) { return state.integrations.find(row => row.projectId === projectId && row.moduleKey === moduleKey) || null },
+    async findByProjectModule(ownerUserId, projectId, moduleKey: ManagedSiteModuleKey) { return state.integrations.find(row => row.ownerUserId === ownerUserId && row.projectId === projectId && row.moduleKey === moduleKey) || null },
     async findByShopDomain(shopDomain) { return state.integrations.find(row => row.shopDomain === shopDomain && row.moduleKey === 'shopify_commerce') || null },
     async findByIdempotency(ownerUserId, idempotencyKey) { return state.integrations.find(row => row.ownerUserId === ownerUserId && row.idempotencyKey === idempotencyKey) || null },
-    async findByFingerprint(intentFingerprint) { return state.integrations.find(row => row.intentFingerprint === intentFingerprint) || null },
-    async insert(input) { const row = { ...input, id: state.nextId++ } as ManagedSiteIntegration; state.integrations.push(row); return row },
+    async findByFingerprint(ownerUserId, intentFingerprint) { return state.integrations.find(row => row.ownerUserId === ownerUserId && row.intentFingerprint === intentFingerprint) || null },
+    async insert(input) {
+      if (state.integrations.some(row => row.ownerUserId === input.ownerUserId && (row.idempotencyKey === input.idempotencyKey || row.intentFingerprint === input.intentFingerprint || row.projectId === input.projectId && row.moduleKey === input.moduleKey))) throw Object.assign(new Error('owner-scoped integration conflict'), { statusCode: 409, statusMessage: 'Managed site integration conflicts with an existing owner-scoped record.' })
+      const row = { ...input, id: state.nextId++ } as ManagedSiteIntegration; state.integrations.push(row); return row
+    },
     async update(id, patch) { const row = state.integrations.find(item => item.id === id); if (!row) return null; Object.assign(row, patch); return row },
     async listByProject(ownerUserId, projectId) { return state.integrations.filter(row => row.ownerUserId === ownerUserId && row.projectId === projectId) },
   })

@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "b877906a-b0ff-4d8d-ac28-5869032a3b51",
+  "id": "a72c43a3-9ff9-45ab-a7ed-f9a323454818",
   "prevId": "dad5ab7a-1168-48fc-8923-9ce6d18ea47b",
   "tables": {
     "auditEvidenceLedger": {
@@ -5669,7 +5669,7 @@
           "name": "ownerUserId",
           "type": "int",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "projectId": {
@@ -5785,9 +5785,10 @@
           ],
           "isUnique": true
         },
-        "managed_site_domain_intents_idempotency_unique": {
-          "name": "managed_site_domain_intents_idempotency_unique",
+        "managed_site_domain_intents_owner_idempotency_unique": {
+          "name": "managed_site_domain_intents_owner_idempotency_unique",
           "columns": [
+            "ownerUserId",
             "idempotencyKey"
           ],
           "isUnique": true
@@ -6172,23 +6173,26 @@
           ],
           "isUnique": true
         },
-        "managed_site_integrations_intent_unique": {
-          "name": "managed_site_integrations_intent_unique",
+        "managed_site_integrations_owner_intent_unique": {
+          "name": "managed_site_integrations_owner_intent_unique",
           "columns": [
+            "ownerUserId",
             "intentFingerprint"
           ],
           "isUnique": true
         },
-        "managed_site_integrations_idempotency_unique": {
-          "name": "managed_site_integrations_idempotency_unique",
+        "managed_site_integrations_owner_idempotency_unique": {
+          "name": "managed_site_integrations_owner_idempotency_unique",
           "columns": [
+            "ownerUserId",
             "idempotencyKey"
           ],
           "isUnique": true
         },
-        "managed_site_integrations_shop_domain_unique": {
-          "name": "managed_site_integrations_shop_domain_unique",
+        "managed_site_integrations_owner_shop_domain_unique": {
+          "name": "managed_site_integrations_owner_shop_domain_unique",
           "columns": [
+            "ownerUserId",
             "shopDomain"
           ],
           "isUnique": true
@@ -7654,16 +7658,18 @@
           ],
           "isUnique": true
         },
-        "managed_site_provisioning_plans_intent_unique": {
-          "name": "managed_site_provisioning_plans_intent_unique",
+        "managed_site_provisioning_plans_owner_intent_unique": {
+          "name": "managed_site_provisioning_plans_owner_intent_unique",
           "columns": [
+            "ownerUserId",
             "intentFingerprint"
           ],
           "isUnique": true
         },
-        "managed_site_provisioning_plans_idempotency_unique": {
-          "name": "managed_site_provisioning_plans_idempotency_unique",
+        "managed_site_provisioning_plans_owner_idempotency_unique": {
+          "name": "managed_site_provisioning_plans_owner_idempotency_unique",
           "columns": [
+            "ownerUserId",
             "idempotencyKey"
           ],
           "isUnique": true
@@ -8474,14 +8480,14 @@
           "name": "nonceHash",
           "type": "varchar(128)",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "codeVerifierHash": {
           "name": "codeVerifierHash",
           "type": "varchar(128)",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "shopDomain": {

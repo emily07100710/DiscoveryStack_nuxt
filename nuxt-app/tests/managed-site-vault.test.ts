@@ -53,11 +53,18 @@ describe('managed site project vault', () => {
     const invitation = await inviteManagedSiteMember(1, test.project.id, ownerActor(1), { email: 'editor@acme.taipei', role: 'editor', idempotencyKey: 'invite-editor-1' }, test.repository)
     const accepted = await acceptManagedSiteInvitation(invitation.invitationToken!, test.repository)
     const projection = await getManagedSiteCustomerProjection(accepted.sessionToken, test.repository)
-    const exported = await exportManagedSiteCustomerData(accepted.sessionToken, test.repository)
     expect(versionResult.version?.version).toBe(1)
     expect(projection.membership.role).toBe('editor')
     expect(projection.versions[0]?.lifecycleStatus).toBe('preview')
     expect(projection.capabilities.sourceCodeExport).toBe(false)
+    expect(projection.capabilities.customerDataExport).toBe(false)
+    await expect(exportManagedSiteCustomerData(accepted.sessionToken, test.repository)).rejects.toMatchObject({ statusCode: 403 })
+    const administratorInvitation = await inviteManagedSiteMember(1, test.project.id, ownerActor(1), { email: 'administrator@acme.taipei', role: 'administrator', idempotencyKey: 'invite-administrator-export-1' }, test.repository)
+    const administrator = await acceptManagedSiteInvitation(administratorInvitation.invitationToken!, test.repository)
+    const administratorProjection = await getManagedSiteCustomerProjection(administrator.sessionToken, test.repository)
+    const exported = await exportManagedSiteCustomerData(administrator.sessionToken, test.repository)
+    expect(administratorProjection.membership.role).toBe('administrator')
+    expect(administratorProjection.capabilities.customerDataExport).toBe(true)
     expect(exported.sourceCode).toBeNull()
     expect(exported.secrets).toBeNull()
     expect(exported.otherTenants).toBeNull()
@@ -173,5 +180,19 @@ describe('managed site version authority', () => {
     expect(test.state.projects.find(project => project.id === test.project.id)?.activeVersionId).toBe(third.version!.id)
     expect(test.state.versions.find(version => version.id === first.version!.id)?.lifecycleStatus).toBe('superseded')
     expect(test.state.versions.filter(version => version.lifecycleStatus === 'active')).toHaveLength(1)
+  })
+
+  it('allocates unique bounded version numbers under concurrent create requests', async () => {
+    const test = await makeProject(1)
+    const specs = [
+      buildSiteSpec({ draftIdentity: 'version-concurrent-001', brandName: 'Concurrent Client', audience: 'Taiwan customers', brief: 'Concurrent version one.', businessGoals: ['increase_inquiries'], siteType: 'brand_blog', selectedModules: ['managed_content_admin'], styleReferences: [] }, new Date('2026-08-26T00:00:00.000Z')),
+      buildSiteSpec({ draftIdentity: 'version-concurrent-002', brandName: 'Concurrent Client', audience: 'Taiwan customers', brief: 'Concurrent version two.', businessGoals: ['increase_inquiries'], siteType: 'brand_blog', selectedModules: ['managed_content_admin'], styleReferences: [] }, new Date('2026-08-26T00:00:00.000Z')),
+    ]
+    const results = await Promise.all([
+      createManagedSiteVersion(1, test.project.id, ownerActor(1), { siteSpecSnapshot: specs[0]!, designTokenSnapshot: specs[0]!.designTokens, selectedModuleSnapshot: specs[0]!.selectedModules, contentFingerprint: 'f'.repeat(64), createdByAuthority: 'owner_session', lifecycleStatus: 'preview' }, test.repository),
+      createManagedSiteVersion(1, test.project.id, ownerActor(1), { siteSpecSnapshot: specs[1]!, designTokenSnapshot: specs[1]!.designTokens, selectedModuleSnapshot: specs[1]!.selectedModules, contentFingerprint: '0'.repeat(64), createdByAuthority: 'owner_session', lifecycleStatus: 'preview' }, test.repository),
+    ])
+    expect(results.map(result => result.version?.version).sort()).toEqual([1, 2])
+    expect(new Set(test.state.versions.map(version => version.version)).size).toBe(2)
   })
 })

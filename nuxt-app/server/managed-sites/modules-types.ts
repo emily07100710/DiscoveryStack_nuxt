@@ -28,12 +28,18 @@ export type BoundedAssistantKnowledge = {
   citationId: string
   knowledgeKey: string
   evidenceHash: string
+  contentHash: string
+  publicationReceiptFingerprint: string
+  sourceLocator: string
+  excerpt: string
   tenantScope: string
 }
 
 export type BoundedAssistantCitation = {
   citationId: string
   evidenceHash: string
+  contentHash: string
+  sourceLocator: string
 }
 
 export type BoundedAssistantResponse = {
@@ -53,10 +59,10 @@ export type BoundedAssistantAdapter = {
 export type IntegrationRepository = {
   transaction<T>(work: (repository: IntegrationRepository) => Promise<T>): Promise<T>
   findById(id: number): Promise<ManagedSiteIntegration | null>
-  findByProjectModule(projectId: number, moduleKey: ManagedSiteModuleKey): Promise<ManagedSiteIntegration | null>
+  findByProjectModule(ownerUserId: number, projectId: number, moduleKey: ManagedSiteModuleKey): Promise<ManagedSiteIntegration | null>
   findByShopDomain(shopDomain: string): Promise<ManagedSiteIntegration | null>
   findByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSiteIntegration | null>
-  findByFingerprint(intentFingerprint: string): Promise<ManagedSiteIntegration | null>
+  findByFingerprint(ownerUserId: number, intentFingerprint: string): Promise<ManagedSiteIntegration | null>
   insert(input: Omit<ManagedSiteIntegration, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteIntegration>
   update(id: number, patch: Partial<Omit<ManagedSiteIntegration, 'id' | 'ownerUserId' | 'projectId' | 'moduleKey' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteIntegration | null>
   listByProject(ownerUserId: number, projectId: number): Promise<ManagedSiteIntegration[]>

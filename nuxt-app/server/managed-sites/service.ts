@@ -34,6 +34,11 @@ function now(): Date {
   return new Date()
 }
 
+function isDuplicateError(error: unknown): boolean {
+  const candidate = error as { code?: string; errno?: number; message?: string }
+  return candidate?.code === 'ER_DUP_ENTRY' || candidate?.errno === 1062 || /duplicate entry|unique constraint/i.test(candidate?.message || '')
+}
+
 function ensureActorRole(actor: ManagedSiteActor, permission: string) {
   if (!actor.role || !roleAllows(actor.role, permission)) throw createError({ statusCode: 403, statusMessage: 'This managed site action is not permitted.' })
 }
@@ -222,26 +227,35 @@ export async function createManagedSiteVersion(ownerUserId: number, projectId: n
   if (typeof input.contentFingerprint !== 'string' || !/^[a-f0-9]{64}$/iu.test(input.contentFingerprint)) throw createError({ statusCode: 422, statusMessage: 'Managed site content fingerprint must be a SHA-256 value.' })
   if (stableFingerprint(input.designTokenSnapshot) !== stableFingerprint(siteSpec.designTokens)) throw createError({ statusCode: 409, statusMessage: 'Managed site design-token snapshot does not match the canonical SiteSpec.' })
   if (stableFingerprint(input.selectedModuleSnapshot) !== stableFingerprint(siteSpec.selectedModules)) throw createError({ statusCode: 409, statusMessage: 'Managed site module snapshot does not match the canonical SiteSpec.' })
-  return repository.transaction(async transaction => {
-    const currentVersions = await transaction.listVersions(ownerUserId, projectId)
-    const nextVersion = (currentVersions[0]?.version || 0) + 1
-    const snapshot = { siteSpecSnapshot: siteSpec, designTokenSnapshot: siteSpec.designTokens, selectedModuleSnapshot: siteSpec.selectedModules }
-    const fingerprint = stableFingerprint({ projectId, version: nextVersion, snapshot, contentFingerprint: input.contentFingerprint })
-    const sameFingerprint = currentVersions.find(version => version.versionFingerprint === fingerprint)
-    if (sameFingerprint) return { version: sameFingerprint, replayed: true }
-    const sameVersion = currentVersions.find(version => version.version === nextVersion)
-    if (sameVersion) throw createError({ statusCode: 409, statusMessage: 'Managed site version numbering collided with a different persisted version.' })
-    const createdAt = now()
-    const previousActive = currentVersions.find(version => version.id === project.activeVersionId && version.lifecycleStatus === 'active') || currentVersions.find(version => version.lifecycleStatus === 'active')
-    const version = await transaction.insertVersion({ ownerUserId, projectId, version: nextVersion, siteSpecSnapshot: siteSpec, designTokenSnapshot: siteSpec.designTokens, selectedModuleSnapshot: siteSpec.selectedModules, contentFingerprint: input.contentFingerprint, parentVersionId: currentVersions[0]?.id || null, lifecycleStatus, createdByAuthority: input.createdByAuthority, versionFingerprint: fingerprint, createdAt } as any)
-    if (version.lifecycleStatus === 'active') {
-      if (previousActive && previousActive.id !== version.id) await transaction.updateVersion(ownerUserId, previousActive.id, { lifecycleStatus: 'superseded' })
-      const changedProject = await transaction.updateProject(ownerUserId, projectId, { activeVersionId: version.id, updatedAt: createdAt } as any)
-      if (!changedProject) projectNotFound()
+  const VERSION_ALLOCATION_MAX_ATTEMPTS = 3
+  for (let allocationAttempt = 0; allocationAttempt < VERSION_ALLOCATION_MAX_ATTEMPTS; allocationAttempt++) {
+    try {
+      return await repository.transaction(async transaction => {
+        const currentVersions = await transaction.listVersions(ownerUserId, projectId)
+        const nextVersion = (currentVersions[0]?.version || 0) + 1
+        const snapshot = { siteSpecSnapshot: siteSpec, designTokenSnapshot: siteSpec.designTokens, selectedModuleSnapshot: siteSpec.selectedModules }
+        const fingerprint = stableFingerprint({ projectId, version: nextVersion, snapshot, contentFingerprint: input.contentFingerprint })
+        const sameFingerprint = currentVersions.find(version => version.versionFingerprint === fingerprint)
+        if (sameFingerprint) return { version: sameFingerprint, replayed: true }
+        const sameVersion = currentVersions.find(version => version.version === nextVersion)
+        if (sameVersion) throw Object.assign(new Error('Managed site version numbering collision.'), { code: 'ER_DUP_ENTRY' })
+        const createdAt = now()
+        const previousActive = currentVersions.find(version => version.id === project.activeVersionId && version.lifecycleStatus === 'active') || currentVersions.find(version => version.lifecycleStatus === 'active')
+        const version = await transaction.insertVersion({ ownerUserId, projectId, version: nextVersion, siteSpecSnapshot: siteSpec, designTokenSnapshot: siteSpec.designTokens, selectedModuleSnapshot: siteSpec.selectedModules, contentFingerprint: input.contentFingerprint, parentVersionId: currentVersions[0]?.id || null, lifecycleStatus, createdByAuthority: input.createdByAuthority, versionFingerprint: fingerprint, createdAt } as any)
+        if (version.lifecycleStatus === 'active') {
+          if (previousActive && previousActive.id !== version.id) await transaction.updateVersion(ownerUserId, previousActive.id, { lifecycleStatus: 'superseded' })
+          const changedProject = await transaction.updateProject(ownerUserId, projectId, { activeVersionId: version.id, updatedAt: createdAt } as any)
+          if (!changedProject) projectNotFound()
+        }
+        await appendAudit(transaction, { ownerUserId, projectId, actorUserId: actor.actorUserId ?? null, authority: actor.authority, action: 'managed_site_version_created', beforeFingerprint: previousActive?.versionFingerprint || currentVersions[0]?.versionFingerprint || null, afterFingerprint: version.versionFingerprint, idempotencyKey: `version:${fingerprint}`, metadata: { versionId: version.id, version: version.version, lifecycleStatus: version.lifecycleStatus, activeAuthorityChanged: version.lifecycleStatus === 'active' } })
+        return { version, replayed: false }
+      })
+    } catch (error) {
+      if (!isDuplicateError(error)) throw error
+      if (allocationAttempt === VERSION_ALLOCATION_MAX_ATTEMPTS - 1) throw createError({ statusCode: 409, statusMessage: 'Managed site version allocation remained contended after bounded retries.' })
     }
-    await appendAudit(transaction, { ownerUserId, projectId, actorUserId: actor.actorUserId ?? null, authority: actor.authority, action: 'managed_site_version_created', beforeFingerprint: previousActive?.versionFingerprint || currentVersions[0]?.versionFingerprint || null, afterFingerprint: version.versionFingerprint, idempotencyKey: `version:${fingerprint}`, metadata: { versionId: version.id, version: version.version, lifecycleStatus: version.lifecycleStatus, activeAuthorityChanged: version.lifecycleStatus === 'active' } })
-    return { version, replayed: false }
-  })
+  }
+  throw createError({ statusCode: 409, statusMessage: 'Managed site version allocation could not be completed.' })
 }
 
 export async function inviteManagedSiteMember(ownerUserId: number, projectId: number, actor: ManagedSiteActor, input: unknown, repository = getManagedSiteRepository()) {
@@ -416,13 +430,14 @@ export async function getManagedSiteCustomerProjection(rawSessionToken: string, 
     versions: versions.map(version => ({ id: version.id, version: version.version, lifecycleStatus: version.lifecycleStatus, contentFingerprint: version.contentFingerprint, versionFingerprint: version.versionFingerprint, createdByAuthority: version.createdByAuthority, createdAt: version.createdAt })),
     assets: assets.map(asset => ({ id: asset.id, assetHash: asset.assetHash, mimeType: asset.mimeType, byteSize: asset.byteSize, purpose: asset.purpose, createdAt: asset.createdAt })),
     subscription: subscription ? { planKey: subscription.planKey, status: subscription.status, gracePeriodEndsAt: subscription.gracePeriodEndsAt, termEndsAt: subscription.termEndsAt, createdAt: subscription.createdAt, updatedAt: subscription.updatedAt } : null,
-    capabilities: { sourceCodeExport: false, customerDataExport: true, domainOwnership: 'customer', platformSourceAccess: false },
+    capabilities: { sourceCodeExport: false, customerDataExport: roleAllows(access.membership.role, 'data:export'), domainOwnership: 'customer', platformSourceAccess: false },
   }
 }
 
 export async function exportManagedSiteCustomerData(rawSessionToken: string, repository = getManagedSiteRepository()): Promise<ManagedSiteDataExport> {
   const access = await getManagedSiteCustomerSession(rawSessionToken, repository)
   if (!access) throw createError({ statusCode: 401, statusMessage: 'Managed site customer access requires a valid invitation session.' })
+  if (!roleAllows(access.membership.role, 'data:export')) throw createError({ statusCode: 403, statusMessage: 'This customer role is not allowed to export managed-site data.' })
   const projection = await getManagedSiteCustomerProjection(rawSessionToken, repository)
   const versions = await repository.listVersions(access.project.ownerUserId, access.project.id)
   return {
