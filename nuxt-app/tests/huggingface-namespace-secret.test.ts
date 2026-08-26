@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-describe('Hugging Face namespace secret', () => {
+const externalCredentialTestsEnabled = process.env.DS_RUN_EXTERNAL_CREDENTIAL_TESTS === '1'
+
+describe.skipIf(!externalCredentialTestsEnabled)('Hugging Face namespace secret (explicit external opt-in)', () => {
   it('matches the authenticated whoami identity without exposing the token', async () => {
     const token = String(process.env.HUGGINGFACE_API_TOKEN || '').trim()
     const namespace = String(process.env.HUGGINGFACE_NAMESPACE || '').trim()

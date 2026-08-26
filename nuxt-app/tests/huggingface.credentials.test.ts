@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-describe('Hugging Face server credential', () => {
+const externalCredentialTestsEnabled = process.env.DS_RUN_EXTERNAL_CREDENTIAL_TESTS === '1'
+
+describe.skipIf(!externalCredentialTestsEnabled)('Hugging Face server credential (explicit external opt-in)', () => {
   it('authenticates through the lightweight whoami endpoint without exposing the token', async () => {
     const token = process.env.HUGGINGFACE_API_TOKEN
     expect(token, 'HUGGINGFACE_API_TOKEN must be configured in server secrets.').toBeTruthy()

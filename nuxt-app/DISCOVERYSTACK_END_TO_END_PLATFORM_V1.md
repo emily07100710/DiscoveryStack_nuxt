@@ -180,7 +180,7 @@ main 已包含 GEO Content Quality Prompt/RAG、GEO Content Evaluation Harness�
 目前已知限制如下：
 
 1. GitHub CLI active account 是 `mamamia5241888`，不符合附件要求的 `emily07100710`；依不自行切換帳號規則，本地可繼續，但禁止 push，直到帳號／授權由使用者處理。
-2. targeted tests、完整 typecheck 與 Nuxt production build 已在最新 checkpoint 後執行；完整 suite 為 78 個 test files 通過、3 個 skipped，仍有 3 個既存 provider-secret integration tests 因 sandbox 沒有真實 Firecrawl/Hugging Face credentials 且外部 token 驗證失敗。這些 tests 未被繞過，也未因本 task 取得或使用真實 credentials。
+2. targeted tests、完整 typecheck 與 Nuxt production build 已在最新 checkpoint 後執行；送稽核前 recheck 的完整 suite 為 78 個 test files 通過、6 個 skipped，3 個 provider-secret integration files 已改為只有在明確設定 `DS_RUN_EXTERNAL_CREDENTIAL_TESTS=1` 時才執行，預設安全模式不會發出真實 HTTP 或要求 credentials。recheck 統計為 3,093 tests passed、8 skipped、0 failed；本 task 未設定該 opt-in，也未取得或使用真實 credentials。
 3. 尚未套用任何 production migration；如需 schema 變更，只能生成新的後續 migration，並在 disposable throwaway database 驗證，不能修改既有 migration、renumber、seed 或寫 production DB。
 4. 未呼叫真實 Qwen／Bailian、AutoGEO、GEOFlow、GitHub Contents、WordPress、PHP Agent、Generic HTTP 或客戶網站；所有外部 boundary 都必須以 injected mock 驗證。
 5. 未取得四份 paused patch 的可驗證附件；可用內容須重算 SHA-256，否則要從 current main、contracts、tests 與報告 reconstructed，不能報告為 ported。
@@ -260,7 +260,7 @@ Phase 11 新增 `tests/discovery-stack-e2e.acceptance.test.ts`，5 個 mocked ac
 | `3c55dad` | scheduler retry test bound to durable autopilot policy |
 | `4f3cd5f` | provider visibility route contract coverage |
 
-Phase 12 validation 結果為：`pnpm typecheck` 通過；`pnpm build` 通過並產生本地 Nuxt `.output`；build 後完整 `pnpm test` 為 78 個 test files 通過、3 個 skipped，3 個既存 provider-secret integration tests（Firecrawl／Hugging Face）因 sandbox 沒有真實 credentials 且 token 驗證失敗而未通過。這 3 個 tests 沒有被修改、繞過或以假 secret 滿足；依本任務禁止真實 credential／provider call 的規則，列為 environment-blocked，而非 V1 mocked runtime failure。Production-origin 與 private-output boundary tests 在本地 build 後通過。
+Phase 12 validation 結果為：`pnpm typecheck` 通過；`pnpm build` 通過並產生本地 Nuxt `.output`；送稽核前 recheck 的完整 `pnpm test` 為 78 個 test files 通過、6 個 skipped，3,093 tests passed、8 skipped、0 failed。Firecrawl／Hugging Face credential integration tests 現在保留原本的真實 identity assertions，但只在明確設定 `DS_RUN_EXTERNAL_CREDENTIAL_TESTS=1` 時執行；本 task 未設定該 flag，因此沒有任何真實 provider／token HTTP call。Database、OAuth managed preview／runtime 及這些 external credential checks 仍以 skipped 狀態保留，並非被假 secret 滿足。Production-origin 與 private-output boundary tests 在本地 build 後通過。
 
 Migration audit 已執行 `pnpm db:generate`。由於既有 `0017_governed_autopilot.sql` 尚未進入 Drizzle journal，工具產生了另一個等價但命名不同的 duplicate migration／snapshot；該 duplicate 與 metadata-only journal 變更已刪除／還原，沒有修改既有 migration history。保留狀態為：`0017_governed_autopilot.sql` generated = YES、applied = NO、disposable runtime database validation = NOT RUN、production migration／DB write = NOT RUN。
 
@@ -279,7 +279,7 @@ Public Astro site boundary audit：相對 task-start authoritative SHA 的非 `n
 | Workbench targeted tests | PASS：52 tests across 5 files | owner UI contracts、content operations routes、visibility provider runtime |
 | Mocked E2E acceptance | PASS：5 tests | all outbound transports injected／synthetic |
 | Adversarial scheduler regression | PASS：17 tests | scheduler publication requires durable owner autopilot policy |
-| Full suite after build | 78 files PASS、3 skipped；3 existing provider-secret tests blocked | no real credentials supplied |
+| Full suite after final recheck | 78 files PASS、6 skipped；3,093 tests PASS、8 skipped、0 failed | external credential tests require explicit opt-in; no real credentials supplied |
 | Nuxt typecheck | PASS | local source tree |
 | Nuxt production build | PASS | local `.output` only |
 | Migration generation | `0017` already present; duplicate generation audited and removed | generated only; not applied |

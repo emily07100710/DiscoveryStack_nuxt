@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest'
 const firecrawlApiKey = process.env.FIRECRAWL_API_KEY
 const huggingFaceToken = process.env.HUGGINGFACE_API_TOKEN
 const huggingFaceNamespace = process.env.HUGGINGFACE_NAMESPACE
+const externalCredentialTestsEnabled = process.env.DS_RUN_EXTERNAL_CREDENTIAL_TESTS === '1'
 
-describe('server-only provider credentials', () => {
+describe.skipIf(!externalCredentialTestsEnabled)('server-only provider credentials (explicit external opt-in)', () => {
   it('keeps required provider settings available only to the server test runtime', () => {
     expect(firecrawlApiKey).toBeTruthy()
     expect(huggingFaceToken).toBeTruthy()
