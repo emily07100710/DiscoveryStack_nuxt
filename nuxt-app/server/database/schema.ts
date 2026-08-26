@@ -1409,3 +1409,153 @@ export type ManagedSiteInvitation = typeof managedSiteInvitations.$inferSelect
 export type ManagedSiteAuditEvent = typeof managedSiteAuditEvents.$inferSelect
 export type ManagedSiteSubscription = typeof managedSiteSubscriptions.$inferSelect
 export type ManagedSiteSession = typeof managedSiteSessions.$inferSelect
+
+
+/** Anonymous or owner-associated preview draft. Only validated SiteSpec/style snapshots are persisted. */
+export const managedSitePreviews = mysqlTable('managedSitePreviews', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').references(() => users.id),
+  draftKey: varchar('draftKey', { length: 160 }).notNull(),
+  accessTokenHash: varchar('accessTokenHash', { length: 128 }).notNull(),
+  sourceMode: mysqlEnum('sourceMode', ['new_site', 'existing_site']).notNull(),
+  existingSiteUrl: varchar('existingSiteUrl', { length: 2048 }),
+  brief: text('brief').notNull(),
+  businessGoals: json('businessGoals').notNull(),
+  styleProfile: json('styleProfile').notNull(),
+  siteSpecSnapshot: json('siteSpecSnapshot').notNull(),
+  designTokenSnapshot: json('designTokenSnapshot').notNull(),
+  selectedModuleSnapshot: json('selectedModuleSnapshot').notNull(),
+  previewFingerprint: varchar('previewFingerprint', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['draft', 'generated', 'saved', 'expired', 'converted']).default('generated').notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_previews_draft_key_unique').on(table.draftKey),
+  uniqueIndex('managed_site_previews_access_token_unique').on(table.accessTokenHash),
+  uniqueIndex('managed_site_previews_fingerprint_unique').on(table.previewFingerprint),
+  index('managed_site_previews_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+])
+
+/** Server-priced immutable quote bound to one preview snapshot and fixed catalog. */
+export const managedSiteQuotes = mysqlTable('managedSiteQuotes', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').references(() => users.id),
+  previewId: int('previewId').notNull().references(() => managedSitePreviews.id),
+  projectId: int('projectId').references(() => managedSiteProjects.id),
+  quoteVersion: varchar('quoteVersion', { length: 96 }).notNull(),
+  planKey: varchar('planKey', { length: 96 }).notNull(),
+  currency: varchar('currency', { length: 3 }).notNull(),
+  totalMinor: int('totalMinor').notNull(),
+  taxStatus: mysqlEnum('taxStatus', ['not_calculated', 'limited']).notNull(),
+  moduleSnapshot: json('moduleSnapshot').notNull(),
+  cadenceDays: int('cadenceDays').notNull(),
+  domainOption: mysqlEnum('domainOption', ['existing', 'new', 'assisted']).notNull(),
+  siteSpecFingerprint: varchar('siteSpecFingerprint', { length: 128 }).notNull(),
+  quoteFingerprint: varchar('quoteFingerprint', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['draft', 'quoted', 'expired', 'locked', 'cancelled']).default('quoted').notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
+  lockedAt: timestamp('lockedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_quotes_fingerprint_unique').on(table.quoteFingerprint),
+  index('managed_site_quotes_preview_status_idx').on(table.previewId, table.status),
+  index('managed_site_quotes_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+])
+
+/** Immutable quote line items generated only from the server-side price catalog. */
+export const managedSiteQuoteLines = mysqlTable('managedSiteQuoteLines', {
+  id: int('id').autoincrement().primaryKey(),
+  quoteId: int('quoteId').notNull().references(() => managedSiteQuotes.id),
+  lineKey: varchar('lineKey', { length: 96 }).notNull(),
+  description: varchar('description', { length: 300 }).notNull(),
+  quantity: int('quantity').notNull(),
+  unitAmountMinor: int('unitAmountMinor').notNull(),
+  lineAmountMinor: int('lineAmountMinor').notNull(),
+  catalogVersion: varchar('catalogVersion', { length: 96 }).notNull(),
+  lineFingerprint: varchar('lineFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_quote_lines_quote_key_unique').on(table.quoteId, table.lineKey),
+  index('managed_site_quote_lines_quote_idx').on(table.quoteId),
+])
+
+/** Links an existing canonical lead record to a managed-site preview and quote. */
+export const managedSiteLeadIntents = mysqlTable('managedSiteLeadIntents', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').references(() => users.id),
+  previewId: int('previewId').notNull().references(() => managedSitePreviews.id),
+  quoteId: int('quoteId').references(() => managedSiteQuotes.id),
+  leadId: int('leadId').notNull().references(() => leads.id),
+  requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_lead_intents_idempotency_unique').on(table.idempotencyKey),
+  uniqueIndex('managed_site_lead_intents_request_unique').on(table.requestFingerprint),
+  index('managed_site_lead_intents_preview_idx').on(table.previewId, table.createdAt),
+])
+
+/** Draft order created from an exact quote and lead; it is never marked paid by public input. */
+export const managedSiteDraftOrders = mysqlTable('managedSiteDraftOrders', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').references(() => users.id),
+  previewId: int('previewId').notNull().references(() => managedSitePreviews.id),
+  quoteId: int('quoteId').notNull().references(() => managedSiteQuotes.id),
+  projectId: int('projectId').references(() => managedSiteProjects.id),
+  leadId: int('leadId').notNull().references(() => leads.id),
+  status: mysqlEnum('status', ['draft', 'payment_pending', 'payment_verified', 'cancelled', 'expired']).default('draft').notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  paymentIntentReference: varchar('paymentIntentReference', { length: 160 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_draft_orders_idempotency_unique').on(table.idempotencyKey),
+  uniqueIndex('managed_site_draft_orders_request_unique').on(table.requestFingerprint),
+  index('managed_site_draft_orders_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+])
+
+/** Append-only verified payment event ledger. Provider payloads are reduced to safe references and fingerprints. */
+export const managedSitePaymentEvents = mysqlTable('managedSitePaymentEvents', {
+  id: int('id').autoincrement().primaryKey(),
+  draftOrderId: int('draftOrderId').notNull().references(() => managedSiteDraftOrders.id),
+  eventId: varchar('eventId', { length: 160 }).notNull(),
+  providerReference: varchar('providerReference', { length: 160 }).notNull(),
+  eventType: varchar('eventType', { length: 96 }).notNull(),
+  verificationStatus: mysqlEnum('verificationStatus', ['verified', 'rejected', 'replayed']).notNull(),
+  eventFingerprint: varchar('eventFingerprint', { length: 128 }).notNull(),
+  receivedAt: timestamp('receivedAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_payment_events_event_unique').on(table.eventId),
+  uniqueIndex('managed_site_payment_events_fingerprint_unique').on(table.eventFingerprint),
+  index('managed_site_payment_events_order_idx').on(table.draftOrderId, table.receivedAt),
+])
+
+/** Subscription entitlement intent bound to the exact quote cadence and plan. */
+export const managedSiteSubscriptionIntents = mysqlTable('managedSiteSubscriptionIntents', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').references(() => users.id),
+  projectId: int('projectId').references(() => managedSiteProjects.id),
+  quoteId: int('quoteId').notNull().references(() => managedSiteQuotes.id),
+  planKey: varchar('planKey', { length: 96 }).notNull(),
+  cadenceDays: int('cadenceDays').notNull(),
+  termMonths: int('termMonths').notNull(),
+  status: mysqlEnum('status', ['draft', 'entitled', 'blocked']).default('draft').notNull(),
+  intentFingerprint: varchar('intentFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_subscription_intents_quote_unique').on(table.quoteId),
+  uniqueIndex('managed_site_subscription_intents_fingerprint_unique').on(table.intentFingerprint),
+  index('managed_site_subscription_intents_owner_status_idx').on(table.ownerUserId, table.status),
+])
+
+export type ManagedSitePreview = typeof managedSitePreviews.$inferSelect
+export type ManagedSiteQuote = typeof managedSiteQuotes.$inferSelect
+export type ManagedSiteQuoteLine = typeof managedSiteQuoteLines.$inferSelect
+export type ManagedSiteLeadIntent = typeof managedSiteLeadIntents.$inferSelect
+export type ManagedSiteDraftOrder = typeof managedSiteDraftOrders.$inferSelect
+export type ManagedSitePaymentEvent = typeof managedSitePaymentEvents.$inferSelect
+export type ManagedSiteSubscriptionIntent = typeof managedSiteSubscriptionIntents.$inferSelect

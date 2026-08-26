@@ -49,6 +49,16 @@ const isGenerating = ref(false)
 const generationStep = ref(4)
 const showHandoff = ref(false)
 const viewport = ref<'desktop' | 'mobile'>('desktop')
+const previewResult = ref<any>(null)
+const previewToken = ref<string | null>(null)
+const quoteResult = ref<any>(null)
+const apiMessage = ref('')
+const apiError = ref('')
+const contactName = ref('')
+const contactEmail = ref('')
+const contactCompany = ref('')
+const privacyConsent = ref(false)
+const isSubmittingOrder = ref(false)
 
 const currentTheme = computed(() => themes.find((item) => item.id === theme.value) ?? themes[0])
 const currentPlan = computed(() => plans.find((item) => item.id === plan.value) ?? plans[0])
@@ -73,17 +83,87 @@ function runDiagnosis() {
   diagnosisRevealed.value = true
 }
 
-function generatePreview() {
+const siteTypeContract: Record<SiteType, 'one_page' | 'brand_blog' | 'simple_commerce'> = { 'one-page': 'one_page', 'brand-blog': 'brand_blog', commerce: 'simple_commerce' }
+const moduleContract: Record<string, string> = { admin: 'managed_content_admin', ai: 'bounded_ai_assistant', booking: 'google_booking_assisted_integration', line: 'line_assisted_integration', payment: 'payment', invoice: 'invoice', member: 'membership', app: 'pwa_reference_only' }
+const apiOrigin = ((import.meta as any).env?.PUBLIC_MANAGED_SITE_API_ORIGIN || '').replace(/\/$/, '')
+
+function contractModules() {
+  const modules = selectedModules.value.map((item) => moduleContract[item]).filter(Boolean)
+  if (siteType.value === 'commerce') modules.push('shopify_commerce')
+  return [...new Set(modules)]
+}
+
+function businessGoals() {
+  const goals = ['improve_search_ai_understanding', 'increase_inquiries']
+  if (siteType.value === 'commerce') goals.push('sell_online')
+  if (selectedModules.value.includes('booking')) goals.push('increase_bookings')
+  if (entryMode.value === 'existing') goals.push('build_brand')
+  return [...new Set(goals)]
+}
+
+async function apiRequest(path: string, body?: Record<string, unknown>) {
+  const response = await fetch(`${apiOrigin}${path}`, { method: body ? 'POST' : 'GET', headers: body ? { 'content-type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data?.message || data?.statusMessage || '目前無法完成這個步驟。')
+  return data
+}
+
+async function generatePreview() {
   if (isGenerating.value) return
   isGenerating.value = true
   generationStep.value = 0
+  apiError.value = ''
+  apiMessage.value = ''
   const sequence = [1, 2, 3, 4]
-  sequence.forEach((step, index) => {
-    window.setTimeout(() => {
-      generationStep.value = step
-      if (step === 4) isGenerating.value = false
-    }, 420 * (index + 1))
-  })
+  sequence.forEach((step, index) => window.setTimeout(() => { generationStep.value = step }, 420 * (index + 1)))
+  try {
+    const result = await apiRequest('/api/managed-sites/previews', {
+      draftIdentity: `public-preview-${Date.now()}`,
+      brandName: brandName.value,
+      audience: '重視專業、信任與清楚答案的潛在客戶',
+      brief: businessBrief.value,
+      businessGoals: businessGoals(),
+      siteType: siteTypeContract[siteType.value],
+      selectedModules: contractModules(),
+      existingSiteUrl: entryMode.value === 'existing' ? existingUrl.value : null,
+      diagnosisProjection: entryMode.value === 'existing' && diagnosisRevealed.value ? { issueKeys: ['answer_depth', 'entity_clarity', 'content_cadence'], limitations: ['公開診斷概念投影；正式版需客戶授權後再執行。'] } : undefined,
+    })
+    previewResult.value = result
+    previewToken.value = result.previewAccessToken || previewToken.value
+    apiMessage.value = '預覽已建立；目前仍是 preview，不會扣款、購買網域或部署。'
+  } catch (error: any) {
+    apiError.value = error?.message || '預覽建立失敗，請稍後再試。'
+  } finally {
+    window.setTimeout(() => { isGenerating.value = false }, 420)
+  }
+}
+
+async function openHandoff() {
+  if (!previewResult.value) await generatePreview()
+  showHandoff.value = true
+  if (previewResult.value && previewToken.value) await prepareQuote()
+}
+
+async function prepareQuote() {
+  if (!previewResult.value?.previewId || !previewToken.value) return
+  try {
+    const result = await apiRequest(`/api/managed-sites/previews/${previewResult.value.previewId}/quote`, { previewAccessToken: previewToken.value, planKey: plan.value === 'autopilot' ? 'business' : 'basic', cadenceDays: cadence.value, domainOption: 'new', moduleKeys: contractModules(), idempotencyKey: `quote-${previewResult.value.previewId}-${plan.value}-${cadence.value}` })
+    quoteResult.value = result.quote
+    apiMessage.value = '報價已依伺服器價格目錄建立；付款仍需客戶確認，尚未扣款。'
+  } catch (error: any) { apiError.value = error?.message || '報價建立失敗。' }
+}
+
+async function submitOrderIntent() {
+  if (!previewResult.value?.previewId || !previewToken.value || !quoteResult.value?.quoteId) { apiError.value = '請先建立預覽與報價。'; return }
+  if (!contactName.value.trim() || !contactEmail.value.trim() || !contactCompany.value.trim() || !privacyConsent.value) { apiError.value = '請填寫姓名、Email、公司與隱私同意。'; return }
+  isSubmittingOrder.value = true
+  apiError.value = ''
+  try {
+    const lead = await apiRequest(`/api/managed-sites/previews/${previewResult.value.previewId}/lead`, { previewAccessToken: previewToken.value, quoteId: quoteResult.value.quoteId, name: contactName.value, email: contactEmail.value, company: contactCompany.value, privacyConsent: true, recontactConsent: true, idempotencyKey: `lead-${previewResult.value.previewId}-${contactEmail.value.trim().toLowerCase()}` })
+    const order = await apiRequest(`/api/managed-sites/previews/${previewResult.value.previewId}/order`, { previewAccessToken: previewToken.value, quoteId: quoteResult.value.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: `order-${previewResult.value.previewId}-${quoteResult.value.quoteId}` })
+    apiMessage.value = `訂購意圖已送出（${order.order.status}）；尚未扣款，後續付款、網域與部署需另行確認。`
+  } catch (error: any) { apiError.value = error?.message || '訂購意圖送出失敗。' }
+  finally { isSubmittingOrder.value = false }
 }
 
 function formatMoney(value: number) {
@@ -223,7 +303,9 @@ function formatMoney(value: number) {
     </div>
 
     <section class="launch-config">
-      <header><p>04 · FROM PREVIEW TO PRODUCTION</p><h2>喜歡這個方向，就把它變成真的。</h2><span>以下金額與網域狀態都是概念示範。</span></header>
+      <p v-if="apiMessage" class="builder-notice builder-notice--success" role="status">{{ apiMessage }}</p>
+      <p v-if="apiError" class="builder-notice builder-notice--error" role="alert">{{ apiError }}</p>
+      <header><p>04 · FROM PREVIEW TO PRODUCTION</p><h2>喜歡這個方向，就把它變成真的。</h2><span>目前先產生預覽與伺服器報價；付款、網域與部署都要另外確認。</span></header>
       <div class="launch-grid">
         <div class="plan-panel">
           <h3>選擇持續服務</h3>
@@ -251,8 +333,8 @@ function formatMoney(value: number) {
           <ul><li v-for="label in selectedLabels.slice(0, 5)" :key="label">{{ label }}</li></ul>
           <div class="order-total"><span>網站建置預估</span><strong>NT$ {{ formatMoney(launchPrice) }}</strong></div>
           <div v-if="cadencePrice" class="order-monthly"><span>12 個月 GEO 方案</span><strong>NT$ {{ formatMoney(cadencePrice) }}／月</strong></div>
-          <button type="button" @click="showHandoff = true">保留這份設計並進入購買 <b>→</b></button>
-          <small>正式版會先建立訂單，再進行付款、網域與 API 授權。</small>
+          <button type="button" @click="openHandoff">保留這份設計並進入訂購意圖 <b>→</b></button>
+          <small>這個按鈕只建立 preview handoff 與訂購意圖，不會直接扣款、購買網域或部署。</small>
         </aside>
       </div>
     </section>
@@ -263,8 +345,18 @@ function formatMoney(value: number) {
         <p>PREVIEW HANDOFF</p>
         <h2 id="handoff-title">這裡，就是預覽轉成正式專案的交接點。</h2>
         <div class="handoff-path"><span>留下聯絡資料</span><i>→</i><span>確認規格與付款</span><i>→</i><span>購買網域</span><i>→</i><span>自動部署</span></div>
-        <p>系統會保存這一版的網站規格、功能、文案、設計版本與價格。需要 Google、LINE、金流或發票 API 的部分，付款後再由專人協助授權。</p>
-        <button type="button" @click="showHandoff = false">了解，繼續調整概念</button>
+        <p>系統會保存這一版的網站規格、功能、內容與伺服器報價。需要 Shopify、Google、LINE、金流或發票 API 的部分，付款後再由客戶授權或由專人協助。</p>
+        <div v-if="quoteResult" class="handoff-quote"><span>SERVER QUOTE · {{ quoteResult.planKey }}</span><strong>{{ quoteResult.currency }} {{ quoteResult.totalMinor }}</strong><small>報價有效至 {{ new Date(quoteResult.expiresAt).toLocaleDateString('zh-TW') }}；稅額未計算。</small></div>
+        <div class="handoff-form">
+          <label>姓名<input v-model="contactName" autocomplete="name" placeholder="你的姓名"></label>
+          <label>Email<input v-model="contactEmail" autocomplete="email" inputmode="email" placeholder="you@example.com"></label>
+          <label>公司／品牌<input v-model="contactCompany" autocomplete="organization" placeholder="公司或品牌名稱"></label>
+          <label class="consent"><input v-model="privacyConsent" type="checkbox"> 我同意 DiscoveryStack 依隱私政策聯絡我並處理此訂購意圖。</label>
+        </div>
+        <div class="handoff-actions">
+          <button type="button" class="handoff-submit" :disabled="isSubmittingOrder" @click="submitOrderIntent">{{ isSubmittingOrder ? '送出中…' : '送出訂購意圖（不扣款）' }}</button>
+          <button type="button" @click="showHandoff = false">返回繼續調整</button>
+        </div>
       </section>
     </div>
   </section>
@@ -343,7 +435,7 @@ function formatMoney(value: number) {
 .cadence-control{margin-top:1.2rem}.cadence-control>span{font-size:.7rem;font-weight:800}.cadence-control>div{display:flex;gap:.35rem;margin-top:.55rem}.cadence-control button{flex:1;border:1px solid #ddd8ce;background:#fff;border-radius:.5rem;padding:.5rem .2rem;font-size:.62rem;cursor:pointer}.cadence-control button.active{background:#17233b;color:#fff;border-color:#17233b}
 .domain-panel label{font-size:.7rem;font-weight:800}.domain-panel label div{display:flex;margin-top:.5rem}.domain-panel input{min-width:0;flex:1;border:1px solid #ddd8ce;border-radius:.55rem 0 0 .55rem;padding:.72rem;font:500 .75rem 'DM Mono',monospace}.domain-panel label button{border:0;background:#17233b;color:#fff;padding:0 .8rem;border-radius:0 .55rem .55rem 0;font-size:.65rem}.domain-result{margin-top:.7rem;color:#24744e;font-size:.68rem}.domain-result span{font-size:.55rem}.domain-panel ul{padding:1rem 0 0 1rem;margin:1rem 0 0;border-top:1px solid #ebe7df}.domain-panel li{padding:.3rem 0;font-size:.7rem}
 .order-card{background:#17233b;color:#fff;box-shadow:0 1rem 3rem rgba(23,35,59,.18)}.order-card>p{color:#8fa7ef;font:600 .6rem 'DM Mono',monospace;letter-spacing:.1em}.order-card h3{font:700 1.4rem 'Noto Serif TC',serif;margin:.7rem 0 1.2rem}.order-card>div:not(.order-total):not(.order-monthly){display:flex;justify-content:space-between;padding:.5rem 0;color:#d4d8e0;font-size:.7rem}.order-card ul{display:flex;flex-wrap:wrap;gap:.3rem;padding:0;margin:.8rem 0;list-style:none}.order-card li{background:rgba(255,255,255,.1);border-radius:999px;padding:.25rem .5rem;font-size:.58rem}.order-total,.order-monthly{border-top:1px solid rgba(255,255,255,.18);display:grid!important;gap:.25rem;padding-top:1rem!important;margin-top:.8rem}.order-total span,.order-monthly span{font-size:.6rem;color:#9da6b7}.order-total strong{font-size:1.25rem}.order-monthly strong{color:#a9bbf2;font-size:.9rem}.order-card>button{width:100%;display:flex;justify-content:space-between;margin-top:1.2rem;border:0;border-radius:.65rem;padding:.85rem;background:#ff7a59;color:#fff;font-weight:800;cursor:pointer}.order-card>small{display:block;margin-top:.7rem;color:#9da6b7;line-height:1.5;font-size:.57rem}
-.handoff-backdrop{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:1rem;background:rgba(15,20,30,.72);backdrop-filter:blur(8px)}.handoff-dialog{position:relative;width:min(42rem,100%);background:#f8f4eb;border-radius:1.2rem;padding:clamp(1.5rem,5vw,3.5rem);box-shadow:0 2rem 7rem rgba(0,0,0,.35)}.close-dialog{position:absolute;right:1rem;top:1rem;border:0;background:transparent;font-size:1.5rem;cursor:pointer}.handoff-dialog>p:first-of-type{color:#315bd6;font:600 .65rem 'DM Mono',monospace;letter-spacing:.1em}.handoff-dialog h2{font:700 clamp(1.8rem,4vw,3rem)/1.15 'Noto Serif TC',serif;margin:.8rem 0 1.2rem}.handoff-dialog>p:last-of-type{color:#666159;line-height:1.8;font-size:.85rem}.handoff-path{display:flex;align-items:center;gap:.5rem;margin:1.2rem 0;padding:1rem;background:#ebe6db;border-radius:.7rem;overflow:auto}.handoff-path span{white-space:nowrap;font-size:.7rem;font-weight:800}.handoff-path i{font-style:normal;color:#315bd6}.handoff-dialog>button:last-child{margin-top:1.5rem;border:0;border-radius:.6rem;background:#17233b;color:#fff;padding:.8rem 1rem;font-weight:800;cursor:pointer}
+.builder-notice{max-width:88rem;margin:0 auto 1rem;padding:.8rem 1rem;border-radius:.65rem;font-size:.72rem;line-height:1.5}.builder-notice--success{background:#e6f4ec;color:#176b42}.builder-notice--error{background:#fff0ed;color:#8b3024}.handoff-backdrop{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:1rem;background:rgba(15,20,30,.72);backdrop-filter:blur(8px)}.handoff-dialog{position:relative;width:min(42rem,100%);background:#f8f4eb;border-radius:1.2rem;padding:clamp(1.5rem,5vw,3.5rem);box-shadow:0 2rem 7rem rgba(0,0,0,.35)}.close-dialog{position:absolute;right:1rem;top:1rem;border:0;background:transparent;font-size:1.5rem;cursor:pointer}.handoff-dialog>p:first-of-type{color:#315bd6;font:600 .65rem 'DM Mono',monospace;letter-spacing:.1em}.handoff-dialog h2{font:700 clamp(1.8rem,4vw,3rem)/1.15 'Noto Serif TC',serif;margin:.8rem 0 1.2rem}.handoff-dialog>p:last-of-type{color:#666159;line-height:1.8;font-size:.85rem}.handoff-quote{display:grid;gap:.3rem;margin:1rem 0;padding:1rem;background:#ebe6db;border-radius:.7rem}.handoff-quote span{color:#315bd6;font:600 .6rem 'DM Mono',monospace;letter-spacing:.1em}.handoff-quote strong{font:700 1.35rem 'Noto Serif TC',serif}.handoff-quote small{color:#77736b;font-size:.65rem}.handoff-form{display:grid;grid-template-columns:1fr 1fr;gap:.7rem}.handoff-form label{display:grid;gap:.35rem;color:#666159;font-size:.7rem;font-weight:800}.handoff-form input:not([type='checkbox']){border:1px solid #d8d2c7;border-radius:.5rem;padding:.7rem;background:#fff;color:#20252d}.handoff-form .consent{grid-column:1/-1;display:flex;align-items:flex-start;gap:.5rem;font-weight:500;line-height:1.5}.handoff-form .consent input{margin-top:.2rem}.handoff-actions{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1.2rem}.handoff-actions button{border:0;border-radius:.6rem;background:#17233b;color:#fff;padding:.8rem 1rem;font-weight:800;cursor:pointer}.handoff-actions .handoff-submit{background:#ff7a59}.handoff-actions button:disabled{opacity:.6;cursor:wait}.handoff-path{display:flex;align-items:center;gap:.5rem;margin:1.2rem 0;padding:1rem;background:#ebe6db;border-radius:.7rem;overflow:auto}.handoff-path span{white-space:nowrap;font-size:.7rem;font-weight:800}.handoff-path i{font-style:normal;color:#315bd6}.handoff-dialog>button:last-child{margin-top:1.5rem;border:0;border-radius:.6rem;background:#17233b;color:#fff;padding:.8rem 1rem;font-weight:800;cursor:pointer}
 @media(max-width:72rem){.builder-shell{grid-template-columns:1fr}.builder-controls{border-right:0;border-bottom:1px solid #e5e2da}.launch-grid{grid-template-columns:1fr 1fr}.order-card{grid-column:1/-1}.concept-intro{grid-template-columns:1fr}.concept-intro>p{max-width:46rem}}
-@media(max-width:44rem){.concept-builder{padding-inline:.75rem}.concept-intro h1{font-size:2.55rem}.entry-tabs,.diagnosis-form,.diagnosis-comparison{grid-template-columns:1fr}.comparison-arrow{transform:rotate(90deg);justify-self:center}.site-types{grid-template-columns:1fr}.module-grid{grid-template-columns:1fr}.preview-column{padding:.45rem}.preview-toolbar{grid-template-columns:1fr 2fr}.window-dots{display:none}.site-stage{min-height:32rem}.generated-nav nav{display:none}.generated-hero>*{max-width:100%}.generated-hero::after{opacity:.22}.trust-strip{padding:1rem}.preview-editorial{grid-template-columns:1fr;padding:1.2rem}.preview-evidence{align-items:flex-start;flex-direction:column}.launch-config>header,.launch-grid{grid-template-columns:1fr}.order-card{grid-column:auto}.handoff-path{align-items:flex-start;flex-direction:column}.handoff-path i{transform:rotate(90deg)}}
+@media(max-width:44rem){.concept-builder{padding-inline:.75rem}.handoff-form{grid-template-columns:1fr}.handoff-form .consent{grid-column:auto}.concept-intro h1{font-size:2.55rem}.entry-tabs,.diagnosis-form,.diagnosis-comparison{grid-template-columns:1fr}.comparison-arrow{transform:rotate(90deg);justify-self:center}.site-types{grid-template-columns:1fr}.module-grid{grid-template-columns:1fr}.preview-column{padding:.45rem}.preview-toolbar{grid-template-columns:1fr 2fr}.window-dots{display:none}.site-stage{min-height:32rem}.generated-nav nav{display:none}.generated-hero>*{max-width:100%}.generated-hero::after{opacity:.22}.trust-strip{padding:1rem}.preview-editorial{grid-template-columns:1fr;padding:1.2rem}.preview-evidence{align-items:flex-start;flex-direction:column}.launch-config>header,.launch-grid{grid-template-columns:1fr}.order-card{grid-column:auto}.handoff-path{align-items:flex-start;flex-direction:column}.handoff-path i{transform:rotate(90deg)}}
 </style>

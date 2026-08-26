@@ -1,0 +1,276 @@
+import { randomBytes } from 'node:crypto'
+import { createError } from 'h3'
+import { stableFingerprint } from '../seo-geo-core/repository'
+import { getPreviewRepository } from './ordering-repository'
+import { buildPreviewProjection, buildSiteSpec, BUSINESS_GOALS, SITE_MODULES, type SiteBriefInput, type SiteModule, type SiteSpec } from './site-spec'
+import { normalizeRecipientEmail, tokenHash } from './normalization'
+import type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent } from '../database/schema'
+import type { DraftOrderInput, LeadInput, PreviewGenerationResult, PreviewRepository, QuoteInput, VerifiedPaymentEventInput } from './ordering-types'
+
+export const MANAGED_SITE_PRICE_CATALOG_VERSION = 'managed-site-pricing-v1'
+export const MANAGED_SITE_TERM_MONTHS = 12
+export const MANAGED_SITE_QUOTE_TTL_MS = 1000 * 60 * 60 * 24
+
+const PLAN_CATALOG = {
+  basic: { siteBuildMinor: 9900, geoSubscriptionMinor: 9900, description: 'Basic managed site + GEO subscription' },
+  business: { siteBuildMinor: 19900, geoSubscriptionMinor: 19900, description: 'Business managed site + GEO subscription' },
+} as const
+
+const CADENCE_CATALOG: Record<3 | 7 | 15 | 30, number> = { 3: 4900, 7: 2900, 15: 1900, 30: 990 }
+
+function invalid(message: string): never {
+  throw createError({ statusCode: 422, statusMessage: message })
+}
+
+function notFound(message: string): never {
+  throw createError({ statusCode: 404, statusMessage: message })
+}
+
+function ensureFiniteDate(date: Date, label: string): Date {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) invalid(`${label} is invalid.`)
+  return date
+}
+
+function stringField(value: unknown, label: string, max: number, required = true): string | null {
+  if (value === undefined || value === null || value === '') {
+    if (required) invalid(`${label} is required.`)
+    return null
+  }
+  if (typeof value !== 'string' || value.trim().length > max || (required && !value.trim())) invalid(`${label} is invalid.`)
+  return value.trim()
+}
+
+function assertPreviewUsable(preview: ManagedSitePreview, nowDate: Date) {
+  if (preview.status === 'expired' || preview.expiresAt.getTime() <= nowDate.getTime()) throw createError({ statusCode: 410, statusMessage: 'This preview has expired and must be regenerated.' })
+  if (!['draft', 'generated', 'saved'].includes(preview.status)) throw createError({ statusCode: 409, statusMessage: 'This preview is no longer available for ordering.' })
+}
+
+function assertPreviewAccess(preview: ManagedSitePreview, accessToken: unknown) {
+  if (typeof accessToken !== 'string' || accessToken.length < 32 || accessToken.length > 256 || tokenHash(accessToken) !== preview.accessTokenHash) throw createError({ statusCode: 404, statusMessage: 'Managed site preview was not found.' })
+}
+
+function quoteProjection(quote: ManagedSiteQuote, lines: ManagedSiteQuoteLine[]) {
+  return {
+    quoteId: quote.id,
+    status: quote.status,
+    quoteVersion: quote.quoteVersion,
+    planKey: quote.planKey,
+    currency: quote.currency,
+    totalMinor: quote.totalMinor,
+    taxStatus: quote.taxStatus,
+    cadenceDays: quote.cadenceDays,
+    domainOption: quote.domainOption,
+    siteSpecFingerprint: quote.siteSpecFingerprint,
+    quoteFingerprint: quote.quoteFingerprint,
+    expiresAt: quote.expiresAt,
+    lockedAt: quote.lockedAt,
+    lines: lines.map(line => ({ lineKey: line.lineKey, description: line.description, quantity: line.quantity, unitAmountMinor: line.unitAmountMinor, lineAmountMinor: line.lineAmountMinor, catalogVersion: line.catalogVersion })),
+    limitations: ['Tax is not calculated in V1.', 'Payment, domain purchase, DNS, TLS and deployment are not executed by this contract until separately authorized and configured.', 'AI visibility, ranking, traffic, conversion and revenue are not guaranteed.'],
+  }
+}
+
+export function getManagedSitePriceCatalog() {
+  return {
+    version: MANAGED_SITE_PRICE_CATALOG_VERSION,
+    currency: 'USD' as const,
+    termMonths: MANAGED_SITE_TERM_MONTHS,
+    plans: Object.entries(PLAN_CATALOG).map(([key, value]) => ({ key, siteBuildMinor: value.siteBuildMinor, geoSubscriptionMinor: value.geoSubscriptionMinor, description: value.description })),
+    cadence: Object.entries(CADENCE_CATALOG).map(([days, amount]) => ({ days: Number(days), monthlyMinor: amount })),
+    domainOptions: ['existing', 'new', 'assisted'] as const,
+    modules: SITE_MODULES,
+  }
+}
+
+export async function createManagedSitePreview(ownerUserId: number | null, input: unknown, repository = getPreviewRepository(), clock: () => Date = () => new Date()): Promise<PreviewGenerationResult> {
+  const spec = buildSiteSpec(input, clock())
+  const existing = await repository.findPreviewByDraftKey(spec.draftIdentity)
+  if (existing) {
+    if (existing.previewFingerprint !== stableFingerprint({ draftIdentity: spec.draftIdentity, specFingerprint: spec.deterministicFingerprint })) throw createError({ statusCode: 409, statusMessage: 'Draft identity is already used by a different preview.' })
+    const expiresAt = existing.expiresAt
+    return { preview: existing, projection: buildPreviewProjection(spec, String(existing.id), expiresAt), spec, accessToken: null, replayed: true }
+  }
+  const createdAt = clock()
+  ensureFiniteDate(createdAt, 'Preview clock')
+  const expiresAt = new Date(createdAt.getTime() + 1000 * 60 * 60 * 24)
+  const previewFingerprint = stableFingerprint({ draftIdentity: spec.draftIdentity, specFingerprint: spec.deterministicFingerprint })
+  const duplicate = await repository.findPreviewByFingerprint(previewFingerprint)
+  if (duplicate) return { preview: duplicate, projection: buildPreviewProjection(spec, String(duplicate.id), duplicate.expiresAt), spec, accessToken: null, replayed: true }
+  const accessToken = randomBytes(32).toString('base64url')
+  const preview = await repository.insertPreview({
+    ownerUserId,
+    draftKey: spec.draftIdentity,
+    accessTokenHash: tokenHash(accessToken),
+    sourceMode: input && typeof input === 'object' && 'diagnosisProjection' in input ? 'existing_site' : 'new_site',
+    existingSiteUrl: input && typeof input === 'object' && typeof (input as { existingSiteUrl?: unknown }).existingSiteUrl === 'string' ? (input as { existingSiteUrl: string }).existingSiteUrl : null,
+    brief: spec.businessIdentity.brief,
+    businessGoals: spec.businessGoals,
+    styleProfile: spec.styleReferenceProfile || {},
+    siteSpecSnapshot: spec,
+    designTokenSnapshot: spec.designTokens,
+    selectedModuleSnapshot: spec.selectedModules,
+    previewFingerprint,
+    status: 'generated',
+    expiresAt,
+    createdAt,
+    updatedAt: createdAt,
+  } as any)
+  return { preview, projection: buildPreviewProjection(spec, String(preview.id), expiresAt), spec, accessToken, replayed: false }
+}
+
+export async function getManagedSitePublicPreview(previewId: number, accessToken: string, repository = getPreviewRepository(), clock: () => Date = () => new Date()) {
+  const preview = await repository.findPreviewById(previewId)
+  if (!preview) notFound('Managed site preview was not found.')
+  assertPreviewAccess(preview, accessToken)
+  assertPreviewUsable(preview, clock())
+  const spec = preview.siteSpecSnapshot as unknown as SiteSpec
+  return { previewId: preview.id, previewOnly: true as const, status: preview.status, projection: buildPreviewProjection(spec, String(preview.id), preview.expiresAt), spec, accessTokenRequired: true as const }
+}
+
+export async function saveManagedSitePreview(ownerUserId: number | null, previewId: number, repository = getPreviewRepository(), clock: () => Date = () => new Date()) {
+  const preview = await repository.findPreviewById(previewId)
+  if (!preview || (ownerUserId !== null && preview.ownerUserId !== ownerUserId)) notFound('Managed site preview was not found.')
+  assertPreviewUsable(preview, clock())
+  const updated = await repository.updatePreview(previewId, { status: 'saved', updatedAt: clock() } as any)
+  if (!updated) notFound('Managed site preview was not found.')
+  return { preview: updated, saved: true }
+}
+
+export async function createManagedSiteQuote(input: QuoteInput, repository = getPreviewRepository(), clock: () => Date = () => new Date()) {
+  if (!Number.isSafeInteger(input.previewId) || input.previewId < 1) invalid('Preview id is invalid.')
+  if (!['basic', 'business'].includes(input.planKey)) invalid('Plan is not available in V1.')
+  if (![3, 7, 15, 30].includes(input.cadenceDays)) invalid('GEO cadence is not available in V1.')
+  if (!['existing', 'new', 'assisted'].includes(input.domainOption)) invalid('Domain option is not available in V1.')
+  const preview = await repository.findPreviewById(input.previewId)
+  if (!preview) notFound('Managed site preview was not found.')
+  assertPreviewAccess(preview, input.previewAccessToken)
+  assertPreviewUsable(preview, clock())
+  const spec = preview.siteSpecSnapshot as unknown as SiteSpec
+  const selectedModules = input.moduleKeys ? [...new Set(input.moduleKeys)] : spec.selectedModules
+  if (selectedModules.length > SITE_MODULES.length || selectedModules.some(module => !(SITE_MODULES as readonly string[]).includes(module))) invalid('Selected module is not available in V1.')
+  if (spec.siteType === 'simple_commerce' && !selectedModules.includes('shopify_commerce')) invalid('Simple commerce requires Shopify commerce in V1.')
+  const quoteFingerprint = stableFingerprint({ previewFingerprint: preview.previewFingerprint, planKey: input.planKey, cadenceDays: input.cadenceDays, domainOption: input.domainOption, selectedModules: [...selectedModules].sort(), catalogVersion: MANAGED_SITE_PRICE_CATALOG_VERSION })
+  const replay = await repository.findQuoteByFingerprint(quoteFingerprint)
+  if (replay) return { quote: quoteProjection(replay, await repository.listQuoteLines(replay.id)), replayed: true }
+  const createdAt = clock()
+  const expiresAt = new Date(createdAt.getTime() + MANAGED_SITE_QUOTE_TTL_MS)
+  const plan = PLAN_CATALOG[input.planKey]
+  const lines: QuoteLineInput[] = [
+    { lineKey: 'site-build', description: plan.description, quantity: 1, unitAmountMinor: plan.siteBuildMinor },
+    { lineKey: `geo-${input.cadenceDays}d`, description: `GEO content subscription · every ${input.cadenceDays} days`, quantity: 1, unitAmountMinor: plan.geoSubscriptionMinor + CADENCE_CATALOG[input.cadenceDays] },
+  ]
+  if (input.domainOption === 'new') lines.push({ lineKey: 'domain-registration-intent', description: 'Domain registration intent (provider confirmation required)', quantity: 1, unitAmountMinor: 1200 })
+  if (input.domainOption === 'assisted') lines.push({ lineKey: 'domain-assisted-setup', description: 'Domain setup assistance', quantity: 1, unitAmountMinor: 2500 })
+  if (selectedModules.includes('bounded_ai_assistant')) lines.push({ lineKey: 'bounded-ai-assistant', description: 'Bounded AI assistant module', quantity: 1, unitAmountMinor: 4900 })
+  const totalMinor = lines.reduce((total, line) => total + line.quantity * line.unitAmountMinor, 0)
+  const quote = await repository.transaction(async transaction => {
+    const created = await transaction.insertQuote({ ownerUserId: preview.ownerUserId, previewId: preview.id, projectId: null, quoteVersion: MANAGED_SITE_PRICE_CATALOG_VERSION, planKey: input.planKey, currency: 'USD', totalMinor, taxStatus: 'not_calculated', moduleSnapshot: selectedModules, cadenceDays: input.cadenceDays, domainOption: input.domainOption, siteSpecFingerprint: spec.deterministicFingerprint, quoteFingerprint, status: 'quoted', expiresAt, lockedAt: null, createdAt, updatedAt: createdAt } as any)
+    for (const line of lines) await transaction.insertQuoteLine({ quoteId: created.id, lineKey: line.lineKey, description: line.description, quantity: line.quantity, unitAmountMinor: line.unitAmountMinor, lineAmountMinor: line.quantity * line.unitAmountMinor, catalogVersion: MANAGED_SITE_PRICE_CATALOG_VERSION, lineFingerprint: stableFingerprint({ quoteId: created.id, ...line, catalogVersion: MANAGED_SITE_PRICE_CATALOG_VERSION }) } as any)
+    await transaction.updatePreview(preview.id, { status: 'saved', updatedAt: createdAt } as any)
+    return created
+  })
+  return { quote: quoteProjection(quote, await repository.listQuoteLines(quote.id)), replayed: false }
+}
+
+type QuoteLineInput = { lineKey: string; description: string; quantity: number; unitAmountMinor: number }
+
+export async function createManagedSiteLeadIntent(input: unknown, repository = getPreviewRepository(), clock: () => Date = () => new Date()) {
+  if (!input || typeof input !== 'object') invalid('Lead input is invalid.')
+  const candidate = input as Partial<LeadInput>
+  const previewId = Number(candidate.previewId)
+  if (!Number.isSafeInteger(previewId) || previewId < 1) invalid('Preview id is invalid.')
+  const name = stringField(candidate.name, 'Lead name', 120)!
+  const email = normalizeRecipientEmail(String(candidate.email || ''))
+  const company = stringField(candidate.company, 'Company', 160)!
+  const website = stringField(candidate.website, 'Website', 2048, false)
+  const message = stringField(candidate.message, 'Message', 4000, false)
+  if (candidate.privacyConsent !== true) invalid('Privacy consent is required.')
+  const quoteId = candidate.quoteId === null || candidate.quoteId === undefined ? null : Number(candidate.quoteId)
+  if (quoteId !== null && (!Number.isSafeInteger(quoteId) || quoteId < 1)) invalid('Quote id is invalid.')
+  const idempotencyKey = stringField(candidate.idempotencyKey, 'Lead idempotency key', 128)!
+  const preview = await repository.findPreviewById(previewId)
+  if (!preview) notFound('Managed site preview was not found.')
+  assertPreviewAccess(preview, candidate.previewAccessToken)
+  assertPreviewUsable(preview, clock())
+  const quote = quoteId === null ? null : await repository.findQuoteById(quoteId)
+  if (quote && quote.previewId !== preview.id) throw createError({ statusCode: 409, statusMessage: 'Quote does not belong to the preview.' })
+  const requestFingerprint = stableFingerprint({ previewId, quoteId, name, email, company, website, message, privacyConsent: true })
+  const replay = await repository.findLeadIntentByIdempotency(idempotencyKey)
+  if (replay) {
+    if (replay.requestFingerprint !== requestFingerprint) throw createError({ statusCode: 409, statusMessage: 'Lead idempotency key was already used for a different request.' })
+    return { leadIntent: replay, replayed: true }
+  }
+  const existing = await repository.findLeadIntentByFingerprint(requestFingerprint)
+  if (existing) return { leadIntent: existing, replayed: true }
+  const createdAt = clock()
+  return repository.transaction(async transaction => {
+    const existingLead = await transaction.findLeadByFingerprint(requestFingerprint)
+    const lead = existingLead || await transaction.insertLead({ name, email, company, website, message, packageInterest: 'grow', language: 'zh-hant', privacyConsent: true, recontactConsent: candidate.recontactConsent === true, dedupeKey: stableFingerprint({ email, company }).slice(0, 64), requestFingerprint })
+    const intent = await transaction.insertLeadIntent({ ownerUserId: preview.ownerUserId, previewId: preview.id, quoteId, leadId: lead.id, requestFingerprint, idempotencyKey, createdAt } as any)
+    return { leadIntent: intent, replayed: false }
+  })
+}
+
+export async function createManagedSiteDraftOrder(input: DraftOrderInput, repository = getPreviewRepository(), clock: () => Date = () => new Date()) {
+  const idempotencyKey = stringField(input.idempotencyKey, 'Draft order idempotency key', 128)!
+  const preview = await repository.findPreviewById(input.previewId)
+  const quote = await repository.findQuoteById(input.quoteId)
+  if (!preview || !quote || quote.previewId !== preview.id) notFound('Preview or quote was not found.')
+  assertPreviewAccess(preview, input.previewAccessToken)
+  assertPreviewUsable(preview, clock())
+  if (quote.status !== 'quoted' || quote.expiresAt.getTime() <= clock().getTime()) throw createError({ statusCode: 410, statusMessage: 'Quote has expired and must be recalculated.' })
+  const directLeadIntent = await repository.findLeadIntentById(input.leadIntentId)
+  if (!directLeadIntent || directLeadIntent.previewId !== preview.id || directLeadIntent.quoteId !== quote.id) throw createError({ statusCode: 409, statusMessage: 'A matching lead is required before creating a draft order.' })
+  const requestFingerprint = stableFingerprint({ previewId: preview.id, quoteId: quote.id, leadIntentId: directLeadIntent.id })
+  const replay = await repository.findDraftOrderByIdempotency(idempotencyKey)
+  if (replay) {
+    if (replay.requestFingerprint !== requestFingerprint) throw createError({ statusCode: 409, statusMessage: 'Draft order idempotency key was already used for a different request.' })
+    return { order: replay, replayed: true }
+  }
+  const existing = await repository.findDraftOrderByFingerprint(requestFingerprint)
+  if (existing) return { order: existing, replayed: true }
+  const createdAt = clock()
+  const order = await repository.transaction(async transaction => {
+    const created = await transaction.insertDraftOrder({ ownerUserId: preview.ownerUserId, previewId: preview.id, quoteId: quote.id, projectId: null, leadId: directLeadIntent.leadId, status: 'payment_pending', requestFingerprint, idempotencyKey, paymentIntentReference: null, createdAt, updatedAt: createdAt } as any)
+    const existingIntent = await transaction.findSubscriptionIntentByQuote(quote.id)
+    if (!existingIntent) await transaction.insertSubscriptionIntent({ ownerUserId: preview.ownerUserId, projectId: null, quoteId: quote.id, planKey: quote.planKey, cadenceDays: quote.cadenceDays, termMonths: MANAGED_SITE_TERM_MONTHS, status: 'draft', intentFingerprint: stableFingerprint({ quoteId: quote.id, planKey: quote.planKey, cadenceDays: quote.cadenceDays, termMonths: MANAGED_SITE_TERM_MONTHS }), createdAt, updatedAt: createdAt } as any)
+    return created
+  })
+  return { order, replayed: false, payment: { status: 'payment_pending' as const, providerConfigured: false, requiresVerifiedProviderEvent: true } }
+}
+
+export async function recordVerifiedMockedPaymentEvent(input: unknown, repository = getPreviewRepository(), clock: () => Date = () => new Date()) {
+  if (!input || typeof input !== 'object') invalid('Payment event is invalid.')
+  const candidate = input as Partial<VerifiedPaymentEventInput>
+  const orderId = Number(candidate.draftOrderId)
+  if (!Number.isSafeInteger(orderId) || orderId < 1) invalid('Draft order id is invalid.')
+  if (candidate.verified !== true || candidate.eventType !== 'payment_succeeded') throw createError({ statusCode: 403, statusMessage: 'Only a verified payment provider event can confirm payment.' })
+  const eventId = stringField(candidate.eventId, 'Payment event id', 160)!
+  const providerReference = stringField(candidate.providerReference, 'Payment provider reference', 160)!
+  const idempotencyKey = stringField(candidate.idempotencyKey, 'Payment event idempotency key', 128)!
+  const order = await repository.findDraftOrderById(orderId)
+  if (!order) notFound('Draft order was not found.')
+  const fingerprint = stableFingerprint({ orderId, eventId, providerReference, eventType: candidate.eventType })
+  const replay = await repository.findPaymentEvent(eventId)
+  if (replay) {
+    if (replay.eventFingerprint !== fingerprint || replay.draftOrderId !== order.id) throw createError({ statusCode: 409, statusMessage: 'Payment event id was already used for a different order.' })
+    return { paymentEvent: replay, order, replayed: true }
+  }
+  const fingerprintReplay = await repository.findPaymentEventByFingerprint(fingerprint)
+  if (fingerprintReplay) return { paymentEvent: fingerprintReplay, order, replayed: true }
+  if (order.status !== 'payment_pending') throw createError({ statusCode: 409, statusMessage: 'Draft order is not awaiting payment.' })
+  const updated = await repository.transaction(async transaction => {
+    const event = await transaction.insertPaymentEvent({ draftOrderId: order.id, eventId, providerReference, eventType: 'payment_succeeded', verificationStatus: 'verified', eventFingerprint: fingerprint, receivedAt: clock() } as any)
+    const changed = await transaction.updateDraftOrder(order.id, { status: 'payment_verified', paymentIntentReference: providerReference, updatedAt: clock() } as any)
+    if (!changed) notFound('Draft order was not found.')
+    const quote = await transaction.findQuoteById(order.quoteId)
+    if (quote) {
+      await transaction.updateQuote(quote.id, { status: 'locked', lockedAt: clock(), updatedAt: clock() } as any)
+      const intent = await transaction.findSubscriptionIntentByQuote(quote.id)
+      if (intent) await transaction.updateSubscriptionIntent(quote.id, { status: 'entitled', updatedAt: clock() } as any)
+    }
+    return { event, changed }
+  })
+  return { paymentEvent: updated.event, order: updated.changed, replayed: false }
+}
+
+export type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent }

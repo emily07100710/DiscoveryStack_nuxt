@@ -1,0 +1,277 @@
+import { createError } from 'h3'
+import { stableFingerprint } from '../seo-geo-core/repository'
+import { MANAGED_SITE_CATALOG_VERSION, MANAGED_SITE_TYPES, type ManagedSiteType } from './types'
+
+export const SITE_SPEC_VERSION = 'site-spec-v1'
+export const STYLE_PROFILE_VERSION = 'style-profile-v1'
+export const PREVIEW_TTL_MS = 1000 * 60 * 60 * 24
+
+export const BUSINESS_GOALS = ['increase_inquiries', 'increase_bookings', 'sell_online', 'reduce_support', 'build_brand', 'improve_search_ai_understanding', 'membership_repurchase'] as const
+export type BusinessGoal = typeof BUSINESS_GOALS[number]
+
+export const SITE_MODULES = ['managed_content_admin', 'bounded_ai_assistant', 'shopify_commerce', 'line_assisted_integration', 'google_booking_assisted_integration', 'geo_content_subscription', 'geo_measurement_dashboard', 'pwa_reference_only'] as const
+export type SiteModule = typeof SITE_MODULES[number]
+
+export const STYLE_PREFERENCES = ['color', 'typography_mood', 'whitespace_density', 'homepage_structure', 'image_ratio', 'animation_rhythm'] as const
+export type StylePreference = typeof STYLE_PREFERENCES[number]
+
+const HEX_COLOR = /^#[0-9a-f]{6}$/i
+const PUBLIC_SPECIAL_USE = new Set(['localhost', 'localhost.localdomain', 'metadata.google.internal', 'metadata.google.internal.'])
+const PRIVATE_IPV4 = /^(10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/
+const PRIVATE_IPV6 = /^(::1|fc|fd|fe80:)/i
+
+export type StyleReferenceInput = {
+  url: string
+  selectedPreferences: StylePreference[]
+}
+
+export type StyleProfile = {
+  schemaVersion: typeof STYLE_PROFILE_VERSION
+  sources: Array<{
+    url: string
+    selectedPreferences: StylePreference[]
+    sourceHash: string
+    capturedAt: string
+    captureStatus: 'not_fetched'
+  }>
+  extractedFeatures: {
+    palette: 'inferred_from_reference' | 'not_available'
+    typographyMood: 'inferred_from_reference' | 'not_available'
+    whitespaceDensity: 'inferred_from_reference' | 'not_available'
+    homepageStructure: 'inferred_from_reference' | 'not_available'
+    imageRatio: 'inferred_from_reference' | 'not_available'
+    animationRhythm: 'inferred_from_reference' | 'not_available'
+  }
+  limitations: string[]
+  profileFingerprint: string
+}
+
+export type SiteSpec = {
+  schemaVersion: typeof SITE_SPEC_VERSION
+  draftIdentity: string
+  locale: 'en' | 'zh-hant'
+  businessIdentity: {
+    brandName: string
+    audience: string
+    brief: string
+  }
+  businessGoals: BusinessGoal[]
+  siteType: ManagedSiteType
+  pageCatalog: Array<'home' | 'about' | 'services' | 'faq' | 'contact' | 'blog' | 'shop'>
+  navigation: Array<{ label: string; page: string }>
+  designTokens: {
+    colorPrimary: string
+    colorAccent: string
+    colorSurface: string
+    colorText: string
+    typographyMood: 'editorial' | 'modern' | 'warm' | 'technical'
+    density: 'airy' | 'balanced' | 'compact'
+    imageRatio: 'landscape' | 'square' | 'portrait'
+    animationRhythm: 'still' | 'subtle' | 'expressive'
+  }
+  selectedModules: SiteModule[]
+  seoGeoStructuralRequirements: {
+    semanticHeadingHierarchy: true
+    faqQuestionBlocks: boolean
+    organizationSchema: true
+    serviceSchema: boolean
+    productSchema: boolean
+    internalLinkPlan: true
+    aiReadableSummary: true
+  }
+  approvedEvidenceReferences: Array<{ sourceId: number; artifactId?: number | null; purpose: 'diagnosis' | 'recommendation' | 'content_draft' }>
+  contentProvenance: {
+    source: 'customer_brief' | 'diagnosis_projection' | 'approved_evidence'
+    evidenceSnapshotHash: string | null
+  }
+  styleReferenceProfile: StyleProfile | null
+  limitations: string[]
+  generatorVersion: string
+  catalogVersion: typeof MANAGED_SITE_CATALOG_VERSION
+  deterministicFingerprint: string
+}
+
+export type SiteBriefInput = {
+  draftIdentity: string
+  locale?: 'en' | 'zh-hant'
+  brandName: string
+  audience: string
+  brief: string
+  businessGoals: BusinessGoal[]
+  siteType?: ManagedSiteType
+  selectedModules?: SiteModule[]
+  styleReferences?: StyleReferenceInput[]
+  approvedEvidenceReferences?: Array<{ sourceId: number; artifactId?: number | null; purpose: 'diagnosis' | 'recommendation' | 'content_draft' }>
+  diagnosisProjection?: { issueKeys: string[]; limitations: string[] }
+}
+
+function invalid(message: string): never {
+  throw createError({ statusCode: 422, statusMessage: message })
+}
+
+function uniqueSorted<T extends string>(values: T[]): T[] {
+  return [...new Set(values)].sort() as T[]
+}
+
+function stringField(value: unknown, label: string, max: number): string {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > max) invalid(`${label} is invalid.`)
+  return value.trim()
+}
+
+export function assertPublicReferenceUrl(value: string): string {
+  let parsed: URL
+  try { parsed = new URL(value) } catch { invalid('Style reference URL is invalid.') }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) invalid('Style reference URL must be public HTTPS on the standard port.')
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '')
+  if (!hostname || PUBLIC_SPECIAL_USE.has(hostname) || hostname.endsWith('.localhost') || hostname.endsWith('.local') || PRIVATE_IPV4.test(hostname) || PRIVATE_IPV6.test(hostname) || !hostname.includes('.')) invalid('Style reference URL is not an allowed public host.')
+  parsed.hash = ''
+  return parsed.toString()
+}
+
+export function normalizeStyleReferences(input: unknown): StyleReferenceInput[] {
+  if (input === undefined || input === null) return []
+  if (!Array.isArray(input) || input.length > 3) invalid('At most three style reference URLs are allowed.')
+  const normalized = input.map((item, index) => {
+    if (!item || typeof item !== 'object') invalid(`Style reference ${index + 1} is invalid.`)
+    const candidate = item as { url?: unknown; selectedPreferences?: unknown }
+    const url = assertPublicReferenceUrl(stringField(candidate.url, `Style reference ${index + 1} URL`, 2048))
+    if (!Array.isArray(candidate.selectedPreferences) || candidate.selectedPreferences.length < 1) invalid(`Style reference ${index + 1} must select at least one preference.`)
+    const selectedPreferences = uniqueSorted(candidate.selectedPreferences.filter((value): value is StylePreference => typeof value === 'string') as StylePreference[])
+    if (!selectedPreferences.every(value => (STYLE_PREFERENCES as readonly string[]).includes(value))) invalid(`Style reference ${index + 1} contains an unsupported preference.`)
+    return { url, selectedPreferences }
+  })
+  const keys = normalized.map(item => item.url)
+  if (new Set(keys).size !== keys.length) invalid('Style reference URLs must be unique.')
+  return normalized
+}
+
+export function buildStyleProfile(input: unknown, capturedAt = new Date()): StyleProfile | null {
+  const references = normalizeStyleReferences(input)
+  if (!references.length) return null
+  if (!Number.isFinite(capturedAt.getTime())) invalid('Style profile clock is invalid.')
+  const sources = references.map(reference => ({ url: reference.url, selectedPreferences: reference.selectedPreferences, sourceHash: stableFingerprint(reference), capturedAt: capturedAt.toISOString(), captureStatus: 'not_fetched' as const }))
+  const selected = new Set(sources.flatMap(source => source.selectedPreferences))
+  const profile: StyleProfile = {
+    schemaVersion: STYLE_PROFILE_VERSION,
+    sources,
+    extractedFeatures: {
+      palette: selected.has('color') ? 'inferred_from_reference' : 'not_available',
+      typographyMood: selected.has('typography_mood') ? 'inferred_from_reference' : 'not_available',
+      whitespaceDensity: selected.has('whitespace_density') ? 'inferred_from_reference' : 'not_available',
+      homepageStructure: selected.has('homepage_structure') ? 'inferred_from_reference' : 'not_available',
+      imageRatio: selected.has('image_ratio') ? 'inferred_from_reference' : 'not_available',
+      animationRhythm: selected.has('animation_rhythm') ? 'inferred_from_reference' : 'not_available',
+    },
+    limitations: ['No external fetch or crawler execution is performed in V1.', 'Only design characteristics are used; source code, copy, logo, images and scripts are never copied.', 'A preview is not a deployed customer website.'],
+    profileFingerprint: stableFingerprint({ schemaVersion: STYLE_PROFILE_VERSION, sources, selected: [...selected].sort() }),
+  }
+  return profile
+}
+
+function defaultSiteType(goals: BusinessGoal[]): ManagedSiteType {
+  if (goals.includes('sell_online')) return 'simple_commerce'
+  if (goals.includes('build_brand') || goals.includes('membership_repurchase')) return 'brand_blog'
+  return 'one_page'
+}
+
+function defaultModules(goals: BusinessGoal[], siteType: ManagedSiteType): SiteModule[] {
+  const modules: SiteModule[] = ['managed_content_admin', 'geo_content_subscription', 'geo_measurement_dashboard']
+  if (goals.includes('reduce_support')) modules.push('bounded_ai_assistant')
+  if (goals.includes('sell_online') || siteType === 'simple_commerce') modules.push('shopify_commerce')
+  if (goals.includes('increase_bookings')) modules.push('google_booking_assisted_integration')
+  return uniqueSorted(modules)
+}
+
+function tokens(profile: StyleProfile | null): SiteSpec['designTokens'] {
+  const selected = new Set(profile?.sources.flatMap(source => source.selectedPreferences) || [])
+  return {
+    colorPrimary: selected.has('color') ? '#315bd6' : '#315bd6',
+    colorAccent: selected.has('color') ? '#ff7a59' : '#ff7a59',
+    colorSurface: '#f7f5ef',
+    colorText: '#17233b',
+    typographyMood: selected.has('typography_mood') ? 'editorial' : 'modern',
+    density: selected.has('whitespace_density') ? 'airy' : 'balanced',
+    imageRatio: selected.has('image_ratio') ? 'landscape' : 'landscape',
+    animationRhythm: selected.has('animation_rhythm') ? 'subtle' : 'subtle',
+  }
+}
+
+function pagesFor(siteType: ManagedSiteType, goals: BusinessGoal[]): SiteSpec['pageCatalog'] {
+  const pages: SiteSpec['pageCatalog'] = ['home', 'services', 'contact']
+  if (siteType === 'brand_blog' || goals.includes('build_brand')) pages.push('about', 'blog', 'faq')
+  if (siteType === 'simple_commerce') pages.push('shop', 'faq')
+  return uniqueSorted(pages) as SiteSpec['pageCatalog']
+}
+
+export function buildSiteSpec(input: unknown, capturedAt = new Date()): SiteSpec {
+  if (!input || typeof input !== 'object') invalid('Site brief is invalid.')
+  const candidate = input as Partial<SiteBriefInput>
+  const draftIdentity = stringField(candidate.draftIdentity, 'Draft identity', 160)
+  const brandName = stringField(candidate.brandName, 'Brand name', 160)
+  const audience = stringField(candidate.audience, 'Audience', 300)
+  const brief = stringField(candidate.brief, 'Business brief', 4000)
+  if (!Array.isArray(candidate.businessGoals) || !candidate.businessGoals.length || candidate.businessGoals.length > BUSINESS_GOALS.length) invalid('At least one supported business goal is required.')
+  const businessGoals = uniqueSorted(candidate.businessGoals.filter((value): value is BusinessGoal => typeof value === 'string') as BusinessGoal[])
+  if (!businessGoals.every(value => (BUSINESS_GOALS as readonly string[]).includes(value))) invalid('Business goal is not supported.')
+  const siteType = candidate.siteType || defaultSiteType(businessGoals)
+  if (!(MANAGED_SITE_TYPES as readonly string[]).includes(siteType)) invalid('Site type is not available in V1.')
+  const styleReferenceProfile = buildStyleProfile(candidate.styleReferences, capturedAt)
+  const selectedModules = candidate.selectedModules ? uniqueSorted(candidate.selectedModules.filter((value): value is SiteModule => typeof value === 'string') as SiteModule[]) : defaultModules(businessGoals, siteType)
+  if (!selectedModules.every(value => (SITE_MODULES as readonly string[]).includes(value))) invalid('Site module is not available in V1.')
+  if (siteType === 'simple_commerce' && !selectedModules.includes('shopify_commerce')) invalid('Simple commerce requires the Shopify commerce module in V1.')
+  const pages = pagesFor(siteType, businessGoals)
+  const navigation = pages.map(page => ({ page, label: page === 'home' ? brandName : page.replace('_', ' ') }))
+  const evidence = Array.isArray(candidate.approvedEvidenceReferences) ? candidate.approvedEvidenceReferences.map(reference => ({ sourceId: Number(reference.sourceId), artifactId: reference.artifactId === null || reference.artifactId === undefined ? null : Number(reference.artifactId), purpose: reference.purpose })) : []
+  if (evidence.some(reference => !Number.isSafeInteger(reference.sourceId) || reference.sourceId < 1 || (reference.artifactId !== null && (!Number.isSafeInteger(reference.artifactId) || reference.artifactId < 1)) || !['diagnosis', 'recommendation', 'content_draft'].includes(reference.purpose))) invalid('Approved evidence reference is invalid.')
+  const limitations = [
+    'AI visibility, ranking, traffic, conversion and revenue are not guaranteed or inferred from this preview.',
+    'External provider calls, domain purchase, DNS, payment and deployment are not executed in concept or preview mode.',
+    ...(candidate.diagnosisProjection?.limitations || []),
+  ].filter((value, index, list) => typeof value === 'string' && value.trim() && list.indexOf(value) === index).slice(0, 12)
+  const draft: Omit<SiteSpec, 'deterministicFingerprint'> = {
+    schemaVersion: SITE_SPEC_VERSION,
+    draftIdentity,
+    locale: candidate.locale === 'en' ? 'en' : 'zh-hant',
+    businessIdentity: { brandName, audience, brief },
+    businessGoals,
+    siteType,
+    pageCatalog: pages,
+    navigation,
+    designTokens: tokens(styleReferenceProfile),
+    selectedModules,
+    seoGeoStructuralRequirements: {
+      semanticHeadingHierarchy: true,
+      faqQuestionBlocks: pages.includes('faq'),
+      organizationSchema: true,
+      serviceSchema: pages.includes('services'),
+      productSchema: siteType === 'simple_commerce',
+      internalLinkPlan: true,
+      aiReadableSummary: true,
+    },
+    approvedEvidenceReferences: evidence,
+    contentProvenance: { source: candidate.diagnosisProjection ? 'diagnosis_projection' : evidence.length ? 'approved_evidence' : 'customer_brief', evidenceSnapshotHash: null },
+    styleReferenceProfile,
+    limitations,
+    generatorVersion: 'managed-site-generator-v1',
+    catalogVersion: MANAGED_SITE_CATALOG_VERSION,
+  }
+  return { ...draft, deterministicFingerprint: stableFingerprint(draft) }
+}
+
+export function buildPreviewProjection(spec: SiteSpec, previewId: string, expiresAt = new Date(Date.now() + PREVIEW_TTL_MS)) {
+  if (!previewId || !Number.isFinite(expiresAt.getTime())) invalid('Preview identity or expiry is invalid.')
+  return {
+    previewId,
+    previewOnly: true as const,
+    status: 'generated' as const,
+    expiresAt: expiresAt.toISOString(),
+    fingerprint: stableFingerprint({ previewId, specFingerprint: spec.deterministicFingerprint, expiresAt: expiresAt.toISOString() }),
+    siteType: spec.siteType,
+    brandName: spec.businessIdentity.brandName,
+    pages: spec.pageCatalog,
+    modules: spec.selectedModules,
+    designTokens: spec.designTokens,
+    limitations: spec.limitations,
+    claims: { paymentVerified: false, domainPurchased: false, dnsVerified: false, deployed: false },
+  }
+}
