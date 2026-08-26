@@ -7,10 +7,18 @@ function clone<T>(rows: T[]): T[] { return rows.map(row => ({ ...(row as any) })
 
 export function createProvisioningMemoryRepository() {
   const state: State = { intents: [], plans: [], steps: [], events: [], nextId: 1 }
+  let transactionQueue = Promise.resolve()
   const snapshot = (): State => ({ intents: clone(state.intents), plans: clone(state.plans), steps: clone(state.steps), events: clone(state.events), nextId: state.nextId })
   const insert = <T extends { id: number }>(rows: T[], input: Omit<T, 'id'>): T => { const row = { ...input, id: state.nextId++ } as T; rows.push(row); return row }
   const make = (): ProvisioningRepository => ({
-    async transaction(work) { const saved = snapshot(); try { return await work(make()) } catch (error) { Object.assign(state, saved); throw error } },
+    async transaction(work) {
+      const previous = transactionQueue
+      let release!: () => void
+      transactionQueue = new Promise(resolve => { release = resolve })
+      await previous
+      const saved = snapshot()
+      try { return await work(make()) } catch (error) { Object.assign(state, saved); throw error } finally { release() }
+    },
     async findDomainIntentById(id) { return state.intents.find(row => row.id === id) || null },
     async findDomainIntentByProject(projectId) { return state.intents.find(row => row.projectId === projectId) || null },
     async findDomainIntentByIdempotency(key) { return state.intents.find(row => row.idempotencyKey === key) || null },
@@ -21,6 +29,20 @@ export function createProvisioningMemoryRepository() {
     async findPlanByIdempotency(key) { return state.plans.find(row => row.idempotencyKey === key) || null },
     async insertPlan(input) { return insert(state.plans, input as Omit<ManagedSiteProvisioningPlan, 'id'>) },
     async updatePlan(id, patch) { const row = state.plans.find(item => item.id === id); if (!row) return null; Object.assign(row, patch); return row },
+    async acquirePlanLease(ownerUserId, planId, leaseOwner, now, leaseMs) {
+      const row = state.plans.find(item => item.ownerUserId === ownerUserId && item.id === planId)
+      if (!row) return null
+      const eligible = row.status === 'draft' || row.status === 'awaiting_authorization' || row.status === 'queued' || (row.status === 'retry_wait' && (!row.retryEligibleAt || row.retryEligibleAt.getTime() <= now.getTime())) || (row.status === 'processing' && (!row.leaseExpiresAt || row.leaseExpiresAt.getTime() < now.getTime()))
+      if (!eligible) return null
+      Object.assign(row, { status: 'processing', leaseOwner, leaseExpiresAt: new Date(now.getTime() + leaseMs), retryEligibleAt: null, updatedAt: now })
+      return row
+    },
+    async releasePlanLease(ownerUserId, planId, leaseOwner, patch) {
+      const row = state.plans.find(item => item.ownerUserId === ownerUserId && item.id === planId && item.status === 'processing' && item.leaseOwner === leaseOwner)
+      if (!row) return null
+      Object.assign(row, patch, { leaseOwner: null, leaseExpiresAt: null })
+      return row
+    },
     async findStep(planId, stepKey: ProvisioningStepKey) { return state.steps.find(row => row.planId === planId && row.stepKey === stepKey) || null },
     async listSteps(planId) { return state.steps.filter(row => row.planId === planId).sort((a, b) => a.ordinal - b.ordinal) },
     async insertStep(input) { return insert(state.steps, input as Omit<ManagedSiteProvisioningStep, 'id'>) },

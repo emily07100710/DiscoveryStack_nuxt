@@ -1605,7 +1605,7 @@ export const managedSiteProvisioningPlans = mysqlTable('managedSiteProvisioningP
   domainIntentId: int('domainIntentId').notNull().references(() => managedSiteDomainIntents.id),
   platform: mysqlEnum('platform', ['vercel', 'cloudflare_pages', 'manual_export']).notNull(),
   deploymentMode: mysqlEnum('deploymentMode', ['preview_only', 'customer_authorized', 'owner_authorized']).default('preview_only').notNull(),
-  status: mysqlEnum('status', ['draft', 'awaiting_payment', 'awaiting_authorization', 'queued', 'processing', 'blocked', 'failed', 'succeeded', 'cancelled']).default('draft').notNull(),
+  status: mysqlEnum('status', ['draft', 'awaiting_payment', 'awaiting_authorization', 'queued', 'processing', 'retry_wait', 'blocked', 'failed', 'succeeded', 'cancelled']).default('draft').notNull(),
   domainStatus: mysqlEnum('domainStatus', ['not_started', 'awaiting_customer', 'provider_pending', 'verified', 'blocked']).default('not_started').notNull(),
   dnsStatus: mysqlEnum('dnsStatus', ['not_started', 'awaiting_customer', 'provider_pending', 'verified', 'blocked']).default('not_started').notNull(),
   tlsStatus: mysqlEnum('tlsStatus', ['not_started', 'provider_pending', 'verified', 'blocked']).default('not_started').notNull(),
@@ -1616,6 +1616,9 @@ export const managedSiteProvisioningPlans = mysqlTable('managedSiteProvisioningP
   providerDeploymentReference: varchar('providerDeploymentReference', { length: 160 }),
   deployedUrl: varchar('deployedUrl', { length: 2048 }),
   tlsCertificateReference: varchar('tlsCertificateReference', { length: 160 }),
+  leaseOwner: varchar('leaseOwner', { length: 128 }),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
+  retryEligibleAt: timestamp('retryEligibleAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [

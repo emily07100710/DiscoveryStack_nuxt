@@ -122,6 +122,9 @@ export function createManagedSiteMemoryRepository() {
       Object.assign(row, patch)
       return row
     },
+    async revokeSessionsForProject(ownerUserId, projectId, revokedAt) {
+      for (const row of state.sessions.filter(item => item.ownerUserId === ownerUserId && item.projectId === projectId)) row.revokedAt = revokedAt
+    },
   })
   return { repository: make(), state }
 }

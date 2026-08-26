@@ -6,6 +6,7 @@ import {
   createManagedSiteVersion,
   exportManagedSiteCustomerData,
   getManagedSiteCustomerProjection,
+  getManagedSiteCustomerSession,
   inviteManagedSiteMember,
   listManagedSiteAuditEvents,
   listManagedSiteMembers,
@@ -116,5 +117,32 @@ describe('managed site customer authorization races', () => {
     expect(test.state.sessions).toHaveLength(1)
     expect(test.state.invitations.filter(row => row.status === 'accepted')).toHaveLength(1)
     expect(test.state.memberships.filter(row => row.principalEmail === 'race@acme.taipei' && row.acceptedAt)).toHaveLength(1)
+  })
+})
+
+
+describe('managed site lifecycle invalidation', () => {
+  it('revokes an accepted customer session immediately after a role change', async () => {
+    const test = await makeProject(1)
+    const invitation = await inviteManagedSiteMember(1, test.project.id, ownerActor(1), { email: 'session-role@acme.taipei', role: 'editor', idempotencyKey: 'invite-session-role-001' }, test.repository)
+    const accepted = await acceptManagedSiteInvitation(invitation.invitationToken!, test.repository)
+    expect(await getManagedSiteCustomerSession(accepted.sessionToken, test.repository)).not.toBeNull()
+    const membershipId = test.state.memberships.find(row => row.principalEmail === 'session-role@acme.taipei')!.id
+    await updateManagedSiteMemberRole(1, test.project.id, membershipId, ownerActor(1), { role: 'analyst', idempotencyKey: 'role-session-role-001' }, test.repository)
+    expect(test.state.sessions[0]?.revokedAt).toBeInstanceOf(Date)
+    expect(await getManagedSiteCustomerSession(accepted.sessionToken, test.repository)).toBeNull()
+  })
+
+  it('maps terminated subscription to suspended project state and revokes customer sessions', async () => {
+    const test = await makeProject(1)
+    const subscription = await test.repository.insertSubscription({ ownerUserId: 1, projectId: test.project.id, planKey: 'geo-growth', status: 'active', subscriptionReference: null, gracePeriodEndsAt: null, termEndsAt: null, idempotencyKey: 'subscription-termination-001', stateFingerprint: stableFingerprint({ projectId: test.project.id, status: 'active' }) })
+    const invitation = await inviteManagedSiteMember(1, test.project.id, ownerActor(1), { email: 'session-termination@acme.taipei', role: 'editor', idempotencyKey: 'invite-session-termination-001' }, test.repository)
+    const accepted = await acceptManagedSiteInvitation(invitation.invitationToken!, test.repository)
+    const result = await setManagedSiteSubscriptionStatus(1, test.project.id, ownerActor(1), 'terminated', test.repository)
+    expect(result.subscription.status).toBe('terminated')
+    expect(test.state.projects.find(row => row.id === test.project.id)?.status).toBe('suspended')
+    expect(test.state.sessions[0]?.revokedAt).toBeInstanceOf(Date)
+    expect(await getManagedSiteCustomerSession(accepted.sessionToken, test.repository)).toBeNull()
+    expect(subscription.id).toBeGreaterThan(0)
   })
 })

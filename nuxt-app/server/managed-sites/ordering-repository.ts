@@ -138,6 +138,10 @@ export function makeOrderingRepository(database: any): PreviewRepository {
       const [row] = await database.select().from(managedSitePaymentEvents).where(eq(managedSitePaymentEvents.eventFingerprint, fingerprint)).limit(1)
       return row || null
     },
+    async findVerifiedPaymentEventByDraftOrder(draftOrderId) {
+      const [row] = await database.select().from(managedSitePaymentEvents).where(and(eq(managedSitePaymentEvents.draftOrderId, draftOrderId), eq(managedSitePaymentEvents.verificationStatus, 'verified'))).orderBy(desc(managedSitePaymentEvents.receivedAt)).limit(1)
+      return row || null
+    },
     async insertPaymentEvent(input) {
       const id = rowId(await database.insert(managedSitePaymentEvents).values(input as any))
       const [row] = await database.select().from(managedSitePaymentEvents).where(eq(managedSitePaymentEvents.id, id)).limit(1)

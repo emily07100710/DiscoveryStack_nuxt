@@ -181,6 +181,9 @@ export function makeManagedSiteRepository(database: any): ManagedSiteRepository 
       await database.update(managedSiteSessions).set(patch as any).where(eq(managedSiteSessions.sessionHash, sessionHash))
       return repository.findSessionByHash(sessionHash)
     },
+    async revokeSessionsForProject(ownerUserId, projectId, revokedAt) {
+      await database.update(managedSiteSessions).set({ revokedAt } as any).where(and(eq(managedSiteSessions.ownerUserId, ownerUserId), eq(managedSiteSessions.projectId, projectId)))
+    },
   }
   return repository
 }

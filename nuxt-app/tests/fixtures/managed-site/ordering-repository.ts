@@ -57,6 +57,7 @@ export function createOrderingMemoryRepository() {
     async updateDraftOrder(id, patch) { const row = state.orders.find(item => item.id === id); if (!row) return null; Object.assign(row, patch); return row },
     async findPaymentEvent(ownerUserId, providerKey, eventId) { return state.paymentEvents.find(row => row.ownerUserId === ownerUserId && row.providerKey === providerKey && row.eventId === eventId) || null },
     async findPaymentEventByFingerprint(fingerprint) { return state.paymentEvents.find(row => row.eventFingerprint === fingerprint) || null },
+    async findVerifiedPaymentEventByDraftOrder(draftOrderId) { return state.paymentEvents.find(row => row.draftOrderId === draftOrderId && row.verificationStatus === 'verified') || null },
     async insertPaymentEvent(input) { return insert(state.paymentEvents, { ...input, receivedAt: new Date() } as Omit<ManagedSitePaymentEvent, 'id'>) },
     async updatePaymentEvent(id, patch) { const row = state.paymentEvents.find(item => item.id === id); if (!row) return null; Object.assign(row, patch); return row },
     async findSubscriptionIntentByQuote(quoteId) { return state.subscriptionIntents.find(row => row.quoteId === quoteId) || null },

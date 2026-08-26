@@ -295,6 +295,7 @@ export async function updateManagedSiteMemberRole(ownerUserId: number, projectId
     const changedAt = now()
     const next = await transaction.updateMembership(ownerUserId, membershipId, { role: parsed.role, updatedAt: changedAt } as any)
     if (!next) memberNotFound()
+    await transaction.revokeSessionsForProject(ownerUserId, projectId, changedAt)
     await appendAudit(transaction, {
       ownerUserId,
       projectId,
@@ -323,6 +324,7 @@ export async function revokeManagedSiteMember(ownerUserId: number, projectId: nu
     const changedAt = now()
     const updated = await transaction.updateMembership(ownerUserId, membershipId, { status: 'revoked', revokedAt: changedAt, updatedAt: changedAt } as any)
     if (!updated) memberNotFound()
+    await transaction.revokeSessionsForProject(ownerUserId, projectId, changedAt)
     await appendAudit(transaction, {
       ownerUserId,
       projectId,
@@ -454,7 +456,12 @@ export async function setManagedSiteSubscriptionStatus(ownerUserId: number, proj
     const changedAt = now()
     const next = await transaction.updateSubscription(ownerUserId, projectId, { status, stateFingerprint: stableFingerprint({ projectId, status, changedAt: changedAt.toISOString() }), updatedAt: changedAt } as any)
     if (!next) throw createError({ statusCode: 404, statusMessage: 'Managed site subscription was not found.' })
-    await transaction.updateProject(ownerUserId, projectId, { status: status === 'suspended' || status === 'terminated' ? status : project.status, updatedAt: changedAt } as any)
+    if (status === 'suspended' || status === 'terminated') {
+      await transaction.updateProject(ownerUserId, projectId, { status: 'suspended', updatedAt: changedAt } as any)
+      await transaction.revokeSessionsForProject(ownerUserId, projectId, changedAt)
+    } else {
+      await transaction.updateProject(ownerUserId, projectId, { status: project.status, updatedAt: changedAt } as any)
+    }
     await appendAudit(transaction, { ownerUserId, projectId, actorUserId: actor.actorUserId ?? null, authority: actor.authority, action: 'managed_site_subscription_status_changed', beforeFingerprint: subscription.stateFingerprint, afterFingerprint: next.stateFingerprint, idempotencyKey: `subscription:${projectId}:${status}:${changedAt.getTime()}`, metadata: { previousStatus: subscription.status, status, dataDeletion: false } })
     return { subscription: next, replayed: false }
   })

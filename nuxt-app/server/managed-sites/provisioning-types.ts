@@ -36,6 +36,8 @@ export type ProvisioningRepository = {
   findPlanByIdempotency(idempotencyKey: string): Promise<ManagedSiteProvisioningPlan | null>
   insertPlan(input: Omit<ManagedSiteProvisioningPlan, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteProvisioningPlan>
   updatePlan(id: number, patch: Partial<Omit<ManagedSiteProvisioningPlan, 'id' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteProvisioningPlan | null>
+  acquirePlanLease(ownerUserId: number, planId: number, leaseOwner: string, now: Date, leaseMs: number): Promise<ManagedSiteProvisioningPlan | null>
+  releasePlanLease(ownerUserId: number, planId: number, leaseOwner: string, patch: Partial<Omit<ManagedSiteProvisioningPlan, 'id' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteProvisioningPlan | null>
   findStep(planId: number, stepKey: ProvisioningStepKey): Promise<ManagedSiteProvisioningStep | null>
   listSteps(planId: number): Promise<ManagedSiteProvisioningStep[]>
   insertStep(input: Omit<ManagedSiteProvisioningStep, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteProvisioningStep>

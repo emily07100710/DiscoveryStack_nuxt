@@ -106,6 +106,7 @@ export type ManagedSiteRepository = {
   findSessionByHash(sessionHash: string): Promise<ManagedSiteSession | null>
   insertSession(input: Omit<ManagedSiteSession, 'id' | 'createdAt'>): Promise<ManagedSiteSession>
   updateSession(sessionHash: string, patch: Partial<Pick<ManagedSiteSession, 'lastSeenAt' | 'revokedAt'>>): Promise<ManagedSiteSession | null>
+  revokeSessionsForProject(ownerUserId: number, projectId: number, revokedAt: Date): Promise<void>
 }
 
 export type ManagedSiteProjectProjection = {

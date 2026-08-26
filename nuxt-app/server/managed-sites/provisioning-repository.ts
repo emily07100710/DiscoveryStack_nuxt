@@ -1,5 +1,5 @@
 import { createError } from 'h3'
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, lt, lte, or } from 'drizzle-orm'
 import { getDatabase } from '../database'
 import { managedSiteDomainIntents, managedSiteProvisioningEvents, managedSiteProvisioningPlans, managedSiteProvisioningSteps } from '../database/schema'
 import type { ProvisioningRepository, ProvisioningStepKey } from './provisioning-types'
@@ -64,6 +64,27 @@ function makeRepository(database: any): ProvisioningRepository {
     async updatePlan(id, patch) {
       await database.update(managedSiteProvisioningPlans).set(patch as any).where(eq(managedSiteProvisioningPlans.id, id))
       return repository.findPlanById(id)
+    },
+    async acquirePlanLease(ownerUserId, planId, leaseOwner, now, leaseMs) {
+      const leaseExpiresAt = new Date(now.getTime() + leaseMs)
+      const result = await database.update(managedSiteProvisioningPlans).set({ status: 'processing', leaseOwner, leaseExpiresAt, retryEligibleAt: null, updatedAt: now } as any).where(and(
+        eq(managedSiteProvisioningPlans.ownerUserId, ownerUserId),
+        eq(managedSiteProvisioningPlans.id, planId),
+        or(
+          eq(managedSiteProvisioningPlans.status, 'draft'),
+          eq(managedSiteProvisioningPlans.status, 'awaiting_authorization'),
+          eq(managedSiteProvisioningPlans.status, 'queued'),
+          and(eq(managedSiteProvisioningPlans.status, 'retry_wait'), or(isNull(managedSiteProvisioningPlans.retryEligibleAt), lte(managedSiteProvisioningPlans.retryEligibleAt, now))),
+          and(eq(managedSiteProvisioningPlans.status, 'processing'), or(isNull(managedSiteProvisioningPlans.leaseExpiresAt), lt(managedSiteProvisioningPlans.leaseExpiresAt, now))),
+        ),
+      ))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      return repository.findPlanById(planId)
+    },
+    async releasePlanLease(ownerUserId, planId, leaseOwner, patch) {
+      const result = await database.update(managedSiteProvisioningPlans).set({ ...patch as any, leaseOwner: null, leaseExpiresAt: null }).where(and(eq(managedSiteProvisioningPlans.ownerUserId, ownerUserId), eq(managedSiteProvisioningPlans.id, planId), eq(managedSiteProvisioningPlans.status, 'processing'), eq(managedSiteProvisioningPlans.leaseOwner, leaseOwner)))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      return repository.findPlanById(planId)
     },
     async findStep(planId, stepKey: ProvisioningStepKey) {
       const [row] = await database.select().from(managedSiteProvisioningSteps).where(and(eq(managedSiteProvisioningSteps.planId, planId), eq(managedSiteProvisioningSteps.stepKey, stepKey))).limit(1)

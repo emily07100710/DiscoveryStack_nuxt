@@ -38,6 +38,7 @@ export type PreviewRepository = {
   updateDraftOrder(orderId: number, patch: Partial<Omit<ManagedSiteDraftOrder, 'id' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteDraftOrder | null>
   findPaymentEvent(ownerUserId: number | null, providerKey: string, eventId: string): Promise<ManagedSitePaymentEvent | null>
   findPaymentEventByFingerprint(fingerprint: string): Promise<ManagedSitePaymentEvent | null>
+  findVerifiedPaymentEventByDraftOrder(draftOrderId: number): Promise<ManagedSitePaymentEvent | null>
   insertPaymentEvent(input: Omit<ManagedSitePaymentEvent, 'id' | 'receivedAt'>): Promise<ManagedSitePaymentEvent>
   updatePaymentEvent(id: number, patch: Partial<Omit<ManagedSitePaymentEvent, 'id' | 'receivedAt'>>): Promise<ManagedSitePaymentEvent | null>
   findSubscriptionIntentByQuote(quoteId: number): Promise<ManagedSiteSubscriptionIntent | null>
