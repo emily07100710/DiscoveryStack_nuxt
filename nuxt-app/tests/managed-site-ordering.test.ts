@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { createManagedSitePreview, createManagedSiteQuote, createManagedSiteDraftOrder, createManagedSiteLeadIntent, getManagedSitePublicPreview, getManagedSitePriceCatalog, recordVerifiedMockedPaymentEvent } from '../server/managed-sites/ordering-service'
+import { createManagedSitePreview, createManagedSiteQuote, createManagedSiteDraftOrder, createManagedSiteLeadIntent, getManagedSitePublicPreview, getManagedSitePriceCatalog, recordVerifiedPaymentEvent } from '../server/managed-sites/ordering-service'
+import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
 import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
+
+const mockPaymentVerifier: PaymentEventVerifier = { verify: async () => true }
 
 const brief = {
   draftIdentity: 'preview-acme-001',
@@ -74,13 +77,14 @@ describe('managed site preview and ordering flow', () => {
     const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 30, domainOption: 'assisted', idempotencyKey: 'quote-payment-001' }, test.repository)
     const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: 'pay@example.test', company: 'Paying Co', privacyConsent: true, idempotencyKey: 'lead-payment-001' }, test.repository)
     const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'order-payment-001' }, test.repository)
-    const payment = await recordVerifiedMockedPaymentEvent({ draftOrderId: order.order.id, eventId: 'evt_mock_001', providerReference: 'mock_payment_001', eventType: 'payment_succeeded', verified: true, idempotencyKey: 'payment-event-001' }, test.repository)
-    const replay = await recordVerifiedMockedPaymentEvent({ draftOrderId: order.order.id, eventId: 'evt_mock_001', providerReference: 'mock_payment_001', eventType: 'payment_succeeded', verified: true, idempotencyKey: 'payment-event-replay' }, test.repository)
+    const paymentInput = { draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'evt_mock_001', providerReference: 'mock_payment_001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'a'.repeat(64) }
+    const payment = await recordVerifiedPaymentEvent(paymentInput, mockPaymentVerifier, test.repository)
+    const replay = await recordVerifiedPaymentEvent(paymentInput, mockPaymentVerifier, test.repository)
     expect(payment.order.status).toBe('payment_verified')
     expect(test.state.quotes[0]?.status).toBe('locked')
     expect(test.state.subscriptionIntents[0]?.status).toBe('entitled')
     expect(replay.replayed).toBe(true)
-    await expect(recordVerifiedMockedPaymentEvent({ draftOrderId: order.order.id, eventId: 'evt_unverified', providerReference: 'bad', eventType: 'payment_succeeded', verified: false, idempotencyKey: 'payment-event-bad' }, test.repository)).rejects.toMatchObject({ statusCode: 403 })
+    await expect(recordVerifiedPaymentEvent({ ...paymentInput, eventId: 'evt_unverified', providerReference: 'bad' }, { verify: async () => false }, test.repository)).rejects.toMatchObject({ statusCode: 403 })
   })
 
   it('returns a safe token-bound preview projection and rejects a different tenant token', async () => {
@@ -90,5 +94,55 @@ describe('managed site preview and ordering flow', () => {
     expect(projection.previewOnly).toBe(true)
     expect(projection.accessTokenRequired).toBe(true)
     await expect(getManagedSitePublicPreview(preview.preview.id, 'wrong-token', test.repository)).rejects.toMatchObject({ statusCode: 404 })
+  })
+})
+
+
+describe('managed site payment hardening', () => {
+  async function createPaymentFixture() {
+    const test = createOrderingMemoryRepository()
+    const preview = await createManagedSitePreview(7, { ...brief, draftIdentity: 'payment-hardening-001' }, test.repository)
+    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 30, domainOption: 'existing', idempotencyKey: `quote-${preview.preview.id}-hardening` }, test.repository)
+    const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: `owner-${preview.preview.id}@acme.taipei`, company: 'Acme Studio', privacyConsent: true, idempotencyKey: `lead-${preview.preview.id}-hardening` }, test.repository)
+    const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: `order-${preview.preview.id}-hardening` }, test.repository)
+    const input = { draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: `evt-${preview.preview.id}-hardening`, providerReference: `ref-${preview.preview.id}`, eventType: 'payment_succeeded' as const, amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'c'.repeat(64) }
+    return { test, quote, order, input }
+  }
+
+  it('rejects caller-controlled verification and every non-boolean verifier result', async () => {
+    const fixture = await createPaymentFixture()
+    await expect(recordVerifiedPaymentEvent({ ...fixture.input, verified: true }, mockPaymentVerifier, fixture.test.repository)).rejects.toMatchObject({ statusCode: 422 })
+    for (const result of ['true', 1, {}, []]) {
+      await expect(recordVerifiedPaymentEvent({ ...fixture.input, eventId: `${fixture.input.eventId}-${String(result)}` }, { verify: async () => result }, fixture.test.repository)).rejects.toMatchObject({ statusCode: 403 })
+    }
+  })
+
+  it('rejects amount/currency mismatch and preserves event collision semantics', async () => {
+    const fixture = await createPaymentFixture()
+    await expect(recordVerifiedPaymentEvent({ ...fixture.input, amountMinor: fixture.input.amountMinor + 1 }, mockPaymentVerifier, fixture.test.repository)).rejects.toMatchObject({ statusCode: 409 })
+    const first = await recordVerifiedPaymentEvent(fixture.input, mockPaymentVerifier, fixture.test.repository)
+    expect(first.order.status).toBe('payment_verified')
+    await expect(recordVerifiedPaymentEvent({ ...fixture.input, providerReference: `${fixture.input.providerReference}-different` }, mockPaymentVerifier, fixture.test.repository)).rejects.toMatchObject({ statusCode: 409 })
+    const replay = await recordVerifiedPaymentEvent(fixture.input, mockPaymentVerifier, fixture.test.repository)
+    expect(replay.replayed).toBe(true)
+  })
+
+  it('serializes concurrent duplicate payment events to one ledger row', async () => {
+    const fixture = await createPaymentFixture()
+    const [left, right] = await Promise.all([
+      recordVerifiedPaymentEvent(fixture.input, mockPaymentVerifier, fixture.test.repository),
+      recordVerifiedPaymentEvent(fixture.input, mockPaymentVerifier, fixture.test.repository),
+    ])
+    expect(fixture.test.state.paymentEvents).toHaveLength(1)
+    expect([left.replayed, right.replayed].sort()).toEqual([false, true])
+  })
+
+  it('does not silently replace recontact consent under a replay key', async () => {
+    const test = createOrderingMemoryRepository()
+    const preview = await createManagedSitePreview(7, { ...brief, draftIdentity: 'consent-lineage-001' }, test.repository)
+    const base = { previewId: preview.preview.id, previewAccessToken: preview.accessToken!, name: 'Owner', email: 'consent@acme.taipei', company: 'Acme Studio', privacyConsent: true as const, idempotencyKey: 'lead-consent-001' }
+    const first = await createManagedSiteLeadIntent({ ...base, recontactConsent: false }, test.repository)
+    expect(first.replayed).toBe(false)
+    await expect(createManagedSiteLeadIntent({ ...base, recontactConsent: true }, test.repository)).rejects.toMatchObject({ statusCode: 409 })
   })
 })

@@ -258,6 +258,28 @@ export function buildSiteSpec(input: unknown, capturedAt = new Date()): SiteSpec
   return { ...draft, deterministicFingerprint: stableFingerprint(draft) }
 }
 
+export function parseSiteSpecSnapshot(input: unknown): SiteSpec {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) invalid('Persisted SiteSpec is invalid.')
+  const candidate = input as Partial<SiteSpec>
+  if (candidate.schemaVersion !== SITE_SPEC_VERSION || typeof candidate.deterministicFingerprint !== 'string' || !candidate.businessIdentity || typeof candidate.businessIdentity !== 'object') invalid('Persisted SiteSpec version or identity is invalid.')
+  if (!Array.isArray(candidate.businessGoals) || !candidate.businessGoals.length || candidate.businessGoals.some(value => typeof value !== 'string' || !(BUSINESS_GOALS as readonly string[]).includes(value))) invalid('Persisted SiteSpec business goals are invalid.')
+  if (!Array.isArray(candidate.selectedModules) || !candidate.selectedModules.length || candidate.selectedModules.some(value => typeof value !== 'string' || !(SITE_MODULES as readonly string[]).includes(value))) invalid('Persisted SiteSpec modules are invalid.')
+  if (new Set(candidate.selectedModules).size !== candidate.selectedModules.length) invalid('Persisted SiteSpec modules contain duplicates.')
+  if (!candidate.siteType || !(MANAGED_SITE_TYPES as readonly string[]).includes(candidate.siteType)) invalid('Persisted SiteSpec site type is invalid.')
+  if (!Array.isArray(candidate.approvedEvidenceReferences)) invalid('Persisted SiteSpec evidence references are invalid.')
+  const evidenceKeys = candidate.approvedEvidenceReferences.map(reference => `${reference.sourceId}:${reference.artifactId ?? 'none'}:${reference.purpose}`)
+  if (new Set(evidenceKeys).size !== evidenceKeys.length) invalid('Persisted SiteSpec evidence references contain duplicates.')
+  if (candidate.approvedEvidenceReferences.some(reference => !Number.isSafeInteger(reference.sourceId) || reference.sourceId < 1 || (reference.artifactId !== null && reference.artifactId !== undefined && (!Number.isSafeInteger(reference.artifactId) || reference.artifactId < 1)) || !['diagnosis', 'recommendation', 'content_draft'].includes(reference.purpose))) invalid('Persisted SiteSpec evidence reference is invalid.')
+  if (!candidate.contentProvenance || typeof candidate.contentProvenance !== 'object') invalid('Persisted SiteSpec content provenance is invalid.')
+  const provenance = candidate.contentProvenance
+  if (!['customer_brief', 'diagnosis_projection', 'approved_evidence'].includes(provenance.source)) invalid('Persisted SiteSpec provenance source is invalid.')
+  if (provenance.source !== 'customer_brief' && (typeof provenance.evidenceSnapshotHash !== 'string' || !/^[a-f0-9]{64}$/i.test(provenance.evidenceSnapshotHash))) invalid('Persisted SiteSpec requires a canonical evidence snapshot hash.')
+  if (provenance.source === 'customer_brief' && provenance.evidenceSnapshotHash !== null) invalid('Customer-brief SiteSpec cannot claim an evidence snapshot.')
+  const { deterministicFingerprint, ...withoutFingerprint } = candidate as SiteSpec
+  if (stableFingerprint(withoutFingerprint) !== deterministicFingerprint) invalid('Persisted SiteSpec fingerprint mismatch.')
+  return candidate as SiteSpec
+}
+
 export function buildPreviewProjection(spec: SiteSpec, previewId: string, expiresAt = new Date(Date.now() + PREVIEW_TTL_MS)) {
   if (!previewId || !Number.isFinite(expiresAt.getTime())) invalid('Preview identity or expiry is invalid.')
   return {

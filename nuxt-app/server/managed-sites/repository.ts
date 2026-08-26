@@ -27,10 +27,10 @@ function rowId(result: unknown): number {
   return id
 }
 
-function makeRepository(database: any): ManagedSiteRepository {
+export function makeManagedSiteRepository(database: any): ManagedSiteRepository {
   const repository: ManagedSiteRepository = {
     async transaction<T>(work: (repository: ManagedSiteRepository) => Promise<T>): Promise<T> {
-      return database.transaction((transaction: any) => work(makeRepository(transaction))) as Promise<T>
+      return database.transaction((transaction: any) => work(makeManagedSiteRepository(transaction))) as Promise<T>
     },
     async findProject(ownerUserId, projectId) {
       const [row] = await database.select().from(managedSiteProjects).where(and(eq(managedSiteProjects.ownerUserId, ownerUserId), eq(managedSiteProjects.id, projectId))).limit(1)
@@ -42,6 +42,10 @@ function makeRepository(database: any): ManagedSiteRepository {
     },
     async findProjectByFingerprint(ownerUserId, projectFingerprint) {
       const [row] = await database.select().from(managedSiteProjects).where(and(eq(managedSiteProjects.ownerUserId, ownerUserId), eq(managedSiteProjects.projectFingerprint, projectFingerprint))).limit(1)
+      return row || null
+    },
+    async findProjectByIdempotency(ownerUserId, idempotencyKey) {
+      const [row] = await database.select().from(managedSiteProjects).where(and(eq(managedSiteProjects.ownerUserId, ownerUserId), eq(managedSiteProjects.creationIdempotencyKey, idempotencyKey))).limit(1)
       return row || null
     },
     async listProjects(ownerUserId) {
@@ -177,5 +181,5 @@ function makeRepository(database: any): ManagedSiteRepository {
 }
 
 export function getManagedSiteRepository(): ManagedSiteRepository {
-  return makeRepository(requireManagedSiteDatabase())
+  return makeManagedSiteRepository(requireManagedSiteDatabase())
 }

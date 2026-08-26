@@ -5,7 +5,7 @@ import { getPreviewRepository } from './ordering-repository'
 import { buildPreviewProjection, buildSiteSpec, BUSINESS_GOALS, SITE_MODULES, type SiteBriefInput, type SiteModule, type SiteSpec } from './site-spec'
 import { normalizeRecipientEmail, tokenHash } from './normalization'
 import type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent } from '../database/schema'
-import type { DraftOrderInput, LeadInput, PreviewGenerationResult, PreviewRepository, QuoteInput, VerifiedPaymentEventInput } from './ordering-types'
+import type { DraftOrderInput, LeadInput, PaymentEventVerifier, PreviewGenerationResult, PreviewRepository, QuoteInput } from './ordering-types'
 
 export const MANAGED_SITE_PRICE_CATALOG_VERSION = 'managed-site-pricing-v1'
 export const MANAGED_SITE_TERM_MONTHS = 12
@@ -148,9 +148,18 @@ export async function createManagedSiteQuote(input: QuoteInput, repository = get
   const selectedModules = input.moduleKeys ? [...new Set(input.moduleKeys)] : spec.selectedModules
   if (selectedModules.length > SITE_MODULES.length || selectedModules.some(module => !(SITE_MODULES as readonly string[]).includes(module))) invalid('Selected module is not available in V1.')
   if (spec.siteType === 'simple_commerce' && !selectedModules.includes('shopify_commerce')) invalid('Simple commerce requires Shopify commerce in V1.')
+  const idempotencyKey = stringField(input.idempotencyKey, 'Quote idempotency key', 128)!
   const quoteFingerprint = stableFingerprint({ previewFingerprint: preview.previewFingerprint, planKey: input.planKey, cadenceDays: input.cadenceDays, domainOption: input.domainOption, selectedModules: [...selectedModules].sort(), catalogVersion: MANAGED_SITE_PRICE_CATALOG_VERSION })
+  const replayByKey = await repository.findQuoteByIdempotency(preview.id, idempotencyKey)
+  if (replayByKey) {
+    if (replayByKey.quoteFingerprint !== quoteFingerprint) throw createError({ statusCode: 409, statusMessage: 'Quote idempotency key was already used for a different request.' })
+    return { quote: quoteProjection(replayByKey, await repository.listQuoteLines(replayByKey.id)), replayed: true }
+  }
   const replay = await repository.findQuoteByFingerprint(quoteFingerprint)
-  if (replay) return { quote: quoteProjection(replay, await repository.listQuoteLines(replay.id)), replayed: true }
+  if (replay) {
+    if (replay.idempotencyKey !== idempotencyKey) throw createError({ statusCode: 409, statusMessage: 'Quote request already exists under a different idempotency key.' })
+    return { quote: quoteProjection(replay, await repository.listQuoteLines(replay.id)), replayed: true }
+  }
   const createdAt = clock()
   const expiresAt = new Date(createdAt.getTime() + MANAGED_SITE_QUOTE_TTL_MS)
   const plan = PLAN_CATALOG[input.planKey]
@@ -163,7 +172,7 @@ export async function createManagedSiteQuote(input: QuoteInput, repository = get
   if (selectedModules.includes('bounded_ai_assistant')) lines.push({ lineKey: 'bounded-ai-assistant', description: 'Bounded AI assistant module', quantity: 1, unitAmountMinor: 4900 })
   const totalMinor = lines.reduce((total, line) => total + line.quantity * line.unitAmountMinor, 0)
   const quote = await repository.transaction(async transaction => {
-    const created = await transaction.insertQuote({ ownerUserId: preview.ownerUserId, previewId: preview.id, projectId: null, quoteVersion: MANAGED_SITE_PRICE_CATALOG_VERSION, planKey: input.planKey, currency: 'USD', totalMinor, taxStatus: 'not_calculated', moduleSnapshot: selectedModules, cadenceDays: input.cadenceDays, domainOption: input.domainOption, siteSpecFingerprint: spec.deterministicFingerprint, quoteFingerprint, status: 'quoted', expiresAt, lockedAt: null, createdAt, updatedAt: createdAt } as any)
+      const created = await transaction.insertQuote({ ownerUserId: preview.ownerUserId, previewId: preview.id, projectId: null, quoteVersion: MANAGED_SITE_PRICE_CATALOG_VERSION, idempotencyKey, planKey: input.planKey, currency: 'USD', totalMinor, taxStatus: 'not_calculated', moduleSnapshot: selectedModules, cadenceDays: input.cadenceDays, domainOption: input.domainOption, siteSpecFingerprint: spec.deterministicFingerprint, quoteFingerprint, status: 'quoted', expiresAt, lockedAt: null, createdAt, updatedAt: createdAt } as any)
     for (const line of lines) await transaction.insertQuoteLine({ quoteId: created.id, lineKey: line.lineKey, description: line.description, quantity: line.quantity, unitAmountMinor: line.unitAmountMinor, lineAmountMinor: line.quantity * line.unitAmountMinor, catalogVersion: MANAGED_SITE_PRICE_CATALOG_VERSION, lineFingerprint: stableFingerprint({ quoteId: created.id, ...line, catalogVersion: MANAGED_SITE_PRICE_CATALOG_VERSION }) } as any)
     await transaction.updatePreview(preview.id, { status: 'saved', updatedAt: createdAt } as any)
     return created
@@ -193,18 +202,23 @@ export async function createManagedSiteLeadIntent(input: unknown, repository = g
   assertPreviewUsable(preview, clock())
   const quote = quoteId === null ? null : await repository.findQuoteById(quoteId)
   if (quote && quote.previewId !== preview.id) throw createError({ statusCode: 409, statusMessage: 'Quote does not belong to the preview.' })
-  const requestFingerprint = stableFingerprint({ previewId, quoteId, name, email, company, website, message, privacyConsent: true })
-  const replay = await repository.findLeadIntentByIdempotency(idempotencyKey)
+  if (candidate.recontactConsent !== undefined && typeof candidate.recontactConsent !== 'boolean') invalid('Recontact consent must be a boolean when provided.')
+  const recontactConsent = candidate.recontactConsent === true
+  const requestFingerprint = stableFingerprint({ previewId, quoteId, name, email, company, website, message, privacyConsent: true, recontactConsent })
+  const replay = await repository.findLeadIntentByIdempotency(preview.id, idempotencyKey)
   if (replay) {
     if (replay.requestFingerprint !== requestFingerprint) throw createError({ statusCode: 409, statusMessage: 'Lead idempotency key was already used for a different request.' })
     return { leadIntent: replay, replayed: true }
   }
   const existing = await repository.findLeadIntentByFingerprint(requestFingerprint)
-  if (existing) return { leadIntent: existing, replayed: true }
+  if (existing) {
+    if (existing.idempotencyKey !== idempotencyKey) throw createError({ statusCode: 409, statusMessage: 'Lead request already exists under a different idempotency key.' })
+    return { leadIntent: existing, replayed: true }
+  }
   const createdAt = clock()
   return repository.transaction(async transaction => {
     const existingLead = await transaction.findLeadByFingerprint(requestFingerprint)
-    const lead = existingLead || await transaction.insertLead({ name, email, company, website, message, packageInterest: 'grow', language: 'zh-hant', privacyConsent: true, recontactConsent: candidate.recontactConsent === true, dedupeKey: stableFingerprint({ email, company }).slice(0, 64), requestFingerprint })
+    const lead = existingLead || await transaction.insertLead({ name, email, company, website, message, packageInterest: 'grow', language: 'zh-hant', privacyConsent: true, recontactConsent, dedupeKey: stableFingerprint({ email, company }).slice(0, 64), requestFingerprint })
     const intent = await transaction.insertLeadIntent({ ownerUserId: preview.ownerUserId, previewId: preview.id, quoteId, leadId: lead.id, requestFingerprint, idempotencyKey, createdAt } as any)
     return { leadIntent: intent, replayed: false }
   })
@@ -221,13 +235,16 @@ export async function createManagedSiteDraftOrder(input: DraftOrderInput, reposi
   const directLeadIntent = await repository.findLeadIntentById(input.leadIntentId)
   if (!directLeadIntent || directLeadIntent.previewId !== preview.id || directLeadIntent.quoteId !== quote.id) throw createError({ statusCode: 409, statusMessage: 'A matching lead is required before creating a draft order.' })
   const requestFingerprint = stableFingerprint({ previewId: preview.id, quoteId: quote.id, leadIntentId: directLeadIntent.id })
-  const replay = await repository.findDraftOrderByIdempotency(idempotencyKey)
+  const replay = await repository.findDraftOrderByIdempotency(preview.id, idempotencyKey)
   if (replay) {
     if (replay.requestFingerprint !== requestFingerprint) throw createError({ statusCode: 409, statusMessage: 'Draft order idempotency key was already used for a different request.' })
     return { order: replay, replayed: true }
   }
   const existing = await repository.findDraftOrderByFingerprint(requestFingerprint)
-  if (existing) return { order: existing, replayed: true }
+  if (existing) {
+    if (existing.idempotencyKey !== idempotencyKey) throw createError({ statusCode: 409, statusMessage: 'Draft order already exists under a different idempotency key.' })
+    return { order: existing, replayed: true }
+  }
   const createdAt = clock()
   const order = await repository.transaction(async transaction => {
     const created = await transaction.insertDraftOrder({ ownerUserId: preview.ownerUserId, previewId: preview.id, quoteId: quote.id, projectId: null, leadId: directLeadIntent.leadId, status: 'payment_pending', requestFingerprint, idempotencyKey, paymentIntentReference: null, createdAt, updatedAt: createdAt } as any)
@@ -238,39 +255,78 @@ export async function createManagedSiteDraftOrder(input: DraftOrderInput, reposi
   return { order, replayed: false, payment: { status: 'payment_pending' as const, providerConfigured: false, requiresVerifiedProviderEvent: true } }
 }
 
-export async function recordVerifiedMockedPaymentEvent(input: unknown, repository = getPreviewRepository(), clock: () => Date = () => new Date()) {
-  if (!input || typeof input !== 'object') invalid('Payment event is invalid.')
-  const candidate = input as Partial<VerifiedPaymentEventInput>
+export const FAIL_CLOSED_PAYMENT_EVENT_VERIFIER: PaymentEventVerifier = {
+  async verify() { return false },
+}
+
+function paymentString(value: unknown, label: string, max: number): string {
+  return stringField(value, label, max)!
+}
+
+function paymentCurrency(value: unknown): string {
+  const currency = paymentString(value, 'Payment currency', 3).toUpperCase()
+  if (!/^[A-Z]{3}$/.test(currency)) invalid('Payment currency is invalid.')
+  return currency
+}
+
+function paymentAmount(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) invalid('Payment amount is invalid.')
+  return value
+}
+
+export async function recordVerifiedPaymentEvent(input: unknown, verifier: PaymentEventVerifier = FAIL_CLOSED_PAYMENT_EVENT_VERIFIER, repository = getPreviewRepository(), clock: () => Date = () => new Date()) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) invalid('Payment event is invalid.')
+  const candidate = input as Record<string, unknown>
+  if (Object.prototype.hasOwnProperty.call(candidate, 'verified')) throw createError({ statusCode: 422, statusMessage: 'Caller-controlled payment verification is not accepted.' })
   const orderId = Number(candidate.draftOrderId)
   if (!Number.isSafeInteger(orderId) || orderId < 1) invalid('Draft order id is invalid.')
-  if (candidate.verified !== true || candidate.eventType !== 'payment_succeeded') throw createError({ statusCode: 403, statusMessage: 'Only a verified payment provider event can confirm payment.' })
-  const eventId = stringField(candidate.eventId, 'Payment event id', 160)!
-  const providerReference = stringField(candidate.providerReference, 'Payment provider reference', 160)!
-  const idempotencyKey = stringField(candidate.idempotencyKey, 'Payment event idempotency key', 128)!
+  if (candidate.eventType !== 'payment_succeeded') throw createError({ statusCode: 422, statusMessage: 'Payment event type is not supported.' })
+  const providerKey = paymentString(candidate.providerKey, 'Payment provider key', 96)
+  const eventId = paymentString(candidate.eventId, 'Payment event id', 160)
+  const providerReference = paymentString(candidate.providerReference, 'Payment provider reference', 160)
+  const amountMinor = paymentAmount(candidate.amountMinor)
+  const currency = paymentCurrency(candidate.currency)
+  const canonicalPayloadHash = paymentString(candidate.canonicalPayloadHash, 'Payment canonical payload hash', 128)
+  if (!/^[a-f0-9]{64}$/i.test(canonicalPayloadHash)) invalid('Payment canonical payload hash is invalid.')
+  const receivedAt = ensureFiniteDate(clock(), 'Payment receivedAt')
   const order = await repository.findDraftOrderById(orderId)
   if (!order) notFound('Draft order was not found.')
-  const fingerprint = stableFingerprint({ orderId, eventId, providerReference, eventType: candidate.eventType })
-  const replay = await repository.findPaymentEvent(eventId)
+  const preview = await repository.findPreviewById(order.previewId)
+  const quote = await repository.findQuoteById(order.quoteId)
+  if (!preview || !quote || order.ownerUserId !== preview.ownerUserId || quote.previewId !== preview.id || quote.ownerUserId !== preview.ownerUserId || quote.totalMinor !== amountMinor || quote.currency !== currency) throw createError({ statusCode: 409, statusMessage: 'Payment event lineage or amount does not match the draft order.' })
+  const verificationRequest = { providerKey, eventId, draftOrderId: order.id, amountMinor, currency, eventType: 'payment_succeeded' as const, providerReference, canonicalPayloadHash, receivedAt }
+  const verificationResult = await verifier.verify(verificationRequest)
+  if (verificationResult !== true) throw createError({ statusCode: 403, statusMessage: 'Payment provider verification did not return the exact boolean true.' })
+  const eventFingerprint = stableFingerprint({ ownerUserId: order.ownerUserId, providerKey, eventId, draftOrderId: order.id, previewId: preview.id, quoteId: quote.id, amountMinor, currency, eventType: 'payment_succeeded', providerReference, canonicalPayloadHash })
+  const replay = await repository.findPaymentEvent(order.ownerUserId, providerKey, eventId)
   if (replay) {
-    if (replay.eventFingerprint !== fingerprint || replay.draftOrderId !== order.id) throw createError({ statusCode: 409, statusMessage: 'Payment event id was already used for a different order.' })
+    if (replay.eventFingerprint !== eventFingerprint || replay.draftOrderId !== order.id || replay.previewId !== preview.id || replay.quoteId !== quote.id) throw createError({ statusCode: 409, statusMessage: 'Payment event identity was already used for a different order or payload.' })
     return { paymentEvent: replay, order, replayed: true }
   }
-  const fingerprintReplay = await repository.findPaymentEventByFingerprint(fingerprint)
+  const fingerprintReplay = await repository.findPaymentEventByFingerprint(eventFingerprint)
   if (fingerprintReplay) return { paymentEvent: fingerprintReplay, order, replayed: true }
   if (order.status !== 'payment_pending') throw createError({ statusCode: 409, statusMessage: 'Draft order is not awaiting payment.' })
   const updated = await repository.transaction(async transaction => {
-    const event = await transaction.insertPaymentEvent({ draftOrderId: order.id, eventId, providerReference, eventType: 'payment_succeeded', verificationStatus: 'verified', eventFingerprint: fingerprint, receivedAt: clock() } as any)
-    const changed = await transaction.updateDraftOrder(order.id, { status: 'payment_verified', paymentIntentReference: providerReference, updatedAt: clock() } as any)
-    if (!changed) notFound('Draft order was not found.')
-    const quote = await transaction.findQuoteById(order.quoteId)
-    if (quote) {
-      await transaction.updateQuote(quote.id, { status: 'locked', lockedAt: clock(), updatedAt: clock() } as any)
-      const intent = await transaction.findSubscriptionIntentByQuote(quote.id)
-      if (intent) await transaction.updateSubscriptionIntent(quote.id, { status: 'entitled', updatedAt: clock() } as any)
+    const raceReplay = await transaction.findPaymentEvent(order.ownerUserId, providerKey, eventId)
+    if (raceReplay) {
+      if (raceReplay.eventFingerprint !== eventFingerprint || raceReplay.draftOrderId !== order.id) throw createError({ statusCode: 409, statusMessage: 'Payment event identity was already used for a different order or payload.' })
+      const replayOrder = await transaction.findDraftOrderById(order.id)
+      if (!replayOrder) notFound('Draft order was not found.')
+      return { event: raceReplay, changed: replayOrder, replayed: true }
     }
-    return { event, changed }
+    const currentOrder = await transaction.findDraftOrderById(order.id)
+    const currentQuote = await transaction.findQuoteById(order.quoteId)
+    if (!currentOrder || !currentQuote || currentOrder.status !== 'payment_pending' || currentQuote.totalMinor !== amountMinor || currentQuote.currency !== currency) throw createError({ statusCode: 409, statusMessage: 'Payment order changed while verification was in progress.' })
+    const event = await transaction.insertPaymentEvent({ ownerUserId: order.ownerUserId, draftOrderId: order.id, previewId: preview.id, quoteId: quote.id, providerKey, eventId, providerReference, eventType: 'payment_succeeded', amountMinor, currency, canonicalPayloadHash, verificationStatus: 'verified', eventFingerprint, receivedAt } as any)
+    const changed = await transaction.updateDraftOrder(order.id, { status: 'payment_verified', paymentIntentReference: providerReference, updatedAt: receivedAt } as any)
+    if (!changed) notFound('Draft order was not found.')
+    await transaction.updateQuote(quote.id, { status: 'locked', lockedAt: receivedAt, updatedAt: receivedAt } as any)
+    const intent = await transaction.findSubscriptionIntentByQuote(quote.id)
+    if (intent) await transaction.updateSubscriptionIntent(quote.id, { status: 'entitled', updatedAt: receivedAt } as any)
+    return { event, changed, replayed: false }
   })
-  return { paymentEvent: updated.event, order: updated.changed, replayed: false }
+  if (!updated.changed) notFound('Draft order was not found.')
+  return { paymentEvent: updated.event, order: updated.changed, replayed: updated.replayed }
 }
 
 export type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent }

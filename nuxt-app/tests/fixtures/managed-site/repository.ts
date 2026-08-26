@@ -58,6 +58,7 @@ export function createManagedSiteMemoryRepository() {
     async findProject(ownerUserId, projectId) { return state.projects.find(row => row.ownerUserId === ownerUserId && row.id === projectId) || null },
     async findProjectByClientIdentity(ownerUserId, value) { return state.projects.find(row => row.ownerUserId === ownerUserId && row.canonicalClientIdentity === value) || null },
     async findProjectByFingerprint(ownerUserId, value) { return state.projects.find(row => row.ownerUserId === ownerUserId && row.projectFingerprint === value) || null },
+    async findProjectByIdempotency(ownerUserId, value) { return state.projects.find(row => row.ownerUserId === ownerUserId && row.creationIdempotencyKey === value) || null },
     async listProjects(ownerUserId) { return dateDesc(state.projects.filter(row => row.ownerUserId === ownerUserId)) },
     async insertProject(input) { return create(state.projects, input as Omit<ManagedSiteProject, 'id'>) },
     async updateProject(ownerUserId, projectId, patch) {

@@ -106,7 +106,9 @@ export async function createManagedSiteProject(ownerUserId: number, actor: Manag
   ensureActorRole(actor, 'project:write')
   const parsed = normalizeProject(input as ManagedSiteProjectInput)
   const fingerprint = stableFingerprint({ ownerUserId, ...parsed, catalogVersion: MANAGED_SITE_CATALOG_VERSION })
-  const existing = await repository.findProjectByFingerprint(ownerUserId, fingerprint)
+  const existingByIdempotency = await repository.findProjectByIdempotency(ownerUserId, parsed.idempotencyKey)
+  if (existingByIdempotency && existingByIdempotency.projectFingerprint !== fingerprint) throw createError({ statusCode: 409, statusMessage: 'Project idempotency key is already associated with a different request.' })
+  const existing = existingByIdempotency || await repository.findProjectByFingerprint(ownerUserId, fingerprint)
   if (existing) {
     const [versions, memberships, subscription] = await Promise.all([
       repository.listVersions(ownerUserId, existing.id),
@@ -128,9 +130,10 @@ export async function createManagedSiteProject(ownerUserId: number, actor: Manag
       siteType: parsed.siteType,
       activeVersionId: null,
       catalogVersion: MANAGED_SITE_CATALOG_VERSION,
-      subscriptionReference: null,
-      projectFingerprint: fingerprint,
-      createdAt,
+       subscriptionReference: null,
+       projectFingerprint: fingerprint,
+       creationIdempotencyKey: parsed.idempotencyKey,
+       createdAt,
     } as any)
     const membership = await transaction.insertMembership({
       ownerUserId,

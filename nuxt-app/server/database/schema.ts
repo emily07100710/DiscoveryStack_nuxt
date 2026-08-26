@@ -1263,12 +1263,14 @@ export const managedSiteProjects = mysqlTable('managedSiteProjects', {
   catalogVersion: varchar('catalogVersion', { length: 96 }).notNull(),
   subscriptionReference: varchar('subscriptionReference', { length: 160 }),
   projectFingerprint: varchar('projectFingerprint', { length: 128 }).notNull(),
+  creationIdempotencyKey: varchar('creationIdempotencyKey', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
   uniqueIndex('managed_site_projects_owner_client_identity_unique').on(table.ownerUserId, table.canonicalClientIdentity),
   uniqueIndex('managed_site_projects_owner_website_identity_unique').on(table.ownerUserId, table.canonicalWebsiteIdentity),
   uniqueIndex('managed_site_projects_owner_fingerprint_unique').on(table.ownerUserId, table.projectFingerprint),
+  uniqueIndex('managed_site_projects_owner_creation_idempotency_unique').on(table.ownerUserId, table.creationIdempotencyKey),
   index('managed_site_projects_owner_status_idx').on(table.ownerUserId, table.status),
 ])
 
@@ -1444,6 +1446,7 @@ export const managedSiteQuotes = mysqlTable('managedSiteQuotes', {
   previewId: int('previewId').notNull().references(() => managedSitePreviews.id),
   projectId: int('projectId').references(() => managedSiteProjects.id),
   quoteVersion: varchar('quoteVersion', { length: 96 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   planKey: varchar('planKey', { length: 96 }).notNull(),
   currency: varchar('currency', { length: 3 }).notNull(),
   totalMinor: int('totalMinor').notNull(),
@@ -1459,6 +1462,7 @@ export const managedSiteQuotes = mysqlTable('managedSiteQuotes', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  uniqueIndex('managed_site_quotes_preview_idempotency_unique').on(table.previewId, table.idempotencyKey),
   uniqueIndex('managed_site_quotes_fingerprint_unique').on(table.quoteFingerprint),
   index('managed_site_quotes_preview_status_idx').on(table.previewId, table.status),
   index('managed_site_quotes_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
@@ -1492,7 +1496,7 @@ export const managedSiteLeadIntents = mysqlTable('managedSiteLeadIntents', {
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
-  uniqueIndex('managed_site_lead_intents_idempotency_unique').on(table.idempotencyKey),
+  uniqueIndex('managed_site_lead_intents_preview_idempotency_unique').on(table.previewId, table.idempotencyKey),
   uniqueIndex('managed_site_lead_intents_request_unique').on(table.requestFingerprint),
   index('managed_site_lead_intents_preview_idx').on(table.previewId, table.createdAt),
 ])
@@ -1512,7 +1516,7 @@ export const managedSiteDraftOrders = mysqlTable('managedSiteDraftOrders', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
-  uniqueIndex('managed_site_draft_orders_idempotency_unique').on(table.idempotencyKey),
+  uniqueIndex('managed_site_draft_orders_preview_idempotency_unique').on(table.previewId, table.idempotencyKey),
   uniqueIndex('managed_site_draft_orders_request_unique').on(table.requestFingerprint),
   index('managed_site_draft_orders_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
 ])
@@ -1520,16 +1524,23 @@ export const managedSiteDraftOrders = mysqlTable('managedSiteDraftOrders', {
 /** Append-only verified payment event ledger. Provider payloads are reduced to safe references and fingerprints. */
 export const managedSitePaymentEvents = mysqlTable('managedSitePaymentEvents', {
   id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   draftOrderId: int('draftOrderId').notNull().references(() => managedSiteDraftOrders.id),
+  previewId: int('previewId').notNull().references(() => managedSitePreviews.id),
+  quoteId: int('quoteId').notNull().references(() => managedSiteQuotes.id),
+  providerKey: varchar('providerKey', { length: 96 }).notNull(),
   eventId: varchar('eventId', { length: 160 }).notNull(),
   providerReference: varchar('providerReference', { length: 160 }).notNull(),
   eventType: varchar('eventType', { length: 96 }).notNull(),
+  amountMinor: int('amountMinor').notNull(),
+  currency: varchar('currency', { length: 3 }).notNull(),
+  canonicalPayloadHash: varchar('canonicalPayloadHash', { length: 128 }).notNull(),
   verificationStatus: mysqlEnum('verificationStatus', ['verified', 'rejected', 'replayed']).notNull(),
   eventFingerprint: varchar('eventFingerprint', { length: 128 }).notNull(),
   receivedAt: timestamp('receivedAt').defaultNow().notNull(),
 }, table => [
-  uniqueIndex('managed_site_payment_events_event_unique').on(table.eventId),
-  uniqueIndex('managed_site_payment_events_fingerprint_unique').on(table.eventFingerprint),
+  uniqueIndex('managed_site_payment_events_owner_provider_event_unique').on(table.ownerUserId, table.providerKey, table.eventId),
+  uniqueIndex('managed_site_payment_events_fingerprint_unique').on(table.ownerUserId, table.eventFingerprint),
   index('managed_site_payment_events_order_idx').on(table.draftOrderId, table.receivedAt),
 ])
 

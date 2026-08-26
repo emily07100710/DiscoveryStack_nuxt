@@ -49,7 +49,7 @@ export type ManagedSiteSubscriptionStatus = typeof MANAGED_SITE_SUBSCRIPTION_STA
 export type ManagedSiteActor = {
   ownerUserId: number
   actorUserId?: number | null
-  authority: 'owner_session' | 'customer_session' | 'system_test'
+  authority: 'owner_session' | 'customer_session' | 'system_test' | 'system_workflow'
   role?: ManagedSiteRole
   principal?: string
 }
@@ -77,6 +77,7 @@ export type ManagedSiteRepository = {
   findProject(ownerUserId: number, projectId: number): Promise<ManagedSiteProject | null>
   findProjectByClientIdentity(ownerUserId: number, canonicalClientIdentity: string): Promise<ManagedSiteProject | null>
   findProjectByFingerprint(ownerUserId: number, projectFingerprint: string): Promise<ManagedSiteProject | null>
+  findProjectByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSiteProject | null>
   listProjects(ownerUserId: number): Promise<ManagedSiteProject[]>
   insertProject(input: Omit<ManagedSiteProject, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteProject>
   updateProject(ownerUserId: number, projectId: number, patch: Partial<Omit<ManagedSiteProject, 'id' | 'ownerUserId' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteProject | null>
