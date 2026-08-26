@@ -67,4 +67,6 @@ export {
   OUTCOME_SPLIT_VALIDATION_RATIO,
 } from './policy-catalog'
 export { OUTCOME_LEARNING_ENGINE_VERSION } from './types'
+export { buildContentLearningDataset, scanOutcomeLearningPii } from './content-learning-runtime'
+export type { ContentLearningDatasetResult, LearningPiiScan } from './content-learning-runtime'
 export * from './types'

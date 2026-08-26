@@ -29,6 +29,7 @@ export {
   materializeOwnerDueContent,
   recordOwnerOutcomeAssessment,
   replanOwnerContentCalendar,
+  buildOwnerContentLearningDataset,
 } from './service'
 export { runContentOperationsTick } from './scheduler'
 export { enableOwnerAutopilot, revokeOwnerAutopilot, getOwnerAutopilotPolicy, projectAutopilotPolicy } from './autopilot-service'

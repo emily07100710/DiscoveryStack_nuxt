@@ -3,6 +3,8 @@ import { createError } from 'h3'
 import {
   assessPublishedContentOutcome,
   buildOutcomeLearningCandidate,
+  scanOutcomeLearningPii,
+  buildContentLearningDataset,
   OUTCOME_DATA_CONTRACT_VERSION,
   type PublishedContentOutcomeAssessment,
 } from '../outcome-learning'
@@ -616,7 +618,8 @@ export async function recordOwnerOutcomeAssessment(ownerUserId: number, input: u
   }
   const outcomeRequest = { publication: publicationIdentity, baselineMeasurements: parsed.baselineMeasurements, followUpMeasurements: parsed.followUpMeasurements, dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION }
   const assessment = assessPublishedContentOutcome(outcomeRequest)
-  const learningCandidate = parsed.learningCandidate ? buildOutcomeLearningCandidate({ outcomeRequest, assessment, consent: parsed.consent, piiScanStatus: 'unknown', dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION }) : null
+  const learningPiiScan = parsed.learningCandidate ? scanOutcomeLearningPii({ outcomeRequest, assessment, consent: parsed.consent }) : null
+  const learningCandidate = parsed.learningCandidate ? buildOutcomeLearningCandidate({ outcomeRequest, assessment, consent: parsed.consent, piiScanStatus: learningPiiScan?.status || 'unknown', dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION }) : null
   const fingerprint = stableFingerprint({ entryId: parsed.entryId, idempotencyKey: parsed.idempotencyKey, outcomeRequest, consent: safeConsentSnapshot(parsed.consent), assessmentFingerprint: assessment.assessmentFingerprint })
   const existing = await db.findOutcomeByIdempotency(ownerUserId, parsed.idempotencyKey)
   if (existing) {
@@ -657,6 +660,21 @@ function nextActionForEntry(entry: ContentOperationCalendarEntryRow, hasApproved
 function outcomeValidPairCount(snapshot: unknown): number | null {
   if (!isRecord(snapshot) || typeof snapshot.validPairCount !== 'number' || !Number.isSafeInteger(snapshot.validPairCount) || snapshot.validPairCount < 0) return null
   return snapshot.validPairCount
+}
+
+export async function buildOwnerContentLearningDataset(ownerUserId: number, repository?: ContentOperationsRepository) {
+  const db = await getRepository(repository)
+  const outcomes = await db.listOutcomes(ownerUserId)
+  const records = outcomes.map(outcome => {
+    const assessment = isRecord(outcome.assessmentSnapshot) ? outcome.assessmentSnapshot : null
+    const publication = assessment && isRecord(assessment.publication) ? assessment.publication : null
+    return {
+      outcomeRequest: { publication, baselineMeasurements: Array.isArray(outcome.baselineSnapshot) ? outcome.baselineSnapshot : [], followUpMeasurements: Array.isArray(outcome.followUpSnapshot) ? outcome.followUpSnapshot : [], dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION },
+      assessment: outcome.assessmentSnapshot,
+      consent: outcome.consentLineageSnapshot,
+    }
+  })
+  return buildContentLearningDataset({ records })
 }
 
 export async function getOwnerContentOperationsWorkspace(ownerUserId: number, repository?: ContentOperationsRepository): Promise<WorkspacePayload> {
