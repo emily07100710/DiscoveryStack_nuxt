@@ -15,4 +15,3 @@ export default defineEventHandler(async (event) => {
     throw toPublicContentOperationsError(error, 'Entry publication target binding is temporarily unavailable.')
   }
 })
-
