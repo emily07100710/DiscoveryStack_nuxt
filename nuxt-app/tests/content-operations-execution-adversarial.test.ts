@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ContentOperationsRepository } from '../server/content-operations/repository'
 import { buildPublicationIdentity, validatePersistedPublicationIdentity } from '../server/content-operations/publication-identity'
 import { createOwnerPublicationTarget, executeContentOperationEntry, runContentOperationsExecutionTick } from '../server/content-operations/orchestrator'
+import { enableOwnerAutopilot } from '../server/content-operations/autopilot-service'
 import { BoundedFetchNetworkError, BoundedFetchTimeoutError, createBoundedFetch } from '../server/content-operations/bounded-fetch'
 import { createSecureFirstPartyNonce } from '../server/content-operations/runtime-dependencies'
 import { parseCredentialRegistryForTests, resolveServerCredential } from '../server/content-operations/credential-resolver'
@@ -67,6 +68,7 @@ function schedulerKey(runId: number, attemptNumber: number): string {
 describe('content operations execution adversarial hardening', () => {
   it('runs the real tick through execute attempts 1, 2, and 3 with due backoff and no fourth publisher call', async () => {
     const lineage = await queuePublicationFixture()
+    await enableOwnerAutopilot(1, lineage.workspace.client.id, { expiresAt: '2026-12-31T23:59:59.000Z', allowedContentTypes: ['article'], allowedLanguages: ['en'] }, lineage.repository, NOW)
     let calls = 0
     const publisher = async () => { calls += 1; return { status: 'retryable_failure' as const, code: 'REMOTE_RATE_LIMITED' as const, reasons: ['synthetic rate limit'], httpStatus: 429 } }
     const dependencies = { repository: lineage.repository, publicationExecutor: publisher }
