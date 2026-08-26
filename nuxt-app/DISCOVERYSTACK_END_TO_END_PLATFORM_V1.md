@@ -36,13 +36,13 @@
 |---|---|---|
 | Astro public site | 品牌、服務、FAQ、公開內容、lead capture、公開 site analysis 與 bounded public assistant；不攜帶 owner secret、cookie 或私有內容。 | 已存在 public-site application 與 public/private split contract；本 V1 不修改公開官網視覺。 |
 | Nuxt owner backend | owner-only session、私人 workbench、SEO/GEO API、Content Operations、calendar、review、risk、preview/export、LLM visibility、public intelligence 與 learning governance。 | 有 pages、layouts、API 與 server modules；owner OAuth round-trip、正式 DB 與正式部署仍需環境驗證。 |
-| GEOFlow service | Content Brief、Prompt/RAG、provider、base draft 與 publishing runtime 的整合來源。 | 有 GEOFlow integration contract、normalization、signing、lineage、idempotency 與 status machine；完整 queue／provider runtime convergence 尚待完成。 |
-| AutoGEO isolated worker | 對 Base Draft 做 selected-rule analyze／optimize、Markdown preservation、content safety、ruleset lineage 與 candidate fingerprint。 | 有 server-side AutoGEO rules、output safety 與 provider adapters；目前沒有可由 source tree 證明的 subprocess／worker isolation runtime。 |
-| Qwen／Bailian provider | 以 server-only credential 產生 Base Draft，保存 provider provenance、model、content hash 與 evidence binding。 | 有 adapter 與 endpoint validation；未配置或 malformed provider 必須 blocked／needs_human_review，不能 fallback 後自動發布。 |
-| Database／persistence | 保存 client、website、diagnosis、evidence、strategy、plan、brief、job、draft、risk、review、calendar、runs、leases、events、publication attempts、outcomes、visibility 與 learning lineage。 | Drizzle schema 與 `0000`～`0016` migrations 存在；本任務不得套用 production migration。 |
-| Scheduler／queue | Materialize due entries、建立 durable runs、取得 leases、bounded retries、blocked／failed／delivered state 與事件。 | Nitro task 與 Content Operations orchestrator 存在；atomic claim、長時間 recovery、dead-letter 與 production-like concurrency 仍需完成。 |
-| Publication executors | 依 framework／transport capability 選擇專用 executor，驗證 credential、target、identity、hash、receipt、retry 與 event。 | First-party Git／Signed API executor 可見；WordPress REST、PHP Agent、Generic HTTP、GEOFlow Local、Static／GEOFlow Agent 與 multisite fanout 仍需獨立完成。 |
-| Monitoring／learning | 保存 owner LLM observations、outcome、人工修訂、learning candidate 與 dataset manifest；所有資料須有 rights、consent、PII、revocation 與 lineage gate。 | LLM visibility、public intelligence、training admission 與 outcome-learning modules 存在；provider convergence、真實 outcome 與足量合法資料尚未被證明。 |
+| GEOFlow service | Content Brief、Prompt/RAG、provider、base draft 與 publishing runtime 的整合來源。 | 有 GEOFlow integration contract、normalization、signing、lineage、idempotency、status machine 與可注入 mock 的 Qwen/Bailian base-draft runtime；正式 queue／provider credentials 仍未連線驗證。 |
+| AutoGEO isolated worker | 對 Base Draft 做 selected-rule analyze／optimize、Markdown preservation、content safety、ruleset lineage 與 candidate fingerprint。 | 已加入 isolated Node child-process deterministic reference worker；bounded I/O、2.5s timeout、128 MB heap、shell=false、protocol／request fingerprint／rule lineage revalidation。此 fallback 明確不可進 governed_autopilot。 |
+| Qwen／Bailian provider | 以 server-only credential 產生 Base Draft，保存 provider provenance、model、content hash 與 evidence binding。 | `server/geoflow-runtime/qwen.ts` 已接 strict GEOFlow contract、Bailian endpoint allowlist、opaque credential resolver、bounded JSON、retryable HTTP、source-bound safety、artifact/hash/citation lineage；credential／real provider execution 未驗證。 |
+| Database／persistence | 保存 client、website、diagnosis、evidence、strategy、plan、brief、job、draft、risk、review、calendar、runs、leases、events、publication attempts、autopilot policies、outcomes、visibility 與 learning lineage。 | Drizzle schema 含 `contentOperationAutopilotPolicies`；`0017_governed_autopilot.sql` 已生成但未套用，`db:generate` 只產生過 duplicate metadata 後已清理，未執行任何 DB migrate 或 production DB write。 |
+| Scheduler／queue | Materialize due entries、建立 durable runs、取得 leases、bounded retries、blocked／failed／delivered state 與事件。 | Nitro task 與 Content Operations orchestrator 已具 owner scope、lease、stage compatibility、bounded retry、persisted policy rehydration；scheduler publication 無 matching durable autopilot policy 時 fail-closed。production queue／concurrency 未做正式環境驗證。 |
+| Publication executors | 依 framework／transport capability 選擇專用 executor，驗證 credential、target、identity、hash、receipt、retry 與 event。 | First-party Git／Signed API application path 已存在；另有獨立 injected multi-channel registry 覆蓋 WordPress REST、PHP/GEOFlow agent、Generic HTTP、GEOFlow Local、receipt replay 與 multisite partial failure，但尚未接入 Content Operations first-party target DB/orchestrator，未作真實 site write。 |
+| Monitoring／learning | 保存 owner LLM observations、outcome、人工修訂、learning candidate 與 dataset manifest；所有資料須有 rights、consent、PII、revocation 與 lineage gate。 | LLM visibility 已有 fixed ChatGPT/Gemini/Perplexity provider API adapters 與 owner route；provider rows 僅 `secondary_only`、`verifiedByOwner:false`、`consumerSurfaceEquivalent:false`。Outcome learning 已建立 hash-only dataset review artifact，但未 training/upload/promote。 |
 
 ## 3. Current runtime inventory
 
@@ -54,7 +54,7 @@
 - public `/api/leads` 與 `/api/site-analysis`，包含 validation、honeypot、rate limit、public target guard 與受限 CORS；
 - SEO/GEO diagnosis、recommendation、strategy、production plan、brief、job、review、revision、delivery preview 與 export route；
 - Content Operations client、calendar、calendar entry、materialization、replan、durable runs、leases、events、execution tick 與 outcome assessment；
-- LLM Visibility project、query、manual observation、summary projection 與 observation repository；
+- LLM Visibility project、query、manual observation、fixed server provider API observation、summary projection 與 observation repository；
 - Public Intelligence source／artifact／dataset／training pipeline 的 owner-scoped CRUD 與 admission gate。
 
 這些 runtime 路徑已具備不同程度的 server wiring，但不能統一稱為完整 end-to-end。Content Operations workspace 仍可回報 generation executor、first-party publisher 與 outcome collector 未配置；publication preview 明確是 preview-only，不能當作真實 CMS delivery。
@@ -140,7 +140,7 @@ API 與 service 的責任分層如下：
 
 每個跨階段關聯都必須保存 owner scope、exact content／evidence hash、version、fingerprint、source／artifact reference、review authority、publication identity、attempt／retry lineage 與 event sequence。任何 caller-provided score、hash、fingerprint、status 或 publication eligibility 都不可直接信任，server 必須重新計算或重新解析。
 
-目前只完成 source-level schema／migration inventory；沒有套用 production migration、沒有加入 seed／DML，也沒有宣稱 runtime database 已完成 migration。
+目前完成 source-level schema／migration inventory；`0017_governed_autopilot.sql` 與 schema 已對齊到可生成的 DDL，但 migration 尚未套用，沒有 seed／DML，也沒有宣稱 runtime database 已完成 migration。
 
 ## 6. External trust boundaries
 
@@ -180,11 +180,11 @@ main 已包含 GEO Content Quality Prompt/RAG、GEO Content Evaluation Harness�
 目前已知限制如下：
 
 1. GitHub CLI active account 是 `mamamia5241888`，不符合附件要求的 `emily07100710`；依不自行切換帳號規則，本地可繼續，但禁止 push，直到帳號／授權由使用者處理。
-2. 目前未執行 targeted tests、完整 test suite、typecheck 或 build；任何「通過」都必須在各 checkpoint 之後以實際輸出記錄，不能預先宣稱。
+2. targeted tests、完整 typecheck 與 Nuxt production build 已在最新 checkpoint 後執行；完整 suite 為 78 個 test files 通過、3 個 skipped，仍有 3 個既存 provider-secret integration tests 因 sandbox 沒有真實 Firecrawl/Hugging Face credentials 且外部 token 驗證失敗。這些 tests 未被繞過，也未因本 task 取得或使用真實 credentials。
 3. 尚未套用任何 production migration；如需 schema 變更，只能生成新的後續 migration，並在 disposable throwaway database 驗證，不能修改既有 migration、renumber、seed 或寫 production DB。
 4. 未呼叫真實 Qwen／Bailian、AutoGEO、GEOFlow、GitHub Contents、WordPress、PHP Agent、Generic HTTP 或客戶網站；所有外部 boundary 都必須以 injected mock 驗證。
 5. 未取得四份 paused patch 的可驗證附件；可用內容須重算 SHA-256，否則要從 current main、contracts、tests 與報告 reconstructed，不能報告為 ported。
-6. Source tree 有 provider adapter 與 publication routing contract，但 provider runtime、AutoGEO isolated worker、GEOFlow queue convergence、多通道 executor、autopilot policy、outcome collector 與 learning admission 的完整 application wiring 仍需後續 phase 完成。
+6. Qwen runtime、AutoGEO isolated deterministic worker、多通道 executor、durable autopilot policy、provider visibility observation 與 learning dataset review wiring 已以 mocked／injected runtime 完成；多通道 executor 尚未接入 Content Operations first-party target persistence，GEOFlow queue、正式 credentials、正式 outcome collector 與 production concurrency 仍未驗證。
 7. `auto_publish_eligible` 不等於 publication authority；任何 governed_autopilot 必須有 owner-scoped policy、explicit activation、policy version、allowed scope、revocation state、policy fingerprint 與 append-only authorization event。
 8. deterministic scaffold／reference fallback 只能用於 tests、preview、development、manual inspection 或 explicit fallback demonstration；不能進入 governed_autopilot production publication path。
 9. LLM provider API observation 只能表示 provider API 的二級觀察，不等同 ChatGPT、Gemini、Qwen、Perplexity 或其他 consumer surface 的實際答案。
@@ -236,3 +236,70 @@ Phase 2 的唯讀稽核已完成。authoritative `origin/main` 仍精確為 `a7a
 Phase 2 targeted tests 已於 Nuxt app 執行並通過：6 個 test files、1,308 個 tests 全部通過，涵蓋 GEOFlow integration contract、production provider selection、GEO content quality Prompt/RAG、GEO content evaluation harness、Unified Publication Routing V2 與 Content Operations execution orchestrator。這些結果只證明現有 contract／engine／orchestrator 的 targeted baseline，不能取代後續 runtime、provider、executor 與 end-to-end acceptance。Phase 2 未新增 migration、未呼叫真實 provider、未寫入外部目標。
 
 Phase 2 的決策是：保留 authoritative main 已吸收的安全 contract 與 V2 implementation；對 paused GEOFlow work 只在後續對照最新 contract 後 selective port 或 reconstructed；對其餘不可存取 patch 以 current main、available contracts、tests 與報告 reconstructed；所有變更繼續只在本地 integration branch，且因 active GitHub account 不符合 `emily07100710`，禁止 push。
+
+
+## 13. Phase 10–12 completion record（2026-08-26）
+
+Phase 10 完成 owner workbench truthful UI。`pages/audit-lab/content-operations.vue` 現在顯示每個 client 的 governed autopilot policy status、expiry、allowlists、target 與可撤銷操作，並明確說明 evidence、review、quality、risk、provider、credential、lease、idempotency 與 scheduler gates 仍然適用；同一頁顯示 hash-only GEO content learning dataset 的 manifest status、eligible／blocked candidates、gate reasons、dataset digest 與 manifest fingerprint，並聲明不 training、upload 或 promotion。`pages/audit-lab/llm-visibility.vue` 現在分開顯示 provider API secondary evidence 與 owner manual primary metrics，明確標示 `secondary_only`、`verifiedByOwner=false`、`consumerSurfaceEquivalent=false`、固定 server adapter、無 credential 時 blocked，且不提供 browser credential input。相關 workbench／route／visibility suites 已通過。
+
+Phase 11 新增 `tests/discovery-stack-e2e.acceptance.test.ts`，5 個 mocked acceptance tests 全部通過。它們涵蓋：approved evidence → mocked Qwen Base Draft → isolated AutoGEO → quality/risk → manual review → exact mocked delivery receipt → outcome／learning lineage；matching durable owner autopilot scheduler publication 與 revoke；missing Qwen credential、stale evidence、high-risk、owner scope mismatch；multi-channel retry／receipt replay／exact content hash／multisite partial failure；以及 provider API visibility 的 owner-scope gate、secondary-only persistence 與 primary metric separation。沒有任何真實 provider、customer website、GitHub、WordPress、PHP Agent、Generic HTTP 或 dataset upload 呼叫。
+
+最新普通 checkpoint commits 如下，全部位於單一 local branch `feature/discoverystack-end-to-end-platform-v1`，沒有 amend、rebase、squash、force-push：
+
+| Commit | 內容 |
+|---|---|
+| `ea96324` | AutoGEO isolated worker 與 workflow bridge |
+| `b6b4ed1` | GEOFlow Qwen generation runtime |
+| `792dcaf` | governed Content Operations runtime |
+| `a9e875b` | multi-channel publication executor layer |
+| `f2c5b52` | durable owner autopilot policy |
+| `aeafa3f` | secondary visibility provider observations |
+| `bd0738b` | GEO content learning dataset runtime |
+| `335257e` | owner workbench governance／learning UI |
+| `5e5d935` | mocked end-to-end acceptance tests |
+| `3c55dad` | scheduler retry test bound to durable autopilot policy |
+| `4f3cd5f` | provider visibility route contract coverage |
+
+Phase 12 validation 結果為：`pnpm typecheck` 通過；`pnpm build` 通過並產生本地 Nuxt `.output`；build 後完整 `pnpm test` 為 78 個 test files 通過、3 個 skipped，3 個既存 provider-secret integration tests（Firecrawl／Hugging Face）因 sandbox 沒有真實 credentials 且 token 驗證失敗而未通過。這 3 個 tests 沒有被修改、繞過或以假 secret 滿足；依本任務禁止真實 credential／provider call 的規則，列為 environment-blocked，而非 V1 mocked runtime failure。Production-origin 與 private-output boundary tests 在本地 build 後通過。
+
+Migration audit 已執行 `pnpm db:generate`。由於既有 `0017_governed_autopilot.sql` 尚未進入 Drizzle journal，工具產生了另一個等價但命名不同的 duplicate migration／snapshot；該 duplicate 與 metadata-only journal 變更已刪除／還原，沒有修改既有 migration history。保留狀態為：`0017_governed_autopilot.sql` generated = YES、applied = NO、disposable runtime database validation = NOT RUN、production migration／DB write = NOT RUN。
+
+Public Astro site boundary audit：相對 task-start authoritative SHA 的非 `nuxt-app` diff 為空；本次未修改公開 Astro 官網的內容、視覺、layout、style、navigation 或 runtime。GitHub CLI active account 仍為 `mamamia5241888`，不是要求的 `emily07100710`，所以本次不 push。四份 paused patch／ZIP 沒有可驗證附件；本次所有相應能力以 current main contract、available tests 與 reconstructed implementation 完成，沒有任何工作被宣稱為 ported。
+
+下列項目仍明確不是本次 internal mocked acceptance 的已完成承諾：real owner OAuth round-trip、real provider credentials／execution、GEOFlow production queue、Content Operations 與 WordPress／PHP／Generic／Local multi-channel executor 的 first-party DB/orchestrator integration、production database migration、customer-site writes、production deployment、真實 outcome collector、consumer-surface LLM UI observation、足量合法 learning data、training／fine-tuning／upload／model promotion 與 production-like concurrency／rollback validation。
+
+## 14. Phase 12 delivery conclusion
+
+本 branch 可主張的是：**internal mocked end-to-end platform V1 acceptance 已完成，並以 fail-closed、owner scope、exact hash／lineage、mocked external boundaries 與 truthful limitations 為前提。** 本 branch 不可主張已 production deployed、已完成正式 DB migration、已取得 provider credentials、已寫入客戶網站、已完成 consumer LLM visibility、已訓練或上傳模型。所有上述差異必須在 Codex review、正式 credentials／environment、disposable DB rehearsal 與 owner authorization 後另行處理。
+
+### 14.1 Latest verification summary
+
+| Check | Result | Boundary |
+|---|---|---|
+| Workbench targeted tests | PASS：52 tests across 5 files | owner UI contracts、content operations routes、visibility provider runtime |
+| Mocked E2E acceptance | PASS：5 tests | all outbound transports injected／synthetic |
+| Adversarial scheduler regression | PASS：17 tests | scheduler publication requires durable owner autopilot policy |
+| Full suite after build | 78 files PASS、3 skipped；3 existing provider-secret tests blocked | no real credentials supplied |
+| Nuxt typecheck | PASS | local source tree |
+| Nuxt production build | PASS | local `.output` only |
+| Migration generation | `0017` already present; duplicate generation audited and removed | generated only; not applied |
+| Public Astro diff | PASS：no non-`nuxt-app` diff from task-start | public site untouched |
+| Push／deploy／production DB／external writes | NOT RUN by policy | account and safety boundary |
+
+本文件維持為 truth inventory；任何未在此處標為 PASS 的正式外部驗證，不得由 branch 內的 mocked tests 推論完成。
+
+## References
+
+本文件的主要證據為 authoritative repository 內的 source、tests、checkpoint commits 與本次 local command outputs；沒有引用外部 provider response 或 customer-site state。相關可核對檔案包括 `tests/discovery-stack-e2e.acceptance.test.ts`、`tests/content-operations-execution-adversarial.test.ts`、`tests/llm-visibility-api-contract.test.ts`、`server/geoflow-runtime/qwen.ts`、`server/geo/isolated-worker.ts`、`server/publication-routing/multi-channel-executors.ts`、`server/content-operations/autopilot-service.ts`、`server/outcome-learning/content-learning-runtime.ts` 與 `server/database/migrations/0017_governed_autopilot.sql`。
+
+[1]: https://github.com/emily07100710/DiscoveryStack_nuxt "Authoritative DiscoveryStack repository"
+
+[2]: https://nuxt.com/docs "Nuxt documentation"
+
+[3]: https://orm.drizzle.team/docs/migrations "Drizzle migrations documentation"
+
+[4]: https://vitest.dev/guide/ "Vitest guide"
+
+[5]: https://www.rfc-editor.org/rfc/rfc9110 "HTTP Semantics"
+
+[6]: https://www.w3.org/TR/trace-context/ "W3C Trace Context"
