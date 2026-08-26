@@ -17,6 +17,7 @@ export type PreviewRepository = {
   findPreviewByFingerprint(fingerprint: string): Promise<ManagedSitePreview | null>
   insertPreview(input: Omit<ManagedSitePreview, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSitePreview>
   updatePreview(previewId: number, patch: Partial<Omit<ManagedSitePreview, 'id' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSitePreview | null>
+  updateLeadIntent(id: number, patch: Partial<Omit<ManagedSiteLeadIntent, 'id' | 'createdAt'>>): Promise<ManagedSiteLeadIntent | null>
   findQuoteById(quoteId: number): Promise<ManagedSiteQuote | null>
   findQuoteByIdempotency(previewId: number, key: string): Promise<ManagedSiteQuote | null>
   findQuoteByFingerprint(fingerprint: string): Promise<ManagedSiteQuote | null>
@@ -26,7 +27,9 @@ export type PreviewRepository = {
   listQuoteLines(quoteId: number): Promise<ManagedSiteQuoteLine[]>
   findLeadByFingerprint(fingerprint: string): Promise<{ id: number } | null>
   findLeadById(id: number): Promise<{ id: number; name: string; email: string; company: string; website: string | null } | null>
+  findUserIdByEmail(email: string): Promise<number | null>
   findLeadIntentById(id: number): Promise<ManagedSiteLeadIntent | null>
+  findLeadIntentByLineage(previewId: number, quoteId: number, leadId: number): Promise<ManagedSiteLeadIntent | null>
   insertLead(input: { name: string; email: string; company: string; website: string | null; message: string | null; packageInterest: 'grow'; language: 'zh-hant' | 'en'; privacyConsent: true; recontactConsent: boolean; dedupeKey: string; requestFingerprint: string }): Promise<{ id: number }>
   findLeadIntentByIdempotency(previewId: number, key: string): Promise<ManagedSiteLeadIntent | null>
   findLeadIntentByFingerprint(fingerprint: string): Promise<ManagedSiteLeadIntent | null>
@@ -37,7 +40,7 @@ export type PreviewRepository = {
   insertDraftOrder(input: Omit<ManagedSiteDraftOrder, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteDraftOrder>
   updateDraftOrder(orderId: number, patch: Partial<Omit<ManagedSiteDraftOrder, 'id' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteDraftOrder | null>
   findPaymentEvent(ownerUserId: number | null, providerKey: string, eventId: string): Promise<ManagedSitePaymentEvent | null>
-  findPaymentEventByFingerprint(fingerprint: string): Promise<ManagedSitePaymentEvent | null>
+  findPaymentEventByFingerprint(ownerUserId: number, fingerprint: string): Promise<ManagedSitePaymentEvent | null>
   findVerifiedPaymentEventByDraftOrder(draftOrderId: number): Promise<ManagedSitePaymentEvent | null>
   insertPaymentEvent(input: Omit<ManagedSitePaymentEvent, 'id' | 'receivedAt'>): Promise<ManagedSitePaymentEvent>
   updatePaymentEvent(id: number, patch: Partial<Omit<ManagedSitePaymentEvent, 'id' | 'receivedAt'>>): Promise<ManagedSitePaymentEvent | null>
@@ -109,6 +112,23 @@ export type PaymentVerificationRequest = {
 
 export type PaymentEventVerifier = {
   verify(input: PaymentVerificationRequest): Promise<unknown>
+}
+
+export type ManagedSiteCheckoutAuthority = {
+  ownerUserId: number
+  source: 'existing_lineage' | 'existing_account_email' | 'injected_mock'
+}
+
+export type ManagedSiteCheckoutAuthorityInput = {
+  preview: ManagedSitePreview
+  quote: ManagedSiteQuote
+  leadIntent: ManagedSiteLeadIntent
+  draftOrder: ManagedSiteDraftOrder
+  subscriptionIntent: ManagedSiteSubscriptionIntent | null
+}
+
+export type ManagedSiteCheckoutAuthorityResolver = {
+  resolve(input: ManagedSiteCheckoutAuthorityInput): Promise<ManagedSiteCheckoutAuthority | null>
 }
 
 export type OrderConversionInput = {

@@ -1,7 +1,7 @@
 import { createError } from 'h3'
 import { and, asc, desc, eq } from 'drizzle-orm'
 import { getDatabase } from '../database'
-import { leads, managedSiteDraftOrders, managedSiteLeadIntents, managedSitePaymentEvents, managedSitePreviews, managedSiteQuoteLines, managedSiteQuotes, managedSiteSubscriptionIntents } from '../database/schema'
+import { leads, managedSiteDraftOrders, managedSiteLeadIntents, managedSitePaymentEvents, managedSitePreviews, managedSiteQuoteLines, managedSiteQuotes, managedSiteSubscriptionIntents, users } from '../database/schema'
 import type { PreviewRepository } from './ordering-types'
 
 function requireDatabase() {
@@ -47,6 +47,10 @@ export function makeOrderingRepository(database: any): PreviewRepository {
       await database.update(managedSitePreviews).set(patch as any).where(eq(managedSitePreviews.id, previewId))
       return repository.findPreviewById(previewId)
     },
+    async updateLeadIntent(id, patch) {
+      await database.update(managedSiteLeadIntents).set(patch as any).where(eq(managedSiteLeadIntents.id, id))
+      return repository.findLeadIntentById(id)
+    },
     async findQuoteById(quoteId) {
       const [row] = await database.select().from(managedSiteQuotes).where(eq(managedSiteQuotes.id, quoteId)).limit(1)
       return row || null
@@ -86,8 +90,16 @@ export function makeOrderingRepository(database: any): PreviewRepository {
       const [row] = await database.select({ id: leads.id, name: leads.name, email: leads.email, company: leads.company, website: leads.website }).from(leads).where(eq(leads.id, id)).limit(1)
       return row || null
     },
+    async findUserIdByEmail(email) {
+      const [row] = await database.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1)
+      return row ? Number(row.id) : null
+    },
     async findLeadIntentById(id) {
       const [row] = await database.select().from(managedSiteLeadIntents).where(eq(managedSiteLeadIntents.id, id)).limit(1)
+      return row || null
+    },
+    async findLeadIntentByLineage(previewId, quoteId, leadId) {
+      const [row] = await database.select().from(managedSiteLeadIntents).where(and(eq(managedSiteLeadIntents.previewId, previewId), eq(managedSiteLeadIntents.quoteId, quoteId), eq(managedSiteLeadIntents.leadId, leadId))).limit(1)
       return row || null
     },
     async insertLead(input) {
@@ -134,8 +146,8 @@ export function makeOrderingRepository(database: any): PreviewRepository {
       const [row] = await database.select().from(managedSitePaymentEvents).where(and(ownerUserId === null ? eq(managedSitePaymentEvents.ownerUserId, -1) : eq(managedSitePaymentEvents.ownerUserId, ownerUserId), eq(managedSitePaymentEvents.providerKey, providerKey), eq(managedSitePaymentEvents.eventId, eventId))).limit(1)
       return row || null
     },
-    async findPaymentEventByFingerprint(fingerprint) {
-      const [row] = await database.select().from(managedSitePaymentEvents).where(eq(managedSitePaymentEvents.eventFingerprint, fingerprint)).limit(1)
+    async findPaymentEventByFingerprint(ownerUserId, fingerprint) {
+      const [row] = await database.select().from(managedSitePaymentEvents).where(and(eq(managedSitePaymentEvents.ownerUserId, ownerUserId), eq(managedSitePaymentEvents.eventFingerprint, fingerprint))).limit(1)
       return row || null
     },
     async findVerifiedPaymentEventByDraftOrder(draftOrderId) {

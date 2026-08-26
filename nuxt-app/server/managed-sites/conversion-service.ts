@@ -5,9 +5,10 @@ import { makeOrderingRepository } from './ordering-repository'
 import { makeManagedSiteRepository } from './repository'
 import { createManagedSiteProject, createManagedSiteVersion } from './service'
 import { parseSiteSpecSnapshot, type SiteSpec } from './site-spec'
+import { createManagedSiteCheckoutAuthorityResolver, FAIL_CLOSED_PAYMENT_EVENT_VERIFIER, recordVerifiedPaymentEvent } from './ordering-service'
 import type { ManagedSiteDraftOrder, ManagedSiteProject, ManagedSiteSubscription, ManagedSiteVersion } from '../database/schema'
 import type { ManagedSiteActor, ManagedSiteRepository } from './types'
-import type { OrderConversionInput, PreviewRepository } from './ordering-types'
+import type { ManagedSiteCheckoutAuthorityResolver, OrderConversionInput, PaymentEventVerifier, PreviewRepository } from './ordering-types'
 
 function invalid(message: string): never {
   throw createError({ statusCode: 422, statusMessage: message })
@@ -36,7 +37,7 @@ export type ManagedSiteOrderConversionResult = {
   saga: 'payment_verified_then_conversion'
 }
 
-type ConversionRepositories = {
+export type ConversionRepositories = {
   ordering: PreviewRepository
   managed: ManagedSiteRepository
 }
@@ -117,4 +118,27 @@ export async function convertPaidOrderToManagedProject(ownerUserId: number, inpu
   const database = getDatabase()
   if (!database) throw createError({ statusCode: 503, statusMessage: 'Managed site conversion is temporarily unavailable.' })
   return database.transaction(async (transaction: any) => convertPaidOrderWithinRepositories(ownerUserId, input, { ordering: makeOrderingRepository(transaction), managed: makeManagedSiteRepository(transaction) }, clock))
+}
+
+export type ManagedSitePaymentConversionResult = ManagedSiteOrderConversionResult & {
+  paymentEvent: Awaited<ReturnType<typeof recordVerifiedPaymentEvent>>['paymentEvent']
+  authority: Awaited<ReturnType<typeof recordVerifiedPaymentEvent>>['authority']
+  paymentReplayed: boolean
+  conversionReplayed: boolean
+}
+
+export async function processManagedSitePaymentAndConversion(
+  input: unknown,
+  verifier: PaymentEventVerifier = FAIL_CLOSED_PAYMENT_EVENT_VERIFIER,
+  repositories?: ConversionRepositories,
+  authorityResolver?: ManagedSiteCheckoutAuthorityResolver,
+  clock: () => Date = () => new Date(),
+): Promise<ManagedSitePaymentConversionResult> {
+  const ordering = repositories?.ordering
+  const payment = await recordVerifiedPaymentEvent(input, verifier, ordering, clock, authorityResolver || (ordering ? createManagedSiteCheckoutAuthorityResolver(ordering) : undefined) as any)
+  const ownerUserId = payment.authority.ownerUserId
+  const paymentKey = input && typeof input === 'object' && !Array.isArray(input) ? String((input as Record<string, unknown>).idempotencyKey || `${payment.paymentEvent.providerKey}:${payment.paymentEvent.eventId}`) : `${payment.paymentEvent.providerKey}:${payment.paymentEvent.eventId}`
+  const conversionIdempotencyKey = `payment-conversion:${payment.order.id}:${paymentKey}`.slice(0, 128)
+  const conversion = await convertPaidOrderToManagedProject(ownerUserId, { draftOrderId: payment.order.id, idempotencyKey: conversionIdempotencyKey }, repositories, clock)
+  return { ...conversion, paymentEvent: payment.paymentEvent, authority: payment.authority, paymentReplayed: payment.replayed, conversionReplayed: conversion.replayed }
 }

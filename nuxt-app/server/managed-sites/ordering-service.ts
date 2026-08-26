@@ -6,7 +6,7 @@ import { assertExistingSiteUrl, buildPreviewProjection, buildSiteSpec, BUSINESS_
 import { FAIL_CLOSED_EXISTING_SITE_DIAGNOSIS_RESOLVER, type ExistingSiteDiagnosisResolver } from './diagnosis-binding'
 import { normalizeRecipientEmail, tokenHash } from './normalization'
 import type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent } from '../database/schema'
-import type { DraftOrderInput, LeadInput, PaymentEventVerifier, PreviewGenerationResult, PreviewRepository, QuoteInput } from './ordering-types'
+import type { DraftOrderInput, LeadInput, ManagedSiteCheckoutAuthority, ManagedSiteCheckoutAuthorityInput, ManagedSiteCheckoutAuthorityResolver, PaymentEventVerifier, PreviewGenerationResult, PreviewRepository, QuoteInput } from './ordering-types'
 
 export const MANAGED_SITE_PRICE_CATALOG_VERSION = 'managed-site-pricing-v1'
 export const MANAGED_SITE_TERM_MONTHS = 12
@@ -283,6 +283,37 @@ export const FAIL_CLOSED_PAYMENT_EVENT_VERIFIER: PaymentEventVerifier = {
   async verify() { return false },
 }
 
+export const FAIL_CLOSED_MANAGED_SITE_CHECKOUT_AUTHORITY_RESOLVER: ManagedSiteCheckoutAuthorityResolver = {
+  async resolve() { return null },
+}
+
+export function createManagedSiteCheckoutAuthorityResolver(repository: PreviewRepository): ManagedSiteCheckoutAuthorityResolver {
+  return {
+    async resolve(input: ManagedSiteCheckoutAuthorityInput): Promise<ManagedSiteCheckoutAuthority | null> {
+      const knownOwners = [input.preview.ownerUserId, input.quote.ownerUserId, input.leadIntent.ownerUserId, input.draftOrder.ownerUserId, input.subscriptionIntent?.ownerUserId ?? null].filter((value): value is number => value !== null)
+      if (knownOwners.length > 0 && knownOwners.every(value => value === knownOwners[0])) return { ownerUserId: knownOwners[0]!, source: 'existing_lineage' }
+      if (knownOwners.length > 0) return null
+      const lead = await repository.findLeadById(input.leadIntent.leadId)
+      if (!lead) return null
+      const ownerUserId = await repository.findUserIdByEmail(lead.email)
+      if (!ownerUserId || !Number.isSafeInteger(ownerUserId) || ownerUserId < 1) return null
+      return { ownerUserId, source: 'existing_account_email' }
+    },
+  }
+}
+
+async function resolveManagedSiteCheckoutAuthority(
+  repository: PreviewRepository,
+  input: ManagedSiteCheckoutAuthorityInput,
+  resolver: ManagedSiteCheckoutAuthorityResolver,
+): Promise<{ authority: ManagedSiteCheckoutAuthority; lineage: ManagedSiteCheckoutAuthorityInput }> {
+  const authority = await resolver.resolve(input)
+  if (!authority || !Number.isSafeInteger(authority.ownerUserId) || authority.ownerUserId < 1) throw createError({ statusCode: 409, statusMessage: 'A server-owned checkout authority could not be resolved.' })
+  const owners = [input.preview.ownerUserId, input.quote.ownerUserId, input.leadIntent.ownerUserId, input.draftOrder.ownerUserId, input.subscriptionIntent?.ownerUserId ?? null].filter((value): value is number => value !== null)
+  if (owners.some(value => value !== authority.ownerUserId)) throw createError({ statusCode: 409, statusMessage: 'Checkout lineage is already bound to a different owner.' })
+  return { authority, lineage: input }
+}
+
 function paymentString(value: unknown, label: string, max: number): string {
   return stringField(value, label, max)!
 }
@@ -298,7 +329,7 @@ function paymentAmount(value: unknown): number {
   return value
 }
 
-export async function recordVerifiedPaymentEvent(input: unknown, verifier: PaymentEventVerifier = FAIL_CLOSED_PAYMENT_EVENT_VERIFIER, repository = getPreviewRepository(), clock: () => Date = () => new Date()) {
+export async function recordVerifiedPaymentEvent(input: unknown, verifier: PaymentEventVerifier = FAIL_CLOSED_PAYMENT_EVENT_VERIFIER, repository = getPreviewRepository(), clock: () => Date = () => new Date(), authorityResolver: ManagedSiteCheckoutAuthorityResolver = createManagedSiteCheckoutAuthorityResolver(repository)) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) invalid('Payment event is invalid.')
   const candidate = input as Record<string, unknown>
   if (Object.prototype.hasOwnProperty.call(candidate, 'verified')) throw createError({ statusCode: 422, statusMessage: 'Caller-controlled payment verification is not accepted.' })
@@ -317,40 +348,60 @@ export async function recordVerifiedPaymentEvent(input: unknown, verifier: Payme
   if (!order) notFound('Draft order was not found.')
   const preview = await repository.findPreviewById(order.previewId)
   const quote = await repository.findQuoteById(order.quoteId)
-  if (!preview || !quote || order.ownerUserId !== preview.ownerUserId || quote.previewId !== preview.id || quote.ownerUserId !== preview.ownerUserId || quote.totalMinor !== amountMinor || quote.currency !== currency) throw createError({ statusCode: 409, statusMessage: 'Payment event lineage or amount does not match the draft order.' })
-  const verificationRequest = { providerKey, eventId, draftOrderId: order.id, amountMinor, currency, eventType: 'payment_succeeded' as const, providerReference, canonicalPayloadHash, receivedAt }
+  const leadIntent = await repository.findLeadIntentByLineage(order.previewId, order.quoteId, order.leadId)
+  const subscriptionIntent = await repository.findSubscriptionIntentByQuote(order.quoteId)
+  if (!preview || !quote || !leadIntent || !subscriptionIntent || quote.previewId !== preview.id || quote.totalMinor !== amountMinor || quote.currency !== currency || leadIntent.previewId !== preview.id || leadIntent.quoteId !== quote.id || subscriptionIntent.quoteId !== quote.id) throw createError({ statusCode: 409, statusMessage: 'Payment event lineage or amount does not match the draft order.' })
+  const authorityResult = await resolveManagedSiteCheckoutAuthority(repository, { preview, quote, leadIntent, draftOrder: order, subscriptionIntent }, authorityResolver)
+  const authority = authorityResult.authority
+  const lineage = authorityResult.lineage
+  const verificationRequest = { providerKey, eventId, draftOrderId: lineage.draftOrder.id, amountMinor, currency, eventType: 'payment_succeeded' as const, providerReference, canonicalPayloadHash, receivedAt }
   const verificationResult = await verifier.verify(verificationRequest)
   if (verificationResult !== true) throw createError({ statusCode: 403, statusMessage: 'Payment provider verification did not return the exact boolean true.' })
-  const eventFingerprint = stableFingerprint({ ownerUserId: order.ownerUserId, providerKey, eventId, draftOrderId: order.id, previewId: preview.id, quoteId: quote.id, amountMinor, currency, eventType: 'payment_succeeded', providerReference, canonicalPayloadHash })
-  const replay = await repository.findPaymentEvent(order.ownerUserId, providerKey, eventId)
+  const eventFingerprint = stableFingerprint({ ownerUserId: authority.ownerUserId, providerKey, eventId, draftOrderId: lineage.draftOrder.id, previewId: lineage.preview.id, quoteId: lineage.quote.id, amountMinor, currency, eventType: 'payment_succeeded', providerReference, canonicalPayloadHash })
+  const replay = await repository.findPaymentEvent(authority.ownerUserId, providerKey, eventId)
   if (replay) {
-    if (replay.eventFingerprint !== eventFingerprint || replay.draftOrderId !== order.id || replay.previewId !== preview.id || replay.quoteId !== quote.id) throw createError({ statusCode: 409, statusMessage: 'Payment event identity was already used for a different order or payload.' })
-    return { paymentEvent: replay, order, replayed: true }
+    if (replay.eventFingerprint !== eventFingerprint || replay.draftOrderId !== lineage.draftOrder.id || replay.previewId !== lineage.preview.id || replay.quoteId !== lineage.quote.id) throw createError({ statusCode: 409, statusMessage: 'Payment event identity was already used for a different order or payload.' })
+    return { paymentEvent: replay, order: lineage.draftOrder, replayed: true, authority }
   }
-  const fingerprintReplay = await repository.findPaymentEventByFingerprint(eventFingerprint)
-  if (fingerprintReplay) return { paymentEvent: fingerprintReplay, order, replayed: true }
-  if (order.status !== 'payment_pending') throw createError({ statusCode: 409, statusMessage: 'Draft order is not awaiting payment.' })
+  const fingerprintReplay = await repository.findPaymentEventByFingerprint(authority.ownerUserId, eventFingerprint)
+  if (fingerprintReplay) return { paymentEvent: fingerprintReplay, order: lineage.draftOrder, replayed: true, authority }
+  if (lineage.draftOrder.status !== 'payment_pending') throw createError({ statusCode: 409, statusMessage: 'Draft order is not awaiting payment.' })
   const updated = await repository.transaction(async transaction => {
-    const raceReplay = await transaction.findPaymentEvent(order.ownerUserId, providerKey, eventId)
+    const currentPreview = await transaction.findPreviewById(lineage.preview.id)
+    const currentQuote = await transaction.findQuoteById(lineage.quote.id)
+    const currentLeadIntent = await transaction.findLeadIntentByLineage(lineage.preview.id, lineage.quote.id, lineage.draftOrder.leadId)
+    const currentOrderLineage = await transaction.findDraftOrderById(lineage.draftOrder.id)
+    const currentSubscriptionIntent = await transaction.findSubscriptionIntentByQuote(lineage.quote.id)
+    if (!currentPreview || !currentQuote || !currentLeadIntent || !currentOrderLineage || !currentSubscriptionIntent) throw createError({ statusCode: 409, statusMessage: 'Checkout lineage disappeared during authority binding.' })
+    const currentOwners = [currentPreview.ownerUserId, currentQuote.ownerUserId, currentLeadIntent.ownerUserId, currentOrderLineage.ownerUserId, currentSubscriptionIntent.ownerUserId]
+    if (currentOwners.some(value => value !== null && value !== authority.ownerUserId)) throw createError({ statusCode: 409, statusMessage: 'Checkout lineage is already bound to a different owner.' })
+    const boundAt = receivedAt
+    const boundPreview = await transaction.updatePreview(currentPreview.id, { ownerUserId: authority.ownerUserId, updatedAt: boundAt } as any)
+    const boundQuoteRecord = await transaction.updateQuote(currentQuote.id, { ownerUserId: authority.ownerUserId, updatedAt: boundAt } as any)
+    const boundLeadIntent = await transaction.updateLeadIntent(currentLeadIntent.id, { ownerUserId: authority.ownerUserId } as any)
+    const boundDraftOrder = await transaction.updateDraftOrder(currentOrderLineage.id, { ownerUserId: authority.ownerUserId, updatedAt: boundAt } as any)
+    const boundSubscriptionIntent = await transaction.updateSubscriptionIntent(currentSubscriptionIntent.quoteId, { ownerUserId: authority.ownerUserId, updatedAt: boundAt } as any)
+    if (!boundPreview || !boundQuoteRecord || !boundLeadIntent || !boundDraftOrder || !boundSubscriptionIntent) throw createError({ statusCode: 409, statusMessage: 'Checkout lineage could not be atomically bound to one owner.' })
+    const boundLineage = { preview: boundPreview, quote: boundQuoteRecord, leadIntent: boundLeadIntent, draftOrder: boundDraftOrder, subscriptionIntent: boundSubscriptionIntent }
+    const raceReplay = await transaction.findPaymentEvent(authority.ownerUserId, providerKey, eventId)
     if (raceReplay) {
-      if (raceReplay.eventFingerprint !== eventFingerprint || raceReplay.draftOrderId !== order.id) throw createError({ statusCode: 409, statusMessage: 'Payment event identity was already used for a different order or payload.' })
-      const replayOrder = await transaction.findDraftOrderById(order.id)
+      if (raceReplay.eventFingerprint !== eventFingerprint || raceReplay.draftOrderId !== lineage.draftOrder.id) throw createError({ statusCode: 409, statusMessage: 'Payment event identity was already used for a different order or payload.' })
+      const replayOrder = await transaction.findDraftOrderById(lineage.draftOrder.id)
       if (!replayOrder) notFound('Draft order was not found.')
       return { event: raceReplay, changed: replayOrder, replayed: true }
     }
-    const currentOrder = await transaction.findDraftOrderById(order.id)
-    const currentQuote = await transaction.findQuoteById(order.quoteId)
-    if (!currentOrder || !currentQuote || currentOrder.status !== 'payment_pending' || currentQuote.totalMinor !== amountMinor || currentQuote.currency !== currency) throw createError({ statusCode: 409, statusMessage: 'Payment order changed while verification was in progress.' })
-    const event = await transaction.insertPaymentEvent({ ownerUserId: order.ownerUserId, draftOrderId: order.id, previewId: preview.id, quoteId: quote.id, providerKey, eventId, providerReference, eventType: 'payment_succeeded', amountMinor, currency, canonicalPayloadHash, verificationStatus: 'verified', eventFingerprint, receivedAt } as any)
-    const changed = await transaction.updateDraftOrder(order.id, { status: 'payment_verified', paymentIntentReference: providerReference, updatedAt: receivedAt } as any)
+    const currentOrder = boundLineage.draftOrder
+    const boundQuote = boundLineage.quote
+    if (currentOrder.status !== 'payment_pending' || boundQuote.totalMinor !== amountMinor || boundQuote.currency !== currency) throw createError({ statusCode: 409, statusMessage: 'Payment order changed while verification was in progress.' })
+    const event = await transaction.insertPaymentEvent({ ownerUserId: authority.ownerUserId, draftOrderId: boundLineage.draftOrder.id, previewId: boundLineage.preview.id, quoteId: boundQuote.id, providerKey, eventId, providerReference, eventType: 'payment_succeeded', amountMinor, currency, canonicalPayloadHash, verificationStatus: 'verified', eventFingerprint, receivedAt } as any)
+    const changed = await transaction.updateDraftOrder(boundLineage.draftOrder.id, { status: 'payment_verified', paymentIntentReference: providerReference, updatedAt: receivedAt } as any)
     if (!changed) notFound('Draft order was not found.')
-    await transaction.updateQuote(quote.id, { status: 'locked', lockedAt: receivedAt, updatedAt: receivedAt } as any)
-    const intent = await transaction.findSubscriptionIntentByQuote(quote.id)
-    if (intent) await transaction.updateSubscriptionIntent(quote.id, { status: 'entitled', updatedAt: receivedAt } as any)
+    await transaction.updateQuote(boundQuote.id, { status: 'locked', lockedAt: receivedAt, updatedAt: receivedAt } as any)
+    await transaction.updateSubscriptionIntent(boundQuote.id, { status: 'entitled', updatedAt: receivedAt } as any)
     return { event, changed, replayed: false }
   })
   if (!updated.changed) notFound('Draft order was not found.')
-  return { paymentEvent: updated.event, order: updated.changed, replayed: updated.replayed }
+  return { paymentEvent: updated.event, order: updated.changed, replayed: updated.replayed, authority }
 }
 
 export type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent }
