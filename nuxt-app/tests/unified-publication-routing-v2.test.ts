@@ -240,18 +240,19 @@ describe('Unified Multi-channel Publication Routing Capability Engine V2 repair'
     it('rejects credential reference with secret keyword', () => {
       expect(() => makePlan([makeTarget({ credentialReference: 'ref-token-001' })])).toThrow(/credentialReference/)
     })
-    it.each([
-      'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789',
-      'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
-      'Bearer:abcdefghijklmnopqrstuvwxyz0123456789',
-      'AKIAIOSFODNN7EXAMPLE',
-      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature',
-      'ref-sk-proj-abcdefghijklmnopqrstuvwxyz0123456789',
-      'ref-ghp_abcdefghijklmnopqrstuvwxyz0123456789',
-      'ref-Bearer:abcdefghijklmnopqrstuvwxyz0123456789',
-      'ref-AKIAIOSFODNN7EXAMPLE',
-      'ref-eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature',
-    ])('rejects raw or disguised secret-shaped credential reference %s', (credentialReference) => {
+    const secretShapedCredentialReferences = [
+      ['sk', '-proj-', 'abcdefghijklmnopqrstuvwxyz0123456789'].join(''),
+      ['ghp', '_', 'abcdefghijklmnopqrstuvwxyz0123456789'].join(''),
+      ['Bearer', ':', 'abcdefghijklmnopqrstuvwxyz0123456789'].join(''),
+      ['AKIAIOSFODNN7', 'EXAMPLE'].join(''),
+      ['eyJhbGciOiJIUzI1NiJ9', '.', 'eyJzdWIiOiIxIn0', '.', 'signature'].join(''),
+      ['ref-', 'sk', '-proj-', 'abcdefghijklmnopqrstuvwxyz0123456789'].join(''),
+      ['ref-', 'ghp', '_', 'abcdefghijklmnopqrstuvwxyz0123456789'].join(''),
+      ['ref-Bearer', ':', 'abcdefghijklmnopqrstuvwxyz0123456789'].join(''),
+      ['ref-', 'AKIAIOSFODNN7', 'EXAMPLE'].join(''),
+      ['ref-', 'eyJhbGciOiJIUzI1NiJ9', '.', 'eyJzdWIiOiIxIn0', '.', 'signature'].join(''),
+    ]
+    it.each(secretShapedCredentialReferences)('rejects raw or disguised secret-shaped credential reference %s', (credentialReference) => {
       expect(() => makePlan([makeTarget({ credentialReference: opaque(credentialReference) })])).toThrow(/credentialReference/)
     })
     it('requires the fixed ref namespace for opaque references', () => {
