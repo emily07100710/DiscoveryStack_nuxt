@@ -15,6 +15,7 @@ import {
   updateManagedSiteMemberRole,
 } from '../server/managed-sites/service'
 import { stableFingerprint } from '../server/seo-geo-core/repository'
+import { buildSiteSpec } from '../server/managed-sites/site-spec'
 
 const ownerActor = (ownerUserId: number) => ({ ownerUserId, actorUserId: ownerUserId, authority: 'owner_session' as const, role: 'owner' as const, principal: `owner-${ownerUserId}@acme.taipei` })
 
@@ -47,7 +48,8 @@ describe('managed site project vault', () => {
 
   it('creates immutable version lineage and never includes source code in customer export', async () => {
     const test = await makeProject(1)
-    const versionResult = await createManagedSiteVersion(1, test.project.id, ownerActor(1), { siteSpecSnapshot: { schemaVersion: 'site-spec-v1', pages: ['home'] }, designTokenSnapshot: { colorPrimary: '#123456' }, selectedModuleSnapshot: { managed_content_admin: true }, contentFingerprint: stableFingerprint({ content: 'owned' }), createdByAuthority: 'owner_session', lifecycleStatus: 'preview' }, test.repository)
+    const siteSpec = buildSiteSpec({ draftIdentity: 'vault-version-001', brandName: 'Vault Client', audience: 'Taiwan customers', brief: 'A canonical version fixture.', businessGoals: ['increase_inquiries'], siteType: 'brand_blog', selectedModules: ['managed_content_admin', 'geo_content_subscription'], styleReferences: [] }, new Date('2026-08-27T00:00:00.000Z'))
+    const versionResult = await createManagedSiteVersion(1, test.project.id, ownerActor(1), { siteSpecSnapshot: siteSpec, designTokenSnapshot: siteSpec.designTokens, selectedModuleSnapshot: siteSpec.selectedModules, contentFingerprint: stableFingerprint({ content: 'owned' }), createdByAuthority: 'owner_session', lifecycleStatus: 'preview' }, test.repository)
     const invitation = await inviteManagedSiteMember(1, test.project.id, ownerActor(1), { email: 'editor@acme.taipei', role: 'editor', idempotencyKey: 'invite-editor-1' }, test.repository)
     const accepted = await acceptManagedSiteInvitation(invitation.invitationToken!, test.repository)
     const projection = await getManagedSiteCustomerProjection(accepted.sessionToken, test.repository)
@@ -59,7 +61,7 @@ describe('managed site project vault', () => {
     expect(exported.sourceCode).toBeNull()
     expect(exported.secrets).toBeNull()
     expect(exported.otherTenants).toBeNull()
-    expect(exported.versions).toEqual([{ schemaVersion: 'site-spec-v1', pages: ['home'] }])
+    expect(exported.versions).toEqual([siteSpec])
   })
 
   it('uses fixed roles, prevents owner downgrade, and records changes and revocation', async () => {
@@ -144,5 +146,32 @@ describe('managed site lifecycle invalidation', () => {
     expect(test.state.sessions[0]?.revokedAt).toBeInstanceOf(Date)
     expect(await getManagedSiteCustomerSession(accepted.sessionToken, test.repository)).toBeNull()
     expect(subscription.id).toBeGreaterThan(0)
+  })
+})
+
+
+describe('managed site version authority', () => {
+  it('rejects mismatched design/module snapshots and stale SiteSpec fingerprints', async () => {
+    const test = await makeProject(1)
+    const siteSpec = buildSiteSpec({ draftIdentity: 'version-authority-001', brandName: 'Version Client', audience: 'Taiwan customers', brief: 'Version authority fixture.', businessGoals: ['increase_inquiries'], siteType: 'brand_blog', selectedModules: ['managed_content_admin'], styleReferences: [] }, new Date('2026-08-27T00:00:00.000Z'))
+    await expect(createManagedSiteVersion(1, test.project.id, ownerActor(1), { siteSpecSnapshot: siteSpec, designTokenSnapshot: { wrong: true }, selectedModuleSnapshot: siteSpec.selectedModules, contentFingerprint: 'a'.repeat(64), createdByAuthority: 'owner_session', lifecycleStatus: 'preview' }, test.repository)).rejects.toMatchObject({ statusCode: 409 })
+    await expect(createManagedSiteVersion(1, test.project.id, ownerActor(1), { siteSpecSnapshot: { ...siteSpec, deterministicFingerprint: 'b'.repeat(64) }, designTokenSnapshot: siteSpec.designTokens, selectedModuleSnapshot: siteSpec.selectedModules, contentFingerprint: 'a'.repeat(64), createdByAuthority: 'owner_session', lifecycleStatus: 'preview' }, test.repository)).rejects.toMatchObject({ statusCode: 422 })
+    await expect(createManagedSiteVersion(2, test.project.id, ownerActor(1), { siteSpecSnapshot: siteSpec, designTokenSnapshot: siteSpec.designTokens, selectedModuleSnapshot: siteSpec.selectedModules, contentFingerprint: 'a'.repeat(64), createdByAuthority: 'owner_session', lifecycleStatus: 'preview' }, test.repository)).rejects.toMatchObject({ statusCode: 404 })
+  })
+
+  it('supersedes the prior active version and only active lifecycle updates project authority', async () => {
+    const test = await makeProject(1)
+    const firstSpec = buildSiteSpec({ draftIdentity: 'version-active-001', brandName: 'Active Client', audience: 'Taiwan customers', brief: 'First active fixture.', businessGoals: ['increase_inquiries'], siteType: 'brand_blog', selectedModules: ['managed_content_admin'], styleReferences: [] }, new Date('2026-08-27T00:00:00.000Z'))
+    const first = await createManagedSiteVersion(1, test.project.id, ownerActor(1), { siteSpecSnapshot: firstSpec, designTokenSnapshot: firstSpec.designTokens, selectedModuleSnapshot: firstSpec.selectedModules, contentFingerprint: 'c'.repeat(64), createdByAuthority: 'owner_session', lifecycleStatus: 'active' }, test.repository)
+    const secondSpec = buildSiteSpec({ draftIdentity: 'version-active-002', brandName: 'Active Client', audience: 'Taiwan customers', brief: 'Second preview fixture.', businessGoals: ['increase_inquiries'], siteType: 'brand_blog', selectedModules: ['managed_content_admin'], styleReferences: [] }, new Date('2026-08-27T00:00:00.000Z'))
+    const second = await createManagedSiteVersion(1, test.project.id, ownerActor(1), { siteSpecSnapshot: secondSpec, designTokenSnapshot: secondSpec.designTokens, selectedModuleSnapshot: secondSpec.selectedModules, contentFingerprint: 'd'.repeat(64), createdByAuthority: 'owner_session', lifecycleStatus: 'preview' }, test.repository)
+    expect(test.state.projects.find(project => project.id === test.project.id)?.activeVersionId).toBe(first.version!.id)
+    expect(test.state.versions.find(version => version.id === first.version!.id)?.lifecycleStatus).toBe('active')
+    expect(second.version?.lifecycleStatus).toBe('preview')
+    const thirdSpec = buildSiteSpec({ draftIdentity: 'version-active-003', brandName: 'Active Client', audience: 'Taiwan customers', brief: 'Third active fixture.', businessGoals: ['increase_inquiries'], siteType: 'brand_blog', selectedModules: ['managed_content_admin'], styleReferences: [] }, new Date('2026-08-27T00:00:00.000Z'))
+    const third = await createManagedSiteVersion(1, test.project.id, ownerActor(1), { siteSpecSnapshot: thirdSpec, designTokenSnapshot: thirdSpec.designTokens, selectedModuleSnapshot: thirdSpec.selectedModules, contentFingerprint: 'e'.repeat(64), createdByAuthority: 'owner_session', lifecycleStatus: 'active' }, test.repository)
+    expect(test.state.projects.find(project => project.id === test.project.id)?.activeVersionId).toBe(third.version!.id)
+    expect(test.state.versions.find(version => version.id === first.version!.id)?.lifecycleStatus).toBe('superseded')
+    expect(test.state.versions.filter(version => version.lifecycleStatus === 'active')).toHaveLength(1)
   })
 })

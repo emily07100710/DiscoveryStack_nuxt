@@ -120,6 +120,7 @@ export async function createManagedSiteDomainIntent(ownerUserId: number, input: 
   const normalizedDomain = normalizeDomain(input.requestedDomain)
   const project = await managedRepository.findProject(ownerUserId, input.projectId)
   if (!project) notFound('Managed site project was not found.')
+  if (project.status === 'suspended') conflict('Suspended managed-site projects cannot create new domain work.')
   const fingerprint = stableFingerprint({ projectId: input.projectId, normalizedDomain, mode, providerKey: input.providerKey || null })
   const replay = await repository.findDomainIntentByIdempotency(input.idempotencyKey)
   if (replay) {
@@ -143,6 +144,7 @@ export async function createManagedSiteProvisioningPlan(ownerUserId: number, inp
   const version = await managedRepository.findVersion(ownerUserId, input.versionId)
   const domainIntent = await repository.findDomainIntentById(input.domainIntentId)
   if (!project || !version || version.projectId !== input.projectId || !domainIntent || domainIntent.projectId !== input.projectId || domainIntent.ownerUserId !== ownerUserId) notFound('Managed site provisioning lineage was not found.')
+  if (project.status === 'suspended') conflict('Suspended managed-site projects cannot create new provisioning work.')
   if (deploymentMode !== 'preview_only') await assertPaidProvisioningLineage(ownerUserId, project, version, domainIntent, managedRepository, orderingRepository || getPreviewRepository())
   const intentFingerprint = stableFingerprint({ ownerUserId, projectId: input.projectId, versionId: input.versionId, domainIntentId: input.domainIntentId, platform, deploymentMode })
   const replay = await repository.findPlanByIdempotency(input.idempotencyKey)
@@ -195,6 +197,7 @@ export async function executeManagedSiteProvisioningPlan(ownerUserId: number, pl
     const version = await managedRepository.findVersion(ownerUserId, plan.versionId)
     const domainIntent = await repository.findDomainIntentById(plan.domainIntentId)
     if (!project || !version || !domainIntent || domainIntent.projectId !== project.id || version.projectId !== project.id) notFound('Managed site provisioning lineage was not found.')
+    if (project.status === 'suspended') conflict('Suspended managed-site projects cannot execute provisioning work.')
     if (executionMode !== 'dry_run') await assertPaidProvisioningLineage(ownerUserId, project, version, domainIntent, managedRepository, orderingRepository || getPreviewRepository())
     const steps = await repository.listSteps(plan.id)
     const results: Array<Record<string, unknown>> = []

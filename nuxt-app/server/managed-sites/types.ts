@@ -84,6 +84,7 @@ export type ManagedSiteRepository = {
   findVersion(ownerUserId: number, versionId: number): Promise<ManagedSiteVersion | null>
   listVersions(ownerUserId: number, projectId: number): Promise<ManagedSiteVersion[]>
   insertVersion(input: Omit<ManagedSiteVersion, 'id' | 'createdAt'>): Promise<ManagedSiteVersion>
+  updateVersion(ownerUserId: number, versionId: number, patch: Partial<Pick<ManagedSiteVersion, 'lifecycleStatus' | 'parentVersionId'>>): Promise<ManagedSiteVersion | null>
   findMembership(ownerUserId: number, membershipId: number): Promise<ManagedSiteMembership | null>
   findMembershipByEmail(ownerUserId: number, projectId: number, principalEmail: string): Promise<ManagedSiteMembership | null>
   listMemberships(ownerUserId: number, projectId: number): Promise<ManagedSiteMembership[]>

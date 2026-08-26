@@ -14,7 +14,7 @@ const brief = {
   businessGoals: ['increase_inquiries', 'build_brand', 'improve_search_ai_understanding'],
   siteType: 'brand_blog',
   selectedModules: ['managed_content_admin', 'geo_content_subscription', 'geo_measurement_dashboard'],
-  styleReferences: [{ url: 'https://example.com/inspiration', selectedPreferences: ['color', 'typography_mood', 'homepage_structure'] }],
+  styleReferences: [{ url: 'https://inspiration.acme.taipei', selectedPreferences: ['color', 'typography_mood', 'homepage_structure'] }],
 } as any
 
 describe('managed site preview and ordering flow', () => {
@@ -59,8 +59,8 @@ describe('managed site preview and ordering flow', () => {
     const test = createOrderingMemoryRepository()
     const preview = await createManagedSitePreview(null, { ...brief, draftIdentity: 'preview-order-001' }, test.repository)
     const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'business', cadenceDays: 3, domainOption: 'existing', idempotencyKey: 'quote-order-001' }, test.repository)
-    await expect(createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: 'owner@example.test', company: 'Acme', privacyConsent: false, idempotencyKey: 'lead-order-bad' }, test.repository)).rejects.toMatchObject({ statusCode: 422 })
-    const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: 'owner@example.test', company: 'Acme', privacyConsent: true, recontactConsent: true, idempotencyKey: 'lead-order-001' }, test.repository)
+    await expect(createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: 'owner@acme.taipei', company: 'Acme', privacyConsent: false, idempotencyKey: 'lead-order-bad' }, test.repository)).rejects.toMatchObject({ statusCode: 422 })
+    const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: 'owner@acme.taipei', company: 'Acme', privacyConsent: true, recontactConsent: true, idempotencyKey: 'lead-order-001' }, test.repository)
     const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'order-order-001' }, test.repository)
     expect(order.order.status).toBe('payment_pending')
     expect(test.state.subscriptionIntents).toHaveLength(1)
@@ -72,7 +72,7 @@ describe('managed site preview and ordering flow', () => {
     const test = createOrderingMemoryRepository()
     const preview = await createManagedSitePreview(null, { ...brief, draftIdentity: 'preview-payment-001' }, test.repository)
     const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 30, domainOption: 'assisted', idempotencyKey: 'quote-payment-001' }, test.repository)
-    const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: 'pay@example.test', company: 'Paying Co', privacyConsent: true, idempotencyKey: 'lead-payment-001' }, test.repository)
+    const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: 'paying@acme.taipei', company: 'Paying Co', privacyConsent: true, idempotencyKey: 'lead-payment-001' }, test.repository)
     const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'order-payment-001' }, test.repository)
     const paymentInput = { draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'evt_mock_001', providerReference: 'mock_payment_001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'a'.repeat(64) }
     const payment = await recordVerifiedPaymentEvent(paymentInput, mockPaymentVerifier, test.repository)

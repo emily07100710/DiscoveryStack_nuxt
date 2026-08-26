@@ -75,6 +75,12 @@ export function createManagedSiteMemoryRepository() {
     async findVersion(ownerUserId, versionId) { return state.versions.find(row => row.ownerUserId === ownerUserId && row.id === versionId) || null },
     async listVersions(ownerUserId, projectId) { return [...state.versions.filter(row => row.ownerUserId === ownerUserId && row.projectId === projectId)].sort((a, b) => b.version - a.version) },
     async insertVersion(input) { return create(state.versions, input as Omit<ManagedSiteVersion, 'id'>) },
+    async updateVersion(ownerUserId, versionId, patch) {
+      const row = state.versions.find(item => item.ownerUserId === ownerUserId && item.id === versionId)
+      if (!row) return null
+      Object.assign(row, patch)
+      return row
+    },
     async findMembership(ownerUserId, membershipId) { return state.memberships.find(row => row.ownerUserId === ownerUserId && row.id === membershipId) || null },
     async findMembershipByEmail(ownerUserId, projectId, principalEmail) { return state.memberships.find(row => row.ownerUserId === ownerUserId && row.projectId === projectId && row.principalEmail === principalEmail) || null },
     async listMemberships(ownerUserId, projectId) { return state.memberships.filter(row => row.ownerUserId === ownerUserId && row.projectId === projectId).sort((a, b) => a.id - b.id) },

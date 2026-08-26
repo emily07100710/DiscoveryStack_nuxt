@@ -74,6 +74,10 @@ export function makeManagedSiteRepository(database: any): ManagedSiteRepository 
       if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed site version could not be loaded.' })
       return row
     },
+    async updateVersion(ownerUserId, versionId, patch) {
+      await database.update(managedSiteVersions).set(patch as any).where(and(eq(managedSiteVersions.ownerUserId, ownerUserId), eq(managedSiteVersions.id, versionId)))
+      return repository.findVersion(ownerUserId, versionId)
+    },
     async findMembership(ownerUserId, membershipId) {
       const [row] = await database.select().from(managedSiteMemberships).where(and(eq(managedSiteMemberships.ownerUserId, ownerUserId), eq(managedSiteMemberships.id, membershipId))).limit(1)
       return row || null
