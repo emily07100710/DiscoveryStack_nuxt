@@ -135,7 +135,7 @@ export async function processManagedSitePaymentAndConversion(
   clock: () => Date = () => new Date(),
 ): Promise<ManagedSitePaymentConversionResult> {
   const ordering = repositories?.ordering
-  const payment = await recordVerifiedPaymentEvent(input, verifier, ordering, clock, authorityResolver || (ordering ? createManagedSiteCheckoutAuthorityResolver(ordering) : undefined) as any)
+  const payment = await recordVerifiedPaymentEvent(input, verifier, ordering, clock, authorityResolver || createManagedSiteCheckoutAuthorityResolver())
   const ownerUserId = payment.authority.ownerUserId
   const paymentKey = input && typeof input === 'object' && !Array.isArray(input) ? String((input as Record<string, unknown>).idempotencyKey || `${payment.paymentEvent.providerKey}:${payment.paymentEvent.eventId}`) : `${payment.paymentEvent.providerKey}:${payment.paymentEvent.eventId}`
   const conversionIdempotencyKey = `payment-conversion:${payment.order.id}:${paymentKey}`.slice(0, 128)

@@ -1,7 +1,7 @@
 import { createError } from 'h3'
 import { and, asc, desc, eq } from 'drizzle-orm'
 import { getDatabase } from '../database'
-import { leads, managedSiteDraftOrders, managedSiteLeadIntents, managedSitePaymentEvents, managedSitePreviews, managedSiteQuoteLines, managedSiteQuotes, managedSiteSubscriptionIntents, users } from '../database/schema'
+import { leads, managedSiteDraftOrders, managedSiteLeadIntents, managedSitePaymentEvents, managedSitePreviews, managedSiteQuoteLines, managedSiteQuotes, managedSiteSubscriptionIntents } from '../database/schema'
 import type { PreviewRepository } from './ordering-types'
 
 function requireDatabase() {
@@ -89,10 +89,6 @@ export function makeOrderingRepository(database: any): PreviewRepository {
     async findLeadById(id) {
       const [row] = await database.select({ id: leads.id, name: leads.name, email: leads.email, company: leads.company, website: leads.website }).from(leads).where(eq(leads.id, id)).limit(1)
       return row || null
-    },
-    async findUserIdByEmail(email) {
-      const [row] = await database.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1)
-      return row ? Number(row.id) : null
     },
     async findLeadIntentById(id) {
       const [row] = await database.select().from(managedSiteLeadIntents).where(eq(managedSiteLeadIntents.id, id)).limit(1)

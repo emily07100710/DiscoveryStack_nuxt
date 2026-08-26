@@ -27,7 +27,6 @@ export type PreviewRepository = {
   listQuoteLines(quoteId: number): Promise<ManagedSiteQuoteLine[]>
   findLeadByFingerprint(fingerprint: string): Promise<{ id: number } | null>
   findLeadById(id: number): Promise<{ id: number; name: string; email: string; company: string; website: string | null } | null>
-  findUserIdByEmail(email: string): Promise<number | null>
   findLeadIntentById(id: number): Promise<ManagedSiteLeadIntent | null>
   findLeadIntentByLineage(previewId: number, quoteId: number, leadId: number): Promise<ManagedSiteLeadIntent | null>
   insertLead(input: { name: string; email: string; company: string; website: string | null; message: string | null; packageInterest: 'grow'; language: 'zh-hant' | 'en'; privacyConsent: true; recontactConsent: boolean; dedupeKey: string; requestFingerprint: string }): Promise<{ id: number }>
@@ -116,7 +115,7 @@ export type PaymentEventVerifier = {
 
 export type ManagedSiteCheckoutAuthority = {
   ownerUserId: number
-  source: 'existing_lineage' | 'existing_account_email' | 'injected_mock'
+  source: 'existing_lineage' | 'injected_mock'
 }
 
 export type ManagedSiteCheckoutAuthorityInput = {
@@ -129,6 +128,25 @@ export type ManagedSiteCheckoutAuthorityInput = {
 
 export type ManagedSiteCheckoutAuthorityResolver = {
   resolve(input: ManagedSiteCheckoutAuthorityInput): Promise<ManagedSiteCheckoutAuthority | null>
+}
+
+export type ManagedSiteCheckoutClaimInput = {
+  previewId: number
+  previewAccessToken: string
+  quoteId: number
+  leadIntentId: number
+  draftOrderId: number
+}
+
+export type ManagedSiteCheckoutClaimResult = {
+  ownerUserId: number
+  previewId: number
+  quoteId: number
+  leadIntentId: number
+  draftOrderId: number
+  subscriptionQuoteId: number
+  replayed: boolean
+  claimedAt: Date
 }
 
 export type OrderConversionInput = {

@@ -50,7 +50,6 @@ export function createOrderingMemoryRepository() {
     async listQuoteLines(quoteId) { return state.lines.filter(row => row.quoteId === quoteId).sort((a, b) => a.id - b.id) },
     async findLeadByFingerprint(fingerprint) { return state.leads.find(row => row.requestFingerprint === fingerprint) || null },
     async findLeadById(id) { return (state.leads.find(row => row.id === id) as any) || null },
-    async findUserIdByEmail() { return null },
     async findLeadIntentById(id) { return state.leadIntents.find(row => row.id === id) || null },
     async findLeadIntentByLineage(previewId, quoteId, leadId) { return state.leadIntents.find(row => row.previewId === previewId && row.quoteId === quoteId && row.leadId === leadId) || null },
     async insertLead(input) { const row = { id: state.nextId++, name: input.name, email: input.email, company: input.company, website: input.website, requestFingerprint: input.requestFingerprint }; state.leads.push(row); return { id: row.id } },

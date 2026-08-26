@@ -6,7 +6,7 @@ import { assertPaidManagedSiteModuleEntitlement } from './module-authority'
 import { getIntegrationRepository } from './modules-repository'
 import { getManagedSiteRepository } from './repository'
 import { getShopifyRepository } from './shopify-repository'
-import { SHOPIFY_OAUTH_TTL_MS, SHOPIFY_WEBHOOK_MAX_BYTES, type ShopifyAuthorizationStartInput, type ShopifyOAuthCallbackVerifier, type ShopifyOAuthExchangeAdapter, type ShopifyOAuthCallbackVerificationInput, type ShopifyReadOnlyAdminAdapter, type ShopifyServiceRepositories, type ShopifyWebhookVerifier, type ShopifyWebhookVerificationRequest } from './shopify-types'
+import { SHOPIFY_OAUTH_TTL_MS, SHOPIFY_WEBHOOK_MAX_BYTES, type ShopifyAuthorizationStartInput, type ShopifyOAuthCallbackVerifier, type ShopifyOAuthExchangeAdapter, type ShopifyOAuthCallbackVerificationInput, type ShopifyReadOnlyAdminAdapter, type ShopifyServiceRepositories, type ShopifyWebhookEventInput, type ShopifyWebhookVerifier, type ShopifyWebhookVerificationRequest } from './shopify-types'
 import type { ManagedSiteIntegration } from '../database/schema'
 import type { IntegrationRepository } from './modules-types'
 import type { ManagedSiteRepository } from './types'
@@ -22,6 +22,10 @@ function boundedString(value: unknown, label: string, max: number): string {
 
 function hashValue(value: string): string { return stableFingerprint({ value }) }
 function payloadHash(value: string): string { return createHash('sha256').update(value, 'utf8').digest('hex') }
+function rawWebhookBody(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value, 'utf8') > SHOPIFY_WEBHOOK_MAX_BYTES) invalid('Shopify webhook body is invalid.')
+  return value
+}
 function constantTimeEqual(left: string, right: string): boolean {
   const a = Buffer.from(left)
   const b = Buffer.from(right)
@@ -32,19 +36,34 @@ function decodeQueryComponent(value: string): string {
   try { return decodeURIComponent(value.replace(/\+/gu, ' ')) } catch { invalid('Shopify OAuth callback query is malformed.') }
 }
 
-/** Shopify signs the decoded callback query with hmac excluded and parameters sorted. */
-export function canonicalizeShopifyOAuthQuery(rawQuery: string): string {
+type ShopifyOAuthQueryPair = { key: string; value: string }
+
+function parseShopifyOAuthQuery(rawQuery: string): ShopifyOAuthQueryPair[] {
   const query = rawQuery.startsWith('?') ? rawQuery.slice(1) : rawQuery
   if (query.length > 8192) invalid('Shopify OAuth callback query is too large.')
-  const pairs = query ? query.split('&').filter(Boolean).map(part => {
+  return query ? query.split('&').filter(Boolean).map(part => {
     const separator = part.indexOf('=')
     const rawKey = separator < 0 ? part : part.slice(0, separator)
     const rawValue = separator < 0 ? '' : part.slice(separator + 1)
     return { key: decodeQueryComponent(rawKey), value: decodeQueryComponent(rawValue) }
   }) : []
-  return pairs
+}
+
+function codeUnitCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+function exactShopifyOAuthQueryValue(pairs: ShopifyOAuthQueryPair[], key: string): string {
+  const matches = pairs.filter(pair => pair.key === key)
+  if (matches.length !== 1 || !matches[0]!.value) invalid(`Shopify OAuth ${key} is missing or ambiguous.`)
+  return matches[0]!.value
+}
+
+/** Shopify signs the decoded callback query with hmac excluded and parameters sorted. */
+export function canonicalizeShopifyOAuthQuery(rawQuery: string): string {
+  return parseShopifyOAuthQuery(rawQuery)
     .filter(pair => pair.key !== 'hmac')
-    .sort((left, right) => left.key.localeCompare(right.key) || left.value.localeCompare(right.value))
+    .sort((left, right) => codeUnitCompare(left.key, right.key) || codeUnitCompare(left.value, right.value))
     .map(pair => `${pair.key}=${pair.value}`)
     .join('&')
 }
@@ -54,12 +73,11 @@ function callbackHmac(secret: string, canonicalQuery: string): string {
 }
 
 export function normalizeShopifyShopDomain(value: unknown): string {
-  const candidate = boundedString(value, 'Shopify shop domain', 253).toLowerCase().replace(/\.$/, '')
-  if (candidate.includes('://') || candidate.includes('/') || candidate.includes('@') || candidate.includes(':') || candidate.includes('..')) invalid('Shopify shop domain must be a hostname without protocol, path, port, credentials, or wildcard.')
-  const origin = normalizePublicHttpsOrigin(`https://${candidate}`)
-  const hostname = new URL(origin).hostname.toLowerCase()
-  if (hostname === 'shopify.com' || hostname === 'admin.shopify.com' || hostname.endsWith('.admin.shopify.com')) invalid('Shopify shop domain must identify a merchant shop, not a Shopify control-plane host.')
-  return hostname
+  if (typeof value !== 'string' || !value || value.length > 253 || value !== value.trim()) invalid('Shopify shop domain must be one lowercase merchant label under myshopify.com.')
+  const candidate = value
+  const merchantLabel = candidate.split('.')[0] || ''
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/u.test(candidate) || merchantLabel.endsWith('-') || candidate.split('.').length !== 3) invalid('Shopify shop domain must be one lowercase merchant label under myshopify.com.')
+  return candidate
 }
 
 function normalizeRedirectUri(value: unknown): string {
@@ -86,7 +104,7 @@ export function createShopifyOAuthCallbackVerifier(sharedSecret: string | null |
     async verify(input: ShopifyOAuthCallbackVerificationInput) {
       if (canonicalizeShopifyOAuthQuery(input.rawQuery) !== input.canonicalQuery) return false
       const expected = callbackHmac(secret, input.canonicalQuery)
-      return constantTimeEqual(expected, input.hmac.toLowerCase())
+      return constantTimeEqual(expected, input.hmac)
     },
   }
 }
@@ -95,8 +113,30 @@ export const FAIL_CLOSED_SHOPIFY_WEBHOOK_VERIFIER: ShopifyWebhookVerifier = {
   async verify() { return false },
 }
 
+export function createShopifyWebhookVerifier(sharedSecret: string | null | undefined): ShopifyWebhookVerifier {
+  if (typeof sharedSecret !== 'string' || !sharedSecret.trim()) return FAIL_CLOSED_SHOPIFY_WEBHOOK_VERIFIER
+  const secret = sharedSecret.trim()
+  return {
+    async verify(input: ShopifyWebhookVerificationRequest) {
+      if (typeof input.rawBody !== 'string' || typeof input.signature !== 'string' || input.signature.length > 128) return false
+      const expected = createHmac('sha256', secret).update(input.rawBody, 'utf8').digest('base64')
+      return constantTimeEqual(expected, input.signature)
+    },
+  }
+}
+
 export const FAIL_CLOSED_SHOPIFY_ADMIN_ADAPTER: ShopifyReadOnlyAdminAdapter = {
   async readCatalog() { return { status: 'blocked', products: [], collections: [], externalCalls: false, limitation: 'Shopify Admin read-only sync is disabled until a customer-authorized provider adapter is injected.' } },
+}
+
+async function verifyShopifyWebhookSignature(rawBody: string, signature: string, verifier: ShopifyWebhookVerifier): Promise<void> {
+  let verified: unknown
+  try {
+    verified = await verifier.verify({ rawBody, signature })
+  } catch {
+    conflict('Shopify webhook signature could not be verified.')
+  }
+  if (verified !== true) conflict('Shopify webhook signature could not be verified.')
 }
 
 function integrationShopDomain(integration: ManagedSiteIntegration): string {
@@ -135,30 +175,32 @@ export async function startShopifyAuthorization(input: ShopifyAuthorizationStart
   return { authorization, state, authorizationUrl, providerConfigured: false, externalCalls: false, projectId: authority.project.id, limitation: authorizationUrl ? 'Authorization URL is a customer navigation intent; no Shopify request was executed.' : 'Shopify client configuration is missing; customer authorization URL is withheld.' }
 }
 
-export async function completeShopifyAuthorization(input: { state: string; code: string; hmac: string; shopDomain: string; timestamp: string | number; redirectUri: string; rawQuery: string; stateCookie?: string }, adapter: ShopifyOAuthExchangeAdapter = FAIL_CLOSED_SHOPIFY_OAUTH_ADAPTER, repositories: ShopifyServiceRepositories = { integrations: getIntegrationRepository(), shopify: getShopifyRepository() }, managedRepository: ManagedSiteRepository = getManagedSiteRepository(), clock: () => Date = () => new Date(), callbackVerifier: ShopifyOAuthCallbackVerifier = FAIL_CLOSED_SHOPIFY_OAUTH_CALLBACK_VERIFIER) {
-  const state = boundedString(input.state, 'Shopify OAuth state', 256)
-  const code = boundedString(input.code, 'Shopify OAuth code', 2048)
-  const hmac = boundedString(input.hmac, 'Shopify OAuth HMAC', 128)
+export async function completeShopifyAuthorization(input: { rawQuery: string; redirectUri: string; stateCookie?: string }, adapter: ShopifyOAuthExchangeAdapter = FAIL_CLOSED_SHOPIFY_OAUTH_ADAPTER, repositories: ShopifyServiceRepositories = { integrations: getIntegrationRepository(), shopify: getShopifyRepository() }, managedRepository: ManagedSiteRepository = getManagedSiteRepository(), clock: () => Date = () => new Date(), callbackVerifier: ShopifyOAuthCallbackVerifier = FAIL_CLOSED_SHOPIFY_OAUTH_CALLBACK_VERIFIER) {
+  const pairs = parseShopifyOAuthQuery(input.rawQuery)
+  const hmac = exactShopifyOAuthQueryValue(pairs, 'hmac')
   if (!/^[a-f0-9]{64}$/iu.test(hmac)) invalid('Shopify OAuth HMAC is invalid.')
-  const requestedShopDomain = normalizeShopifyShopDomain(input.shopDomain)
-  const redirectUri = normalizeRedirectUri(input.redirectUri)
-  const timestampText = boundedString(String(input.timestamp), 'Shopify OAuth timestamp', 32)
-  if (!/^\d{1,12}$/u.test(timestampText)) invalid('Shopify OAuth timestamp is invalid.')
-  const timestamp = Number(timestampText)
-  const now = clock()
-  if (!(now instanceof Date) || !Number.isFinite(now.getTime()) || !Number.isSafeInteger(timestamp) || Math.abs(now.getTime() - timestamp * 1000) > SHOPIFY_OAUTH_TTL_MS) conflict('Shopify OAuth callback timestamp is outside the allowed window.')
-  if (input.stateCookie !== undefined && !constantTimeEqual(state, boundedString(input.stateCookie, 'Shopify OAuth state cookie', 256))) conflict('Shopify OAuth browser state does not match the callback state.')
-  const pending = await repositories.shopify.findAuthorizationByStateHash(hashValue(state))
-  if (!pending || pending.status !== 'pending' || pending.expiresAt.getTime() <= now.getTime()) conflict('Shopify OAuth state is expired, revoked, or already consumed.')
-  if (pending.shopDomain !== requestedShopDomain || pending.redirectUri !== redirectUri) conflict('Shopify OAuth redirect URI or shop identity does not match the authorization state.')
   const canonicalQuery = canonicalizeShopifyOAuthQuery(input.rawQuery)
   let verified: unknown
   try {
-    verified = await callbackVerifier.verify({ rawQuery: input.rawQuery, canonicalQuery, hmac, shopDomain: requestedShopDomain, state, timestamp, redirectUri })
+    verified = await callbackVerifier.verify({ rawQuery: input.rawQuery, canonicalQuery, hmac })
   } catch {
     conflict('Shopify OAuth callback signature could not be verified.')
   }
   if (verified !== true) conflict('Shopify OAuth callback signature could not be verified.')
+
+  const state = boundedString(exactShopifyOAuthQueryValue(pairs, 'state'), 'Shopify OAuth state', 256)
+  const code = boundedString(exactShopifyOAuthQueryValue(pairs, 'code'), 'Shopify OAuth code', 2048)
+  const requestedShopDomain = normalizeShopifyShopDomain(exactShopifyOAuthQueryValue(pairs, 'shop'))
+  const timestampText = boundedString(exactShopifyOAuthQueryValue(pairs, 'timestamp'), 'Shopify OAuth timestamp', 32)
+  if (!/^\d{10,12}$/u.test(timestampText)) invalid('Shopify OAuth timestamp is invalid.')
+  const timestamp = Number(timestampText)
+  const now = clock()
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime()) || !Number.isSafeInteger(timestamp) || Math.abs(now.getTime() - timestamp * 1000) > SHOPIFY_OAUTH_TTL_MS) conflict('Shopify OAuth callback timestamp is outside the allowed window.')
+  if (typeof input.stateCookie !== 'string' || !constantTimeEqual(state, boundedString(input.stateCookie, 'Shopify OAuth state cookie', 256))) conflict('Shopify OAuth browser state does not match the callback state.')
+  const redirectUri = normalizeRedirectUri(input.redirectUri)
+  const pending = await repositories.shopify.findAuthorizationByStateHash(hashValue(state))
+  if (!pending || pending.status !== 'pending' || pending.expiresAt.getTime() <= now.getTime()) conflict('Shopify OAuth state is expired, revoked, or already consumed.')
+  if (pending.shopDomain !== requestedShopDomain || pending.redirectUri !== redirectUri) conflict('Shopify OAuth redirect URI or shop identity does not match the authorization state.')
   const integration = await ensureIntegration(pending.ownerUserId, pending.projectId, pending.integrationId, repositories.integrations)
   if (integration.status !== 'awaiting_authorization') conflict('Shopify integration is not awaiting authorization.')
   await assertPaidManagedSiteModuleEntitlement(pending.ownerUserId, pending.projectId, 'shopify_commerce', managedRepository)
@@ -202,18 +244,16 @@ export async function readShopifyCatalog(ownerUserId: number, projectId: number,
   return { status: 'read' as const, shopDomain, products: result.products, collections: result.collections, writes: false, externalCalls: false, providerConfigured: false, limitation: 'Read-only catalog data came from an injected mock contract; no Shopify write, order, payment, or checkout mutation was executed.' }
 }
 
-export async function handleShopifyWebhook(ownerUserId: number, projectId: number, integrationId: number, request: ShopifyWebhookVerificationRequest, verifier: ShopifyWebhookVerifier = FAIL_CLOSED_SHOPIFY_WEBHOOK_VERIFIER, repositories: ShopifyServiceRepositories = { integrations: getIntegrationRepository(), shopify: getShopifyRepository() }, managedRepository: ManagedSiteRepository = getManagedSiteRepository(), clock: () => Date = () => new Date()) {
+async function processVerifiedShopifyWebhook(ownerUserId: number, projectId: number, integrationId: number, request: ShopifyWebhookEventInput, repositories: ShopifyServiceRepositories, managedRepository: ManagedSiteRepository, clock: () => Date = () => new Date(), knownIntegration?: ManagedSiteIntegration) {
   await assertPaidManagedSiteModuleEntitlement(ownerUserId, projectId, 'shopify_commerce', managedRepository)
-  const integration = await ensureIntegration(ownerUserId, projectId, integrationId, repositories.integrations)
+  const integration = knownIntegration || await ensureIntegration(ownerUserId, projectId, integrationId, repositories.integrations)
   if (!['active', 'mock_verified'].includes(integration.status)) conflict('Shopify webhook integration is not active.')
   const shopDomain = normalizeShopifyShopDomain(request.shopDomain)
   if (integrationShopDomain(integration) !== shopDomain) conflict('Shopify webhook shop identity does not match the integration.')
   const webhookId = boundedString(request.webhookId, 'Shopify webhook id', 160)
   const topic = boundedString(request.topic, 'Shopify webhook topic', 160)
-  const rawBody = boundedString(request.rawBody, 'Shopify webhook body', SHOPIFY_WEBHOOK_MAX_BYTES)
+  const rawBody = rawWebhookBody(request.rawBody)
   const signature = boundedString(request.signature, 'Shopify webhook signature', 512)
-  const verified = await verifier.verify({ shopDomain, webhookId, topic, rawBody, signature })
-  if (verified !== true) conflict('Shopify webhook signature was not verified by the server-owned verifier.')
   const hash = payloadHash(rawBody)
   const signatureHash = hashValue(signature)
   const fingerprint = stableFingerprint({ ownerUserId, projectId, integrationId, shopDomain, webhookId, topic, payloadHash: hash })
@@ -227,6 +267,23 @@ export async function handleShopifyWebhook(ownerUserId: number, projectId: numbe
   const webhook = await repositories.shopify.transaction(transaction => transaction.insertWebhook({ ownerUserId, projectId, integrationId, shopDomain, webhookId, topic, payloadHash: hash, signatureHash, status: 'accepted', eventFingerprint: fingerprint } as any))
   const updatedIntegration = topic === 'app/uninstalled' ? await repositories.integrations.update(integration.id, { status: 'revoked', externalReference: null, updatedAt: clock() } as any) : integration
   return { status: 'accepted' as const, replayed: false, webhook, integration: updatedIntegration, externalCalls: false, writes: topic === 'app/uninstalled', limitation: topic === 'app/uninstalled' ? 'Uninstall webhook revoked the integration reference only; no Shopify API call was made.' : 'Verified webhook was recorded as an intent-only event; no Shopify write was executed.' }
+}
+
+export async function handleShopifyWebhook(ownerUserId: number, projectId: number, integrationId: number, request: ShopifyWebhookEventInput, verifier: ShopifyWebhookVerifier = FAIL_CLOSED_SHOPIFY_WEBHOOK_VERIFIER, repositories: ShopifyServiceRepositories = { integrations: getIntegrationRepository(), shopify: getShopifyRepository() }, managedRepository: ManagedSiteRepository = getManagedSiteRepository(), clock: () => Date = () => new Date()) {
+  const rawBody = rawWebhookBody(request.rawBody)
+  const signature = boundedString(request.signature, 'Shopify webhook signature', 512)
+  await verifyShopifyWebhookSignature(rawBody, signature, verifier)
+  return processVerifiedShopifyWebhook(ownerUserId, projectId, integrationId, { ...request, rawBody, signature }, repositories, managedRepository, clock)
+}
+
+export async function handleShopifyWebhookIngress(request: ShopifyWebhookEventInput, verifier: ShopifyWebhookVerifier = FAIL_CLOSED_SHOPIFY_WEBHOOK_VERIFIER, repositories: ShopifyServiceRepositories = { integrations: getIntegrationRepository(), shopify: getShopifyRepository() }, managedRepository: ManagedSiteRepository = getManagedSiteRepository(), clock: () => Date = () => new Date()) {
+  const rawBody = rawWebhookBody(request.rawBody)
+  const signature = boundedString(request.signature, 'Shopify webhook signature', 512)
+  await verifyShopifyWebhookSignature(rawBody, signature, verifier)
+  const shopDomain = normalizeShopifyShopDomain(request.shopDomain)
+  const integration = await repositories.integrations.findByShopDomain(shopDomain)
+  if (!integration) notFound('Shopify webhook integration was not found.')
+  return processVerifiedShopifyWebhook(integration.ownerUserId, integration.projectId, integration.id, { ...request, shopDomain, rawBody, signature }, repositories, managedRepository, clock, integration)
 }
 
 export async function revokeShopifyIntegration(ownerUserId: number, projectId: number, integrationId: number, integrations: IntegrationRepository = getIntegrationRepository(), managedRepository: ManagedSiteRepository = getManagedSiteRepository()) {

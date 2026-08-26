@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { createManagedSitePreview, createManagedSiteQuote, createManagedSiteDraftOrder, createManagedSiteLeadIntent } from '../server/managed-sites/ordering-service'
 import { processManagedSitePaymentAndConversion } from '../server/managed-sites/conversion-service'
 import { createShopifyIntegrationIntent } from '../server/managed-sites/modules-service'
-import { canonicalizeShopifyOAuthQuery, completeShopifyAuthorization, createShopifyOAuthCallbackVerifier, handleShopifyWebhook, normalizeShopifyShopDomain, readShopifyCatalog, revokeShopifyIntegration, startShopifyAuthorization, validateShopifyStorefrontUrl } from '../server/managed-sites/shopify-service'
+import { canonicalizeShopifyOAuthQuery, completeShopifyAuthorization, createShopifyOAuthCallbackVerifier, createShopifyWebhookVerifier, handleShopifyWebhook, handleShopifyWebhookIngress, normalizeShopifyShopDomain, readShopifyCatalog, revokeShopifyIntegration, startShopifyAuthorization, validateShopifyStorefrontUrl } from '../server/managed-sites/shopify-service'
 import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
-import type { ShopifyOAuthExchangeAdapter, ShopifyReadOnlyAdminAdapter, ShopifyWebhookVerifier } from '../server/managed-sites/shopify-types'
+import type { ShopifyOAuthExchangeAdapter, ShopifyReadOnlyAdminAdapter, ShopifyServiceRepositories, ShopifyWebhookVerifier } from '../server/managed-sites/shopify-types'
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
 import { createInjectedManagedSiteCheckoutAuthorityResolver, createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
 import { createIntegrationMemoryRepository, createShopifyMemoryRepository } from './fixtures/managed-site/modules-repository'
@@ -14,13 +14,21 @@ const mockPaymentVerifier: PaymentEventVerifier = { verify: async () => true }
 const SHOPIFY_TEST_SECRET = 'shopify-test-shared-secret'
 const CALLBACK_REDIRECT_URI = 'https://discovery.acme.taipei/api/managed-sites/shopify/callback'
 
-function signedCallback(start: { state: string }, options: { shopDomain?: string; timestamp?: string; code?: string; extra?: string; hmac?: string } = {}) {
+type CallbackInput = { rawQuery: string; redirectUri: string; stateCookie?: string }
+
+function signedCallback(start: { state: string }, options: { shopDomain?: string; timestamp?: string; code?: string; extra?: string; hmac?: string } = {}): CallbackInput {
   const shopDomain = options.shopDomain || 'merchant.myshopify.com'
   const timestamp = options.timestamp || String(Math.floor(new Date('2026-08-27T00:01:00.000Z').getTime() / 1000))
   const code = options.code || 'mock-code'
   const unsignedQuery = `shop=${encodeURIComponent(shopDomain)}&timestamp=${encodeURIComponent(timestamp)}&code=${encodeURIComponent(code)}&extra=${encodeURIComponent(options.extra || 'hello world')}&state=${encodeURIComponent(start.state)}`
   const hmac = options.hmac || createHmac('sha256', SHOPIFY_TEST_SECRET).update(canonicalizeShopifyOAuthQuery(unsignedQuery), 'utf8').digest('hex')
-  return { state: start.state, code, hmac, shopDomain, timestamp, redirectUri: CALLBACK_REDIRECT_URI, rawQuery: `${unsignedQuery}&hmac=${hmac}`, stateCookie: start.state }
+  return { rawQuery: `${unsignedQuery}&hmac=${hmac}`, redirectUri: CALLBACK_REDIRECT_URI, stateCookie: start.state }
+}
+
+function withValidHmac(rawQueryWithoutHmac: string): string {
+  const canonical = canonicalizeShopifyOAuthQuery(rawQueryWithoutHmac)
+  const hmac = createHmac('sha256', SHOPIFY_TEST_SECRET).update(canonical, 'utf8').digest('hex')
+  return `${rawQueryWithoutHmac}&hmac=${hmac}`
 }
 
 async function makeProject() {
@@ -37,8 +45,25 @@ async function makeProject() {
   return { managed, ordering, integrations, shopify, project: conversion.project, integration: integration.integration }
 }
 
+function countedRepositories(line: Awaited<ReturnType<typeof makeProject>>, counters: { authorizationLookups: number; integrationLookups: number; webhookLookups: number; webhookWrites: number }): ShopifyServiceRepositories {
+  return {
+    integrations: {
+      ...line.integrations.repository,
+      async findById(id: number) { counters.integrationLookups += 1; return line.integrations.repository.findById(id) },
+      async findByShopDomain(shopDomain: string) { counters.integrationLookups += 1; return line.integrations.repository.findByShopDomain(shopDomain) },
+    },
+    shopify: {
+      ...line.shopify.repository,
+      async findAuthorizationByStateHash(stateHash: string) { counters.authorizationLookups += 1; return line.shopify.repository.findAuthorizationByStateHash(stateHash) },
+      async findWebhookByIntegrationEvent(integrationId: number, webhookId: string) { counters.webhookLookups += 1; return line.shopify.repository.findWebhookByIntegrationEvent(integrationId, webhookId) },
+      async findWebhookByFingerprint(ownerUserId: number, fingerprint: string) { counters.webhookLookups += 1; return line.shopify.repository.findWebhookByFingerprint(ownerUserId, fingerprint) },
+      async insertWebhook(input: any) { counters.webhookWrites += 1; return line.shopify.repository.insertWebhook(input) },
+    },
+  } as ShopifyServiceRepositories
+}
+
 describe('managed site Shopify contract', () => {
-  it('creates hashed single-use OAuth state and verifies the official authorization-code callback contract', async () => {
+  it('creates hashed single-use OAuth state and verifies the raw authorization-code callback contract', async () => {
     const line = await makeProject()
     const start = await startShopifyAuthorization({ ownerUserId: 1, projectId: line.project.id, integrationId: line.integration.id, shopDomain: 'merchant.myshopify.com', redirectUri: CALLBACK_REDIRECT_URI, idempotencyKey: 'shopify-oauth-start-001' }, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:00:00.000Z'), 'shopify-client-id')
     const authorizationUrl = new URL(start.authorizationUrl!)
@@ -59,41 +84,87 @@ describe('managed site Shopify contract', () => {
     await expect(completeShopifyAuthorization(signedCallback(start), adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:02:00.000Z'), createShopifyOAuthCallbackVerifier(SHOPIFY_TEST_SECRET))).rejects.toMatchObject({ statusCode: 409 })
   })
 
-  it('does not consume pending state on invalid HMAC, verifier throw/reject, cookie, timestamp, redirect, or shop mismatch', async () => {
+  it('verifies raw callback HMAC before authorization/integration lookup, state comparison, or adapter call', async () => {
+    const line = await makeProject()
+    const start = await startShopifyAuthorization({ ownerUserId: 1, projectId: line.project.id, integrationId: line.integration.id, shopDomain: 'merchant.myshopify.com', redirectUri: CALLBACK_REDIRECT_URI, idempotencyKey: 'shopify-ordering-start-001' }, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:00:00.000Z'), 'shopify-client-id')
+    const counters = { authorizationLookups: 0, integrationLookups: 0, webhookLookups: 0, webhookWrites: 0 }
+    const repositories = countedRepositories(line, counters)
+    let adapterCalls = 0
+    const adapter: ShopifyOAuthExchangeAdapter = { exchange: async input => { adapterCalls += 1; return { status: 'authorized', shopDomain: input.shopDomain, credentialReference: 'vault:shopify-ordering-001', providerConfigured: false, externalCalls: false, limitation: 'Injected mock only.' } } }
+    const invalidHmac = signedCallback(start, { hmac: '0'.repeat(64) })
+    await expect(completeShopifyAuthorization(invalidHmac, adapter, repositories, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), createShopifyOAuthCallbackVerifier(SHOPIFY_TEST_SECRET))).rejects.toMatchObject({ statusCode: 409 })
+    await expect(completeShopifyAuthorization(signedCallback(start), adapter, repositories, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), { verify: async () => false })).rejects.toMatchObject({ statusCode: 409 })
+    await expect(completeShopifyAuthorization(signedCallback(start), adapter, repositories, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), { verify: async () => { throw new Error('synthetic verifier failure') } })).rejects.toMatchObject({ statusCode: 409 })
+    expect(counters.authorizationLookups).toBe(0)
+    expect(counters.integrationLookups).toBe(0)
+    expect(adapterCalls).toBe(0)
+    expect(line.shopify.state.authorizations[0]?.status).toBe('pending')
+  })
+
+  it('requires each signed callback identity parameter exactly once and matches the literal golden HMAC', async () => {
+    const canonical = 'code=abc123&shop=foo.myshopify.com&state=state-value&timestamp=1700000000'
+    const rawQuery = `${canonical}&hmac=a2c360d33f2e985020e379b8340904341cbfea8a13ca84a585322d1913d62c38`
+    expect(canonicalizeShopifyOAuthQuery(rawQuery)).toBe(canonical)
+    const verifier = createShopifyOAuthCallbackVerifier('golden-shopify-secret')
+    expect(await verifier.verify({ rawQuery, canonicalQuery: canonical, hmac: 'a2c360d33f2e985020e379b8340904341cbfea8a13ca84a585322d1913d62c38' })).toBe(true)
+
+    const line = await makeProject()
+    const start = await startShopifyAuthorization({ ownerUserId: 1, projectId: line.project.id, integrationId: line.integration.id, shopDomain: 'merchant.myshopify.com', redirectUri: CALLBACK_REDIRECT_URI, idempotencyKey: 'shopify-duplicate-start-001' }, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:00:00.000Z'))
+    const adapter: ShopifyOAuthExchangeAdapter = { exchange: async input => ({ status: 'authorized', shopDomain: input.shopDomain, credentialReference: 'vault:shopify-duplicate-001', providerConfigured: false, externalCalls: false, limitation: 'Injected mock only.' }) }
+    const base = signedCallback(start).rawQuery.replace(/&hmac=[^&]+$/u, '')
+    for (const duplicateKey of ['code', 'hmac', 'shop', 'state', 'timestamp']) {
+      const duplicateValue = duplicateKey === 'hmac' ? '1'.repeat(64) : duplicateKey === 'shop' ? 'merchant.myshopify.com' : 'duplicate'
+      const duplicateQuery = withValidHmac(`${base}&${duplicateKey}=${encodeURIComponent(duplicateValue)}`)
+      await expect(completeShopifyAuthorization({ rawQuery: duplicateQuery, redirectUri: CALLBACK_REDIRECT_URI, stateCookie: start.state }, adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), createShopifyOAuthCallbackVerifier(SHOPIFY_TEST_SECRET))).rejects.toMatchObject({ statusCode: 422 })
+    }
+    expect(line.shopify.state.authorizations[0]?.status).toBe('pending')
+  })
+
+  it('does not consume pending state on invalid callback cookie, timestamp, redirect, or shop mismatch', async () => {
     const line = await makeProject()
     const start = await startShopifyAuthorization({ ownerUserId: 1, projectId: line.project.id, integrationId: line.integration.id, shopDomain: 'merchant.myshopify.com', redirectUri: CALLBACK_REDIRECT_URI, idempotencyKey: 'shopify-adversarial-start-001' }, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:00:00.000Z'), 'shopify-client-id')
-    const adapterCalls: string[] = []
-    const adapter: ShopifyOAuthExchangeAdapter = { exchange: async input => { adapterCalls.push(input.code); return { status: 'authorized', shopDomain: input.shopDomain, credentialReference: 'vault:shopify-adversarial-001', providerConfigured: false, externalCalls: false, limitation: 'Injected mock only.' } } }
-    const rejectVerifier = { verify: async () => false }
-    const badHmac = signedCallback(start, { hmac: '0'.repeat(64) })
-    await expect(completeShopifyAuthorization(badHmac, adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), createShopifyOAuthCallbackVerifier(SHOPIFY_TEST_SECRET))).rejects.toMatchObject({ statusCode: 409 })
-    expect(line.shopify.state.authorizations[0]?.status).toBe('pending')
-    const tampered = signedCallback(start)
-    tampered.rawQuery = tampered.rawQuery.replace('hello%20world', 'tampered')
-    await expect(completeShopifyAuthorization(tampered, adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), createShopifyOAuthCallbackVerifier(SHOPIFY_TEST_SECRET))).rejects.toMatchObject({ statusCode: 409 })
-    expect(line.shopify.state.authorizations[0]?.status).toBe('pending')
-    await expect(completeShopifyAuthorization(signedCallback(start), adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), rejectVerifier)).rejects.toMatchObject({ statusCode: 409 })
-    expect(line.shopify.state.authorizations[0]?.status).toBe('pending')
-    await expect(completeShopifyAuthorization(signedCallback(start), adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), { verify: async () => { throw new Error('synthetic verifier failure') } })).rejects.toMatchObject({ statusCode: 409 })
-    expect(line.shopify.state.authorizations[0]?.status).toBe('pending')
+    const adapter: ShopifyOAuthExchangeAdapter = { exchange: async input => ({ status: 'authorized', shopDomain: input.shopDomain, credentialReference: 'vault:shopify-adversarial-001', providerConfigured: false, externalCalls: false, limitation: 'Injected mock only.' }) }
     await expect(completeShopifyAuthorization({ ...signedCallback(start), stateCookie: 'different-state' }, adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), createShopifyOAuthCallbackVerifier(SHOPIFY_TEST_SECRET))).rejects.toMatchObject({ statusCode: 409 })
-    await expect(completeShopifyAuthorization({ ...signedCallback(start), redirectUri: 'https://different.acme.taipei/api/managed-sites/shopify/callback' }, adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), createShopifyOAuthCallbackVerifier(SHOPIFY_TEST_SECRET))).rejects.toMatchObject({ statusCode: 409 })
     await expect(completeShopifyAuthorization(signedCallback(start, { timestamp: String(Math.floor(new Date('2026-08-27T00:30:00.000Z').getTime() / 1000)) }), adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:30:00.000Z'), createShopifyOAuthCallbackVerifier(SHOPIFY_TEST_SECRET))).rejects.toMatchObject({ statusCode: 409 })
     await expect(completeShopifyAuthorization(signedCallback(start, { shopDomain: 'other.myshopify.com' }), adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), createShopifyOAuthCallbackVerifier(SHOPIFY_TEST_SECRET))).rejects.toMatchObject({ statusCode: 409 })
     expect(line.shopify.state.authorizations[0]?.status).toBe('pending')
-    expect(adapterCalls).toHaveLength(0)
   })
 
-  it('rejects unsafe shop identity and validates Storefront product, collection, cart, and checkout URLs', () => {
-    expect(normalizeShopifyShopDomain('Merchant.myshopify.com.')).toBe('merchant.myshopify.com')
-    expect(() => normalizeShopifyShopDomain('https://merchant.myshopify.com')).toThrow()
-    expect(() => normalizeShopifyShopDomain('admin.shopify.com')).toThrow()
+  it('accepts only strict lowercase single-label myshopify domains and validates Storefront URL contracts', () => {
+    expect(normalizeShopifyShopDomain('merchant.myshopify.com')).toBe('merchant.myshopify.com')
+    for (const forbidden of [
+      'Merchant.myshopify.com',
+      'merchant.myshopify.com.',
+      'myshopify.com',
+      'foo.bar.myshopify.com',
+      'foo.myshopify.com.attacker.example',
+      'attacker.example',
+      'custom-storefront.example',
+      'https://merchant.myshopify.com',
+      'merchant.myshopify.com:443',
+      'merchant.myshopify.com/path',
+      'merchant.myshopify.com?x=1',
+      'merchant.myshopify.com#fragment',
+      '*.myshopify.com',
+      '-merchant.myshopify.com',
+      'merchant-.myshopify.com',
+      'ｍerchant.myshopify.com',
+    ]) expect(() => normalizeShopifyShopDomain(forbidden)).toThrow()
     expect(validateShopifyStorefrontUrl('merchant.myshopify.com', 'https://merchant.myshopify.com/products/red-shirt', 'product')).toBe('https://merchant.myshopify.com/products/red-shirt')
     expect(validateShopifyStorefrontUrl('merchant.myshopify.com', 'https://merchant.myshopify.com/collections/sale', 'collection')).toBe('https://merchant.myshopify.com/collections/sale')
     expect(validateShopifyStorefrontUrl('merchant.myshopify.com', 'https://merchant.myshopify.com/cart', 'cart')).toBe('https://merchant.myshopify.com/cart')
     expect(validateShopifyStorefrontUrl('merchant.myshopify.com', 'https://merchant.myshopify.com/checkout', 'checkout')).toBe('https://merchant.myshopify.com/checkout')
     expect(() => validateShopifyStorefrontUrl('merchant.myshopify.com', 'https://other.myshopify.com/cart', 'cart')).toThrow()
     expect(() => validateShopifyStorefrontUrl('merchant.myshopify.com', 'javascript:alert(1)', 'checkout')).toThrow()
+  })
+
+  it('fails closed without a webhook secret and accepts only a correct raw-body HMAC', async () => {
+    const body = '{"id":1}'
+    const signature = createHmac('sha256', SHOPIFY_TEST_SECRET).update(body, 'utf8').digest('base64')
+    const verifier = createShopifyWebhookVerifier(SHOPIFY_TEST_SECRET)
+    expect(await verifier.verify({ rawBody: body, signature })).toBe(true)
+    expect(await verifier.verify({ rawBody: body + ' ', signature })).toBe(false)
+    expect(await createShopifyWebhookVerifier(null).verify({ rawBody: body, signature })).toBe(false)
   })
 
   it('keeps Admin sync read-only and only accepts bounded injected catalog data', async () => {
@@ -109,12 +180,23 @@ describe('managed site Shopify contract', () => {
     expect(result.externalCalls).toBe(false)
   })
 
+  it('verifies raw webhook HMAC before shop lookup, topic parsing, entitlement, or writes', async () => {
+    const line = await makeProject()
+    const counters = { authorizationLookups: 0, integrationLookups: 0, webhookLookups: 0, webhookWrites: 0 }
+    const repositories = countedRepositories(line, counters)
+    const request = { shopDomain: 'merchant.myshopify.com', webhookId: 'webhook-invalid-001', topic: 'products/update', rawBody: '{"id":1}', signature: 'invalid-signature' }
+    await expect(handleShopifyWebhookIngress(request, { verify: async () => false }, repositories, line.managed.repository)).rejects.toMatchObject({ statusCode: 409 })
+    expect(counters.integrationLookups).toBe(0)
+    expect(counters.webhookLookups).toBe(0)
+    expect(counters.webhookWrites).toBe(0)
+  })
+
   it('verifies webhook through injected verifier, replays exact events, rejects collisions, and revokes on uninstall', async () => {
     const line = await makeProject()
     const start = await startShopifyAuthorization({ ownerUserId: 1, projectId: line.project.id, integrationId: line.integration.id, shopDomain: 'merchant.myshopify.com', redirectUri: CALLBACK_REDIRECT_URI, idempotencyKey: 'shopify-webhook-start-001' }, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:00:00.000Z'))
     const adapter: ShopifyOAuthExchangeAdapter = { exchange: async input => ({ status: 'authorized', shopDomain: input.shopDomain, credentialReference: 'vault:shopify-webhook-001', providerConfigured: false, externalCalls: false, limitation: 'Injected mock only.' }) }
     await completeShopifyAuthorization(signedCallback(start), adapter, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository, () => new Date('2026-08-27T00:01:00.000Z'), createShopifyOAuthCallbackVerifier(SHOPIFY_TEST_SECRET))
-    const verifier: ShopifyWebhookVerifier = { verify: async input => input.signature === 'mock-valid-signature' }
+    const verifier: ShopifyWebhookVerifier = { verify: async input => Object.keys(input).sort().join(',') === 'rawBody,signature' && input.signature === 'mock-valid-signature' }
     const request = { shopDomain: 'merchant.myshopify.com', webhookId: 'webhook-001', topic: 'products/update', rawBody: '{"id":1}', signature: 'mock-valid-signature' }
     const accepted = await handleShopifyWebhook(1, line.project.id, line.integration.id, request, verifier, { integrations: line.integrations.repository, shopify: line.shopify.repository }, line.managed.repository)
     expect(accepted.status).toBe('accepted')
@@ -134,4 +216,3 @@ describe('managed site Shopify contract', () => {
     expect(revoked.integration?.externalReference).toBeNull()
   })
 })
-

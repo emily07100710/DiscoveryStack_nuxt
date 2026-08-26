@@ -31,10 +31,6 @@ export type ShopifyOAuthCallbackVerificationInput = {
   rawQuery: string
   canonicalQuery: string
   hmac: string
-  shopDomain: string
-  state: string
-  timestamp: number
-  redirectUri: string
 }
 
 export type ShopifyOAuthCallbackVerifier = {
@@ -47,10 +43,15 @@ export type ShopifyAuthorizationInsert = Omit<ManagedSiteShopifyAuthorization, '
   codeVerifierHash?: null
 }
 
-export type ShopifyWebhookVerificationRequest = {
+export type ShopifyWebhookEventInput = {
   shopDomain: string
   webhookId: string
   topic: string
+  rawBody: string
+  signature: string
+}
+
+export type ShopifyWebhookVerificationRequest = {
   rawBody: string
   signature: string
 }

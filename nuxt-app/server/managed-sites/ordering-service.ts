@@ -287,17 +287,15 @@ export const FAIL_CLOSED_MANAGED_SITE_CHECKOUT_AUTHORITY_RESOLVER: ManagedSiteCh
   async resolve() { return null },
 }
 
-export function createManagedSiteCheckoutAuthorityResolver(repository: PreviewRepository): ManagedSiteCheckoutAuthorityResolver {
+export function createManagedSiteCheckoutAuthorityResolver(): ManagedSiteCheckoutAuthorityResolver {
   return {
     async resolve(input: ManagedSiteCheckoutAuthorityInput): Promise<ManagedSiteCheckoutAuthority | null> {
-      const knownOwners = [input.preview.ownerUserId, input.quote.ownerUserId, input.leadIntent.ownerUserId, input.draftOrder.ownerUserId, input.subscriptionIntent?.ownerUserId ?? null].filter((value): value is number => value !== null)
-      if (knownOwners.length > 0 && knownOwners.every(value => value === knownOwners[0])) return { ownerUserId: knownOwners[0]!, source: 'existing_lineage' }
-      if (knownOwners.length > 0) return null
-      const lead = await repository.findLeadById(input.leadIntent.leadId)
-      if (!lead) return null
-      const ownerUserId = await repository.findUserIdByEmail(lead.email)
-      if (!ownerUserId || !Number.isSafeInteger(ownerUserId) || ownerUserId < 1) return null
-      return { ownerUserId, source: 'existing_account_email' }
+      const lineageOwners = [input.preview.ownerUserId, input.quote.ownerUserId, input.leadIntent.ownerUserId, input.draftOrder.ownerUserId, input.subscriptionIntent?.ownerUserId ?? null]
+      if (lineageOwners.some(value => value === null || value === undefined)) return null
+      const ownerUserId = lineageOwners[0]
+      if (typeof ownerUserId !== 'number' || !Number.isSafeInteger(ownerUserId) || ownerUserId < 1) return null
+      if (!lineageOwners.every(value => value === ownerUserId)) return null
+      return { ownerUserId, source: 'existing_lineage' }
     },
   }
 }
@@ -329,7 +327,7 @@ function paymentAmount(value: unknown): number {
   return value
 }
 
-export async function recordVerifiedPaymentEvent(input: unknown, verifier: PaymentEventVerifier = FAIL_CLOSED_PAYMENT_EVENT_VERIFIER, repository = getPreviewRepository(), clock: () => Date = () => new Date(), authorityResolver: ManagedSiteCheckoutAuthorityResolver = createManagedSiteCheckoutAuthorityResolver(repository)) {
+export async function recordVerifiedPaymentEvent(input: unknown, verifier: PaymentEventVerifier = FAIL_CLOSED_PAYMENT_EVENT_VERIFIER, repository = getPreviewRepository(), clock: () => Date = () => new Date(), authorityResolver: ManagedSiteCheckoutAuthorityResolver = createManagedSiteCheckoutAuthorityResolver()) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) invalid('Payment event is invalid.')
   const candidate = input as Record<string, unknown>
   if (Object.prototype.hasOwnProperty.call(candidate, 'verified')) throw createError({ statusCode: 422, statusMessage: 'Caller-controlled payment verification is not accepted.' })
