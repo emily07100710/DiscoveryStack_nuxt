@@ -127,6 +127,7 @@ export type OperationClaim = {
 
 export type OutcomeAssessmentInput = {
   entryId: number
+  targetId?: number
   runId?: number
   idempotencyKey: string
   baselineMeasurements: unknown[]

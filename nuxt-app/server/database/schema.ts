@@ -1113,6 +1113,111 @@ export const llmVisibilityObservations = mysqlTable('llmVisibilityObservations',
   index('llm_visibility_observations_query_idx').on(table.queryId),
 ])
 
+/** Owner-scoped measurement source connection. Only opaque credential references are persisted. */
+export const contentOperationMeasurementConnections = mysqlTable('contentOperationMeasurementConnections', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  publicationTargetId: int('publicationTargetId').references(() => contentOperationPublicationTargets.id),
+  /** Server-derived target/origin identity used for one live source per measured website. */
+  websiteIdentity: varchar('websiteIdentity', { length: 160 }).notNull(),
+  source: mysqlEnum('source', ['google_search_console', 'first_party_analytics', 'llm_visibility']).notNull(),
+  /** Mirrors source while the connection is live; NULL after revocation enables immutable replacement rows. */
+  activeSource: mysqlEnum('activeSource', ['google_search_console', 'first_party_analytics', 'llm_visibility']),
+  status: mysqlEnum('status', ['configured', 'paused', 'revoked', 'needs_reauthorization']).default('configured').notNull(),
+  /** Opaque server-side reference only; OAuth tokens, API keys, and headers are never stored. */
+  credentialReference: varchar('credentialReference', { length: 128 }),
+  googleSearchConsoleProperty: varchar('googleSearchConsoleProperty', { length: 2048 }),
+  ga4PropertyId: varchar('ga4PropertyId', { length: 12 }),
+  llmVisibilityProjectId: int('llmVisibilityProjectId').references(() => llmVisibilityProjects.id),
+  canonicalOrigin: varchar('canonicalOrigin', { length: 2048 }).notNull(),
+  timeZone: varchar('timeZone', { length: 80 }).notNull(),
+  allowedPageScope: json('allowedPageScope').notNull(),
+  sourceAvailabilityLagDays: int('sourceAvailabilityLagDays').notNull().default(0),
+  providerTargets: json('providerTargets'),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
+  connectedAt: timestamp('connectedAt'),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('measurement_connections_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('measurement_connections_owner_website_active_source_unique').on(table.ownerUserId, table.websiteIdentity, table.activeSource),
+  index('measurement_connections_owner_status_idx').on(table.ownerUserId, table.status),
+  index('measurement_connections_owner_client_idx').on(table.ownerUserId, table.clientId),
+])
+
+/** One durable source/checkpoint publication measurement run. Claims are leaseable and idempotent. */
+export const contentOperationMeasurementRuns = mysqlTable('contentOperationMeasurementRuns', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  connectionId: int('connectionId').notNull().references(() => contentOperationMeasurementConnections.id),
+  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  targetId: int('targetId').notNull().references(() => contentOperationPublicationTargets.id),
+  source: mysqlEnum('source', ['google_search_console', 'first_party_analytics', 'llm_visibility']).notNull(),
+  checkpointDays: int('checkpointDays').notNull(),
+  publicationReceiptFingerprint: varchar('publicationReceiptFingerprint', { length: 128 }).notNull(),
+  canonicalPage: varchar('canonicalPage', { length: 2048 }).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  publicationLocalDate: varchar('publicationLocalDate', { length: 10 }).notNull(),
+  timeZone: varchar('timeZone', { length: 80 }).notNull(),
+  baselineWindowStart: timestamp('baselineWindowStart').notNull(),
+  baselineWindowEnd: timestamp('baselineWindowEnd').notNull(),
+  followUpWindowStart: timestamp('followUpWindowStart').notNull(),
+  followUpWindowEnd: timestamp('followUpWindowEnd').notNull(),
+  dueAt: timestamp('dueAt').notNull(),
+  state: mysqlEnum('state', ['queued', 'processing', 'retry_wait', 'succeeded', 'insufficient_data', 'blocked', 'failed', 'cancelled']).default('queued').notNull(),
+  attemptNumber: int('attemptNumber').notNull().default(0),
+  leaseOwner: varchar('leaseOwner', { length: 128 }),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
+  retryEligibleAt: timestamp('retryEligibleAt'),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  outputFingerprint: varchar('outputFingerprint', { length: 128 }),
+  errorCode: varchar('errorCode', { length: 120 }),
+  errorSummary: varchar('errorSummary', { length: 500 }),
+  startedAt: timestamp('startedAt'),
+  completedAt: timestamp('completedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('measurement_runs_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('measurement_runs_owner_pair_unique').on(table.ownerUserId, table.entryId, table.targetId, table.source, table.checkpointDays, table.baselineWindowStart, table.followUpWindowStart, table.publicationReceiptFingerprint, table.contentHash, table.evidenceSnapshotHash),
+  index('measurement_runs_owner_due_idx').on(table.ownerUserId, table.state, table.dueAt),
+  index('measurement_runs_connection_idx').on(table.connectionId, table.state),
+  index('measurement_runs_entry_checkpoint_idx').on(table.ownerUserId, table.entryId, table.checkpointDays),
+  index('measurement_runs_lease_idx').on(table.state, table.leaseExpiresAt),
+])
+
+/** Append-only normalized measurement snapshot. There are intentionally no update/delete helpers. */
+export const contentOperationMeasurementSnapshots = mysqlTable('contentOperationMeasurementSnapshots', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  runId: int('runId').notNull().references(() => contentOperationMeasurementRuns.id),
+  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  targetId: int('targetId').notNull().references(() => contentOperationPublicationTargets.id),
+  source: mysqlEnum('source', ['google_search_console', 'first_party_analytics', 'llm_visibility']).notNull(),
+  phase: mysqlEnum('phase', ['baseline', 'follow_up']).notNull(),
+  deidentifiedSubjectKey: varchar('deidentifiedSubjectKey', { length: 64 }).notNull(),
+  scopeFingerprint: varchar('scopeFingerprint', { length: 128 }).notNull(),
+  windowStart: timestamp('windowStart').notNull(),
+  windowEnd: timestamp('windowEnd').notNull(),
+  capturedAt: timestamp('capturedAt').notNull(),
+  sourceHash: varchar('sourceHash', { length: 128 }).notNull(),
+  normalizedMetrics: json('normalizedMetrics').notNull(),
+  providerProvenance: json('providerProvenance').notNull(),
+  limitations: json('limitations').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('measurement_snapshots_run_phase_unique').on(table.runId, table.phase),
+  uniqueIndex('measurement_snapshots_owner_source_hash_unique').on(table.ownerUserId, table.sourceHash),
+  index('measurement_snapshots_owner_entry_idx').on(table.ownerUserId, table.entryId, table.createdAt),
+  index('measurement_snapshots_run_idx').on(table.runId),
+])
+
 export type User = typeof users.$inferSelect
 export type ProviderCredentials = typeof providerCredentials.$inferSelect
 export type Lead = typeof leads.$inferSelect

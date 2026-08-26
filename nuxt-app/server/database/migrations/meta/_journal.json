@@ -141,6 +141,13 @@
       "when": 1787725064824,
       "tag": "0019_productive_butterfly",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1787732990368,
+      "tag": "0020_goofy_dazzler",
+      "breakpoints": true
     }
   ]
 }

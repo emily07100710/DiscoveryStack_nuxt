@@ -560,8 +560,21 @@ export async function materializeOwnerDueContent(ownerUserId: number, input: Mat
   })
 }
 
-async function deliveredPublication(repository: ContentOperationsRepository, ownerUserId: number, entryId: number) {
-  const resolved = await repository.resolveDeliveredPublication(ownerUserId, entryId)
+async function deliveredPublication(repository: ContentOperationsRepository, ownerUserId: number, entryId: number, targetId?: number) {
+  let resolved = await repository.resolveDeliveredPublication(ownerUserId, entryId)
+  if (resolved && targetId && resolved.publicationTarget?.id !== targetId) {
+    const [target, bindings, attempts, runs] = await Promise.all([
+      repository.findPublicationTarget(ownerUserId, targetId),
+      repository.listEntryTargetBindings(ownerUserId, entryId),
+      repository.listPublicationAttempts(ownerUserId, entryId),
+      repository.listRuns(ownerUserId, entryId),
+    ])
+    const bound = bindings.some(binding => binding.ownerUserId === ownerUserId && binding.clientId === resolved?.calendar.clientId && binding.entryId === entryId && binding.targetId === targetId)
+    const attempt = attempts.find(candidate => candidate.ownerUserId === ownerUserId && candidate.entryId === entryId && candidate.targetId === targetId && candidate.status === 'delivered' && candidate.contentHash === resolved?.entry.contentHash && candidate.evidenceSnapshotHash === resolved?.entry.evidenceSnapshotHash && typeof candidate.receiptFingerprint === 'string' && /^[a-f0-9]{64}$/u.test(candidate.receiptFingerprint))
+    const run = attempt ? runs.find(candidate => candidate.id === attempt.runId && candidate.ownerUserId === ownerUserId && candidate.entryId === entryId && candidate.stage === 'publication' && candidate.state === 'succeeded') : null
+    if (!target || target.clientId !== resolved.calendar.clientId || !bound || !attempt || !run) invalid('Outcome assessment requires a validated delivered publication receipt for the requested target.')
+    resolved = { ...resolved, publicationTarget: target, publicationAttempt: attempt, publicationRun: run }
+  }
   const autopilotAuthority = typeof resolved?.authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(resolved.authorityReference)
   const manualReview = resolved?.review
   if (!resolved || (resolved.entry.status !== 'delivered' && resolved.entry.status !== 'completed') || !resolved.entry.contentHash || !resolved.job || !resolved.draft || (!autopilotAuthority && (!manualReview || manualReview.decision !== 'approved_for_delivery')) || !resolved.riskGate || resolved.riskGate.status !== 'passed' || !resolved.publicationRun || resolved.publicationRun.ownerUserId !== ownerUserId || resolved.publicationRun.entryId !== resolved.entry.id || resolved.publicationRun.stage !== 'publication' || resolved.publicationRun.state !== 'succeeded' || !resolved.publicationAttempt || resolved.publicationAttempt.status !== 'delivered') invalid('Outcome assessment requires a validated delivered publication receipt.')
@@ -603,7 +616,7 @@ export async function recordOwnerOutcomeAssessment(ownerUserId: number, input: u
   const db = await getRepository(repository)
   const parsed = parseOutcomeInput(input)
   if (parsed.dataContractVersion !== OUTCOME_DATA_CONTRACT_VERSION) invalid('Outcome data contract version is unsupported.')
-  const publication = await deliveredPublication(db, ownerUserId, parsed.entryId)
+  const publication = await deliveredPublication(db, ownerUserId, parsed.entryId, parsed.targetId)
   const receiptAttempt = publication.publicationAttempt
   if (!receiptAttempt || typeof receiptAttempt.receiptFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(receiptAttempt.receiptFingerprint)) invalid('Outcome assessment requires a validated delivered publication receipt.')
   if (parsed.runId && parsed.runId !== publication.publicationRun?.id) collision('Outcome runId does not match the delivered publication run.')
@@ -628,10 +641,10 @@ export async function recordOwnerOutcomeAssessment(ownerUserId: number, input: u
   const assessment = assessPublishedContentOutcome(outcomeRequest)
   const learningPiiScan = parsed.learningCandidate ? scanOutcomeLearningPii({ outcomeRequest, assessment, consent: parsed.consent }) : null
   const learningCandidate = parsed.learningCandidate ? buildOutcomeLearningCandidate({ outcomeRequest, assessment, consent: parsed.consent, piiScanStatus: learningPiiScan?.status || 'unknown', dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION }) : null
-  const fingerprint = stableFingerprint({ entryId: parsed.entryId, idempotencyKey: parsed.idempotencyKey, outcomeRequest, consent: safeConsentSnapshot(parsed.consent), assessmentFingerprint: assessment.assessmentFingerprint })
+  const fingerprint = stableFingerprint({ entryId: parsed.entryId, targetId: publication.publicationTarget?.id || null, publicationReceiptFingerprint: receiptAttempt.receiptFingerprint, idempotencyKey: parsed.idempotencyKey, outcomeRequest, consent: safeConsentSnapshot(parsed.consent), assessmentFingerprint: assessment.assessmentFingerprint })
   const existing = await db.findOutcomeByIdempotency(ownerUserId, parsed.idempotencyKey)
   if (existing) {
-    if (existing.assessmentFingerprint !== assessment.assessmentFingerprint || stableFingerprint(existing.baselineSnapshot) !== stableFingerprint(safeMeasurementSnapshot(parsed.baselineMeasurements)) || stableFingerprint(existing.followUpSnapshot) !== stableFingerprint(safeMeasurementSnapshot(parsed.followUpMeasurements)) || stableFingerprint(existing.consentLineageSnapshot) !== stableFingerprint(safeConsentSnapshot(parsed.consent))) collision('Outcome idempotency key is already associated with a different assessment payload.')
+    if (existing.targetId !== (publication.publicationTarget?.id || null) || existing.publicationReceiptFingerprint !== receiptAttempt.receiptFingerprint || existing.assessmentFingerprint !== assessment.assessmentFingerprint || stableFingerprint(existing.baselineSnapshot) !== stableFingerprint(safeMeasurementSnapshot(parsed.baselineMeasurements)) || stableFingerprint(existing.followUpSnapshot) !== stableFingerprint(safeMeasurementSnapshot(parsed.followUpMeasurements)) || stableFingerprint(existing.consentLineageSnapshot) !== stableFingerprint(safeConsentSnapshot(parsed.consent))) collision('Outcome idempotency key is already associated with a different target, receipt, or assessment payload.')
     return { assessment: existing.assessmentSnapshot as unknown as PublishedContentOutcomeAssessment, learningCandidate, persisted: existing }
   }
   const measuredAt = parsed.measuredAt ? new Date(parsed.measuredAt) : new Date()
@@ -656,7 +669,7 @@ export async function recordOwnerOutcomeAssessment(ownerUserId: number, input: u
   }
   return db.transaction(async transaction => {
     const persisted = await transaction.insertOutcome(outcomeInsert)
-    await transaction.appendEvent(eventInput(ownerUserId, { entryId: publication.entry.id, runId: outcomeInsert.runId, eventType: 'outcome_assessed', fromStatus: publication.entry.status, toStatus: assessment.status, metadata: { assessmentStatus: assessment.status, assessmentFingerprint: assessment.assessmentFingerprint, learningCandidateStatus: learningCandidate?.candidateStatus || 'not_requested', providerExecution: false }, key: { event: 'outcome_assessed', fingerprint, idempotencyKey: parsed.idempotencyKey } }))
+    await transaction.appendEvent(eventInput(ownerUserId, { entryId: publication.entry.id, runId: outcomeInsert.runId, eventType: 'outcome_assessed', fromStatus: publication.entry.status, toStatus: assessment.status, metadata: { targetId: outcomeInsert.targetId, publicationReceiptFingerprint: outcomeInsert.publicationReceiptFingerprint, assessmentStatus: assessment.status, assessmentFingerprint: assessment.assessmentFingerprint, learningCandidateStatus: learningCandidate?.candidateStatus || 'not_requested', providerExecution: false }, key: { event: 'outcome_assessed', fingerprint, idempotencyKey: parsed.idempotencyKey } }))
     return { assessment, learningCandidate, persisted }
   })
 }

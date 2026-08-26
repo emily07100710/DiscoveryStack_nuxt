@@ -47,6 +47,7 @@ const strictMaterialize = z.object({
 
 const strictOutcome = z.object({
   entryId: z.number().int().positive(),
+  targetId: z.number().int().positive().optional(),
   runId: z.number().int().positive().optional(),
   idempotencyKey: z.string().trim().min(1).max(128),
   baselineMeasurements: z.array(z.unknown()).max(100),
