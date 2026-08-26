@@ -157,6 +157,37 @@ export type OutcomeResult = {
   persisted: ContentOperationOutcomeAssessmentRow
 }
 
+export type WorkspaceTargetReceiptSummary = {
+  attemptId: number
+  status: string
+  attemptNumber: number
+  receiptFingerprint: string | null
+  publicationUrl: string | null
+  remoteRevision: string | null
+  errorCode: string | null
+  errorSummary: string | null
+  completedAt: Date | null
+  retryEligibleAt: Date | null
+}
+
+export type WorkspaceEntryTargetProjection = {
+  bindingId: number
+  slot: number
+  targetRowId: number
+  targetId: string
+  websiteId: string | null
+  framework: string
+  transport: string
+  targetOrigin: string
+  status: string
+  executionEnabled: boolean
+  credentialConfigured: boolean
+  destinationPublicationIdentityConfigured: boolean
+  serviceReferenceConfigured: boolean
+  bindingFingerprint: string
+  latestAttempt: WorkspaceTargetReceiptSummary | null
+}
+
 export type WorkspaceEntryProjection = ContentOperationCalendarEntryRow & {
   topic: string
   framework: string | null
@@ -164,6 +195,7 @@ export type WorkspaceEntryProjection = ContentOperationCalendarEntryRow & {
   hasApprovedDraft: boolean
   hasPassedRiskGate: boolean
   nextAction: 'generate' | 'review' | 'publish' | 'measure' | 'learn' | 'wait' | 'none'
+  publicationTargetBindings: WorkspaceEntryTargetProjection[]
 }
 
 export type WorkspaceOutcomeProjection = ContentOperationOutcomeAssessmentRow & {
@@ -179,9 +211,15 @@ export type WorkspacePayload = {
   publicationTargets: Array<Record<string, unknown> & { id: number; clientId: number; targetId: string; framework: string; transport: string; targetOrigin: string; contentRoot: string; defaultBranch: string | null; status: string; activeSlot: number | null; executionEnabled: boolean; credentialConfigured: boolean }>
   capabilities: {
     schedulerAvailable: boolean
-    generationExecutorConfigured: false
-    firstPartyPublisherConfigured: false
-    outcomeCollectionConfigured: false
+    generationExecutorConfigured: boolean
+    firstPartyPublisherConfigured: boolean
+    outcomeCollectionConfigured: boolean
+    externalRuntimeAvailability: {
+      generationProviderConfigured: boolean
+      firstPartyTransportConfigured: boolean
+      nonFirstPartyTransportConfigured: boolean
+      credentialResolverAvailable: boolean
+    }
   }
   readiness: {
     schedulerAvailable: boolean

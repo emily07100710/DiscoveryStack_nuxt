@@ -33,9 +33,11 @@ export function evaluateContentRisk(input: { source: GeoDocumentInput, candidate
   if (input.candidateBody.length < 180) findings.push({ id: 'thin_content_candidate', severity: 'review', message: '候選稿偏短，請人工確認是否足以回應既定受眾與問題。' })
   const hasBlocking = findings.some(finding => finding.severity === 'blocking')
   const hasReview = findings.some(finding => finding.severity === 'review')
+  const riskLevel = hasBlocking ? 'high' : hasReview ? 'general' : 'low'
   return {
     gateVersion: CONTENT_RISK_GATE_VERSION,
     status: hasBlocking ? 'blocked' : hasReview ? 'needs_human_review' : 'passed',
+    riskLevel,
     findings,
     publicationNotice: '通過本 gate 不等於自動核准、發布或外部成效；仍須人工 review、明確核准與受控 delivery adapter。',
   }

@@ -47,18 +47,18 @@ describe('governed three-layer production runtime', () => {
     state.job.providerMode = 'reference_rules'
   })
 
-  it('uses an explicitly configured content provider through the server resolver, with mocked provider calls only', async () => {
+  it('fails closed to the deterministic plan-level fallback when no calendar-entry Qwen boundary is configured', async () => {
     vi.stubEnv('NUXT_CONTENT_DRAFT_PROVIDER', 'autogeo_api')
     vi.stubEnv('NUXT_AUTOGEO_GEMINI_API_KEY', 'configured-in-test')
-    const fetchMock = vi.fn(async () => ({ ok: true, async json() { return { candidates: [{ content: { parts: [{ text: '可核對的內容來源與方法說明。' }] } }] } } }))
+    const fetchMock = vi.fn(async () => ({ ok: true, async json() { return { candidates: [{ content: { parts: [{ text: '不可在此 plan-level fallback path使用 provider。' }] } }] } } }))
     vi.stubGlobal('fetch', fetchMock)
     state.job.providerMode = 'autogeo_api'
     const result = await runOwnerProductionPlan({ ownerUserId: 11, planId: 7 })
     expect(result.generated[0]).toMatchObject({ deliverableId: 8, status: 'needs_human_review' })
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(state.drafts[0].provenance.actualProviderMode).toBe('autogeo_api')
-    expect(state.drafts[0].provenance.runtimeProvider).toMatchObject({ baseDraftRole: 'content-draft-provider', optimizerRole: 'selected-rule-autogeo-optimizer' })
-    expect(state.drafts[1].provenance.runtimeProvider).toMatchObject({ baseDraftRole: 'content-draft-provider', optimizerRole: 'selected-rule-autogeo-optimizer' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(state.drafts[0].provenance.actualProviderMode).toBe('reference_rules')
+    expect(state.drafts[0].provenance.runtimeProvider).toMatchObject({ mode: 'reference_rules', configured: false, baseDraftRole: 'deterministic-scaffold', optimizerRole: 'reference-rules' })
+    expect(state.drafts[1].provenance.runtimeProvider).toMatchObject({ mode: 'reference_rules', configured: false, baseDraftRole: 'deterministic-scaffold', optimizerRole: 'reference-rules' })
   })
 
   it('runs the mocked happy path through base draft, selected-rule optimization, risk gate, and human review state', async () => {

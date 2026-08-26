@@ -78,20 +78,19 @@ describe('Owner Content Operations Workbench V1 contract', () => {
     expect(source).not.toContain('Math.random()')
   })
 
-  it('limits framework options to Astro and Nuxt', () => {
+  it('offers the complete internal target framework matrix', () => {
     const source = page()
-    expect(source).toContain('<option value="astro">Astro</option>')
-    expect(source).toContain('<option value="nuxt">Nuxt</option>')
-    expect(source).not.toContain('WordPress')
+    for (const framework of ['astro', 'nuxt', 'wordpress', 'php_agent', 'generic_http', 'geoflow_local', 'static_site']) expect(source).toContain(`<option value="${framework}">`)
+    expect(source).toContain('WordPress')
+    expect(source).toContain('GEOFlow local')
   })
 
-  it('limits publication transport options to first-party Git and signed API', () => {
+  it('offers the complete internal publication transport matrix', () => {
     const source = page()
-    expect(source).toContain('value="first_party_git"')
-    expect(source).toContain('First-party Git')
-    expect(source).toContain('value="first_party_signed_api"')
-    expect(source).toContain('First-party Signed API')
-    expect(source).not.toMatch(/wordpress_rest|WordPress/i)
+    expect(source).toContain('transportOptionsForFramework')
+    for (const transport of ['first_party_git', 'first_party_signed_api', 'wordpress_rest', 'geoflow_agent', 'generic_http', 'geoflow_local']) expect(source).toContain(transport)
+    for (const label of ['First-party Git', 'First-party Signed API', 'WordPress REST', 'PHP / GEOFlow agent', 'Generic HTTP', 'GEOFlow local']) expect(source).toContain(label)
+    expect(source).toContain('static_site: [\'geoflow_agent\']')
   })
 
   it('limits cadence options to 3, 7, 15 and 30 days', () => {
@@ -131,12 +130,11 @@ describe('Owner Content Operations Workbench V1 contract', () => {
     expect(source).toContain('已送出；畫面正在重新整理')
   })
 
-  it('truthfully renders every false capability message', () => {
+  it('renders capability state separately from external runtime availability', () => {
     const source = page()
-    for (const message of ['排程器尚未接通', '自動內容生成尚未接通', '第一方網站發布器尚未設定', '成效資料尚未自動回收']) expect(source).toContain(message)
+    for (const message of ['排程器尚未接通', '目前沒有已配置的 provider runtime', '尚無 active publication target', 'Outcome persistence 尚未可用']) expect(source).toContain(message)
+    for (const field of ['externalRuntimeAvailability', 'generationProviderConfigured', 'firstPartyTransportConfigured', 'nonFirstPartyTransportConfigured', 'credentialResolverAvailable']) expect(source).toContain(field)
     expect(source).toContain('workspace.capabilities')
-    expect(source).not.toContain('schedulerAvailable: true')
-    expect(source).not.toContain('generationExecutorConfigured: true')
   })
 
   it('keeps blocked, failed and retry_wait as independent text statuses', () => {
@@ -171,7 +169,7 @@ describe('Owner Content Operations Workbench V1 contract', () => {
 
   it('renders calendar fields and entry fields required by the contract', () => {
     const source = page()
-    for (const field of ['plannedLocalDate', 'title', 'topic', 'contentType', 'language', 'status', 'framework', 'target', 'hasApprovedDraft', 'hasPassedRiskGate']) expect(source).toContain(field)
+    for (const field of ['plannedLocalDate', 'title', 'topic', 'contentType', 'language', 'status', 'framework', 'target', 'hasApprovedDraft', 'hasPassedRiskGate', 'publicationTargetBindings', 'latestAttempt', 'receiptFingerprint']) expect(source).toContain(field)
     expect(source).toContain('plannedLocalDate')
     expect(source).toContain('frameworkLabel(entry.framework)')
   })
@@ -226,7 +224,7 @@ describe('Owner Content Operations Workbench V1 contract', () => {
 })
 
 describe('Content Operations Execution Orchestrator workbench additions', () => {
-  it('keeps the new execution readiness projection and first-party-only target controls', () => {
+  it('keeps execution readiness projection and multi-channel target controls', () => {
     const source = page()
     expect(source).toContain('generationExecutorAvailable')
     expect(source).toContain('publicationTargetConfigured')
@@ -235,15 +233,18 @@ describe('Content Operations Execution Orchestrator workbench additions', () => 
     expect(source).toContain('credential reference 已設定')
     expect(source).toContain('credential reference 未設定')
     expect(source).toContain('第一方 target 尚未設定')
-    expect(source).toContain('第一方 Git')
-    expect(source).toContain('第一方 Signed API')
-    expect(source).not.toMatch(/wordpress/i)
-    expect(source).not.toMatch(/generic[_ -]?http/i)
+    expect(source).toContain('First-party Git')
+    expect(source).toContain('First-party Signed API')
+    expect(source).toContain('publicationTargetBindings')
+    expect(source).toContain('serviceReferenceConfigured')
+    expect(source).toContain('destinationPublicationIdentityConfigured')
+    expect(source).toContain('WordPress REST')
+    expect(source).toContain('Generic HTTP')
   })
 
   it('shows the explicit execution warning and durable pipeline actions', () => {
     const source = page()
-    expect(source).toContain('開啟後，通過正式 delivery approval 的內容可由 scheduler 發布到第一方網站')
+    expect(source).toContain('開啟後，通過正式 evidence/risk/policy gate 的內容才可送入對應 transport')
     for (const status of ['awaiting_review', 'ready_to_publish', 'retry_wait', 'delivered', 'blocked']) expect(source).toContain(status)
     expect(source).toContain('執行下一步 dry-run')
     expect(source).toContain("executeEntry(entry, 'execute')")
@@ -255,6 +256,8 @@ describe('Content Operations Execution Orchestrator workbench additions', () => 
     const source = page()
     expect(source).toContain('/api/content-operations/clients/${targetForm.clientId}/publication-target')
     expect(source).toContain('/api/content-operations/entries/${entry.id}/execute')
+    expect(source).toContain('/api/content-operations/entries/${entry.id}/publication-targets')
+    expect(source).toContain('bindEntryTargets(entry)')
     expect(source).toContain('正在讀取內容營運資料')
     expect(source).toContain('isSaving')
     expect(source).toContain('notice--success')

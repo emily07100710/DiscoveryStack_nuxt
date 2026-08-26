@@ -28,6 +28,7 @@ import type {
 } from './repository'
 import { createContentOperationsRepository } from './repository'
 import { runtimeCredentialResolverAvailable } from './runtime-dependencies'
+import { resolveProductionRuntimeProviders } from '../seo-geo-core/productionProviders'
 import {
   assertDateOnly,
   assertSha256,
@@ -44,10 +45,13 @@ import {
 import type {
   Clock,
   ContentOperationCalendarEntryRow,
+  ContentOperationCalendarEntryTargetRow,
   ContentOperationCalendarRow,
   ContentOperationEventRow,
   ContentOperationClientInput,
   ContentOperationClientRow,
+  ContentOperationPublicationAttemptRow,
+  ContentOperationPublicationTargetRow,
   ContentOperationRunRow,
   CreateCalendarInput,
   MaterializeExecutionOptions,
@@ -672,6 +676,46 @@ function outcomeValidPairCount(snapshot: unknown): number | null {
   return snapshot.validPairCount
 }
 
+function latestAttemptSummary(targetRowId: number, attempts: ContentOperationPublicationAttemptRow[], runs: ContentOperationRunRow[]) {
+  const attempt = attempts
+    .filter(candidate => candidate.targetId === targetRowId)
+    .sort((left, right) => right.attemptNumber - left.attemptNumber || right.createdAt.getTime() - left.createdAt.getTime())[0]
+  if (!attempt) return null
+  const run = runs.find(candidate => candidate.id === attempt.runId)
+  return {
+    attemptId: attempt.id,
+    status: attempt.status,
+    attemptNumber: attempt.attemptNumber,
+    receiptFingerprint: attempt.receiptFingerprint ?? null,
+    publicationUrl: attempt.publicationUrl ?? null,
+    remoteRevision: attempt.remoteRevision ?? null,
+    errorCode: attempt.errorCode ?? null,
+    errorSummary: attempt.errorSummary ?? null,
+    completedAt: attempt.completedAt ?? null,
+    retryEligibleAt: run?.retryEligibleAt ?? null,
+  }
+}
+
+function projectEntryTargetBinding(binding: ContentOperationCalendarEntryTargetRow, target: ContentOperationPublicationTargetRow | null, attempts: ContentOperationPublicationAttemptRow[], runs: ContentOperationRunRow[]) {
+  return {
+    bindingId: binding.id,
+    slot: binding.slot,
+    targetRowId: binding.targetId,
+    targetId: target?.targetId || `missing-target-${binding.targetId}`,
+    websiteId: target?.websiteId ?? null,
+    framework: target?.framework || 'unknown',
+    transport: target?.transport || 'unknown',
+    targetOrigin: target?.targetOrigin || '',
+    status: target?.status || 'missing',
+    executionEnabled: target?.executionEnabled === true,
+    credentialConfigured: Boolean(target?.credentialReference),
+    destinationPublicationIdentityConfigured: Boolean(target?.destinationPublicationIdentity),
+    serviceReferenceConfigured: Boolean(target?.serviceReference),
+    bindingFingerprint: binding.bindingFingerprint,
+    latestAttempt: target ? latestAttemptSummary(target.id, attempts, runs) : null,
+  }
+}
+
 export async function buildOwnerContentLearningDataset(ownerUserId: number, repository?: ContentOperationsRepository) {
   const db = await getRepository(repository)
   const outcomes = await db.listOutcomes(ownerUserId)
@@ -690,17 +734,31 @@ export async function buildOwnerContentLearningDataset(ownerUserId: number, repo
 export async function getOwnerContentOperationsWorkspace(ownerUserId: number, repository?: ContentOperationsRepository): Promise<WorkspacePayload> {
   const db = await getRepository(repository)
   const [clients, calendars, entries, runs, outcomeAssessments, targets] = await Promise.all([db.listClients(ownerUserId), db.listCalendars(ownerUserId), db.listEntries(ownerUserId), db.listRuns(ownerUserId), db.listOutcomes(ownerUserId), db.listPublicationTargets(ownerUserId)])
-  const lineages = await Promise.all(entries.map(entry => db.resolveWorkspaceEntry(ownerUserId, entry.id)))
+  const targetByRowId = new Map(targets.map(target => [target.id, target]))
+  const entryDetails = await Promise.all(entries.map(async entry => {
+    const [lineage, bindings, attempts] = await Promise.all([db.resolveWorkspaceEntry(ownerUserId, entry.id), db.listEntryTargetBindings(ownerUserId, entry.id), db.listPublicationAttempts(ownerUserId, entry.id)])
+    return { lineage, bindings, attempts }
+  }))
   const projections = entries.map((entry, index) => {
-    const lineage = lineages[index]
+    const detail = entryDetails[index]!
+    const lineage = detail.lineage
     const hasApprovedDraft = Boolean(lineage?.draft && lineage.review && ['approved_for_preview', 'approved_for_delivery'].includes(lineage.review.decision) && lineage.review.evidenceSnapshotHash === entry.evidenceSnapshotHash && lineage.draft.jobId === lineage.job?.id)
     const hasPassedRiskGate = Boolean(lineage?.riskGate && lineage.riskGate.status === 'passed' && lineage.riskGate.evidenceSnapshotHash === entry.evidenceSnapshotHash && lineage.riskGate.draftId === lineage.draft?.id)
     const hasOutcome = outcomeAssessments.some(outcome => outcome.entryId === entry.id)
-    return { ...entry, topic: entry.topicCluster, framework: lineage?.client.framework || null, target: lineage?.client.canonicalSiteOrigin || null, hasApprovedDraft, hasPassedRiskGate, nextAction: nextActionForEntry(entry, hasApprovedDraft, hasPassedRiskGate, hasOutcome) }
+    const publicationTargetBindings = detail.bindings
+      .sort((left, right) => left.slot - right.slot)
+      .map(binding => projectEntryTargetBinding(binding, targetByRowId.get(binding.targetId) || null, detail.attempts, runs))
+    return { ...entry, topic: entry.topicCluster, framework: lineage?.client.framework || null, target: lineage?.client.canonicalSiteOrigin || null, hasApprovedDraft, hasPassedRiskGate, nextAction: nextActionForEntry(entry, hasApprovedDraft, hasPassedRiskGate, hasOutcome), publicationTargetBindings }
   })
   const activeTargets = targets.filter(target => target.status === 'active')
-  const publicationTargets = targets.map(target => ({ id: target.id, clientId: target.clientId, targetId: target.targetId, framework: target.framework, transport: target.transport, targetOrigin: target.targetOrigin, contentRoot: target.contentRoot, defaultBranch: target.defaultBranch, repositoryOwner: target.repositoryOwner, repositoryName: target.repositoryName, endpointPath: target.endpointPath, allowedContentTypes: target.allowedContentTypes, allowedLanguages: target.allowedLanguages, maximumPayloadBytes: target.maximumPayloadBytes, status: target.status, activeSlot: target.activeSlot, executionEnabled: target.executionEnabled, credentialConfigured: Boolean(target.credentialReference), configurationFingerprint: target.configurationFingerprint, idempotencyKey: target.idempotencyKey, createdAt: target.createdAt, updatedAt: target.updatedAt }))
-  return { clients: clients.map(publicClient), calendars, entries: projections, runs, outcomeAssessments: outcomeAssessments.map(outcome => ({ ...outcome, validPairCount: outcomeValidPairCount(outcome.assessmentSnapshot) })), publicationTargets, capabilities: { schedulerAvailable: true, generationExecutorConfigured: false, firstPartyPublisherConfigured: false, outcomeCollectionConfigured: false }, readiness: { schedulerAvailable: true, generationExecutorAvailable: true, publicationTargetConfigured: activeTargets.length > 0, publicationExecutionEnabled: activeTargets.some(target => target.executionEnabled), credentialReferenceConfigured: activeTargets.some(target => Boolean(target.credentialReference)), runtimeCredentialResolverAvailable: runtimeCredentialResolverAvailable(), outcomeCollectionConfigured: false }, limitations: [...CONTENT_OPERATIONS_LIMITATIONS] }
+  const generationProviderConfigured = resolveProductionRuntimeProviders().configured
+  const firstPartyTransportConfigured = activeTargets.some(target => ['first_party_git', 'first_party_signed_api'].includes(target.transport))
+  const nonFirstPartyTransportConfigured = activeTargets.some(target => !['first_party_git', 'first_party_signed_api'].includes(target.transport))
+  const credentialResolverConfigured = runtimeCredentialResolverAvailable()
+  const publicationTargets = targets.map(target => ({ id: target.id, clientId: target.clientId, targetId: target.targetId, websiteId: target.websiteId ?? null, framework: target.framework, transport: target.transport, targetOrigin: target.targetOrigin, contentRoot: target.contentRoot, defaultBranch: target.defaultBranch, repositoryOwner: target.repositoryOwner, repositoryName: target.repositoryName, endpointPath: target.endpointPath, allowedContentTypes: target.allowedContentTypes, allowedLanguages: target.allowedLanguages, maximumPayloadBytes: target.maximumPayloadBytes, status: target.status, activeSlot: target.activeSlot, executionEnabled: target.executionEnabled, credentialConfigured: Boolean(target.credentialReference), destinationPublicationIdentityConfigured: Boolean(target.destinationPublicationIdentity), serviceReferenceConfigured: Boolean(target.serviceReference), configurationFingerprint: target.configurationFingerprint, idempotencyKey: target.idempotencyKey, createdAt: target.createdAt, updatedAt: target.updatedAt }))
+  const capabilities = { schedulerAvailable: true, generationExecutorConfigured: generationProviderConfigured, firstPartyPublisherConfigured: firstPartyTransportConfigured, outcomeCollectionConfigured: true, externalRuntimeAvailability: { generationProviderConfigured, firstPartyTransportConfigured, nonFirstPartyTransportConfigured, credentialResolverAvailable: credentialResolverConfigured } }
+  const readiness = { schedulerAvailable: true, generationExecutorAvailable: generationProviderConfigured, publicationTargetConfigured: activeTargets.length > 0, publicationExecutionEnabled: activeTargets.some(target => target.executionEnabled), credentialReferenceConfigured: activeTargets.some(target => Boolean(target.credentialReference)), runtimeCredentialResolverAvailable: credentialResolverConfigured, outcomeCollectionConfigured: true }
+  return { clients: clients.map(publicClient), calendars, entries: projections, runs, outcomeAssessments: outcomeAssessments.map(outcome => ({ ...outcome, validPairCount: outcomeValidPairCount(outcome.assessmentSnapshot) })), publicationTargets, capabilities, readiness, limitations: [...CONTENT_OPERATIONS_LIMITATIONS] }
 }
 
 export function getDefaultContentOperationsClock(): Clock {

@@ -75,6 +75,7 @@ export type ContentOperationsRepository = {
   updatePublicationTarget(ownerUserId: number, targetRowId: number, patch: Partial<PublicationTargetInsert>): Promise<ContentOperationPublicationTargetRow>
   listPublicationTargets(ownerUserId: number): Promise<ContentOperationPublicationTargetRow[]>
   findAutopilotPolicy(ownerUserId: number, clientId: number, publicationTargetId: number): Promise<ContentOperationAutopilotPolicyRow | null>
+  listAutopilotPolicies(ownerUserId: number, clientId: number): Promise<ContentOperationAutopilotPolicyRow[]>
   insertAutopilotPolicy(input: AutopilotPolicyInsert): Promise<ContentOperationAutopilotPolicyRow>
   revokeAutopilotPolicy(ownerUserId: number, policyId: string, revokedAt: Date): Promise<ContentOperationAutopilotPolicyRow | null>
   findCalendarByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationCalendarRow | null>
@@ -100,7 +101,7 @@ export type ContentOperationsRepository = {
   appendEvent(input: EventInsert): Promise<ContentOperationEventRow>
   listEvents(ownerUserId: number, entryId?: number): Promise<ContentOperationEventRow[]>
   findLatestOptimizedDraft(ownerUserId: number, jobId: number): Promise<Record<string, unknown> & { id: number; jobId: number; version: number; title: string; body: string; contentHash: string; provenance: unknown; safetyStatus: string } | null>
-  findRiskGate(ownerUserId: number, draftId: number, evidenceSnapshotHash: string): Promise<Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string } | null>
+  findRiskGate(ownerUserId: number, draftId: number, evidenceSnapshotHash: string): Promise<Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string; gateVersion?: string; findings?: unknown; riskLevel?: string } | null>
   findLatestReview(ownerUserId: number, jobId: number, draftId: number, evidenceSnapshotHash: string): Promise<Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string } | null>
   findPublicationAttemptByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationPublicationAttemptRow | null>
   listPublicationAttempts(ownerUserId: number, entryId?: number): Promise<ContentOperationPublicationAttemptRow[]>
@@ -202,6 +203,9 @@ function makeRepository(database: any): ContentOperationsRepository {
     async findAutopilotPolicy(ownerUserId, clientId, publicationTargetId) {
       const [row] = await database.select().from(contentOperationAutopilotPolicies).where(and(eq(contentOperationAutopilotPolicies.ownerUserId, ownerUserId), eq(contentOperationAutopilotPolicies.clientId, clientId), eq(contentOperationAutopilotPolicies.publicationTargetId, publicationTargetId))).limit(1)
       return row || null
+    },
+    async listAutopilotPolicies(ownerUserId, clientId) {
+      return database.select().from(contentOperationAutopilotPolicies).where(and(eq(contentOperationAutopilotPolicies.ownerUserId, ownerUserId), eq(contentOperationAutopilotPolicies.clientId, clientId))).orderBy(contentOperationAutopilotPolicies.publicationTargetId)
     },
     async insertAutopilotPolicy(input) {
       const id = rowId(await database.insert(contentOperationAutopilotPolicies).values(input as any))
@@ -368,8 +372,13 @@ function makeRepository(database: any): ContentOperationsRepository {
       return optimized ? optimized as Record<string, unknown> & { id: number; jobId: number; version: number; title: string; body: string; contentHash: string; provenance: unknown; safetyStatus: string } : null
     },
     async findRiskGate(ownerUserId, draftId, evidenceSnapshotHash) {
-      const [row] = await database.select({ id: seoGeoContentRiskGates.id, draftId: seoGeoContentRiskGates.draftId, status: seoGeoContentRiskGates.status, evidenceSnapshotHash: seoGeoContentRiskGates.evidenceSnapshotHash }).from(seoGeoContentRiskGates).innerJoin(seoGeoContentDrafts, eq(seoGeoContentRiskGates.draftId, seoGeoContentDrafts.id)).innerJoin(seoGeoContentJobs, eq(seoGeoContentDrafts.jobId, seoGeoContentJobs.id)).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentRiskGates.draftId, draftId), eq(seoGeoContentRiskGates.evidenceSnapshotHash, evidenceSnapshotHash))).orderBy(desc(seoGeoContentRiskGates.id)).limit(1)
-      return row ? row as Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string } : null
+      const [row] = await database.select({ id: seoGeoContentRiskGates.id, draftId: seoGeoContentRiskGates.draftId, gateVersion: seoGeoContentRiskGates.gateVersion, status: seoGeoContentRiskGates.status, findings: seoGeoContentRiskGates.findings, evidenceSnapshotHash: seoGeoContentRiskGates.evidenceSnapshotHash }).from(seoGeoContentRiskGates).innerJoin(seoGeoContentDrafts, eq(seoGeoContentRiskGates.draftId, seoGeoContentDrafts.id)).innerJoin(seoGeoContentJobs, eq(seoGeoContentDrafts.jobId, seoGeoContentJobs.id)).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentRiskGates.draftId, draftId), eq(seoGeoContentRiskGates.evidenceSnapshotHash, evidenceSnapshotHash))).orderBy(desc(seoGeoContentRiskGates.id)).limit(1)
+      if (!row) return null
+      const findings = Array.isArray(row.findings) ? row.findings : []
+      const hasBlocking = findings.some((item: unknown) => item && typeof item === 'object' && !Array.isArray(item) && (item as { severity?: unknown }).severity === 'blocking')
+      const hasReview = findings.some((item: unknown) => item && typeof item === 'object' && !Array.isArray(item) && (item as { severity?: unknown }).severity === 'review')
+      const riskLevel = hasBlocking ? 'high' : hasReview ? 'general' : 'low'
+      return { ...row, riskLevel } as Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string; gateVersion?: string; findings?: unknown; riskLevel?: string }
     },
     async findLatestReview(ownerUserId, jobId, draftId, evidenceSnapshotHash) {
       const [row] = await database.select().from(seoGeoContentReviews).where(and(eq(seoGeoContentReviews.reviewerUserId, ownerUserId), eq(seoGeoContentReviews.jobId, jobId), eq(seoGeoContentReviews.draftId, draftId), eq(seoGeoContentReviews.evidenceSnapshotHash, evidenceSnapshotHash))).orderBy(desc(seoGeoContentReviews.id)).limit(1)

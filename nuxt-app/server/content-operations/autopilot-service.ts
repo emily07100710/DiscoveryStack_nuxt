@@ -1,5 +1,5 @@
 import { createError } from 'h3'
-import { enableOwnerAutopilotPolicy, revokeOwnerAutopilotPolicy, type OwnerAutopilotPolicy } from './autopilot-policy'
+import { enableOwnerAutopilotPolicy, revokeOwnerAutopilotPolicy, validateOwnerAutopilotPolicyIntegrity, type OwnerAutopilotPolicy } from './autopilot-policy'
 import { createContentOperationsRepository, type AutopilotPolicyInsert, type ContentOperationsRepository } from './repository'
 import { parseAutopilotPolicyInput, stableFingerprint } from './normalization'
 import type { ContentOperationAutopilotPolicyRow } from './types'
@@ -10,61 +10,43 @@ function conflict(message: string): never { throw createError({ statusCode: 409,
 function listOf(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [] }
 
 export function projectAutopilotPolicy(row: ContentOperationAutopilotPolicyRow, targetId: string): OwnerAutopilotPolicy {
-  return {
+  const cadenceDays = row.cadenceDays === 3 || row.cadenceDays === 7 || row.cadenceDays === 15 || row.cadenceDays === 30 ? row.cadenceDays : null
+  const maximumRiskLevel = row.maximumRiskLevel === 'low' || row.maximumRiskLevel === 'general' || row.maximumRiskLevel === 'high' ? row.maximumRiskLevel : null
+  const allowedTargetIds = listOf(row.allowedTargetIds)
+  const allowedProviderModels = listOf(row.allowedProviderModels)
+  const evidenceFreshnessHours = row.evidenceFreshnessHours
+  if (row.policyVersion !== 'governed-autopilot-policy-v3' || !cadenceDays || !maximumRiskLevel || !allowedTargetIds.length || !allowedProviderModels.length || !row.requiredQualityGateVersion?.trim() || typeof evidenceFreshnessHours !== 'number' || !Number.isSafeInteger(evidenceFreshnessHours) || evidenceFreshnessHours < 1 || !targetId.trim()) throw new Error('stored autopilot policy is malformed or uses an unsupported version')
+  const policy: OwnerAutopilotPolicy = {
     policyId: row.policyId,
-    policyVersion: row.policyVersion as OwnerAutopilotPolicy['policyVersion'],
+    policyVersion: row.policyVersion,
     ownerUserId: row.ownerUserId,
     authorizedByOwnerUserId: row.authorizedByOwnerUserId,
     clientId: row.clientId,
     targetRowId: row.publicationTargetId,
-    targetId,
+    targetId: targetId.normalize('NFKC').trim(),
     status: row.status,
-    authorizedAt: row.authorizedAt.toISOString(),
-    expiresAt: row.expiresAt.toISOString(),
-    revokedAt: row.revokedAt?.toISOString() || null,
-    allowedContentTypes: listOf(row.allowedContentTypes),
-    allowedLanguages: listOf(row.allowedLanguages),
-    cadenceDays: (row.cadenceDays === 7 || row.cadenceDays === 15 || row.cadenceDays === 30 ? row.cadenceDays : 3),
-    allowedTargetIds: listOf(row.allowedTargetIds).length ? listOf(row.allowedTargetIds) : [targetId],
-    evidenceFreshnessHours: typeof row.evidenceFreshnessHours === 'number' ? row.evidenceFreshnessHours : 720,
-    maximumRiskLevel: row.maximumRiskLevel === 'low' ? 'low' : 'general',
-    requiredQualityGateVersion: row.requiredQualityGateVersion || 'content-risk-gate-v1',
-    allowedProviderModels: listOf(row.allowedProviderModels).length ? listOf(row.allowedProviderModels) : ['bailian:qwen-plus'],
-    activatedAt: (row.activatedAt || row.authorizedAt).toISOString(),
-    requireApprovedForDelivery: row.requireApprovedForDelivery === true,
-    requirePassedRiskGate: true,
-    configurationFingerprint: row.configurationFingerprint,
-  }
-}
-
-function policyProjection(row: ContentOperationAutopilotPolicyRow, targetId: string): OwnerAutopilotPolicy {
-  const cadenceDays = row.cadenceDays === 7 || row.cadenceDays === 15 || row.cadenceDays === 30 ? row.cadenceDays : 3
-  const maximumRiskLevel = row.maximumRiskLevel === 'low' ? 'low' : 'general'
-  return {
-    policyId: row.policyId,
-    policyVersion: row.policyVersion as OwnerAutopilotPolicy['policyVersion'],
-    ownerUserId: row.ownerUserId,
-    clientId: row.clientId,
-    targetRowId: row.publicationTargetId,
-    targetId,
-    status: row.status,
-    authorizedByOwnerUserId: row.authorizedByOwnerUserId,
     authorizedAt: row.authorizedAt.toISOString(),
     expiresAt: row.expiresAt.toISOString(),
     revokedAt: row.revokedAt?.toISOString() || null,
     allowedContentTypes: listOf(row.allowedContentTypes),
     allowedLanguages: listOf(row.allowedLanguages),
     cadenceDays,
-    allowedTargetIds: listOf(row.allowedTargetIds).length ? listOf(row.allowedTargetIds) : [targetId],
-    evidenceFreshnessHours: row.evidenceFreshnessHours || 720,
+    allowedTargetIds,
+    evidenceFreshnessHours,
     maximumRiskLevel,
-    requiredQualityGateVersion: row.requiredQualityGateVersion || 'content-risk-gate-v1',
-    allowedProviderModels: listOf(row.allowedProviderModels).length ? listOf(row.allowedProviderModels) : ['bailian:qwen-plus'],
+    requiredQualityGateVersion: row.requiredQualityGateVersion.trim(),
+    allowedProviderModels,
     activatedAt: (row.activatedAt || row.authorizedAt).toISOString(),
     requireApprovedForDelivery: row.requireApprovedForDelivery === true,
     requirePassedRiskGate: true,
     configurationFingerprint: row.configurationFingerprint,
   }
+  if (!validateOwnerAutopilotPolicyIntegrity(policy)) throw new Error('stored autopilot policy fingerprint or version is invalid')
+  return policy
+}
+
+function policyProjection(row: ContentOperationAutopilotPolicyRow, targetId: string): OwnerAutopilotPolicy {
+  return projectAutopilotPolicy(row, targetId)
 }
 
 function insertInput(policy: OwnerAutopilotPolicy): AutopilotPolicyInsert {
@@ -122,28 +104,54 @@ export async function enableOwnerAutopilot(ownerUserId: number, clientId: number
   }
 }
 
-export async function revokeOwnerAutopilot(ownerUserId: number, clientId: number, repository?: ContentOperationsRepository) {
+export async function revokeOwnerAutopilot(ownerUserId: number, clientId: number, repository?: ContentOperationsRepository, revokeNow = new Date()) {
   const db = repository || createContentOperationsRepository()
-  const target = (await db.listPublicationTargets(ownerUserId)).find(candidate => candidate.clientId === clientId && candidate.status !== 'revoked') || (await db.listPublicationTargets(ownerUserId)).find(candidate => candidate.clientId === clientId)
-  if (!target) notFound('A publication target was not found for this owner client.')
-  const existing = await db.findAutopilotPolicy(ownerUserId, clientId, target.id)
-  if (!existing) notFound('An autopilot policy was not found for this owner target.')
-  if (existing.status === 'revoked') return { policy: policyProjection(existing, target.targetId), replayed: true }
-  const revokedAt = new Date()
-  const revoked = await db.transaction(async transaction => {
-    const row = await transaction.revokeAutopilotPolicy(ownerUserId, existing.policyId, revokedAt)
-    if (!row) notFound('Autopilot policy disappeared before revocation.')
-    await transaction.appendEvent({ ownerUserId, clientId, calendarId: null, entryId: null, runId: null, eventType: 'autopilot_policy_revoked', fromStatus: existing.status, toStatus: row.status, eventFingerprint: stableFingerprint({ event: 'autopilot_policy_revoked', policyId: row.policyId, revokedAt: revokedAt.toISOString() }), metadata: { policyId: row.policyId, policyVersion: row.policyVersion, clientId: row.clientId, publicationTargetId: row.publicationTargetId, status: row.status, revokedAt: row.revokedAt } })
-    return row
+  const client = await db.findClient(ownerUserId, clientId)
+  if (!client) notFound('Content operation client was not found for this owner.')
+  const targets = (await db.listPublicationTargets(ownerUserId)).filter(target => target.clientId === clientId)
+  const targetById = new Map(targets.map(target => [target.id, target]))
+  const policies = await db.listAutopilotPolicies(ownerUserId, clientId)
+  if (!policies.length) notFound('No autopilot policy was found for this owner client.')
+  const projections = policies.map(row => {
+    const target = targetById.get(row.publicationTargetId)
+    if (!target) conflict('Autopilot policy target is not owner-scoped to this client.')
+    return { row, targetId: target.targetId, policy: policyProjection(row, target.targetId) }
   })
-  return { policy: policyProjection(revoked, target.targetId), replayed: false }
+  const active = projections.filter(item => item.row.status === 'enabled' || item.row.status === 'paused')
+  const alreadyRevokedPolicies = projections.filter(item => item.row.status === 'revoked').map(item => item.policy)
+  if (!active.length) {
+    return { policy: alreadyRevokedPolicies[0]!, revokedPolicies: [], alreadyRevokedPolicies, revokedCount: 0, replayed: true }
+  }
+  if (!Number.isFinite(revokeNow.getTime())) throw createError({ statusCode: 422, statusMessage: 'Autopilot revoke time is invalid.' })
+  const revokedAt = new Date(revokeNow.getTime())
+  const revokedRows = await db.transaction(async transaction => {
+    const rows: ContentOperationAutopilotPolicyRow[] = []
+    for (const item of active) {
+      const row = await transaction.revokeAutopilotPolicy(ownerUserId, item.row.policyId, revokedAt)
+      if (!row) throw createError({ statusCode: 409, statusMessage: 'Autopilot policy disappeared before client-wide revocation completed.' })
+      await transaction.appendEvent({ ownerUserId, clientId, calendarId: null, entryId: null, runId: null, eventType: 'autopilot_policy_revoked', fromStatus: item.row.status, toStatus: row.status, eventFingerprint: stableFingerprint({ event: 'autopilot_policy_revoked', policyId: row.policyId, revokedAt: revokedAt.toISOString() }), metadata: { policyId: row.policyId, policyVersion: row.policyVersion, clientId: row.clientId, publicationTargetId: row.publicationTargetId, status: row.status, revokedAt: row.revokedAt, revokeScope: 'client-wide' } })
+      rows.push(row)
+    }
+    return rows
+  })
+  const revokedPolicies = revokedRows.map(row => {
+    const target = targetById.get(row.publicationTargetId)
+    if (!target) throw createError({ statusCode: 409, statusMessage: 'Revoked autopilot policy target is no longer owner-scoped.' })
+    return policyProjection(row, target.targetId)
+  })
+  return { policy: revokedPolicies[0] || alreadyRevokedPolicies[0]!, revokedPolicies, alreadyRevokedPolicies, revokedCount: revokedPolicies.length, replayed: false }
 }
 
 export async function getOwnerAutopilotPolicy(ownerUserId: number, clientId: number, repository?: ContentOperationsRepository) {
   const db = repository || createContentOperationsRepository()
-  const targets = await db.listPublicationTargets(ownerUserId)
-  const target = targets.find(candidate => candidate.clientId === clientId && candidate.status !== 'revoked') || targets.find(candidate => candidate.clientId === clientId)
-  if (!target) return { policy: null }
-  const row = await db.findAutopilotPolicy(ownerUserId, clientId, target.id)
-  return { policy: row ? policyProjection(row, target.targetId) : null }
+  const targets = (await db.listPublicationTargets(ownerUserId)).filter(target => target.clientId === clientId)
+  const targetById = new Map(targets.map(target => [target.id, target]))
+  const rows = await db.listAutopilotPolicies(ownerUserId, clientId)
+  const policies = rows.map(row => {
+    const target = targetById.get(row.publicationTargetId)
+    if (!target) conflict('Autopilot policy target is not owner-scoped to this client.')
+    return policyProjection(row, target.targetId)
+  })
+  const policy = policies.find(item => item.status !== 'revoked') || policies[0] || null
+  return { policy, policies, activePolicies: policies.filter(item => item.status === 'enabled' || item.status === 'paused'), revokedPolicies: policies.filter(item => item.status === 'revoked'), policyCount: policies.length }
 }

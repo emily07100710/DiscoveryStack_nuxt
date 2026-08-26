@@ -41,6 +41,8 @@ export type EvidenceSnapshot = {
   context: string
   hash: string
   materials: EvidenceMaterial[]
+  approvalTimestamps: string[]
+  freshnessBasis: string
 }
 
 function evidenceKey(sourceId?: number, artifactId?: number) {
@@ -74,12 +76,15 @@ async function getOwnerSource(ownerUserId: number, sourceId: number) {
 }
 
 /** Resolve only active, owner-scoped approvals and return canonical immutable evidence metadata for downstream work. */
-export async function resolveApprovedEvidenceSnapshot(ownerUserId: number, requestedRefs: EvidenceRef[], allowedFor: EvidencePurpose | readonly EvidencePurpose[], options: { requireArtifact: boolean }): Promise<EvidenceSnapshot> {
+export async function resolveApprovedEvidenceSnapshot(ownerUserId: number, requestedRefs: EvidenceRef[], allowedFor: EvidencePurpose | readonly EvidencePurpose[], options: { requireArtifact: boolean; now?: Date }): Promise<EvidenceSnapshot> {
   const purposes = Array.isArray(allowedFor) ? allowedFor : [allowedFor]
   if (!requestedRefs.length) throw createError({ statusCode: 422, statusMessage: '至少需要一項已核准 evidence reference。' })
+  const now = options.now || new Date()
+  if (!Number.isFinite(now.getTime())) throw createError({ statusCode: 422, statusMessage: 'Evidence freshness clock is invalid.' })
   const database = requireAuditDatabase()
   const rows = await database.select({
     approvalId: seoGeoEvidenceApprovals.id,
+    approvedAt: seoGeoEvidenceApprovals.approvedAt,
     approvalPurpose: seoGeoEvidenceApprovals.allowedFor,
     sourceId: seoGeoEvidenceApprovals.sourceId,
     artifactId: seoGeoEvidenceApprovals.artifactId,
@@ -128,12 +133,16 @@ export async function resolveApprovedEvidenceSnapshot(ownerUserId: number, reque
     if (!row || missingPurpose) throw createError({ statusCode: 422, statusMessage: `Evidence source/artifact 尚未取得 ${missingPurpose || purposes.join('/')} 用途的有效核准，或已撤銷。` })
     if (options.requireArtifact && (!row.artifactId || !row.artifactHash || !row.artifactType)) throw createError({ statusCode: 422, statusMessage: 'Content generation 必須使用通過品質與 PII 檢查的 approved artifact snapshot。' })
     if (requested.artifactHash && requested.artifactHash !== row.artifactHash) throw createError({ statusCode: 409, statusMessage: 'Evidence artifact hash 與目前核准 snapshot 不一致，請重新建立 Content Brief。' })
+    const approvedAt = row.approvedAt ? new Date(row.approvedAt) : null
+    if (!approvedAt || !Number.isFinite(approvedAt.getTime()) || approvedAt.getTime() > now.getTime()) throw createError({ statusCode: 409, statusMessage: 'Evidence approval timestamp is missing, invalid, or in the future.' })
+    const approvedAtIso = approvedAt.toISOString()
     const locator = row.artifactLocator || row.sourceUrl || row.fallbackSourceUrl || undefined
     const canonical: EvidenceRef = {
       sourceId: row.sourceId,
       artifactId: row.artifactId ?? undefined,
       locator,
       artifactHash: row.artifactHash ?? undefined,
+      approvedAt: approvedAtIso,
       reason: `Evidence approval #${row.approvalId} 已由 owner 明確核准用於 ${purposes.join('/')}`,
     }
     canonicalRefs.push(canonical)
@@ -152,9 +161,13 @@ export async function resolveApprovedEvidenceSnapshot(ownerUserId: number, reque
   }
   const refs = canonicalRefs.slice(0, 40)
   const context = contextBlocks.join('\n\n').slice(0, 16000)
-  const snapshotIdentity = refs.map(({ sourceId, artifactId, locator, artifactHash }) => ({ sourceId, artifactId: artifactId ?? null, locator: locator || null, artifactHash: artifactHash || null }))
+  const snapshotIdentity = refs.map(({ sourceId, artifactId, locator, artifactHash, approvedAt }) => ({ sourceId, artifactId: artifactId ?? null, locator: locator || null, artifactHash: artifactHash || null, approvedAt: approvedAt || null }))
+  const approvalTimestamps = refs.map(ref => ref.approvedAt).filter((value): value is string => typeof value === 'string')
+  if (approvalTimestamps.length !== refs.length) throw createError({ statusCode: 409, statusMessage: 'Approved evidence snapshot is missing an approval timestamp.' })
   if (options.requireArtifact && materials.length !== refs.filter(ref => Boolean(ref.artifactId)).length) throw createError({ statusCode: 422, statusMessage: 'Approved artifact material is incomplete; content generation is blocked.' })
-  return { refs, context, hash: stableFingerprint(snapshotIdentity), materials }
+  const freshnessBasis = [...approvalTimestamps].sort()[0]
+  if (!freshnessBasis) throw createError({ statusCode: 409, statusMessage: 'Approved evidence snapshot has no freshness basis.' })
+  return { refs, context, hash: stableFingerprint(snapshotIdentity), materials, approvalTimestamps, freshnessBasis }
 }
 
 export async function createEvidenceApproval(input: { ownerUserId: number, sourceId: number, artifactId?: number, allowedFor: EvidencePurpose, reviewNote: string }) {

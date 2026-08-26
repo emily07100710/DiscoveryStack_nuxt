@@ -107,10 +107,22 @@ export function createProviderContentDraftGenerator(provider: ContentDraftProvid
   }
 }
 
+export type ContentDraftGenerationContext = {
+  ownerUserId: number
+  clientId: number
+  calendarEntryId?: number
+  productionPlanId: number
+  deliverableId: number
+  briefId: number
+  jobId: number
+  evidenceSnapshotHash: string
+  now?: Date
+}
+
 export type ContentDraftGenerator = {
   id: string
   version: string
-  generate: (input: ContentDraftGenerationInput) => Promise<ContentDraftGenerationResult>
+  generate: (input: ContentDraftGenerationInput, context?: ContentDraftGenerationContext) => Promise<ContentDraftGenerationResult>
 }
 
 export function buildEvidenceMaterialContext(materials: EvidenceMaterial[]): string {

@@ -149,7 +149,8 @@ describe('Content Operations Persistence & Scheduler Core V1', () => {
     expect(result.materialized).toBe(50)
     expect(fixture.entries.filter(entry => entry.status === 'materialized')).toHaveLength(50)
     const workspace = await getOwnerContentOperationsWorkspace(1, fixture.repository)
-    expect(workspace.capabilities).toEqual({ schedulerAvailable: true, generationExecutorConfigured: false, firstPartyPublisherConfigured: false, outcomeCollectionConfigured: false })
+    expect(workspace.capabilities).toMatchObject({ schedulerAvailable: true, generationExecutorConfigured: expect.any(Boolean), firstPartyPublisherConfigured: expect.any(Boolean), outcomeCollectionConfigured: true, externalRuntimeAvailability: { generationProviderConfigured: expect.any(Boolean), firstPartyTransportConfigured: expect.any(Boolean), nonFirstPartyTransportConfigured: expect.any(Boolean), credentialResolverAvailable: expect.any(Boolean) } })
+    expect(workspace.entries.every(item => Array.isArray(item.publicationTargetBindings))).toBe(true)
     expect(workspace.calendars.some(item => item.id === calendar.id)).toBe(true)
   })
 

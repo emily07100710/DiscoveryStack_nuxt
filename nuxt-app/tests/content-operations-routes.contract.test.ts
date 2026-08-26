@@ -61,10 +61,11 @@ describe('Content Operations owner-only route contract', () => {
     expect(calendars).not.toContain('evidenceSnapshotHash')
   })
 
-  it('exposes truthful capability values only in the workspace service contract', () => {
+  it('exposes truthful capability values and separates external runtime availability', () => {
     const source = readFileSync(join(process.cwd(), 'server/content-operations/service.ts'), 'utf8')
-    expect(source).toContain('generationExecutorConfigured: false')
-    expect(source).toContain('firstPartyPublisherConfigured: false')
-    expect(source).toContain('outcomeCollectionConfigured: false')
+    expect(source).toContain('resolveProductionRuntimeProviders().configured')
+    expect(source).toContain('externalRuntimeAvailability')
+    expect(source).toContain('firstPartyTransportConfigured')
+    expect(source).toContain('outcomeCollectionConfigured: true')
   })
 })

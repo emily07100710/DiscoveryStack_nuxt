@@ -41,8 +41,8 @@ function attachLineage(fixture: ContentOperationsFixture, entryId: number, targe
   entry.contentHash = contentHash
   let review: Record<string, unknown> | null = null
   const job = { id: 700, ownerUserId: entry.ownerUserId, productionPlanId: calendar.productionPlanId, productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId, evidenceSnapshotHash: entry.evidenceSnapshotHash, briefId: 701, status: 'approved' }
-  const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified synthetic draft', body, contentHash, provenance: { stage: 'optimized', selectedRuleIds: ['direct-answer-first'], appliedRuleIds: ['direct-answer-first'], providerExecution: true, provider: 'bailian', providerVersion: 'qwen-plus', model: 'bailian:qwen-plus', qualityGateVersion: 'content-risk-gate-v1' }, safetyStatus: 'passed', evidenceRefs: [] }
-  const gate = { id: 703, draftId: draft.id, status: 'passed', evidenceSnapshotHash: entry.evidenceSnapshotHash }
+  const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified synthetic draft', body, contentHash, provenance: { stage: 'optimized', selectedRuleIds: ['direct-answer-first'], appliedRuleIds: ['direct-answer-first'], providerExecution: true, provider: 'bailian', providerVersion: 'qwen-plus', model: 'bailian:qwen-plus', providerModel: 'bailian:qwen-plus', providerProvenance: { provider: 'bailian', model: 'qwen-plus', mode: 'provider', providerExecution: true }, evidenceSnapshotHash: entry.evidenceSnapshotHash, qualityGateVersion: 'content-risk-gate-v1' }, safetyStatus: 'passed', evidenceRefs: [] }
+  const gate = { id: 703, draftId: draft.id, status: 'passed', gateVersion: 'content-risk-gate-v1', findings: [], riskLevel: 'general', evidenceSnapshotHash: entry.evidenceSnapshotHash }
   const repository = fixture.repository as ContentOperationsRepository
   repository.findLatestOptimizedDraft = async () => draft
   repository.findRiskGate = async () => gate
@@ -119,6 +119,7 @@ describe('DiscoveryStack End-to-End Platform V1 mocked acceptance', () => {
     const client = fixture.addClient(1)
     const calendar = await fixture.addCalendar(1, '2026-08-25', 1)
     calendar.updatedAt = NOW
+    fixture.evidenceApprovalAt = NOW.toISOString()
     const entry = fixture.entries.find(item => item.calendarId === calendar.id)!
     entry.status = 'ready_to_publish'; entry.jobId = 700; entry.draftId = 702
     const targetResult = await createOwnerPublicationTarget(1, client.id, targetInput(), fixture.repository)

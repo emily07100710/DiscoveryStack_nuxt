@@ -41,8 +41,8 @@ function attachLineage(fixture: ContentOperationsFixture, entryId: number, targe
   entry.contentHash = BODY_HASH
   let review: Record<string, unknown> | null = null
   const job = { id: 700, ownerUserId: entry.ownerUserId, productionPlanId: calendar.productionPlanId, productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId, evidenceSnapshotHash: entry.evidenceSnapshotHash, briefId: 701, status: 'approved' }
-  const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified draft', body: 'Direct answer\n\nEvidence-bound body.', contentHash: BODY_HASH, provenance: { stage: 'optimized', providerExecution: true, provider: 'bailian', providerVersion: 'qwen-plus', model: 'bailian:qwen-plus', qualityGateVersion: 'content-risk-gate-v1', selectedRuleIds: ['rule-topic'], appliedRuleIds: ['rule-topic'] }, safetyStatus: 'passed', evidenceRefs: [] }
-  const gate = { id: 703, draftId: draft.id, status: 'passed', evidenceSnapshotHash: entry.evidenceSnapshotHash }
+  const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified draft', body: 'Direct answer\n\nEvidence-bound body.', contentHash: BODY_HASH, provenance: { stage: 'optimized', providerExecution: true, provider: 'bailian', providerVersion: 'qwen-plus', model: 'bailian:qwen-plus', providerModel: 'bailian:qwen-plus', providerProvenance: { provider: 'bailian', model: 'qwen-plus', mode: 'provider', providerExecution: true }, evidenceSnapshotHash: entry.evidenceSnapshotHash, qualityGateVersion: 'content-risk-gate-v1', selectedRuleIds: ['rule-topic'], appliedRuleIds: ['rule-topic'] }, safetyStatus: 'passed', evidenceRefs: [] }
+  const gate = { id: 703, draftId: draft.id, status: 'passed', gateVersion: 'content-risk-gate-v1', findings: [], riskLevel: 'general', evidenceSnapshotHash: entry.evidenceSnapshotHash }
   const repository = fixture.repository as ContentOperationsRepository
   repository.findLatestOptimizedDraft = async () => draft
   repository.findRiskGate = async () => gate

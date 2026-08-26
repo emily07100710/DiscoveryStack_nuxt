@@ -1,14 +1,12 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { GEOFLOW_PROTOCOL_VERSION } from '../server/geoflow-integration'
 import { createGeoFlowQwenGenerationRuntime } from '../server/geoflow-runtime/qwen'
 import { createAutoGeoIsolatedWorkerAdapter } from '../server/geo/isolated-worker'
 import { geoRules } from '../server/geo/rules'
-import { evaluateContentRisk } from '../server/seo-geo-core/riskGate'
+import type { GeoRewriteAdapter } from '../server/geo/contracts'
 import { bindOwnerEntryPublicationTargets, createOwnerPublicationTarget, runContentOperationsExecutionTick, runOwnerContentEntryWorkflow } from '../server/content-operations/orchestrator'
 import { enableOwnerAutopilot, revokeOwnerAutopilot } from '../server/content-operations/autopilot-service'
 import { buildOwnerContentLearningDataset, getOwnerContentOperationsWorkspace, recordOwnerOutcomeAssessment } from '../server/content-operations/service'
-import type { ContentOperationsRepository } from '../server/content-operations/repository'
 import type { ContentOperationPublicationTargetRow } from '../server/content-operations/types'
 import { createMultiChannelExecutorRegistry, type MultiChannelExecutorRegistry } from '../server/publication-routing'
 import { makeGrantedConsent, makeMeasurement } from './fixtures/outcome-learning/measurements'
@@ -18,33 +16,6 @@ const NOW = new Date('2026-08-25T04:00:00.000Z')
 const EVIDENCE_HASH = 'a'.repeat(64)
 const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
 const OWNER_SUBJECT_KEY = hash('content-operations:1')
-
-function qwenRequest(entryId: number) {
-  const reviewedText = '核准的 mock evidence：這是一段只供 owner 查核的內容。'
-  return {
-    protocolVersion: GEOFLOW_PROTOCOL_VERSION,
-    requestId: `ref-qwen-request-${entryId}`,
-    idempotencyKey: `ref-qwen-idempotency-${entryId}`,
-    ownerUserId: 1,
-    clientId: 101,
-    calendarEntryId: entryId,
-    productionPlanId: 11,
-    deliverableId: 1,
-    briefId: 701,
-    jobId: 700 + entryId,
-    evidenceSnapshotHash: EVIDENCE_HASH,
-    brief: { title: '核准內容主題', audience: '內容 owner', goals: ['回答核心問題'], constraints: ['不得新增未核准主張'] },
-    contentType: 'article',
-    language: 'en',
-    generationMode: 'draft',
-    revisionContext: null,
-    requestedCapabilities: ['qwen_generation', 'knowledge_rag', 'human_review'],
-    selectedRuleIds: [],
-    authoritySourceIds: ['source-1'],
-    evidenceChunks: [{ sourceId: 'source-1', artifactId: 'artifact-1', chunkId: 'chunk-1', chunkHash: hash(reviewedText.normalize('NFKC').trim().replace(/\s+/gu, ' ')), reviewedText, locator: 'https://evidence.routing.discoverystack.dev/section-1' }],
-    createdAt: NOW.toISOString(),
-  }
-}
 
 function targetInput(idempotencyKey: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -72,56 +43,27 @@ async function addTarget(fixture: ContentOperationsFixture, clientId: number, ke
   return fixture.targets.find(target => target.id === result.target.id)!
 }
 
-function createProviderBackedMockRunner(fixture: ContentOperationsFixture, options: { qwenFetch?: ReturnType<typeof vi.fn>; riskStatus?: 'passed' | 'needs_human_review' } = {}) {
-  const qwenFetch = options.qwenFetch || vi.fn().mockResolvedValue(new Response(JSON.stringify({ model: 'qwen-plus', choices: [{ message: { content: '# 核准內容主題\n\n核准的 mock evidence：這是一段只供 owner 查核的內容。本文只整理已核准資料，不新增任何外部事實。發布前由 owner 逐項核對來源、範圍、語言與頁面路徑。'.repeat(3) } }] }), { status: 200 }))
+function createProviderBackedMockRuntime(options: { qwenFetch?: ReturnType<typeof vi.fn>; highRisk?: boolean } = {}) {
+  const baseBody = '# 核准內容主題\\n\\n核准的 mock evidence：這是一段只供 owner 查核的內容。本文只整理已核准資料，不新增任何外部事實。發布前由 owner 逐項核對來源、範圍、語言與頁面路徑。'
+  const responseBody = options.highRisk ? `${baseBody}\\n\\nApproved test evidence records ranked #1 as a prohibited measurement claim.` : baseBody.repeat(3)
+  const qwenFetch = options.qwenFetch || vi.fn().mockResolvedValue(new Response(JSON.stringify({ model: 'qwen-plus', choices: [{ message: { content: responseBody } }] }), { status: 200 }))
   const autoGeoProvider = vi.fn()
-  const qwenRuntime = createGeoFlowQwenGenerationRuntime({     endpoint: 'https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions', credentialRef: 'ref-qwen-credential', resolveCredential: async () => 'mock-qwen-secret', fetchImpl: qwenFetch as typeof fetch, now: () => NOW.toISOString() })
+  const qwenRuntime = createGeoFlowQwenGenerationRuntime({ endpoint: 'https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions', credentialRef: 'ref-qwen-credential', resolveCredential: async () => 'mock-qwen-secret', fetchImpl: qwenFetch as typeof fetch, now: () => NOW.toISOString() })
   const isolated = createAutoGeoIsolatedWorkerAdapter()
-  const runner = async ({ ownerUserId, deliverableId }: { ownerUserId: number; planId: number; deliverableId: number; dependencies?: unknown }) => {
-    const entry = fixture.entries.find(row => row.ownerUserId === ownerUserId && row.productionDeliverableId === deliverableId)
-    if (!entry) throw new Error('fixture entry not found')
-    const generated = await qwenRuntime.generate(qwenRequest(entry.id))
-    if (!generated.ok || generated.value.status !== 'review_required') return { job: { id: 700 + entry.id, status: 'blocked' } }
-    const selectedRules = geoRules.filter(rule => ['direct-answer-first', 'semantic-sections'].includes(rule.id))
-    const autoGeo = await isolated.rewrite({ title: '核准內容主題', content: generated.value.contentArtifact.bodyMarkdown, language: 'en' }, selectedRules)
-    autoGeoProvider()
-    const body = autoGeo.optimizedContent
-    const risk = evaluateContentRisk({ source: { title: '核准內容主題', content: generated.value.contentArtifact.bodyMarkdown, language: 'en' }, candidateTitle: autoGeo.optimizedTitle, candidateBody: body, evidenceCount: 1 })
-    const riskStatus = options.riskStatus || (risk.status === 'passed' ? 'passed' : 'needs_human_review')
-    const jobId = 700 + entry.id
-    const draftId = 800 + entry.id
-    const draft = {
-      id: draftId,
-      ownerUserId,
-      jobId,
-      version: 1,
-      title: autoGeo.optimizedTitle,
-      body,
-      contentHash: hash(body),
-      provenance: {
-        stage: 'optimized',
-        provider: 'bailian',
-        providerVersion: 'qwen-plus',
-        providerExecution: true,
-        model: 'bailian:qwen-plus',
-        qualityGateVersion: 'content-risk-gate-v1',
-        evidenceSnapshotHash: entry.evidenceSnapshotHash,
-        promptFingerprint: hash(JSON.stringify(qwenRequest(entry.id))),
-        retrievalSnapshotHash: entry.evidenceSnapshotHash,
-        selectedRuleIds: selectedRules.map(rule => rule.id),
-        appliedRuleIds: autoGeo.appliedRuleIds,
-        providerProvenance: { providerExecution: true, provider: 'bailian', model: 'bailian:qwen-plus', execution: 'mock-provider' },
-      },
-      safetyStatus: riskStatus === 'passed' ? 'passed' : 'needs_review',
-      evidenceRefs: [{ sourceId: 'source-1', artifactId: 'artifact-1' }],
-    }
-    const job = { id: jobId, ownerUserId, productionPlanId: 11, productionDeliverableId: deliverableId, strategyRecommendationId: entry.strategyRecommendationId, evidenceSnapshotHash: entry.evidenceSnapshotHash, briefId: 701, status: 'approved' }
-    const deliverable = { id: deliverableId, ownerUserId, planId: 11, briefId: 701, jobId, selectionId: entry.strategyRecommendationId, contentType: entry.contentType, title: autoGeo.optimizedTitle, audience: '內容 owner', language: entry.language, evidenceSnapshotHash: entry.evidenceSnapshotHash, opportunityKey: `1:opportunity-1`, provenance: { authoritySourceIds: ['source-1'], promptFingerprint: hash(JSON.stringify(qwenRequest(entry.id))), retrievalSnapshotHash: entry.evidenceSnapshotHash, selectedRuleIds: selectedRules.map(rule => rule.id), appliedRuleIds: autoGeo.appliedRuleIds } }
-    const riskGate = { id: 900 + entry.id, ownerUserId, draftId, status: riskStatus, evidenceSnapshotHash: entry.evidenceSnapshotHash, gateVersion: 'content-risk-gate-v1', findings: risk.findings }
-    fixture.persistGeneratedLineage(entry.id, { deliverable, job, draft, riskGate })
-    return { job, draft, riskGate }
+  const optimizationAdapter: GeoRewriteAdapter = {
+    id: 'custom',
+    version: 'mock-autogeo-provider-v1',
+    async rewrite(document: Parameters<typeof isolated.rewrite>[0], rules: Parameters<typeof isolated.rewrite>[1]) {
+      const optimized = await isolated.rewrite(document, rules)
+      autoGeoProvider()
+      return { ...optimized, provider: 'autogeo-bailian-qwen', providerVersion: 'qwen-plus', provenance: { ...optimized.provenance, execution: 'autogeo-framework-bailian-qwen', providerExecution: true, requestedProvider: 'autogeo-bailian-qwen', model: 'qwen-plus' } }
+    },
   }
-  return { runner, qwenFetch, autoGeoProvider }
+  return { qwenRuntime, optimizationAdapter, qwenFetch, autoGeoProvider }
+}
+
+function productionRuntime(fixture: ContentOperationsFixture, runtime: ReturnType<typeof createProviderBackedMockRuntime>) {
+  return { qwenRuntime: runtime.qwenRuntime, optimizationAdapter: runtime.optimizationAdapter, productionPersistence: fixture.productionPersistence() }
 }
 
 function mockedMultiChannelRegistry(failureOnHttpCall?: (callNumber: number) => boolean): { registry: MultiChannelExecutorRegistry; httpCalls: ReturnType<typeof vi.fn>; firstPartyCalls: ReturnType<typeof vi.fn> } {
@@ -159,6 +101,7 @@ async function createMultiAutopilotFixture() {
   const client = fixture.addClient(1)
   const calendar = await fixture.addCalendar(1, '2026-08-25', 1)
   calendar.updatedAt = NOW
+  fixture.evidenceApprovalAt = NOW.toISOString()
   const entry = fixture.entries.find(row => row.calendarId === calendar.id)!
   entry.status = 'materialized'
   const firstParty = await addTarget(fixture, client.id, 'ref-target-git')
@@ -173,12 +116,12 @@ async function createMultiAutopilotFixture() {
 describe('Content Operations application-level lifecycle V1', () => {
   it('runs manual generation→owner review→publication and derives outcome/learning from the verified receipt', async () => {
     const { fixture, entry, target } = await createSingleManualFixture()
-    const mock = createProviderBackedMockRunner(fixture)
+    const runtime = createProviderBackedMockRuntime()
     const publicationExecutor = vi.fn(async ({ publication }: { publication: { productionDeliverableId: string; contentHash: string } }) => ({ status: 'delivered' as const, remoteState: 'created' as const, publicationId: publication.productionDeliverableId, contentHash: publication.contentHash, remoteRevision: 'ref-manual-revision', artifactFingerprint: hash('manual-artifact'), idempotencyKey: 'ref-manual-executor' }))
-    const result = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: entry.id, mode: 'execute', idempotencyKey: 'ref-app-manual', now: NOW, reviewDecision: 'approved_for_delivery', dependencies: { repository: fixture.repository, productionDeliverableRunner: mock.runner, reviewService: async input => fixture.recordOwnerReview(input.entryId, { ownerUserId: input.ownerUserId, jobId: input.jobId, draftId: input.draftId, decision: input.decision, evidenceSnapshotHash: entry.evidenceSnapshotHash }), publicationExecutor } })
+    const result = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: entry.id, mode: 'execute', idempotencyKey: 'ref-app-manual', now: NOW, reviewDecision: 'approved_for_delivery', dependencies: { repository: fixture.repository, productionRuntime: productionRuntime(fixture, runtime), reviewService: async input => fixture.recordOwnerReview(input.entryId, { ownerUserId: input.ownerUserId, jobId: input.jobId, draftId: input.draftId, decision: input.decision, evidenceSnapshotHash: entry.evidenceSnapshotHash }), publicationExecutor } })
     expect(result.outcome).toBe('delivered')
-    expect(mock.qwenFetch).toHaveBeenCalledTimes(1)
-    expect(mock.autoGeoProvider).toHaveBeenCalledTimes(1)
+    expect(runtime.qwenFetch).toHaveBeenCalledTimes(1)
+    expect(runtime.autoGeoProvider).toHaveBeenCalledTimes(1)
     expect(fixture.reviews.size).toBe(1)
     expect(fixture.attempts).toHaveLength(1)
     expect(fixture.attempts[0]).toMatchObject({ targetId: target.id, status: 'delivered', contentHash: fixture.entries.find(row => row.id === entry.id)?.contentHash })
@@ -193,14 +136,19 @@ describe('Content Operations application-level lifecycle V1', () => {
     expect(dataset.candidateResults[0]?.candidateStatus).toBe('eligible')
     expect(dataset.datasetDigest).toMatch(/^[a-f0-9]{64}$/)
     const workspace = await getOwnerContentOperationsWorkspace(1, fixture.repository)
-    expect(workspace.entries.find(item => item.id === entry.id)?.nextAction).toBe('learn')
+    const projectedEntry = workspace.entries.find(item => item.id === entry.id)
+    expect(projectedEntry?.nextAction).toBe('learn')
+    expect(projectedEntry?.publicationTargetBindings).toHaveLength(1)
+    expect(projectedEntry?.publicationTargetBindings[0]).toMatchObject({ targetRowId: target.id, targetId: target.targetId, websiteId: target.websiteId, latestAttempt: { status: 'delivered', attemptNumber: 1, receiptFingerprint: expect.any(String) } })
+    expect(workspace.publicationTargets[0]).toMatchObject({ websiteId: target.websiteId, credentialConfigured: true, destinationPublicationIdentityConfigured: true })
+    expect(JSON.stringify(workspace)).not.toContain('credential-ref')
   })
 
   it('runs governed autopilot without a per-article review across two bound targets, with one durable attempt per target', async () => {
     const context = await createMultiAutopilotFixture()
-    const mock = createProviderBackedMockRunner(context.fixture)
+    const runtime = createProviderBackedMockRuntime()
     const mocked = mockedMultiChannelRegistry()
-    const result = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: context.entry.id, mode: 'execute', idempotencyKey: 'ref-app-autopilot', now: NOW, dependencies: { repository: context.fixture.repository, productionDeliverableRunner: mock.runner, autopilotPolicy: context.firstPolicy, autopilotPoliciesByTarget: { [context.firstParty.id]: context.firstPolicy, [context.wordpress.id]: context.secondPolicy }, multiChannelRegistry: mocked.registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' } })
+    const result = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: context.entry.id, mode: 'execute', idempotencyKey: 'ref-app-autopilot', now: NOW, dependencies: { repository: context.fixture.repository, productionRuntime: productionRuntime(context.fixture, runtime), autopilotPolicy: context.firstPolicy, autopilotPoliciesByTarget: { [context.firstParty.id]: context.firstPolicy, [context.wordpress.id]: context.secondPolicy }, multiChannelRegistry: mocked.registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' } })
     expect(result.outcome).toBe('delivered')
     expect(context.fixture.reviews.size).toBe(0)
     expect(context.fixture.attempts).toHaveLength(2)
@@ -211,13 +159,17 @@ describe('Content Operations application-level lifecycle V1', () => {
     const routeEvents = context.fixture.events.filter(event => event.eventType.startsWith('publication_route_'))
     expect(routeEvents).toHaveLength(2)
     expect(routeEvents.every(event => event.websiteId && event.draftId && event.routingPlanId && event.routeId && event.executorRunId && event.contentHash && event.evidenceSnapshotHash && event.authorityReference)).toBe(true)
+    const workspace = await getOwnerContentOperationsWorkspace(1, context.fixture.repository)
+    const projectedEntry = workspace.entries.find(item => item.id === context.entry.id)
+    expect(projectedEntry?.publicationTargetBindings).toHaveLength(2)
+    expect(projectedEntry?.publicationTargetBindings.every(binding => binding.latestAttempt?.status === 'delivered' && binding.latestAttempt.receiptFingerprint)).toBe(true)
   })
 
   it('retries only the failed target, preserves the delivered target receipt, and replays without a second provider/site call', async () => {
     const context = await createMultiAutopilotFixture()
-    const mock = createProviderBackedMockRunner(context.fixture)
+    const runtime = createProviderBackedMockRuntime()
     const mocked = mockedMultiChannelRegistry(callNumber => callNumber === 1)
-    const dependencies = { repository: context.fixture.repository, productionDeliverableRunner: mock.runner, autopilotPolicy: context.firstPolicy, autopilotPoliciesByTarget: { [context.firstParty.id]: context.firstPolicy, [context.wordpress.id]: context.secondPolicy }, multiChannelRegistry: mocked.registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' }
+    const dependencies = { repository: context.fixture.repository, productionRuntime: productionRuntime(context.fixture, runtime), autopilotPolicy: context.firstPolicy, autopilotPoliciesByTarget: { [context.firstParty.id]: context.firstPolicy, [context.wordpress.id]: context.secondPolicy }, multiChannelRegistry: mocked.registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' }
     const first = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: context.entry.id, mode: 'execute', idempotencyKey: 'ref-app-partial', now: NOW, dependencies })
     expect(first.outcome).toBe('retry_wait')
     expect(context.fixture.attempts).toHaveLength(2)
@@ -236,36 +188,43 @@ describe('Content Operations application-level lifecycle V1', () => {
     expect(replay.outcome).toBe('replayed')
     expect(mocked.firstPartyCalls).toHaveBeenCalledTimes(1)
     expect(mocked.httpCalls).toHaveBeenCalledTimes(2)
+    const workspace = await getOwnerContentOperationsWorkspace(1, context.fixture.repository)
+    const projectedEntry = workspace.entries.find(item => item.id === context.entry.id)
+    const projectedBindings = projectedEntry?.publicationTargetBindings || []
+    expect(projectedBindings).toHaveLength(2)
+    expect(projectedBindings.every(binding => binding.latestAttempt?.status === 'delivered')).toBe(true)
+    expect(projectedBindings.find(binding => binding.targetRowId === context.firstParty.id)?.latestAttempt?.attemptNumber).toBe(1)
+    expect(projectedBindings.find(binding => binding.targetRowId === context.wordpress.id)?.latestAttempt?.attemptNumber).toBe(2)
   })
 
   it('fails closed for missing credential, stale evidence, high-risk generation, and revoked authority without executor calls', async () => {
     const missing = await createMultiAutopilotFixture()
-    const missingMock = createProviderBackedMockRunner(missing.fixture)
+    const missingRuntime = createProviderBackedMockRuntime()
     const missingRegistry = mockedMultiChannelRegistry()
-    const missingResult = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: missing.entry.id, mode: 'execute', idempotencyKey: 'ref-app-missing-credential', now: NOW, dependencies: { repository: missing.fixture.repository, productionDeliverableRunner: missingMock.runner, autopilotPolicy: missing.firstPolicy, autopilotPoliciesByTarget: { [missing.firstParty.id]: missing.firstPolicy, [missing.wordpress.id]: missing.secondPolicy }, multiChannelRegistry: missingRegistry.registry, resolveMultiChannelCredential: async () => undefined } })
+    const missingResult = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: missing.entry.id, mode: 'execute', idempotencyKey: 'ref-app-missing-credential', now: NOW, dependencies: { repository: missing.fixture.repository, productionRuntime: productionRuntime(missing.fixture, missingRuntime), autopilotPolicy: missing.firstPolicy, autopilotPoliciesByTarget: { [missing.firstParty.id]: missing.firstPolicy, [missing.wordpress.id]: missing.secondPolicy }, multiChannelRegistry: missingRegistry.registry, resolveMultiChannelCredential: async () => undefined } })
     expect(missingResult.outcome).toBe('blocked')
     expect(missingRegistry.firstPartyCalls).not.toHaveBeenCalled()
     expect(missingRegistry.httpCalls).not.toHaveBeenCalled()
 
     const stale = await createMultiAutopilotFixture()
-    stale.calendar.updatedAt = new Date(NOW.getTime() - 721 * 60 * 60 * 1000)
-    const staleMock = createProviderBackedMockRunner(stale.fixture)
-    const staleResult = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: stale.entry.id, mode: 'execute', idempotencyKey: 'ref-app-stale', now: NOW, dependencies: { repository: stale.fixture.repository, productionDeliverableRunner: staleMock.runner, autopilotPolicy: stale.firstPolicy, autopilotPoliciesByTarget: { [stale.firstParty.id]: stale.firstPolicy, [stale.wordpress.id]: stale.secondPolicy }, multiChannelRegistry: mockedMultiChannelRegistry().registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' } })
+    stale.fixture.evidenceApprovalAt = new Date(NOW.getTime() - 721 * 60 * 60 * 1000).toISOString()
+    const staleRuntime = createProviderBackedMockRuntime()
+    const staleResult = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: stale.entry.id, mode: 'execute', idempotencyKey: 'ref-app-stale', now: NOW, dependencies: { repository: stale.fixture.repository, productionRuntime: productionRuntime(stale.fixture, staleRuntime), autopilotPolicy: stale.firstPolicy, autopilotPoliciesByTarget: { [stale.firstParty.id]: stale.firstPolicy, [stale.wordpress.id]: stale.secondPolicy }, multiChannelRegistry: mockedMultiChannelRegistry().registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' } })
     expect(staleResult.outcome).toBe('blocked')
 
     const highRisk = await createMultiAutopilotFixture()
-    const highRiskMock = createProviderBackedMockRunner(highRisk.fixture, { riskStatus: 'needs_human_review' })
+    const highRiskRuntime = createProviderBackedMockRuntime({ highRisk: true })
     const highRiskRegistry = mockedMultiChannelRegistry()
-    const highRiskResult = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: highRisk.entry.id, mode: 'execute', idempotencyKey: 'ref-app-high-risk', now: NOW, dependencies: { repository: highRisk.fixture.repository, productionDeliverableRunner: highRiskMock.runner, autopilotPolicy: highRisk.firstPolicy, autopilotPoliciesByTarget: { [highRisk.firstParty.id]: highRisk.firstPolicy, [highRisk.wordpress.id]: highRisk.secondPolicy }, multiChannelRegistry: highRiskRegistry.registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' } })
+    const highRiskResult = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: highRisk.entry.id, mode: 'execute', idempotencyKey: 'ref-app-high-risk', now: NOW, dependencies: { repository: highRisk.fixture.repository, productionRuntime: productionRuntime(highRisk.fixture, highRiskRuntime), autopilotPolicy: highRisk.firstPolicy, autopilotPoliciesByTarget: { [highRisk.firstParty.id]: highRisk.firstPolicy, [highRisk.wordpress.id]: highRisk.secondPolicy }, multiChannelRegistry: highRiskRegistry.registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' } })
     expect(highRiskResult.outcome).toBe('blocked')
     expect(highRiskRegistry.firstPartyCalls).not.toHaveBeenCalled()
     expect(highRiskRegistry.httpCalls).not.toHaveBeenCalled()
 
     const revoked = await createMultiAutopilotFixture()
     const revokedPolicy = await revokeOwnerAutopilot(1, revoked.client.id, revoked.fixture.repository)
-    const revokedMock = createProviderBackedMockRunner(revoked.fixture)
+    const revokedRuntime = createProviderBackedMockRuntime()
     const revokedRegistry = mockedMultiChannelRegistry()
-    const revokedResult = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: revoked.entry.id, mode: 'execute', idempotencyKey: 'ref-app-revoked', now: NOW, dependencies: { repository: revoked.fixture.repository, productionDeliverableRunner: revokedMock.runner, autopilotPolicy: revokedPolicy.policy, autopilotPoliciesByTarget: { [revoked.firstParty.id]: revokedPolicy.policy, [revoked.wordpress.id]: revokedPolicy.policy }, multiChannelRegistry: revokedRegistry.registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' } })
+    const revokedResult = await runOwnerContentEntryWorkflow({ ownerUserId: 1, entryId: revoked.entry.id, mode: 'execute', idempotencyKey: 'ref-app-revoked', now: NOW, dependencies: { repository: revoked.fixture.repository, productionRuntime: productionRuntime(revoked.fixture, revokedRuntime), autopilotPolicy: revokedPolicy.policy, autopilotPoliciesByTarget: { [revoked.firstParty.id]: revokedPolicy.policy, [revoked.wordpress.id]: revokedPolicy.policy }, multiChannelRegistry: revokedRegistry.registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' } })
     expect(revokedResult.outcome).toBe('blocked')
     expect(revokedRegistry.firstPartyCalls).not.toHaveBeenCalled()
     expect(revokedRegistry.httpCalls).not.toHaveBeenCalled()

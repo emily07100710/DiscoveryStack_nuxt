@@ -1,11 +1,15 @@
 import { buildContentCalendar, materializeDueContentWork } from '../../../server/content-calendar'
 import { stableFingerprint } from '../../../server/content-operations/normalization'
 import type { ContentOperationsRepository, WorkspaceEntryLineage } from '../../../server/content-operations/repository'
+import type { ProductionPersistence } from '../../../server/seo-geo-core/service'
+import { contentFingerprint } from '../../../server/seo-geo-core/riskGate'
+import { geoRules } from '../../../server/geo/rules'
 import type { ContentOperationAutopilotPolicyRow, ContentOperationCalendarEntryRow, ContentOperationCalendarEntryTargetRow, ContentOperationCalendarRow, ContentOperationClientRow, ContentOperationEventRow, ContentOperationOutcomeAssessmentRow, ContentOperationPublicationAttemptRow, ContentOperationPublicationTargetRow, ContentOperationRunRow, DeliveredPublication, PlanBundle } from '../../../server/content-operations/types'
 
 export const HASH = 'a'.repeat(64)
 
 function now(): Date { return new Date('2026-01-01T00:00:00.000Z') }
+const canonicalFixtureRules = geoRules.filter(rule => ['direct-answer-first', 'semantic-sections'].includes(rule.id))
 
 export function fixtureClient(ownerUserId = 1, id = 1): ContentOperationClientRow {
   return { id, ownerUserId, displayName: `Owner ${ownerUserId}`, canonicalSiteOrigin: `https://owner${ownerUserId}.example`, framework: 'nuxt', publicationTransport: 'first_party_git', timeZone: 'UTC', defaultCadenceDays: 3, defaultPublishLocalTime: '09:00', monthlyBudgetUnits: 100, status: 'active', idempotencyKey: `client-${ownerUserId}`, createdAt: now(), updatedAt: now() }
@@ -13,11 +17,12 @@ export function fixtureClient(ownerUserId = 1, id = 1): ContentOperationClientRo
 
 export function fixturePlan(ownerUserId = 1, deliverableCount = 2): PlanBundle {
   const opportunities = Array.from({ length: deliverableCount }, (_, index) => ({ key: `opportunity-${index + 1}`, deliverableType: 'article' as const, title: `Article ${index + 1}`, audience: 'owner audience', goals: ['explain'], constraints: ['verify'] }))
+  const approvedAt = now().toISOString()
   const deliverables = opportunities.map((opportunity, index) => ({ id: index + 1, ownerUserId, planId: 11, selectionId: index + 1, opportunityKey: `${index + 1}:${opportunity.key}`, contentType: opportunity.deliverableType, title: opportunity.title, audience: opportunity.audience, goals: opportunity.goals, constraints: opportunity.constraints, language: 'en', status: 'planned', evidenceSnapshotHash: HASH, provenance: { strategyRecommendationId: index + 1, issueCode: 'synthetic_issue', recommendationKey: 'synthetic_recommendation', ruleIds: ['rule-topic'], rules: [{ id: 'rule-topic' }] } }))
   return {
-    plan: { id: 11, ownerUserId, diagnosisId: 9, status: 'ready', evidenceSnapshotHash: HASH },
+    plan: { id: 11, ownerUserId, diagnosisId: 9, status: 'ready', language: 'en', evidenceSnapshotHash: HASH },
     selections: deliverables.map((deliverable, index) => ({ id: deliverable.selectionId, ownerUserId, planId: 11, strategyRecommendationId: index + 1, status: 'selected', evidenceSnapshotHash: HASH })),
-    strategies: deliverables.map((deliverable, index) => ({ id: index + 1, ownerUserId, diagnosisId: 9, status: 'selected', evidenceSnapshotHash: HASH, priority: 'high', ruleIds: ['rule-topic'], evidenceRefs: [{ sourceId: index + 1, artifactId: index + 1 }], contentOpportunities: [opportunities[index]!], provenance: { engine: 'autogeo-strategy-v1', ruleSource: 'discoverystack-autogeo-compatible' } })),
+    strategies: deliverables.map((deliverable, index) => ({ id: index + 1, ownerUserId, diagnosisId: 9, status: 'selected', evidenceSnapshotHash: HASH, priority: 'high', ruleIds: canonicalFixtureRules.map(rule => rule.id), ruleSetVersion: 'autogeo-compatible-rules-v1', rules: canonicalFixtureRules, evidenceRefs: [{ sourceId: index + 1, artifactId: index + 1, artifactHash: HASH, locator: `https://evidence.fixture.example/source-${index + 1}`, approvedAt }], contentOpportunities: [opportunities[index]!], provenance: { engine: 'autogeo-strategy-v1', ruleSource: 'discoverystack-autogeo-compatible' } })),
     deliverables,
   } as unknown as PlanBundle
 }
@@ -35,16 +40,19 @@ export class ContentOperationsFixture {
   attempts: ContentOperationPublicationAttemptRow[] = []
   bundles = new Map<string, PlanBundle>()
   delivered = new Map<number, DeliveredPublication>()
-  generated = new Map<number, { deliverable: Record<string, unknown>; job: Record<string, unknown>; draft: Record<string, unknown>; riskGate: Record<string, unknown> }>()
+  generated = new Map<number, { deliverable: Record<string, unknown>; job: Record<string, unknown>; draft?: Record<string, unknown>; riskGate?: Record<string, unknown> }>()
+  briefs = new Map<number, Record<string, unknown>>()
   reviews = new Map<number, Record<string, unknown>>()
   nextId = 100
+  evidenceApprovalAt = now().toISOString()
+  riskCandidate = false
   readonly repository: ContentOperationsRepository
 
   constructor() {
     this.repository = {
       transaction: async work => {
-        const snapshot = { clients: this.clients.map(row => ({ ...row })), calendars: this.calendars.map(row => ({ ...row })), entries: this.entries.map(row => ({ ...row })), runs: this.runs.map(row => ({ ...row })), events: this.events.map(row => ({ ...row })), outcomes: this.outcomes.map(row => ({ ...row })), targets: this.targets.map(row => ({ ...row })), entryTargetBindings: this.entryTargetBindings.map(row => ({ ...row })), autopilotPolicies: this.autopilotPolicies.map(row => ({ ...row })), attempts: this.attempts.map(row => ({ ...row })), generated: new Map(this.generated), reviews: new Map(this.reviews), nextId: this.nextId }
-        try { return await work(this.repository) } catch (error) { this.clients = snapshot.clients; this.calendars = snapshot.calendars; this.entries = snapshot.entries; this.runs = snapshot.runs; this.events = snapshot.events; this.outcomes = snapshot.outcomes; this.targets = snapshot.targets; this.entryTargetBindings = snapshot.entryTargetBindings; this.autopilotPolicies = snapshot.autopilotPolicies; this.attempts = snapshot.attempts; this.generated = snapshot.generated; this.reviews = snapshot.reviews; this.nextId = snapshot.nextId; throw error }
+        const snapshot = { clients: this.clients.map(row => ({ ...row })), calendars: this.calendars.map(row => ({ ...row })), entries: this.entries.map(row => ({ ...row })), runs: this.runs.map(row => ({ ...row })), events: this.events.map(row => ({ ...row })), outcomes: this.outcomes.map(row => ({ ...row })), targets: this.targets.map(row => ({ ...row })), entryTargetBindings: this.entryTargetBindings.map(row => ({ ...row })), autopilotPolicies: this.autopilotPolicies.map(row => ({ ...row })), attempts: this.attempts.map(row => ({ ...row })), generated: new Map([...this.generated].map(([key, value]) => [key, structuredClone(value)])), briefs: new Map([...this.briefs].map(([key, value]) => [key, structuredClone(value)])), reviews: new Map([...this.reviews].map(([key, value]) => [key, structuredClone(value)])), nextId: this.nextId }
+        try { return await work(this.repository) } catch (error) { this.clients = snapshot.clients; this.calendars = snapshot.calendars; this.entries = snapshot.entries; this.runs = snapshot.runs; this.events = snapshot.events; this.outcomes = snapshot.outcomes; this.targets = snapshot.targets; this.entryTargetBindings = snapshot.entryTargetBindings; this.autopilotPolicies = snapshot.autopilotPolicies; this.attempts = snapshot.attempts; this.generated = snapshot.generated; this.briefs = snapshot.briefs; this.reviews = snapshot.reviews; this.nextId = snapshot.nextId; throw error }
       },
       findClientByIdempotency: async (owner, key) => this.clients.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       findClientByOrigin: async (owner, origin) => this.clients.find(row => row.ownerUserId === owner && row.canonicalSiteOrigin === origin) || null,
@@ -58,6 +66,7 @@ export class ContentOperationsFixture {
       updatePublicationTarget: async (owner, id, patch) => { const row = this.targets.find(item => item.ownerUserId === owner && item.id === id); if (!row) throw new Error('missing target'); if (patch.activeSlot !== undefined && patch.activeSlot !== null && this.targets.some(item => item.ownerUserId === owner && item.clientId === row.clientId && item.activeSlot === patch.activeSlot && item.id !== id)) throw Object.assign(new Error('active slot duplicate'), { code: 'ER_DUP_ENTRY' }); Object.assign(row, patch, { updatedAt: now() }); return row },
       listPublicationTargets: async owner => this.targets.filter(row => row.ownerUserId === owner),
       findAutopilotPolicy: async (owner, clientId, publicationTargetId) => this.autopilotPolicies.find(row => row.ownerUserId === owner && row.clientId === clientId && row.publicationTargetId === publicationTargetId) || null,
+      listAutopilotPolicies: async (owner, clientId) => this.autopilotPolicies.filter(row => row.ownerUserId === owner && row.clientId === clientId).sort((left, right) => left.publicationTargetId - right.publicationTargetId),
       insertAutopilotPolicy: async input => { if (this.autopilotPolicies.some(row => row.ownerUserId === input.ownerUserId && row.publicationTargetId === input.publicationTargetId)) throw Object.assign(new Error('autopilot policy duplicate'), { code: 'ER_DUP_ENTRY' }); const row = { ...input, id: ++this.nextId, createdAt: now(), updatedAt: now() } as ContentOperationAutopilotPolicyRow; this.autopilotPolicies.push(row); return row },
       revokeAutopilotPolicy: async (owner, policyId, revokedAt) => { const row = this.autopilotPolicies.find(item => item.ownerUserId === owner && item.policyId === policyId); if (!row) return null; Object.assign(row, { status: 'revoked', revokedAt, updatedAt: now() }); return row },
       findCalendarByIdempotency: async (owner, key) => this.calendars.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
@@ -88,8 +97,8 @@ export class ContentOperationsFixture {
       updateRun: async (owner, id, patch) => { const row = this.runs.find(item => item.ownerUserId === owner && item.id === id); if (!row) throw new Error('missing run'); Object.assign(row, patch, { updatedAt: now() }); return row },
       appendEvent: async input => { const existing = this.events.find(row => row.ownerUserId === input.ownerUserId && row.eventFingerprint === input.eventFingerprint); if (existing) return existing; const row = { ...input, id: ++this.nextId, occurredAt: now() } as ContentOperationEventRow; this.events.push(row); return row },
       listEvents: async (owner, entryId) => this.events.filter(row => row.ownerUserId === owner && (entryId === undefined || row.entryId === entryId)),
-      findLatestOptimizedDraft: async (owner, jobId) => [...this.generated.values()].map(value => value.draft).find(draft => draft.jobId === jobId && (draft.ownerUserId === undefined || draft.ownerUserId === owner)) as never || null,
-      findRiskGate: async (owner, draftId, evidenceSnapshotHash) => [...this.generated.values()].map(value => value.riskGate).find(gate => gate.draftId === draftId && gate.evidenceSnapshotHash === evidenceSnapshotHash && (gate.ownerUserId === undefined || gate.ownerUserId === owner)) as never || null,
+      findLatestOptimizedDraft: async (owner, jobId) => [...this.generated.values()].map(value => value.draft).find(draft => Boolean(draft) && draft?.jobId === jobId && (draft?.ownerUserId === undefined || draft?.ownerUserId === owner)) as never || null,
+      findRiskGate: async (owner, draftId, evidenceSnapshotHash) => [...this.generated.values()].map(value => value.riskGate).find(gate => Boolean(gate) && gate?.draftId === draftId && gate?.evidenceSnapshotHash === evidenceSnapshotHash && (gate?.ownerUserId === undefined || gate?.ownerUserId === owner)) as never || null,
       findLatestReview: async (owner, jobId, draftId, evidenceSnapshotHash) => [...this.reviews.values()].filter(review => review.ownerUserId === owner && review.jobId === jobId && review.draftId === draftId && review.evidenceSnapshotHash === evidenceSnapshotHash).sort((left, right) => Number(right.id) - Number(left.id))[0] as never || null,
       findPublicationAttemptByIdempotency: async (owner, key) => this.attempts.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       listPublicationAttempts: async (owner, entryId) => this.attempts.filter(row => row.ownerUserId === owner && (entryId === undefined || row.entryId === entryId)),
@@ -130,9 +139,11 @@ export class ContentOperationsFixture {
         const strategy = bundle?.strategies.find(item => item.id === selection?.strategyRecommendationId)
         if (!bundle || !deliverable || !selection || !strategy) throw new Error('missing canonical fixture context')
         const opportunity = (strategy.contentOpportunities as Array<{ key: string; deliverableType: 'article' | 'faq' | 'service_page'; title: string; audience: string; goals: string[]; constraints: string[] }>).find(item => `${strategy.id}:${item.key}` === deliverable.opportunityKey) || (strategy.contentOpportunities as Array<{ key: string; deliverableType: 'article' | 'faq' | 'service_page'; title: string; audience: string; goals: string[]; constraints: string[] }>)[0]
-        const rules = Array.isArray(strategy.ruleIds) ? strategy.ruleIds.map(id => ({ id: String(id) })) : []
-        const refs = Array.isArray(strategy.evidenceRefs) ? strategy.evidenceRefs : []
-        return { plan: bundle.plan, deliverable, selection, strategy, diagnosis: { id: bundle.plan.diagnosisId }, diagnosisResult: { status: 'ready' }, opportunity, rules, evidenceSnapshot: { refs, context: 'fixture', hash: HASH, materials: [] } } as any
+        const rules = Array.isArray(strategy.ruleIds) ? strategy.ruleIds.map(id => canonicalFixtureRules.find(rule => rule.id === String(id)) || { id: String(id) }) : []
+        const refs = (Array.isArray(strategy.evidenceRefs) ? strategy.evidenceRefs : []).map(ref => ({ ...ref, approvedAt: this.evidenceApprovalAt }))
+        const approvalTimestamps = refs.map(ref => typeof ref.approvedAt === 'string' ? ref.approvedAt : this.evidenceApprovalAt)
+        const materials = refs.filter(ref => typeof ref.artifactId === 'number').map(ref => ({ sourceId: ref.sourceId, artifactId: ref.artifactId!, sourceName: `Fixture source ${ref.sourceId}`, locator: `https://evidence.routing.discoverystack.dev/section-${ref.sourceId}`, artifactType: 'text', artifactHash: ref.artifactHash || HASH, reviewedText: `Approved fixture evidence for source ${ref.sourceId}; this text is inert reviewed material.${this.riskCandidate ? ' Approved test evidence records ranked #1 as a prohibited measurement claim.' : ''}` }))
+        return { plan: bundle.plan, deliverable, selection, strategy, diagnosis: { id: bundle.plan.diagnosisId }, diagnosisResult: { status: 'ready' }, opportunity, rules, evidenceSnapshot: { refs, context: materials.map(material => material.reviewedText).join('\\n\\n'), hash: HASH, materials, approvalTimestamps, freshnessBasis: [...approvalTimestamps].sort()[0] || '' } } as any
       },
       resolveWorkspaceEntry: async (owner, entryId) => {
         const entry = this.entries.find(row => row.ownerUserId === owner && row.id === entryId)
@@ -173,6 +184,58 @@ export class ContentOperationsFixture {
     return row
   }
 
+  productionPersistence(): ProductionPersistence {
+    return {
+      resolveProductionContext: async input => this.repository.resolveCanonicalContext(input.ownerUserId, input.planId, input.deliverableId) as never,
+      createContentJob: async input => {
+        const existingEntry = this.entries.find(entry => entry.ownerUserId === input.ownerUserId && entry.productionDeliverableId === input.productionDeliverableId)
+        const existing = existingEntry ? this.generated.get(existingEntry.id)?.job : undefined
+        if (existing) return existing as never
+        const brief = this.briefs.get(input.briefId)
+        if (!brief) throw new Error('fixture production brief not found')
+        const job = { id: ++this.nextId, ownerUserId: input.ownerUserId, briefId: input.briefId, productionPlanId: input.productionPlanId ?? null, productionDeliverableId: input.productionDeliverableId ?? null, strategyRecommendationId: input.strategyRecommendationId ?? null, requestFingerprint: stableFingerprint(input), operation: input.operation, providerMode: input.providerMode, status: 'queued', idempotencyKey: input.idempotencyKey, evidenceSnapshotHash: String(brief.evidenceSnapshotHash), createdAt: now(), updatedAt: now(), startedAt: null, completedAt: null, errorCode: null, errorSummary: null, providerProvenance: null }
+        if (existingEntry) this.generated.set(existingEntry.id, { deliverable: this.bundles.get(`${input.ownerUserId}:11`)!.deliverables.find(deliverable => deliverable.id === existingEntry.productionDeliverableId)! as unknown as Record<string, unknown>, job })
+        return job as never
+      },
+      createCanonicalProductionBrief: async (ownerUserId, context) => {
+        if (context.brief) return context.brief
+        const existing = [...this.briefs.values()].find(brief => brief.ownerUserId === ownerUserId && brief.productionDeliverableId === context.deliverable.id)
+        if (existing) return existing as never
+        const brief = { id: ++this.nextId, ownerUserId, diagnosisId: context.diagnosis.id, strategyRecommendationId: context.strategy.id, productionPlanId: context.plan.id, productionDeliverableId: context.deliverable.id, ruleIds: context.rules.map(rule => rule.id), provenance: { stage: 'canonical-production-context', source: 'server-resolved', evidenceSnapshotHash: context.evidenceSnapshot.hash }, title: context.opportunity.title, audience: context.opportunity.audience, contentType: context.opportunity.deliverableType, language: context.plan.language, goals: context.opportunity.goals, constraints: context.opportunity.constraints, evidenceRefs: context.evidenceSnapshot.refs, evidenceSnapshotHash: context.evidenceSnapshot.hash, status: 'ready_for_generation', createdAt: now(), updatedAt: now() }
+        this.briefs.set(brief.id, brief)
+        return brief as never
+      },
+      transitionContentJob: async input => {
+        const item = [...this.generated.entries()].find(([, value]) => value.job.id === input.jobId && value.job.ownerUserId === input.ownerUserId)
+        if (!item) throw new Error('fixture production job not found')
+        Object.assign(item[1].job, { status: input.to, errorCode: input.errorCode || null, errorSummary: input.errorSummary || null, providerProvenance: input.providerProvenance || item[1].job.providerProvenance, updatedAt: now() })
+        return item[1].job as never
+      },
+      saveContentCandidate: async input => {
+        const item = [...this.generated.entries()].find(([, value]) => value.job.id === input.jobId)
+        if (!item) throw new Error('fixture production job not found for draft')
+        const previous = item[1].draft
+        const draft = { id: ++this.nextId, ownerUserId: item[1].job.ownerUserId, jobId: input.jobId, version: previous ? Number(previous.version || 0) + 1 : 1, title: input.title, body: input.body, contentHash: input.contentHash, sourceMode: input.sourceMode, provenance: input.provenance, evidenceRefs: input.evidenceRefs, safetyStatus: input.safetyStatus, safetyNotes: input.safetyNotes, createdAt: now(), updatedAt: now() }
+        item[1].draft = draft
+        return draft as never
+      },
+      saveRiskGate: async input => {
+        const item = [...this.generated.entries()].find(([, value]) => value.draft?.id === input.draftId)
+        if (!item || !item[1].draft) throw new Error('fixture production draft not found for risk gate')
+        const riskGate = { id: ++this.nextId, ownerUserId: item[1].job.ownerUserId, draftId: input.draftId, status: input.result.status, gateVersion: input.result.gateVersion, riskLevel: input.result.riskLevel, findings: input.result.findings, evidenceSnapshotHash: input.evidenceSnapshotHash }
+        item[1].riskGate = riskGate
+        return riskGate as never
+      },
+      updateProductionDeliverable: async (ownerUserId, deliverableId, patch) => {
+        const bundle = this.bundles.get(`${ownerUserId}:11`)
+        const deliverable = bundle?.deliverables.find(item => item.id === deliverableId)
+        if (!deliverable) throw new Error('fixture production deliverable not found')
+        Object.assign(deliverable, patch)
+        return deliverable as never
+      },
+    }
+  }
+
   persistGeneratedLineage(entryId: number, lineage: { deliverable: Record<string, unknown>; job: Record<string, unknown>; draft: Record<string, unknown>; riskGate: Record<string, unknown> }) {
     this.generated.set(entryId, lineage)
     return lineage
@@ -181,6 +244,12 @@ export class ContentOperationsFixture {
   recordOwnerReview(entryId: number, input: { ownerUserId: number; jobId: number; draftId: number; decision: string; evidenceSnapshotHash: string }) {
     const review = { id: ++this.nextId, reviewerUserId: input.ownerUserId, ...input }
     this.reviews.set(entryId, review)
+    const generated = this.generated.get(entryId)
+    if (generated) {
+      const nextStatus = input.decision.startsWith('approved') ? 'approved' : input.decision === 'changes_requested' ? 'needs_human_review' : 'blocked'
+      Object.assign(generated.job, { status: nextStatus, completedAt: now() })
+      Object.assign(generated.deliverable, { status: input.decision.startsWith('approved') ? 'approved' : nextStatus })
+    }
     return review
   }
 

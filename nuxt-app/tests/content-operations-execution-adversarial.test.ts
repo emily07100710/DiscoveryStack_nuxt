@@ -27,8 +27,8 @@ function attachLineage(fixture: ContentOperationsFixture, entryId: number, targe
   const client = fixture.clients.find(item => item.id === calendar.clientId)!
   let review: Record<string, unknown> | null = null
   const job = { id: 700, ownerUserId: entry.ownerUserId, productionPlanId: calendar.productionPlanId, productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId, evidenceSnapshotHash: entry.evidenceSnapshotHash, briefId: 701, status: 'approved' }
-  const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified draft', body: BODY, contentHash: BODY_HASH, provenance: { stage: 'optimized', providerExecution: true, provider: 'bailian', providerVersion: 'qwen-plus', model: 'bailian:qwen-plus', qualityGateVersion: 'content-risk-gate-v1', selectedRuleIds: ['rule-topic'], appliedRuleIds: ['rule-topic'] }, safetyStatus: 'passed', evidenceRefs: [] }
-  let gate: Record<string, unknown> = { id: 703, draftId: draft.id, status: 'passed', evidenceSnapshotHash: entry.evidenceSnapshotHash }
+  const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified draft', body: BODY, contentHash: BODY_HASH, provenance: { stage: 'optimized', providerExecution: true, provider: 'bailian', providerVersion: 'qwen-plus', model: 'bailian:qwen-plus', providerModel: 'bailian:qwen-plus', providerProvenance: { provider: 'bailian', model: 'qwen-plus', mode: 'provider', providerExecution: true }, evidenceSnapshotHash: entry.evidenceSnapshotHash, qualityGateVersion: 'content-risk-gate-v1', selectedRuleIds: ['rule-topic'], appliedRuleIds: ['rule-topic'] }, safetyStatus: 'passed', evidenceRefs: [] }
+  let gate: Record<string, unknown> = { id: 703, draftId: draft.id, status: 'passed', gateVersion: 'content-risk-gate-v1', findings: [], riskLevel: 'general', evidenceSnapshotHash: entry.evidenceSnapshotHash }
   const repository = fixture.repository as ContentOperationsRepository
   repository.findLatestOptimizedDraft = async () => draft
   repository.findRiskGate = async () => gate as never
@@ -176,7 +176,7 @@ describe('content operations execution adversarial hardening', () => {
 
   it('uses the newest blocked risk gate instead of an older passed gate', async () => {
     const lineage = await readyFixture()
-    lineage.setGate({ id: 710, draftId: lineage.draft.id, status: 'blocked', evidenceSnapshotHash: lineage.entry.evidenceSnapshotHash })
+    lineage.setGate({ id: 710, draftId: lineage.draft.id, status: 'blocked', gateVersion: 'content-risk-gate-v1', findings: [{ id: 'blocked-risk' }], riskLevel: 'high', evidenceSnapshotHash: lineage.entry.evidenceSnapshotHash })
     let calls = 0
     await expect(executeContentOperationEntry({ ownerUserId: 1, entryId: lineage.entry.id, trigger: 'owner_manual', now: NOW, value: { idempotencyKey: 'blocked-latest-gate', mode: 'execute' }, dependencies: { repository: lineage.repository, publicationExecutor: async () => { calls += 1; return { status: 'delivered' as const, remoteState: 'created' as const, publicationId: 'deliverable-1', contentHash: BODY_HASH, remoteRevision: 'synthetic', artifactFingerprint: HASH, idempotencyKey: 'synthetic' } } } })).rejects.toMatchObject({ statusCode: 422 })
     expect(calls).toBe(0)

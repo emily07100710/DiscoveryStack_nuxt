@@ -37,7 +37,8 @@ DISCOVERYSTACK_PUBLIC_SITE_ORIGIN=http://localhost:4321 pnpm dev
 |---|---|
 | `pnpm dev` | 啟動 private Nuxt server，預設 port 3000。 |
 | `pnpm typecheck` | 執行 Nuxt/Vue TypeScript 檢查。 |
-| `pnpm test` | 執行 private API、repository、risk-gate、training、CORS 與全套 safe-default mocked tests；不發出第三方 credential/provider request。 |
+| `pnpm test` | 執行 Vitest；適合已完成 build 的本機迭代，不自動建立 production build。 |
+| `pnpm test:safe` | 依序執行 `typecheck → NODE_OPTIONS/NITRO_PRESET production build → full Vitest`；所有 provider、credential與publication transport均使用 injected mocks，不發出第三方 request。 |
 | `pnpm test:external-credentials` | 明確 opt-in 後執行 read-only Firecrawl/Hugging Face credential tests；需要部署環境注入對應 secrets，未執行或 skipped 絕不代表 provider validation passed。 |
 | `pnpm build` | 建立 Nuxt/Nitro private server artifact；不產生 public static website。 |
 | `pnpm db:generate` | 只產生 Drizzle migration SQL；必須另行審查及受控套用，本次 split 不執行 migration。 |
@@ -52,7 +53,7 @@ DISCOVERYSTACK_PUBLIC_SITE_ORIGIN=http://localhost:4321 pnpm dev
 
 Diagnosis、strategy、Production Plan、candidate draft、risk gate、review、preview、delivery ledger 與 revision 的治理流程只在 private Nuxt server 執行。Evidence、source/artifact policy、quality、PII、removed/revoked、canonical selected rules 與 owner approval 仍由 server-side resolver 重新驗證；沒有將 provider key、database、owner cookie、私有內容或 training artifact 送入 Astro bundle。
 
-Owner revision 的有效路徑為 `owner_revision_input → canonical selected-rule optimization child → risk gate → needs_human_review`。`changes_requested` 會失效舊 draft eligibility，只有新版本重新通過 gate 才能再 review。Preview/export 保留 append-only ledger 與 exact risk-gate validation；V1 沒有 CMS、WordPress 或 HTTP target 寫入。
+Owner revision 的有效路徑為 `owner_revision_input → canonical selected-rule optimization child → risk gate → needs_human_review`。`changes_requested` 會失效舊 draft eligibility，只有新版本重新通過 gate 才能再 review。Content Operations V1 也支援 owner-scoped multi-channel target registry、entry bindings、per-target attempt/receipt/retry projection與 governed autopilot；真正的 WordPress、PHP/GEOFlow agent、Generic HTTP、GEOFlow local與第一方網站連接仍只在 production-like environment 另行執行，safe suite 不會呼叫它們。
 
 ## Data and migration boundary
 
@@ -75,12 +76,12 @@ Private Nuxt：
 
 ```bash
 cd nuxt-app
-pnpm typecheck
-pnpm test
-pnpm build
+pnpm test:safe
 ```
 
-正式 domain、OAuth、資料庫 migration runtime、第三方 provider credentials、Lighthouse、Search Console 與實際部署仍需在 production-like environment 另行人工驗收。本地 split 工作不 deploy、不合併 main、不 force-push。
+`pnpm test:safe` 是本專案送審的 truthful 順序：先完成 Nuxt typecheck，再建立 production Nitro build，最後才執行完整 safe-default Vitest。若只執行單獨 `pnpm test`，必須先確認對應 `.output/` 已由相同 source revision 建立。
+
+正式 domain、OAuth、資料庫 migration apply/runtime、第三方 provider credentials、第一方／WordPress／PHP agent／Generic HTTP／GEOFlow local transport、customer-site write、Lighthouse、Search Console 與實際部署仍需在 production-like environment 另行人工驗收。本地 split 工作不 deploy、不合併 main、不 force-push。
 
 ### External credential test boundary
 

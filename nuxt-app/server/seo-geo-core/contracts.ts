@@ -8,6 +8,8 @@ export type EvidenceRef = {
   artifactId?: number
   locator?: string
   artifactHash?: string
+  /** Server-resolved approval timestamp; never accepted as caller authority. */
+  approvedAt?: string
   reason: string
 }
 
@@ -135,6 +137,8 @@ export type RiskFinding = {
 export type ContentRiskGateResult = {
   gateVersion: typeof CONTENT_RISK_GATE_VERSION
   status: 'passed' | 'needs_human_review' | 'blocked'
+  /** Candidate risk used by governed policy matrix: low < general < high. */
+  riskLevel: 'low' | 'general' | 'high'
   findings: RiskFinding[]
   publicationNotice: string
 }

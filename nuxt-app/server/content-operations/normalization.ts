@@ -274,7 +274,7 @@ const strictAutopilotPolicy = z.object({
   allowedTargetIds: z.array(z.string().trim().min(1).max(128)).min(1).max(20).optional(),
   cadenceDays: z.union([z.literal(3), z.literal(7), z.literal(15), z.literal(30)]).optional(),
   evidenceFreshnessHours: z.number().int().min(1).max(24 * 365).optional(),
-  maximumRiskLevel: z.enum(['low', 'general']).optional(),
+  maximumRiskLevel: z.enum(['low', 'general', 'high']).optional(),
   requiredQualityGateVersion: z.string().trim().min(1).max(96).optional(),
   allowedProviderModels: z.array(z.string().trim().min(1).max(128)).min(1).max(20).optional(),
   requireApprovedForDelivery: z.boolean().optional().default(false),
@@ -320,7 +320,7 @@ export type AutopilotPolicyRequestInput = {
   allowedTargetIds?: string[]
   cadenceDays?: 3 | 7 | 15 | 30
   evidenceFreshnessHours?: number
-  maximumRiskLevel?: 'low' | 'general'
+  maximumRiskLevel?: 'low' | 'general' | 'high'
   requiredQualityGateVersion?: string
   allowedProviderModels?: string[]
   requireApprovedForDelivery: boolean

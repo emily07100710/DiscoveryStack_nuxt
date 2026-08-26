@@ -4,7 +4,7 @@ import { executeFirstPartyPublication } from '../first-party-publishing/executor
 import { validateFirstPartyPublishTarget } from '../first-party-publishing/target-guard'
 import type { ApprovedFirstPartyPublication, FirstPartyExecutionResult, FirstPartyFetch, NonceProvider, ServerCredentialResolver } from '../first-party-publishing/types'
 import { runOwnerProductionDeliverable, type ProductionRuntimeDependencies } from '../seo-geo-core/service'
-import type { ContentOperationsRepository, EventInsert, PublicationAttemptFinalization, PublicationAttemptInsert, PublicationAttemptReservation, PublicationTargetInsert, RunInsert } from './repository'
+import type { CanonicalContext, ContentOperationsRepository, EventInsert, PublicationAttemptFinalization, PublicationAttemptInsert, PublicationAttemptReservation, PublicationTargetInsert, RunInsert } from './repository'
 import { createContentOperationsRepository } from './repository'
 import { buildPublicationIdentity, validatePersistedPublicationIdentity, type PublicationIdentity } from './publication-identity'
 import { materializeOwnerDueContent, getDefaultContentOperationsClock } from './service'
@@ -51,7 +51,7 @@ export type ContentOperationOrchestratorDependencies = {
   productionRuntime?: ProductionRuntimeDependencies
   autopilotPolicy?: OwnerAutopilotPolicy
   autopilotPoliciesByTarget?: Readonly<Record<number, OwnerAutopilotPolicy | undefined>>
-  productionDeliverableRunner?: (input: { ownerUserId: number; planId: number; deliverableId: number; dependencies?: ProductionRuntimeDependencies }) => Promise<ContentDraftResult>
+  productionDeliverableRunner?: (input: { ownerUserId: number; clientId?: number; calendarEntryId?: number; planId: number; deliverableId: number; now?: Date; dependencies?: ProductionRuntimeDependencies }) => Promise<ContentDraftResult>
   publicationExecutor?: FirstPartyPublicationExecutor
   multiChannelRegistry?: MultiChannelExecutorRegistry
   multiChannelHttpTransport?: MultiChannelHttpTransport
@@ -279,6 +279,18 @@ function safeString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+function canonicalEvidenceForAutopilot(context: CanonicalContext, expectedHash: string, now: Date) {
+  const snapshot = context.evidenceSnapshot
+  if (snapshot.hash !== expectedHash || !snapshot.refs.length || snapshot.approvalTimestamps.length !== snapshot.refs.length || snapshot.materials.length !== snapshot.refs.filter(ref => Boolean(ref.artifactId)).length) badRequest('Governed autopilot requires an exact canonical approved evidence snapshot with complete artifact material.')
+  const timestamps = snapshot.approvalTimestamps.map(value => Date.parse(value))
+  if (timestamps.some(value => !Number.isFinite(value) || value > now.getTime())) badRequest('Governed autopilot requires valid non-future evidence approval timestamps.')
+  const freshnessBasis = snapshot.freshnessBasis
+  const minimum = Math.min(...timestamps)
+  if (!freshnessBasis || Date.parse(freshnessBasis) !== minimum) badRequest('Governed autopilot evidence freshness basis is not derived from all approved references.')
+  if (snapshot.refs.some(ref => !ref.approvedAt || Date.parse(ref.approvedAt) > now.getTime())) badRequest('Governed autopilot evidence reference approval metadata is incomplete or stale.')
+  return { evidenceApproved: true as const, evidenceCapturedAt: freshnessBasis }
+}
+
 async function defaultFetch(url: string, init: Parameters<typeof fetch>[1]): Promise<Awaited<ReturnType<typeof fetch>>> {
   return fetch(url, init)
 }
@@ -396,39 +408,44 @@ async function executeMultiChannelPublicationPath(ownerUserId: number, entry: Co
   const draft = lineage.draft as typeof lineage.draft & { title: string; body: string; provenance: unknown; version: number }
   const job = lineage.job as typeof lineage.job & { status?: string }
   const deliverable = lineage.deliverable as typeof lineage.deliverable & { status?: string }
-  if (typeof job.status === 'string' && job.status !== 'approved') badRequest('Publication requires the content job to remain approved.')
-  if (typeof deliverable.status === 'string' && !['approved', 'exported'].includes(deliverable.status)) badRequest('Publication requires the deliverable to remain approved.')
+  const schedulerMayUseGovernedAutopilot = input.trigger === 'scheduler' && Boolean(dependencies.autopilotPolicy || Object.values(dependencies.autopilotPoliciesByTarget || {}).some(Boolean))
+  if (typeof job.status === 'string' && job.status !== 'approved' && !schedulerMayUseGovernedAutopilot) badRequest('Publication requires the content job to remain approved.')
+  if (typeof deliverable.status === 'string' && !['approved', 'exported'].includes(deliverable.status) && !schedulerMayUseGovernedAutopilot) badRequest('Publication requires the deliverable to remain approved.')
+  const context = await repository.resolveCanonicalContext(ownerUserId, lineage.calendar.productionPlanId, entry.productionDeliverableId)
+  if (context.plan.id !== lineage.calendar.productionPlanId || context.deliverable.id !== entry.productionDeliverableId || context.strategy.id !== entry.strategyRecommendationId || context.evidenceSnapshot.hash !== entry.evidenceSnapshotHash) badRequest('Publication canonical context is stale or mismatched.')
   const gate = await repository.findRiskGate(ownerUserId, draft.id, entry.evidenceSnapshotHash)
-  const riskGate = gate as typeof gate & { gateVersion?: string; findings?: unknown }
-  if (!gate || gate.draftId !== draft.id || gate.evidenceSnapshotHash !== entry.evidenceSnapshotHash || gate.status !== 'passed') badRequest('Publication requires the latest exact passed risk gate.')
+  const riskGate = gate as typeof gate & { gateVersion?: string; findings?: unknown; riskLevel?: string }
+  if (!gate || gate.draftId !== draft.id || gate.evidenceSnapshotHash !== entry.evidenceSnapshotHash || gate.status !== 'passed' || !safeString(riskGate.gateVersion) || !safeString(riskGate.riskLevel)) badRequest('Publication requires the latest exact passed risk gate.')
   const latestReview = await repository.findLatestReview(ownerUserId, job.id, draft.id, entry.evidenceSnapshotHash)
   const provenance = readRecord(draft.provenance)
   const providerProvenance = readRecord(provenance.providerProvenance)
-  const providerModel = safeString(provenance.model) || safeString(providerProvenance.model) || (safeString(provenance.provider) ? `${safeString(provenance.provider)}:${safeString(provenance.providerVersion) || 'unknown'}` : null)
-  const providerExecution = provenance.providerExecution === true || providerProvenance.providerExecution === true || provenance.actualProviderMode === 'provider'
-  const qualityGateVersion = safeString(provenance.qualityGateVersion) || safeString(riskGate.gateVersion) || 'content-risk-gate-v1'
+  const providerModel = safeString(provenance.providerModel) || safeString(provenance.model) || safeString(providerProvenance.model) || (safeString(provenance.provider) ? `${safeString(provenance.provider)}:${safeString(provenance.providerVersion) || 'unknown'}` : null)
+  const providerExecution = provenance.providerExecution === true && providerProvenance.providerExecution === true
+  const qualityGateVersion = safeString(riskGate.gateVersion)
   const findings = Array.isArray(riskGate.findings) ? riskGate.findings : []
   const unsupportedFactualClaim = findings.some(item => { const record = readRecord(item); const id = safeString(record.id) || ''; return /unsupported|source_bound_claim|fabricated|performance|guarantee/iu.test(id) })
-  const riskLevel = safeString(provenance.riskLevel) || safeString(readRecord(lineage.deliverable).industryRisk) || 'general'
+  const riskLevel = safeString(riskGate.riskLevel)
   const rules = Array.isArray(provenance.appliedRuleIds) ? provenance.appliedRuleIds.filter((value): value is string => typeof value === 'string') : []
-  const deliverableProvenance = readRecord(lineage.deliverable)
+  const deliverableProvenance = readRecord((lineage.deliverable as { provenance?: unknown }).provenance)
   const authoritySourceIds = Array.isArray(deliverableProvenance.authoritySourceIds) ? deliverableProvenance.authoritySourceIds.filter((value: unknown): value is string => typeof value === 'string') : []
-  const evidenceCapturedAt = lineage.calendar.updatedAt ? new Date(lineage.calendar.updatedAt).toISOString() : null
+  const evidenceAuthority = schedulerMayUseGovernedAutopilot ? canonicalEvidenceForAutopilot(context, entry.evidenceSnapshotHash, now) : null
+  const evidenceApproved = evidenceAuthority?.evidenceApproved ?? false
+  const evidenceCapturedAt = evidenceAuthority?.evidenceCapturedAt ?? null
   const targetRoutes: RoutingTargetInput[] = targets.map(target => routeTargetForExecution(target, ownerUserId).target as unknown as RoutingTargetInput)
   const bodyHash = createHash('sha256').update(draft.body, 'utf8').digest('hex')
   const priorAttempts = await repository.listPublicationAttempts(ownerUserId, entry.id)
   const plannedAt = priorAttempts.length ? Math.min(...priorAttempts.map(attempt => (attempt.startedAt || attempt.createdAt).getTime())) : now.getTime()
   let authorityReference: string | null = null
-  if (input.trigger === 'scheduler') {
+  if (input.trigger === 'scheduler' && schedulerMayUseGovernedAutopilot) {
     for (const target of targets) {
       const targetPolicy = dependencies.autopilotPoliciesByTarget?.[target.id] || dependencies.autopilotPolicy
-      const evaluation = evaluateOwnerAutopilotPolicy({ policy: targetPolicy, ownerUserId, clientId: lineage.client.id, targetRowId: target.id, targetId: target.targetId, targetStatus: target.status, targetExecutionEnabled: target.executionEnabled, entry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: latestReview?.decision || null, riskGateStatus: gate.status, riskLevel, qualityGateVersion, evidenceApproved: Boolean(entry.evidenceSnapshotHash), evidenceCapturedAt, providerExecution, providerModel, providerProvenanceComplete: Boolean(providerModel && entry.evidenceSnapshotHash && provenance.stage === 'optimized'), unsupportedFactualClaim, contentHashMatchesDraft: draft.contentHash === entry.contentHash, now })
+      const evaluation = evaluateOwnerAutopilotPolicy({ policy: targetPolicy, ownerUserId, clientId: lineage.client.id, targetRowId: target.id, targetId: target.targetId, targetStatus: target.status, targetExecutionEnabled: target.executionEnabled, entry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: latestReview?.decision || null, riskGateStatus: gate.status, riskLevel, qualityGateVersion, evidenceApproved, evidenceCapturedAt, providerExecution, providerModel, providerProvenanceComplete: Boolean(providerModel && provenance.stage === 'optimized' && provenance.evidenceSnapshotHash === entry.evidenceSnapshotHash && providerProvenance.providerExecution === true), unsupportedFactualClaim, contentHashMatchesDraft: draft.contentHash === entry.contentHash, now })
       if (!evaluation.allowed) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: [...evaluation.reasons, `decisionCode=${evaluation.code}`] }
     }
     const policyIds = targets.map(target => dependencies.autopilotPoliciesByTarget?.[target.id] || dependencies.autopilotPolicy).filter((policy): policy is OwnerAutopilotPolicy => Boolean(policy)).map(policy => policy.policyId).sort()
     authorityReference = `ref-autopilot-${(policyIds.length ? policyIds.join('.') : 'missing').slice(0, 140)}`
-  } else if (!latestReview || latestReview.reviewerUserId !== ownerUserId || latestReview.jobId !== job.id || latestReview.draftId !== draft.id || latestReview.decision !== 'approved_for_delivery' || latestReview.evidenceSnapshotHash !== entry.evidenceSnapshotHash) {
-    badRequest('A current owner approved_for_delivery review is required before multi-channel publication.')
+  } else if (input.trigger === 'scheduler' || !latestReview || latestReview.reviewerUserId !== ownerUserId || latestReview.jobId !== job.id || latestReview.draftId !== draft.id || latestReview.decision !== 'approved_for_delivery' || latestReview.evidenceSnapshotHash !== entry.evidenceSnapshotHash) {
+    if (!latestReview || latestReview.reviewerUserId !== ownerUserId || latestReview.jobId !== job.id || latestReview.draftId !== draft.id || latestReview.decision !== 'approved_for_delivery' || latestReview.evidenceSnapshotHash !== entry.evidenceSnapshotHash) badRequest('A current owner approved_for_delivery review is required before multi-channel publication.')
   }
   const identityResult = buildPublicationIdentity({ clientId: lineage.client.id, entryId: entry.id, targetId: targets[0]!.targetId, targetOrigin: targets[0]!.targetOrigin, contentRoot: targets[0]!.contentRoot, contentType: entry.contentType, language: entry.language, title: draft.title, ownerScopeKey: ownerScopeKey(ownerUserId) })
   if (!identityResult.ok) badRequest(`Publication identity is invalid: ${identityResult.reason}`)
@@ -593,7 +610,7 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
   const deliverable = lineage.deliverable as typeof lineage.deliverable & { status?: string }
   if (validatedTarget.allowedContentTypes.includes(entry.contentType) === false || !validatedTarget.allowedLanguages.includes(entry.language)) badRequest('Publication target does not allow this content type or language.')
   const latestReview = await repository.findLatestReview(ownerUserId, job.id, draft.id, entry.evidenceSnapshotHash)
-  const schedulerMayUseGovernedAutopilot = input.trigger === 'scheduler' && dependencies.autopilotPolicy?.requireApprovedForDelivery !== true
+  const schedulerMayUseGovernedAutopilot = input.trigger === 'scheduler' && dependencies.autopilotPolicy !== undefined && dependencies.autopilotPolicy.requireApprovedForDelivery !== true
   if ((!latestReview || latestReview.reviewerUserId !== ownerUserId || latestReview.jobId !== job.id || latestReview.draftId !== draft.id || latestReview.evidenceSnapshotHash !== entry.evidenceSnapshotHash) && !schedulerMayUseGovernedAutopilot) badRequest('A current owner review is required before publication.')
   if (latestReview && latestReview.decision !== 'approved_for_delivery') {
     const publicationRuns = await repository.listRuns(ownerUserId, entry.id)
@@ -617,21 +634,26 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
     }
     badRequest('The latest owner review decision is malformed or does not authorize publication.')
   }
-  if (typeof job.status === 'string' && job.status !== 'approved') badRequest('Publication requires the content job to remain approved.')
-  if (typeof deliverable.status === 'string' && !['approved', 'exported'].includes(deliverable.status)) badRequest('Publication requires the deliverable to remain approved.')
+  if (typeof job.status === 'string' && job.status !== 'approved' && !schedulerMayUseGovernedAutopilot) badRequest('Publication requires the content job to remain approved.')
+  if (typeof deliverable.status === 'string' && !['approved', 'exported'].includes(deliverable.status) && !schedulerMayUseGovernedAutopilot) badRequest('Publication requires the deliverable to remain approved.')
+  const context = await repository.resolveCanonicalContext(ownerUserId, lineage.calendar.productionPlanId, entry.productionDeliverableId)
+  if (context.plan.id !== lineage.calendar.productionPlanId || context.deliverable.id !== entry.productionDeliverableId || context.strategy.id !== entry.strategyRecommendationId || context.evidenceSnapshot.hash !== entry.evidenceSnapshotHash) badRequest('Publication canonical context is stale or mismatched.')
   const gate = await repository.findRiskGate(ownerUserId, draft.id, entry.evidenceSnapshotHash)
-  if (!gate || gate.draftId !== draft.id || gate.evidenceSnapshotHash !== entry.evidenceSnapshotHash || gate.status !== 'passed') badRequest('Publication requires the latest exact passed risk gate.')
+  const riskGate = gate as typeof gate & { gateVersion?: string; findings?: unknown; riskLevel?: string }
+  if (!gate || gate.draftId !== draft.id || gate.evidenceSnapshotHash !== entry.evidenceSnapshotHash || gate.status !== 'passed' || !safeString(riskGate.gateVersion) || !safeString(riskGate.riskLevel)) badRequest('Publication requires the latest exact passed risk gate.')
   let authorityReference: string | null = null
-  if (input.trigger === 'scheduler') {
+  if (input.trigger === 'scheduler' && dependencies.autopilotPolicy) {
     const provenance = readRecord(draft.provenance)
     const providerProvenance = readRecord(provenance.providerProvenance)
-    const providerModel = safeString(provenance.model) || safeString(providerProvenance.model) || (safeString(provenance.provider) ? `${safeString(provenance.provider)}:${safeString(provenance.providerVersion) || 'unknown'}` : null)
-    const autopilot = evaluateOwnerAutopilotPolicy({ policy: dependencies.autopilotPolicy, ownerUserId, clientId: lineage.client.id, targetRowId: target.id, targetId: target.targetId, targetStatus: target.status, targetExecutionEnabled: target.executionEnabled, entry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: latestReview?.decision || null, riskGateStatus: gate.status, riskLevel: safeString(provenance.riskLevel) || 'general', qualityGateVersion: safeString(provenance.qualityGateVersion) || 'content-risk-gate-v1', evidenceApproved: Boolean(entry.evidenceSnapshotHash), evidenceCapturedAt: lineage.calendar.updatedAt ? new Date(lineage.calendar.updatedAt).toISOString() : null, providerExecution: provenance.providerExecution === true || providerProvenance.providerExecution === true || provenance.actualProviderMode === 'provider', providerModel, providerProvenanceComplete: Boolean(providerModel && provenance.stage === 'optimized'), unsupportedFactualClaim: false, contentHashMatchesDraft: draft.contentHash === entry.contentHash, now })
+    const providerModel = safeString(provenance.providerModel) || safeString(provenance.model) || safeString(providerProvenance.model) || (safeString(provenance.provider) ? `${safeString(provenance.provider)}:${safeString(provenance.providerVersion) || 'unknown'}` : null)
+    const evidenceAuthority = canonicalEvidenceForAutopilot(context, entry.evidenceSnapshotHash, now)
+    const { evidenceApproved, evidenceCapturedAt } = evidenceAuthority
+    const findings = Array.isArray(riskGate.findings) ? riskGate.findings : []
+    const unsupportedFactualClaim = findings.some(item => { const record = readRecord(item); const id = safeString(record.id) || ''; return /unsupported|source_bound_claim|fabricated|performance|guarantee/iu.test(id) })
+    const autopilot = evaluateOwnerAutopilotPolicy({ policy: dependencies.autopilotPolicy, ownerUserId, clientId: lineage.client.id, targetRowId: target.id, targetId: target.targetId, targetStatus: target.status, targetExecutionEnabled: target.executionEnabled, entry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: latestReview?.decision || null, riskGateStatus: gate.status, riskLevel: safeString(riskGate.riskLevel), qualityGateVersion: safeString(riskGate.gateVersion), evidenceApproved, evidenceCapturedAt, providerExecution: provenance.providerExecution === true && providerProvenance.providerExecution === true, providerModel, providerProvenanceComplete: Boolean(providerModel && provenance.stage === 'optimized' && provenance.evidenceSnapshotHash === entry.evidenceSnapshotHash && providerProvenance.providerExecution === true), unsupportedFactualClaim, contentHashMatchesDraft: draft.contentHash === entry.contentHash, now })
     if (!autopilot.allowed) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: [...autopilot.reasons, `decisionCode=${autopilot.code}`] }
     authorityReference = `ref-autopilot-${dependencies.autopilotPolicy!.policyId}`
   }
-  const context = await repository.resolveCanonicalContext(ownerUserId, lineage.calendar.productionPlanId, entry.productionDeliverableId)
-  if (context.plan.id !== lineage.calendar.productionPlanId || context.deliverable.id !== entry.productionDeliverableId || context.strategy.id !== entry.strategyRecommendationId || context.evidenceSnapshot.hash !== entry.evidenceSnapshotHash) badRequest('Publication canonical context is stale or mismatched.')
   const rules = context.rules.map(rule => rule.id)
   const authoritySourceIds = context.evidenceSnapshot.refs.map(ref => ref.artifactId ? `artifact:${ref.artifactId}` : `source:${ref.sourceId}`).filter(Boolean)
   const identityInput = { clientId: lineage.client.id, entryId: entry.id, targetId: target.targetId, targetOrigin: target.targetOrigin, contentRoot: target.contentRoot, contentType: entry.contentType, language: entry.language, title: draft.title, ownerScopeKey: validatedTarget.ownerScopeKey }
@@ -756,7 +778,9 @@ async function executeGeneration(ownerUserId: number, entry: ContentOperationCal
   const productionRuntime = dependencies.productionRuntime || {}
   const runner = dependencies.productionDeliverableRunner || (async input => runOwnerProductionDeliverable(input))
   try {
-    const result = await runner({ ownerUserId, planId: (await repository.findCalendar(ownerUserId, entry.calendarId))?.productionPlanId || 0, deliverableId: entry.productionDeliverableId, dependencies: productionRuntime })
+    const calendar = await repository.findCalendar(ownerUserId, entry.calendarId)
+    if (!calendar?.productionPlanId) badRequest('Generation requires a canonical calendar production plan.')
+    const result = await runner({ ownerUserId, clientId: calendar.clientId, calendarEntryId: entry.id, planId: calendar.productionPlanId, deliverableId: entry.productionDeliverableId, now, dependencies: productionRuntime })
     const jobId = result.job?.id || entry.jobId
     if (!jobId) badRequest('Generation did not return a persisted job.')
     const draft = await repository.findLatestOptimizedDraft(ownerUserId, jobId)
@@ -789,7 +813,7 @@ async function executeGeneration(ownerUserId: number, entry: ContentOperationCal
       await transaction.appendEvent(event(ownerUserId, entry, completed.id, 'generation_failed', entry.status, updated.status, { errorCode: 'GENERATION_FAILED', errorSummary: sanitizeErrorSummary(error) }, { entryId: entry.id, event: 'generation_failed' }))
       return { updated, completed }
     })
-    return { entryId: entry.id, entry: failed.updated, previousStatus: entry.status, resultingStatus: failed.updated.status, runId: failed.completed.id, stage: 'generation', outcome: 'blocked', retryAt: null, limitations: ['generation exception was converted to a bounded blocked result'] }
+    return { entryId: entry.id, entry: failed.updated, previousStatus: entry.status, resultingStatus: failed.updated.status, runId: failed.completed.id, stage: 'generation', outcome: 'blocked', retryAt: null, limitations: ['generation exception was converted to a bounded blocked result', `error=${sanitizeErrorSummary(error)}`] }
   }
 }
 
@@ -960,14 +984,20 @@ export async function runOwnerContentEntryWorkflow(input: { ownerUserId: number;
     if (!lineage || !lineage.client || !lineage.job || !lineage.draft || !target) badRequest('Governed autopilot workflow lineage or target is incomplete.')
     const evaluationTargets = targets.length ? targets : [target]
     const draft = lineage.draft as typeof lineage.draft & { provenance: unknown }
+    const context = await repository.resolveCanonicalContext(input.ownerUserId, lineage.calendar.productionPlanId, current.productionDeliverableId)
+    if (context.plan.id !== lineage.calendar.productionPlanId || context.deliverable.id !== current.productionDeliverableId || context.strategy.id !== current.strategyRecommendationId || context.evidenceSnapshot.hash !== current.evidenceSnapshotHash) badRequest('Governed autopilot promotion requires a current canonical production context.')
+    const evidenceAuthority = canonicalEvidenceForAutopilot(context, current.evidenceSnapshotHash, now)
     const gate = await repository.findRiskGate(input.ownerUserId, draft.id, current.evidenceSnapshotHash)
+    const riskGate = gate as typeof gate & { gateVersion?: string; findings?: unknown; riskLevel?: string }
     const provenance = readRecord(draft.provenance)
     const providerProvenance = readRecord(provenance.providerProvenance)
-    const providerModel = safeString(provenance.model) || safeString(providerProvenance.model) || (safeString(provenance.provider) ? `${safeString(provenance.provider)}:${safeString(provenance.providerVersion) || 'unknown'}` : null)
+    const providerModel = safeString(provenance.providerModel) || safeString(provenance.model) || safeString(providerProvenance.model) || (safeString(provenance.provider) ? `${safeString(provenance.provider)}:${safeString(provenance.providerVersion) || 'unknown'}` : null)
+    const findings = Array.isArray(riskGate?.findings) ? riskGate.findings : []
+    const unsupportedFactualClaim = findings.some(item => /unsupported|source_bound_claim|fabricated|performance|guarantee/iu.test(safeString(readRecord(item).id) || ''))
     const prospectiveEntry = { ...current, status: 'ready_to_publish' as const }
     for (const candidateTarget of evaluationTargets) {
       const targetPolicy = dependencies.autopilotPoliciesByTarget?.[candidateTarget.id] || dependencies.autopilotPolicy
-      const evaluation = evaluateOwnerAutopilotPolicy({ policy: targetPolicy, ownerUserId: input.ownerUserId, clientId: lineage.client.id, targetRowId: candidateTarget.id, targetId: candidateTarget.targetId, targetStatus: candidateTarget.status, targetExecutionEnabled: candidateTarget.executionEnabled, entry: prospectiveEntry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: null, riskGateStatus: gate?.status || null, riskLevel: safeString(provenance.riskLevel) || 'general', qualityGateVersion: safeString(provenance.qualityGateVersion) || 'content-risk-gate-v1', evidenceApproved: Boolean(current.evidenceSnapshotHash), evidenceCapturedAt: lineage.calendar.updatedAt ? new Date(lineage.calendar.updatedAt).toISOString() : null, providerExecution: provenance.providerExecution === true || providerProvenance.providerExecution === true || provenance.actualProviderMode === 'provider', providerModel, providerProvenanceComplete: Boolean(providerModel && provenance.stage === 'optimized'), unsupportedFactualClaim: false, contentHashMatchesDraft: draft.contentHash === current.contentHash, now })
+      const evaluation = evaluateOwnerAutopilotPolicy({ policy: targetPolicy, ownerUserId: input.ownerUserId, clientId: lineage.client.id, targetRowId: candidateTarget.id, targetId: candidateTarget.targetId, targetStatus: candidateTarget.status, targetExecutionEnabled: candidateTarget.executionEnabled, entry: prospectiveEntry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: null, riskGateStatus: gate?.status || null, riskLevel: safeString(riskGate?.riskLevel), qualityGateVersion: safeString(riskGate?.gateVersion), evidenceApproved: evidenceAuthority.evidenceApproved, evidenceCapturedAt: evidenceAuthority.evidenceCapturedAt, providerExecution: provenance.providerExecution === true && providerProvenance.providerExecution === true, providerModel, providerProvenanceComplete: Boolean(providerModel && provenance.stage === 'optimized' && provenance.evidenceSnapshotHash === current.evidenceSnapshotHash && providerProvenance.providerExecution === true), unsupportedFactualClaim, contentHashMatchesDraft: draft.contentHash === current.contentHash, now })
       if (!evaluation.allowed) return { ...result, outcome: 'blocked', limitations: [...evaluation.reasons, `decisionCode=${evaluation.code}`, 'governed autopilot did not promote the entry; no review or executor call was created'] }
     }
     const promoted = await repository.transaction(async transaction => {
@@ -1007,7 +1037,7 @@ export async function runContentOperationsExecutionTick(input: { ownerUserId?: n
   const repository = input.repository || createContentOperationsRepository()
   const now = input.now || (input.dependencies?.clock || getDefaultContentOperationsClock()).now()
   const runs = await repository.listEligibleRuns(now, Math.min(50, input.maxRuns || 50), input.ownerUserId)
-  const results: Array<{ runId: number; ownerUserId: number; status: string; outcome?: string; errorSummary?: string }> = []
+  const results: Array<{ runId: number; ownerUserId: number; status: string; outcome?: string; errorSummary?: string; limitations?: string[] }> = []
   for (const run of runs) {
     try {
       const entry = await repository.findEntry(run.ownerUserId, run.entryId)
@@ -1041,7 +1071,7 @@ export async function runContentOperationsExecutionTick(input: { ownerUserId?: n
         }
       }
       const result = await executeContentOperationEntry({ ownerUserId: run.ownerUserId, entryId: entry.id, trigger: 'scheduler', expectedRunId: run.id, now, value: { idempotencyKey: `scheduler:publication:${run.id}:attempt:${run.attemptNumber + 1}`, mode }, dependencies: { ...input.dependencies, repository, productionRuntime: input.dependencies?.productionRuntime || {}, autopilotPolicy: persistedAutopilotPolicy, autopilotPoliciesByTarget: persistedAutopilotPoliciesByTarget } })
-      results.push({ runId: run.id, ownerUserId: run.ownerUserId, status: result.resultingStatus, outcome: result.outcome })
+      results.push({ runId: run.id, ownerUserId: run.ownerUserId, status: result.resultingStatus, outcome: result.outcome, limitations: result.limitations })
     } catch (error) {
       results.push({ runId: run.id, ownerUserId: run.ownerUserId, status: 'blocked', errorSummary: sanitizeErrorSummary(error) })
     }
