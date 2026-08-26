@@ -24,7 +24,8 @@ export function scanOutcomeLearningPii(value: unknown): LearningPiiScan {
   try {
     const serialized = JSON.stringify(value)
     if (typeof serialized !== 'string' || serialized.length > 500_000) return { status: 'unknown', reasonCode: 'PAYLOAD_TOO_LARGE' }
-    if (PII_PATTERNS.some(pattern => pattern.test(serialized))) return { status: 'detected', reasonCode: 'PII_PATTERN_DETECTED' }
+    const scanText = serialized.replace(/\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?)?\b/gu, '<timestamp>')
+    if (PII_PATTERNS.some(pattern => pattern.test(scanText))) return { status: 'detected', reasonCode: 'PII_PATTERN_DETECTED' }
     return { status: 'none_detected' }
   } catch {
     return { status: 'unknown', reasonCode: 'UNSERIALIZABLE_PAYLOAD' }

@@ -1,7 +1,7 @@
 import { buildContentCalendar, materializeDueContentWork } from '../../../server/content-calendar'
 import { stableFingerprint } from '../../../server/content-operations/normalization'
 import type { ContentOperationsRepository, WorkspaceEntryLineage } from '../../../server/content-operations/repository'
-import type { ContentOperationAutopilotPolicyRow, ContentOperationCalendarEntryRow, ContentOperationCalendarRow, ContentOperationClientRow, ContentOperationEventRow, ContentOperationOutcomeAssessmentRow, ContentOperationPublicationAttemptRow, ContentOperationPublicationTargetRow, ContentOperationRunRow, DeliveredPublication, PlanBundle } from '../../../server/content-operations/types'
+import type { ContentOperationAutopilotPolicyRow, ContentOperationCalendarEntryRow, ContentOperationCalendarEntryTargetRow, ContentOperationCalendarRow, ContentOperationClientRow, ContentOperationEventRow, ContentOperationOutcomeAssessmentRow, ContentOperationPublicationAttemptRow, ContentOperationPublicationTargetRow, ContentOperationRunRow, DeliveredPublication, PlanBundle } from '../../../server/content-operations/types'
 
 export const HASH = 'a'.repeat(64)
 
@@ -30,18 +30,21 @@ export class ContentOperationsFixture {
   events: ContentOperationEventRow[] = []
   outcomes: ContentOperationOutcomeAssessmentRow[] = []
   targets: ContentOperationPublicationTargetRow[] = []
+  entryTargetBindings: ContentOperationCalendarEntryTargetRow[] = []
   autopilotPolicies: ContentOperationAutopilotPolicyRow[] = []
   attempts: ContentOperationPublicationAttemptRow[] = []
   bundles = new Map<string, PlanBundle>()
   delivered = new Map<number, DeliveredPublication>()
+  generated = new Map<number, { deliverable: Record<string, unknown>; job: Record<string, unknown>; draft: Record<string, unknown>; riskGate: Record<string, unknown> }>()
+  reviews = new Map<number, Record<string, unknown>>()
   nextId = 100
   readonly repository: ContentOperationsRepository
 
   constructor() {
     this.repository = {
       transaction: async work => {
-        const snapshot = { clients: this.clients.map(row => ({ ...row })), calendars: this.calendars.map(row => ({ ...row })), entries: this.entries.map(row => ({ ...row })), runs: this.runs.map(row => ({ ...row })), events: this.events.map(row => ({ ...row })), outcomes: this.outcomes.map(row => ({ ...row })), targets: this.targets.map(row => ({ ...row })), autopilotPolicies: this.autopilotPolicies.map(row => ({ ...row })), attempts: this.attempts.map(row => ({ ...row })), nextId: this.nextId }
-        try { return await work(this.repository) } catch (error) { this.clients = snapshot.clients; this.calendars = snapshot.calendars; this.entries = snapshot.entries; this.runs = snapshot.runs; this.events = snapshot.events; this.outcomes = snapshot.outcomes; this.targets = snapshot.targets; this.autopilotPolicies = snapshot.autopilotPolicies; this.attempts = snapshot.attempts; this.nextId = snapshot.nextId; throw error }
+        const snapshot = { clients: this.clients.map(row => ({ ...row })), calendars: this.calendars.map(row => ({ ...row })), entries: this.entries.map(row => ({ ...row })), runs: this.runs.map(row => ({ ...row })), events: this.events.map(row => ({ ...row })), outcomes: this.outcomes.map(row => ({ ...row })), targets: this.targets.map(row => ({ ...row })), entryTargetBindings: this.entryTargetBindings.map(row => ({ ...row })), autopilotPolicies: this.autopilotPolicies.map(row => ({ ...row })), attempts: this.attempts.map(row => ({ ...row })), generated: new Map(this.generated), reviews: new Map(this.reviews), nextId: this.nextId }
+        try { return await work(this.repository) } catch (error) { this.clients = snapshot.clients; this.calendars = snapshot.calendars; this.entries = snapshot.entries; this.runs = snapshot.runs; this.events = snapshot.events; this.outcomes = snapshot.outcomes; this.targets = snapshot.targets; this.entryTargetBindings = snapshot.entryTargetBindings; this.autopilotPolicies = snapshot.autopilotPolicies; this.attempts = snapshot.attempts; this.generated = snapshot.generated; this.reviews = snapshot.reviews; this.nextId = snapshot.nextId; throw error }
       },
       findClientByIdempotency: async (owner, key) => this.clients.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       findClientByOrigin: async (owner, origin) => this.clients.find(row => row.ownerUserId === owner && row.canonicalSiteOrigin === origin) || null,
@@ -51,8 +54,8 @@ export class ContentOperationsFixture {
       findPublicationTargetByIdempotency: async (owner, key) => this.targets.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       findPublicationTarget: async (owner, id) => this.targets.find(row => row.ownerUserId === owner && row.id === id) || null,
       findActivePublicationTarget: async (owner, clientId) => this.targets.find(row => row.ownerUserId === owner && row.clientId === clientId && row.status === 'active' && row.activeSlot === 1) || null,
-      insertPublicationTarget: async input => { if (input.activeSlot === 1 && this.targets.some(row => row.ownerUserId === input.ownerUserId && row.clientId === input.clientId && row.activeSlot === 1)) throw Object.assign(new Error('active slot duplicate'), { code: 'ER_DUP_ENTRY' }); const row = { ...input, id: ++this.nextId, createdAt: now(), updatedAt: now() } as ContentOperationPublicationTargetRow; this.targets.push(row); return row },
-      updatePublicationTarget: async (owner, id, patch) => { const row = this.targets.find(item => item.ownerUserId === owner && item.id === id); if (!row) throw new Error('missing target'); if (patch.activeSlot === 1 && this.targets.some(item => item.ownerUserId === owner && item.clientId === row.clientId && item.activeSlot === 1 && item.id !== id)) throw Object.assign(new Error('active slot duplicate'), { code: 'ER_DUP_ENTRY' }); Object.assign(row, patch, { updatedAt: now() }); return row },
+      insertPublicationTarget: async input => { if (input.activeSlot !== null && this.targets.some(row => row.ownerUserId === input.ownerUserId && row.clientId === input.clientId && row.activeSlot === input.activeSlot)) throw Object.assign(new Error('active slot duplicate'), { code: 'ER_DUP_ENTRY' }); const row = { ...input, id: ++this.nextId, createdAt: now(), updatedAt: now() } as ContentOperationPublicationTargetRow; this.targets.push(row); return row },
+      updatePublicationTarget: async (owner, id, patch) => { const row = this.targets.find(item => item.ownerUserId === owner && item.id === id); if (!row) throw new Error('missing target'); if (patch.activeSlot !== undefined && patch.activeSlot !== null && this.targets.some(item => item.ownerUserId === owner && item.clientId === row.clientId && item.activeSlot === patch.activeSlot && item.id !== id)) throw Object.assign(new Error('active slot duplicate'), { code: 'ER_DUP_ENTRY' }); Object.assign(row, patch, { updatedAt: now() }); return row },
       listPublicationTargets: async owner => this.targets.filter(row => row.ownerUserId === owner),
       findAutopilotPolicy: async (owner, clientId, publicationTargetId) => this.autopilotPolicies.find(row => row.ownerUserId === owner && row.clientId === clientId && row.publicationTargetId === publicationTargetId) || null,
       insertAutopilotPolicy: async input => { if (this.autopilotPolicies.some(row => row.ownerUserId === input.ownerUserId && row.publicationTargetId === input.publicationTargetId)) throw Object.assign(new Error('autopilot policy duplicate'), { code: 'ER_DUP_ENTRY' }); const row = { ...input, id: ++this.nextId, createdAt: now(), updatedAt: now() } as ContentOperationAutopilotPolicyRow; this.autopilotPolicies.push(row); return row },
@@ -72,6 +75,8 @@ export class ContentOperationsFixture {
       listCalendars: async owner => this.calendars.filter(row => row.ownerUserId === owner),
       findEntry: async (owner, id) => this.entries.find(row => row.ownerUserId === owner && row.id === id) || null,
       listEntries: async (owner, calendarId) => this.entries.filter(row => row.ownerUserId === owner && (calendarId === undefined || row.calendarId === calendarId)).sort((a, b) => a.plannedLocalDate.localeCompare(b.plannedLocalDate) || a.scheduleKey.localeCompare(b.scheduleKey)),
+      listEntryTargetBindings: async (owner, entryId) => this.entryTargetBindings.filter(row => row.ownerUserId === owner && row.entryId === entryId).sort((a, b) => a.slot - b.slot),
+      insertEntryTargetBinding: async input => { const duplicate = this.entryTargetBindings.find(row => row.ownerUserId === input.ownerUserId && (row.entryId === input.entryId && row.targetId === input.targetId || row.entryId === input.entryId && row.slot === input.slot)); if (duplicate) { if (duplicate.targetId === input.targetId && duplicate.slot === input.slot && duplicate.bindingFingerprint === input.bindingFingerprint) return duplicate; throw Object.assign(new Error('entry target binding duplicate'), { code: 'ER_DUP_ENTRY' }); } const row = { ...input, id: ++this.nextId, createdAt: now() } as ContentOperationCalendarEntryTargetRow; this.entryTargetBindings.push(row); return row },
       insertEntry: async input => { const row = { ...input, id: ++this.nextId, createdAt: now(), updatedAt: now() } as ContentOperationCalendarEntryRow; this.entries.push(row); return row },
       updateEntry: async (owner, id, patch) => { const row = this.entries.find(item => item.ownerUserId === owner && item.id === id); if (!row) throw new Error('missing entry'); Object.assign(row, patch, { updatedAt: now() }); return row },
       listRuns: async (owner, entryId) => this.runs.filter(row => row.ownerUserId === owner && (entryId === undefined || row.entryId === entryId)).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
@@ -83,9 +88,9 @@ export class ContentOperationsFixture {
       updateRun: async (owner, id, patch) => { const row = this.runs.find(item => item.ownerUserId === owner && item.id === id); if (!row) throw new Error('missing run'); Object.assign(row, patch, { updatedAt: now() }); return row },
       appendEvent: async input => { const existing = this.events.find(row => row.ownerUserId === input.ownerUserId && row.eventFingerprint === input.eventFingerprint); if (existing) return existing; const row = { ...input, id: ++this.nextId, occurredAt: now() } as ContentOperationEventRow; this.events.push(row); return row },
       listEvents: async (owner, entryId) => this.events.filter(row => row.ownerUserId === owner && (entryId === undefined || row.entryId === entryId)),
-      findLatestOptimizedDraft: async () => null,
-      findRiskGate: async () => null,
-      findLatestReview: async () => null,
+      findLatestOptimizedDraft: async (owner, jobId) => [...this.generated.values()].map(value => value.draft).find(draft => draft.jobId === jobId && (draft.ownerUserId === undefined || draft.ownerUserId === owner)) as never || null,
+      findRiskGate: async (owner, draftId, evidenceSnapshotHash) => [...this.generated.values()].map(value => value.riskGate).find(gate => gate.draftId === draftId && gate.evidenceSnapshotHash === evidenceSnapshotHash && (gate.ownerUserId === undefined || gate.ownerUserId === owner)) as never || null,
+      findLatestReview: async (owner, jobId, draftId, evidenceSnapshotHash) => [...this.reviews.values()].filter(review => review.ownerUserId === owner && review.jobId === jobId && review.draftId === draftId && review.evidenceSnapshotHash === evidenceSnapshotHash).sort((left, right) => Number(right.id) - Number(left.id))[0] as never || null,
       findPublicationAttemptByIdempotency: async (owner, key) => this.attempts.find(row => row.ownerUserId === owner && row.idempotencyKey === key) || null,
       listPublicationAttempts: async (owner, entryId) => this.attempts.filter(row => row.ownerUserId === owner && (entryId === undefined || row.entryId === entryId)),
       insertPublicationAttempt: async input => { if (this.attempts.some(row => row.ownerUserId === input.ownerUserId && row.idempotencyKey === input.idempotencyKey)) throw Object.assign(new Error('duplicate attempt'), { code: 'ER_DUP_ENTRY' }); const row = { ...input, id: ++this.nextId, createdAt: now() } as ContentOperationPublicationAttemptRow; this.attempts.push(row); return row },
@@ -103,12 +108,13 @@ export class ContentOperationsFixture {
         const entry = this.entries.find(row => row.ownerUserId === input.ownerUserId && row.id === input.entryId)
         if (!run || !entry || !['ready_to_publish', 'publishing'].includes(entry.status)) throw Object.assign(new Error('publication lease or entry missing'), { statusCode: 409 })
         entry.status = 'publishing'
-        const nextAttemptNumber = run.attemptNumber + 1
-        if (nextAttemptNumber > 3) throw Object.assign(new Error('Publication retry limit has been reached.'), { statusCode: 422 })
-        run.attemptNumber = nextAttemptNumber
-        run.updatedAt = input.startedAt
-        const { jobId: _jobId, draftId: _draftId, reviewId: _reviewId, riskGateId: _riskGateId, leaseToken: _leaseToken, ...attemptInput } = input
-        const attempt = { ...attemptInput, attemptNumber: nextAttemptNumber, artifactFingerprint: null, status: 'planned' as const, remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null, id: ++this.nextId, createdAt: now() } as ContentOperationPublicationAttemptRow
+                  const requestedAttemptNumber = input.attemptNumber
+          if (!Number.isSafeInteger(requestedAttemptNumber) || requestedAttemptNumber < 1 || requestedAttemptNumber > 3 || requestedAttemptNumber < run.attemptNumber) throw Object.assign(new Error('Publication retry limit has been reached or attempt number is stale.'), { statusCode: 422 })
+          if (requestedAttemptNumber > run.attemptNumber) run.attemptNumber = requestedAttemptNumber
+          run.updatedAt = input.startedAt
+          const { jobId: _jobId, draftId: _draftId, reviewId: _reviewId, riskGateId: _riskGateId, leaseToken: _leaseToken, attemptNumber: _attemptNumber, ...attemptInput } = input
+          const attempt = { ...attemptInput, attemptNumber: requestedAttemptNumber, artifactFingerprint: null, status: 'planned' as const, remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null, id: ++this.nextId, createdAt: now() } as ContentOperationPublicationAttemptRow
+
         this.attempts.push(attempt)
         return { attempt, run, replayed: false }
       },
@@ -136,9 +142,22 @@ export class ContentOperationsFixture {
         const deliverable = entry && bundle?.deliverables.find(row => row.id === entry.productionDeliverableId)
         if (!entry || !calendar || !client || !deliverable) return null
         const delivered = this.delivered.get(entryId)
-        return { entry, calendar, client, deliverable: delivered?.deliverable || deliverable as any, job: delivered?.job || null, draft: delivered?.draft || null, review: delivered?.review || null, riskGate: delivered?.riskGate || null } as WorkspaceEntryLineage
+        const binding = this.entryTargetBindings.filter(row => row.ownerUserId === owner && row.entryId === entryId).sort((left, right) => left.slot - right.slot)[0]
+        const target = binding ? this.targets.find(row => row.ownerUserId === owner && row.id === binding.targetId) || null : this.targets.find(row => row.ownerUserId === owner && row.clientId === client.id && row.status === 'active' && row.activeSlot === 1) || null
+        const generated = this.generated.get(entryId)
+        const review = delivered?.review || this.reviews.get(entryId) || null
+        return { entry, calendar, client, target, deliverable: delivered?.deliverable || generated?.deliverable || deliverable as any, job: delivered?.job || generated?.job || null, draft: delivered?.draft || generated?.draft || null, review: review as WorkspaceEntryLineage['review'], riskGate: delivered?.riskGate || generated?.riskGate || null } as WorkspaceEntryLineage
       },
-      resolveDeliveredPublication: async (owner, entryId) => { const value = this.delivered.get(entryId); return value && value.entry.ownerUserId === owner ? value : null },
+      resolveDeliveredPublication: async (owner, entryId) => {
+        const legacy = this.delivered.get(entryId)
+        if (legacy && legacy.entry.ownerUserId === owner) return legacy
+        const entry = this.entries.find(row => row.ownerUserId === owner && row.id === entryId)
+        const lineage = entry ? await this.repository.resolveWorkspaceEntry(owner, entryId) : null
+        const run = this.runs.find(row => row.ownerUserId === owner && row.entryId === entryId && row.stage === 'publication' && row.state === 'succeeded') || null
+        const attempt = run ? this.attempts.find(row => row.ownerUserId === owner && row.entryId === entryId && row.runId === run.id && row.status === 'delivered') || null : null
+        if (!entry || !lineage?.job || !lineage.draft || !lineage.riskGate || !run || !attempt) return null
+        return { entry, calendar: lineage.calendar, deliverable: lineage.deliverable, job: lineage.job, draft: lineage.draft, review: lineage.review, riskGate: lineage.riskGate, publicationRun: run, publicationTarget: lineage.target || null, publicationAttempt: attempt, authorityReference: entry.publicationAuthorityReference || null, publicationIdentity: entry.publicationSlug && entry.publicationPath && entry.publicationIdentityFingerprint ? { publicationId: `publication-${entry.id}`, slug: entry.publicationSlug, path: entry.publicationPath, identityFingerprint: entry.publicationIdentityFingerprint } : null } as DeliveredPublication
+      },
     }
   }
 
@@ -152,6 +171,17 @@ export class ContentOperationsFixture {
     const row = fixtureClient(ownerUserId, this.nextId + 1)
     this.clients.push(row)
     return row
+  }
+
+  persistGeneratedLineage(entryId: number, lineage: { deliverable: Record<string, unknown>; job: Record<string, unknown>; draft: Record<string, unknown>; riskGate: Record<string, unknown> }) {
+    this.generated.set(entryId, lineage)
+    return lineage
+  }
+
+  recordOwnerReview(entryId: number, input: { ownerUserId: number; jobId: number; draftId: number; decision: string; evidenceSnapshotHash: string }) {
+    const review = { id: ++this.nextId, reviewerUserId: input.ownerUserId, ...input }
+    this.reviews.set(entryId, review)
+    return review
   }
 
   markCompleted(calendarId: number, entryId: number) {

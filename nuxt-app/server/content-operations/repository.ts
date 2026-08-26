@@ -4,6 +4,7 @@ import { getDatabase } from '../database'
 import {
   contentOperationAutopilotPolicies,
   contentOperationCalendarEntries,
+  contentOperationCalendarEntryTargets,
   contentOperationCalendars,
   contentOperationClients,
   contentOperationOutcomeAssessments,
@@ -21,6 +22,7 @@ import { getProductionPlanBundle, resolveProductionContext } from '../seo-geo-co
 import type {
   ContentOperationAutopilotPolicyRow,
   ContentOperationCalendarEntryRow,
+  ContentOperationCalendarEntryTargetRow,
   ContentOperationCalendarRow,
   ContentOperationClientRow,
   ContentOperationEventRow,
@@ -36,23 +38,26 @@ import type { OperationClaim } from './types'
 export type CalendarInsert = Omit<ContentOperationCalendarRow, 'id' | 'createdAt' | 'updatedAt'>
 export type EntryInsert = Omit<ContentOperationCalendarEntryRow, 'id' | 'createdAt' | 'updatedAt'>
 export type RunInsert = Omit<ContentOperationRunRow, 'id' | 'createdAt' | 'updatedAt'>
-export type EventInsert = Omit<ContentOperationEventRow, 'id' | 'occurredAt'>
+export type EventInsert = Omit<ContentOperationEventRow, 'id' | 'occurredAt' | 'websiteId' | 'deliverableId' | 'draftId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'contentHash' | 'evidenceSnapshotHash' | 'authorityReference'> & Partial<Pick<ContentOperationEventRow, 'websiteId' | 'deliverableId' | 'draftId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'contentHash' | 'evidenceSnapshotHash' | 'authorityReference'>>
 export type OperationClaimInput = { ownerUserId: number; calendarId: number; operation: 'replan' | 'materialize'; idempotencyKey: string; requestFingerprint: string; eventFingerprint: string }
 export type LeaseError = { code?: string; summary?: string; retryEligibleAt?: Date | null }
 export type WorkspaceEntryLineage = { entry: ContentOperationCalendarEntryRow; calendar: ContentOperationCalendarRow; client: ContentOperationClientRow; target?: ContentOperationPublicationTargetRow | null; deliverable: Record<string, unknown> & { id: number; ownerUserId: number; planId: number; briefId: number | null; jobId: number | null; selectionId: number; contentType: string; title: string; audience: string; language: string; evidenceSnapshotHash: string; opportunityKey: string; provenance: unknown }; job: (Record<string, unknown> & { id: number; ownerUserId: number; productionPlanId: number | null; productionDeliverableId: number | null; strategyRecommendationId: number | null; evidenceSnapshotHash: string; briefId: number }) | null; draft: (Record<string, unknown> & { id: number; jobId: number; version: number; contentHash: string; evidenceRefs: unknown; safetyStatus: string }) | null; review: (Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string }) | null; riskGate: (Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string }) | null }
 export type OutcomeInsert = Omit<ContentOperationOutcomeAssessmentRow, 'id' | 'createdAt'>
 export type PublicationTargetInsert = Omit<ContentOperationPublicationTargetRow, 'id' | 'createdAt' | 'updatedAt'>
+export type EntryTargetBindingInsert = Omit<ContentOperationCalendarEntryTargetRow, 'id' | 'createdAt'>
 export type AutopilotPolicyInsert = Omit<ContentOperationAutopilotPolicyRow, 'id' | 'createdAt' | 'updatedAt'>
-export type PublicationAttemptInsert = Omit<ContentOperationPublicationAttemptRow, 'id' | 'createdAt'>
+export type PublicationAttemptInsert = Omit<ContentOperationPublicationAttemptRow, 'id' | 'createdAt' | 'websiteId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'authorityReference' | 'receiptFingerprint'> & Partial<Pick<ContentOperationPublicationAttemptRow, 'websiteId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'authorityReference' | 'receiptFingerprint'>>
 export type PublicationAttemptReservationInput = Omit<PublicationAttemptInsert, 'attemptNumber' | 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'> & {
+  attemptNumber: number
   startedAt: Date
   jobId: number
   draftId: number
-  reviewId: number
+  reviewId: number | null
   riskGateId: number
+  authorityReference?: string | null
 }
 export type PublicationAttemptReservation = { attempt: ContentOperationPublicationAttemptRow; run: ContentOperationRunRow; replayed: boolean }
-export type PublicationAttemptFinalization = Pick<ContentOperationPublicationAttemptRow, 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'>
+export type PublicationAttemptFinalization = Pick<ContentOperationPublicationAttemptRow, 'status' | 'artifactFingerprint' | 'remoteState' | 'receiptLedger' | 'remoteRevision' | 'receiptFingerprint' | 'publicationUrl' | 'errorCode' | 'errorSummary' | 'completedAt'>
 
 export type CanonicalContext = Awaited<ReturnType<typeof resolveProductionContext>>
 
@@ -81,6 +86,8 @@ export type ContentOperationsRepository = {
   listCalendars(ownerUserId: number): Promise<ContentOperationCalendarRow[]>
   findEntry(ownerUserId: number, entryId: number): Promise<ContentOperationCalendarEntryRow | null>
   listEntries(ownerUserId: number, calendarId?: number): Promise<ContentOperationCalendarEntryRow[]>
+  listEntryTargetBindings(ownerUserId: number, entryId: number): Promise<ContentOperationCalendarEntryTargetRow[]>
+  insertEntryTargetBinding(input: EntryTargetBindingInsert): Promise<ContentOperationCalendarEntryTargetRow>
   insertEntry(input: EntryInsert): Promise<ContentOperationCalendarEntryRow>
   updateEntry(ownerUserId: number, entryId: number, patch: Partial<EntryInsert>): Promise<ContentOperationCalendarEntryRow>
   listRuns(ownerUserId: number, entryId?: number): Promise<ContentOperationRunRow[]>
@@ -257,6 +264,22 @@ function makeRepository(database: any): ContentOperationsRepository {
     async listEntries(ownerUserId, calendarId) {
       return database.select().from(contentOperationCalendarEntries).where(and(eq(contentOperationCalendarEntries.ownerUserId, ownerUserId), calendarId ? eq(contentOperationCalendarEntries.calendarId, calendarId) : undefined)).orderBy(contentOperationCalendarEntries.plannedLocalDate, contentOperationCalendarEntries.scheduleKey).limit(500)
     },
+    async listEntryTargetBindings(ownerUserId, entryId) {
+      return database.select().from(contentOperationCalendarEntryTargets).where(and(eq(contentOperationCalendarEntryTargets.ownerUserId, ownerUserId), eq(contentOperationCalendarEntryTargets.entryId, entryId))).orderBy(contentOperationCalendarEntryTargets.slot).limit(20)
+    },
+    async insertEntryTargetBinding(input) {
+      try {
+        const id = rowId(await database.insert(contentOperationCalendarEntryTargets).values(input as any))
+        const [row] = await database.select().from(contentOperationCalendarEntryTargets).where(and(eq(contentOperationCalendarEntryTargets.ownerUserId, input.ownerUserId), eq(contentOperationCalendarEntryTargets.id, id))).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Entry publication target binding could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!isDuplicateError(error)) throw error
+        const [existing] = await database.select().from(contentOperationCalendarEntryTargets).where(and(eq(contentOperationCalendarEntryTargets.ownerUserId, input.ownerUserId), eq(contentOperationCalendarEntryTargets.entryId, input.entryId), eq(contentOperationCalendarEntryTargets.targetId, input.targetId))).limit(1)
+        if (existing && existing.bindingFingerprint === input.bindingFingerprint && existing.slot === input.slot) return existing
+        throw createError({ statusCode: 409, statusMessage: 'Entry publication target binding conflicts with an existing slot or target.' })
+      }
+    },
     async insertEntry(input) {
       const id = rowId(await database.insert(contentOperationCalendarEntries).values(input as any))
       const row = await repository.findEntry(input.ownerUserId, id)
@@ -395,13 +418,16 @@ function makeRepository(database: any): ContentOperationsRepository {
           eq(seoGeoContentJobs.ownerUserId, input.ownerUserId),
         )).for('update').limit(1)
         if (!lockedJob) throw createError({ statusCode: 409, statusMessage: 'Publication job is missing or no longer owner-scoped.' })
+        const authorityReference = input.authorityReference || null
+        const governedAutopilot = typeof authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(authorityReference)
         const [latestReview] = await transaction.select({ id: seoGeoContentReviews.id, decision: seoGeoContentReviews.decision }).from(seoGeoContentReviews).where(and(
           eq(seoGeoContentReviews.jobId, input.jobId),
           eq(seoGeoContentReviews.draftId, input.draftId),
           eq(seoGeoContentReviews.reviewerUserId, input.ownerUserId),
           eq(seoGeoContentReviews.evidenceSnapshotHash, input.evidenceSnapshotHash),
         )).orderBy(desc(seoGeoContentReviews.id)).limit(1)
-        if (!latestReview || latestReview.id !== input.reviewId || latestReview.decision !== 'approved_for_delivery') throw createError({ statusCode: 409, statusMessage: 'Publication approval changed before attempt reservation.' })
+        if (!governedAutopilot && (!latestReview || latestReview.id !== input.reviewId || latestReview.decision !== 'approved_for_delivery')) throw createError({ statusCode: 409, statusMessage: 'Publication approval changed before attempt reservation.' })
+        if (governedAutopilot && input.reviewId !== null && input.reviewId !== 0) throw createError({ statusCode: 409, statusMessage: 'Governed autopilot reservation must not impersonate a human review id.' })
         const [latestRiskGate] = await transaction.select({ id: seoGeoContentRiskGates.id, status: seoGeoContentRiskGates.status }).from(seoGeoContentRiskGates).where(and(
           eq(seoGeoContentRiskGates.draftId, input.draftId),
           eq(seoGeoContentRiskGates.evidenceSnapshotHash, input.evidenceSnapshotHash),
@@ -420,14 +446,16 @@ function makeRepository(database: any): ContentOperationsRepository {
         if (!current) throw createError({ statusCode: 409, statusMessage: 'Publication run lease is no longer held.' })
         const claimedEntry = await transaction.update(contentOperationCalendarEntries).set({ status: 'publishing', updatedAt: input.startedAt }).where(and(eq(contentOperationCalendarEntries.ownerUserId, input.ownerUserId), eq(contentOperationCalendarEntries.id, input.entryId), or(eq(contentOperationCalendarEntries.status, 'ready_to_publish'), eq(contentOperationCalendarEntries.status, 'publishing'))))
         if (Number(claimedEntry?.[0]?.affectedRows || 0) !== 1) throw createError({ statusCode: 409, statusMessage: 'Publication entry is no longer executable.' })
-        const nextAttemptNumber = current.attemptNumber + 1
-        if (!Number.isSafeInteger(nextAttemptNumber) || nextAttemptNumber > 3) throw createError({ statusCode: 422, statusMessage: 'Publication retry limit has been reached.' })
-        const updated = await transaction.update(contentOperationRuns).set({ attemptNumber: sql`${contentOperationRuns.attemptNumber} + 1`, updatedAt: input.startedAt }).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId), eq(contentOperationRuns.stage, 'publication'), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, input.leaseToken), eq(contentOperationRuns.attemptNumber, current.attemptNumber)))
-        if (Number(updated?.[0]?.affectedRows || 0) !== 1) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter was claimed by another worker.' })
+        const requestedAttemptNumber = input.attemptNumber
+        if (!Number.isSafeInteger(requestedAttemptNumber) || requestedAttemptNumber < 1 || requestedAttemptNumber > 3 || requestedAttemptNumber < current.attemptNumber) throw createError({ statusCode: 422, statusMessage: 'Publication retry limit has been reached or attempt number is stale.' })
+        if (requestedAttemptNumber > current.attemptNumber) {
+          const updated = await transaction.update(contentOperationRuns).set({ attemptNumber: requestedAttemptNumber, updatedAt: input.startedAt }).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId), eq(contentOperationRuns.stage, 'publication'), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, input.leaseToken), eq(contentOperationRuns.attemptNumber, current.attemptNumber)))
+          if (Number(updated?.[0]?.affectedRows || 0) !== 1) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter was claimed by another worker.' })
+        }
         const [run] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId))).limit(1)
-        if (!run || run.attemptNumber !== nextAttemptNumber) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter could not be verified.' })
-        const { jobId: _jobId, draftId: _draftId, reviewId: _reviewId, riskGateId: _riskGateId, leaseToken: _leaseToken, ...attemptInput } = input
-        const attempt = await txRepository.insertPublicationAttempt({ ...attemptInput, attemptNumber: nextAttemptNumber, artifactFingerprint: null, status: 'planned', remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null })
+        if (!run || run.attemptNumber !== requestedAttemptNumber) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter could not be verified.' })
+        const { jobId: _jobId, draftId: _draftId, reviewId: _reviewId, riskGateId: _riskGateId, leaseToken: _leaseToken, attemptNumber: _attemptNumber, ...attemptInput } = input
+        const attempt = await txRepository.insertPublicationAttempt({ ...attemptInput, attemptNumber: requestedAttemptNumber, artifactFingerprint: null, status: 'planned', remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null })
         return { attempt, run, replayed: false } satisfies PublicationAttemptReservation
       })
     },
@@ -472,11 +500,17 @@ function makeRepository(database: any): ContentOperationsRepository {
     },
     async resolveDeliveredPublication(ownerUserId, entryId) {
       const lineage = await repository.resolveWorkspaceEntry(ownerUserId, entryId)
-      if (!lineage || !lineage.job || !lineage.draft || !lineage.review || lineage.review.decision !== 'approved_for_delivery' || lineage.entry.status !== 'delivered' && lineage.entry.status !== 'completed' || !lineage.entry.contentHash || lineage.draft.contentHash !== lineage.entry.contentHash || lineage.review.evidenceSnapshotHash !== lineage.entry.evidenceSnapshotHash) return null
+      const authorityReference = lineage?.entry.publicationAuthorityReference
+      const governedAutopilot = typeof authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(authorityReference)
+      const manualReviewValid = Boolean(lineage?.review && lineage.review.decision === 'approved_for_delivery')
+      if (!lineage || !lineage.job || !lineage.draft || (!manualReviewValid && !governedAutopilot) || lineage.entry.status !== 'delivered' && lineage.entry.status !== 'completed' || !lineage.entry.contentHash || lineage.draft.contentHash !== lineage.entry.contentHash || (lineage.review && lineage.review.evidenceSnapshotHash !== lineage.entry.evidenceSnapshotHash)) return null
       const publicationRuns = await repository.listRuns(ownerUserId, entryId)
       const publicationRun = publicationRuns.find(run => run.stage === 'publication' && run.state === 'succeeded' && run.ownerUserId === ownerUserId && run.entryId === entryId) || null
       if (!publicationRun) return null
-      return { entry: lineage.entry, calendar: lineage.calendar, deliverable: lineage.deliverable, job: lineage.job, draft: lineage.draft, review: lineage.review, riskGate: lineage.riskGate || undefined, publicationRun, publicationIdentity: lineage.entry.publicationSlug && lineage.entry.publicationPath && lineage.entry.publicationIdentityFingerprint ? { publicationId: `publication-${lineage.entry.id}`, slug: lineage.entry.publicationSlug, path: lineage.entry.publicationPath, identityFingerprint: lineage.entry.publicationIdentityFingerprint } : null }
+      const attempts = await repository.listPublicationAttempts(ownerUserId, entryId)
+      const deliveredAttempt = attempts.find(attempt => attempt.runId === publicationRun.id && attempt.status === 'delivered' && attempt.entryId === entryId && attempt.ownerUserId === ownerUserId && attempt.contentHash === lineage.entry.contentHash && (lineage.target ? attempt.targetId === lineage.target.id : true)) || null
+      if (!deliveredAttempt) return null
+      return { entry: lineage.entry, calendar: lineage.calendar, deliverable: lineage.deliverable, job: lineage.job, draft: lineage.draft, review: lineage.review, riskGate: lineage.riskGate || undefined, publicationRun, authorityReference: governedAutopilot ? authorityReference : null, publicationTarget: lineage.target || null, publicationAttempt: deliveredAttempt, publicationIdentity: lineage.entry.publicationSlug && lineage.entry.publicationPath && lineage.entry.publicationIdentityFingerprint ? { publicationId: `publication-${lineage.entry.id}`, slug: lineage.entry.publicationSlug, path: lineage.entry.publicationPath, identityFingerprint: lineage.entry.publicationIdentityFingerprint } : null }
     },
   }
   return repository

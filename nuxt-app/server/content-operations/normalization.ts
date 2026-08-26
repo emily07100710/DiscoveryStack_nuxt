@@ -227,9 +227,10 @@ export function toPublicContentOperationsError(error: unknown, fallback = 'Conte
 
 const strictPublicationTarget = z.object({
   idempotencyKey: z.string().trim().min(1).max(128),
-  framework: z.enum(['astro', 'nuxt']),
-  transport: z.enum(['first_party_git', 'first_party_signed_api']),
+  framework: z.enum(['astro', 'nuxt', 'wordpress', 'php_agent', 'generic_http', 'geoflow_local', 'static_site']),
+  transport: z.enum(['first_party_git', 'first_party_signed_api', 'wordpress_rest', 'geoflow_agent', 'generic_http', 'geoflow_local']),
   targetOrigin: z.string().trim().min(1).max(2048),
+  serviceReference: z.string().trim().min(1).max(128).nullable().optional(),
   contentRoot: z.string().trim().min(1).max(256),
   defaultBranch: z.string().trim().min(1).max(128).nullable().optional(),
   repositoryOwner: z.string().trim().min(1).max(100).nullable().optional(),
@@ -244,6 +245,7 @@ const strictPublicationTarget = z.object({
 
 const strictPublicationTargetPatch = z.object({
   targetOrigin: z.string().trim().min(1).max(2048).optional(),
+  serviceReference: z.string().trim().min(1).max(128).nullable().optional(),
   contentRoot: z.string().trim().min(1).max(256).optional(),
   defaultBranch: z.string().trim().min(1).max(128).optional(),
   repositoryOwner: z.string().trim().min(1).max(100).nullable().optional(),
@@ -257,6 +259,10 @@ const strictPublicationTargetPatch = z.object({
   status: z.enum(['active', 'paused', 'revoked']).optional(),
 }).strict().refine(value => Object.keys(value).length > 0, { message: 'At least one target patch field is required.' })
 
+const strictEntryPublicationTargets = z.object({
+  targetRowIds: z.array(z.number().int().positive()).min(1).max(20),
+}).strict()
+
 const strictExecute = z.object({
   idempotencyKey: z.string().trim().min(1).max(128),
   mode: z.enum(['dry_run', 'execute']).optional().default('dry_run'),
@@ -264,23 +270,42 @@ const strictExecute = z.object({
 
 const strictAutopilotPolicy = z.object({
   expiresAt: z.string().trim().min(1).max(64),
+  targetRowId: z.number().int().positive().optional(),
+  allowedTargetIds: z.array(z.string().trim().min(1).max(128)).min(1).max(20).optional(),
+  cadenceDays: z.union([z.literal(3), z.literal(7), z.literal(15), z.literal(30)]).optional(),
+  evidenceFreshnessHours: z.number().int().min(1).max(24 * 365).optional(),
+  maximumRiskLevel: z.enum(['low', 'general']).optional(),
+  requiredQualityGateVersion: z.string().trim().min(1).max(96).optional(),
+  allowedProviderModels: z.array(z.string().trim().min(1).max(128)).min(1).max(20).optional(),
+  requireApprovedForDelivery: z.boolean().optional().default(false),
   allowedContentTypes: z.array(z.enum(['article', 'faq', 'service_page'])).min(1).max(3),
   allowedLanguages: z.array(z.enum(['en', 'zh-hant'])).min(1).max(2),
 }).strict()
 
 export function parsePublicationTargetInput(value: unknown): PublicationTargetInput {
   const parsed = strictPublicationTarget.safeParse(value)
-  if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid first-party publication target input.' })
+  if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid publication target input.' })
   const data = parsed.data
+  const firstParty = data.transport === 'first_party_git' || data.transport === 'first_party_signed_api'
   if (data.transport === 'first_party_git' && !data.defaultBranch) throw createError({ statusCode: 422, statusMessage: 'Git publication target requires defaultBranch.' })
   if (data.transport === 'first_party_signed_api' && data.defaultBranch !== undefined && data.defaultBranch !== null) throw createError({ statusCode: 422, statusMessage: 'Signed API publication target must not use defaultBranch.' })
-  return { ...data, defaultBranch: data.defaultBranch ?? null, repositoryOwner: data.repositoryOwner ?? null, repositoryName: data.repositoryName ?? null, endpointPath: data.endpointPath ?? null }
+  if (firstParty && data.serviceReference !== undefined && data.serviceReference !== null) throw createError({ statusCode: 422, statusMessage: 'First-party publication target must not use serviceReference.' })
+  if (data.transport === 'geoflow_local' && !data.serviceReference) throw createError({ statusCode: 422, statusMessage: 'GEOFlow local target requires an opaque serviceReference.' })
+  if (data.transport !== 'geoflow_local' && data.serviceReference !== undefined && data.serviceReference !== null) throw createError({ statusCode: 422, statusMessage: 'Only GEOFlow local target may use serviceReference.' })
+  return { ...data, serviceReference: data.serviceReference ?? null, defaultBranch: data.defaultBranch ?? null, repositoryOwner: data.repositoryOwner ?? null, repositoryName: data.repositoryName ?? null, endpointPath: data.endpointPath ?? null }
 }
 
 export function parsePublicationTargetPatchInput(value: unknown): PublicationTargetPatchInput {
   const parsed = strictPublicationTargetPatch.safeParse(value)
-  if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid first-party publication target patch.' })
+  if (!parsed.success) throw createError({ statusCode: 422, statusMessage: 'Invalid publication target patch.' })
+  if (parsed.data.serviceReference !== undefined && parsed.data.serviceReference !== null && parsed.data.serviceReference.trim() === '') throw createError({ statusCode: 422, statusMessage: 'serviceReference must be an opaque reference or null.' })
   return { ...parsed.data, repositoryOwner: parsed.data.repositoryOwner ?? undefined, repositoryName: parsed.data.repositoryName ?? undefined, endpointPath: parsed.data.endpointPath ?? undefined }
+}
+
+export function parseEntryPublicationTargetsInput(value: unknown): { targetRowIds: number[] } {
+  const parsed = strictEntryPublicationTargets.safeParse(value)
+  if (!parsed.success || new Set(parsed.data.targetRowIds).size !== parsed.data.targetRowIds.length) throw createError({ statusCode: 422, statusMessage: 'Entry publication targets must be 1-20 unique target row IDs.' })
+  return parsed.data
 }
 
 export function parseExecuteInput(value: unknown): ExecuteContentOperationInput {
@@ -291,6 +316,14 @@ export function parseExecuteInput(value: unknown): ExecuteContentOperationInput 
 
 export type AutopilotPolicyRequestInput = {
   expiresAt: string
+  targetRowId?: number
+  allowedTargetIds?: string[]
+  cadenceDays?: 3 | 7 | 15 | 30
+  evidenceFreshnessHours?: number
+  maximumRiskLevel?: 'low' | 'general'
+  requiredQualityGateVersion?: string
+  allowedProviderModels?: string[]
+  requireApprovedForDelivery: boolean
   allowedContentTypes: Array<'article' | 'faq' | 'service_page'>
   allowedLanguages: Array<'en' | 'zh-hant'>
 }

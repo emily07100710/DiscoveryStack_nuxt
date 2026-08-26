@@ -558,8 +558,10 @@ export async function materializeOwnerDueContent(ownerUserId: number, input: Mat
 
 async function deliveredPublication(repository: ContentOperationsRepository, ownerUserId: number, entryId: number) {
   const resolved = await repository.resolveDeliveredPublication(ownerUserId, entryId)
-  if (!resolved || (resolved.entry.status !== 'delivered' && resolved.entry.status !== 'completed') || !resolved.entry.contentHash || !resolved.job || !resolved.draft || !resolved.review || resolved.review.decision !== 'approved_for_delivery' || !resolved.riskGate || resolved.riskGate.status !== 'passed' || !resolved.publicationRun || resolved.publicationRun.ownerUserId !== ownerUserId || resolved.publicationRun.entryId !== resolved.entry.id || resolved.publicationRun.stage !== 'publication' || resolved.publicationRun.state !== 'succeeded') invalid('Outcome assessment requires a delivered publication identity.')
-  if (resolved.calendar.ownerUserId !== ownerUserId || resolved.entry.ownerUserId !== ownerUserId || resolved.deliverable.ownerUserId !== ownerUserId || resolved.job.ownerUserId !== ownerUserId || resolved.draft.jobId !== resolved.job.id || resolved.review.jobId !== resolved.job.id || resolved.review.draftId !== resolved.draft.id || resolved.review.reviewerUserId !== ownerUserId || resolved.job.productionPlanId !== resolved.calendar.productionPlanId || resolved.job.productionDeliverableId !== resolved.entry.productionDeliverableId || resolved.job.strategyRecommendationId !== resolved.entry.strategyRecommendationId || resolved.job.evidenceSnapshotHash !== resolved.entry.evidenceSnapshotHash || resolved.draft.contentHash !== resolved.entry.contentHash || resolved.review.evidenceSnapshotHash !== resolved.entry.evidenceSnapshotHash || resolved.riskGate.draftId !== resolved.draft.id || resolved.riskGate.evidenceSnapshotHash !== resolved.entry.evidenceSnapshotHash) invalid('Delivered publication content/evidence lineage is inconsistent.')
+  const autopilotAuthority = typeof resolved?.authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(resolved.authorityReference)
+  const manualReview = resolved?.review
+  if (!resolved || (resolved.entry.status !== 'delivered' && resolved.entry.status !== 'completed') || !resolved.entry.contentHash || !resolved.job || !resolved.draft || (!autopilotAuthority && (!manualReview || manualReview.decision !== 'approved_for_delivery')) || !resolved.riskGate || resolved.riskGate.status !== 'passed' || !resolved.publicationRun || resolved.publicationRun.ownerUserId !== ownerUserId || resolved.publicationRun.entryId !== resolved.entry.id || resolved.publicationRun.stage !== 'publication' || resolved.publicationRun.state !== 'succeeded' || !resolved.publicationAttempt || resolved.publicationAttempt.status !== 'delivered') invalid('Outcome assessment requires a validated delivered publication receipt.')
+  if (resolved.calendar.ownerUserId !== ownerUserId || resolved.entry.ownerUserId !== ownerUserId || resolved.deliverable.ownerUserId !== ownerUserId || resolved.job.ownerUserId !== ownerUserId || resolved.draft.jobId !== resolved.job.id || (manualReview && (manualReview.jobId !== resolved.job.id || manualReview.draftId !== resolved.draft.id || manualReview.reviewerUserId !== ownerUserId || manualReview.evidenceSnapshotHash !== resolved.entry.evidenceSnapshotHash)) || resolved.job.productionPlanId !== resolved.calendar.productionPlanId || resolved.job.productionDeliverableId !== resolved.entry.productionDeliverableId || resolved.job.strategyRecommendationId !== resolved.entry.strategyRecommendationId || resolved.job.evidenceSnapshotHash !== resolved.entry.evidenceSnapshotHash || resolved.draft.contentHash !== resolved.entry.contentHash || resolved.riskGate.draftId !== resolved.draft.id || resolved.riskGate.evidenceSnapshotHash !== resolved.entry.evidenceSnapshotHash || resolved.publicationAttempt.entryId !== resolved.entry.id || resolved.publicationAttempt.contentHash !== resolved.entry.contentHash) invalid('Delivered publication content/evidence lineage is inconsistent.')
   const context = await repository.resolveCanonicalContext(ownerUserId, resolved.calendar.productionPlanId, resolved.entry.productionDeliverableId)
   if (context.evidenceSnapshot.hash !== resolved.entry.evidenceSnapshotHash || context.deliverable.id !== resolved.entry.productionDeliverableId || context.strategy.id !== resolved.entry.strategyRecommendationId || context.opportunity.key !== resolved.entry.topicCluster) invalid('Delivered publication canonical context is inconsistent.')
   const ruleIds = canonicalRuleIds(context)
@@ -598,6 +600,8 @@ export async function recordOwnerOutcomeAssessment(ownerUserId: number, input: u
   const parsed = parseOutcomeInput(input)
   if (parsed.dataContractVersion !== OUTCOME_DATA_CONTRACT_VERSION) invalid('Outcome data contract version is unsupported.')
   const publication = await deliveredPublication(db, ownerUserId, parsed.entryId)
+  const receiptAttempt = publication.publicationAttempt
+  if (!receiptAttempt || typeof receiptAttempt.receiptFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(receiptAttempt.receiptFingerprint)) invalid('Outcome assessment requires a validated delivered publication receipt.')
   if (parsed.runId && parsed.runId !== publication.publicationRun?.id) collision('Outcome runId does not match the delivered publication run.')
   const publishedAt = publication.publicationRun?.completedAt || publication.entry.updatedAt
   const publicationIdentity = {
@@ -631,6 +635,12 @@ export async function recordOwnerOutcomeAssessment(ownerUserId: number, input: u
     ownerUserId,
     entryId: publication.entry.id,
     runId: publication.publicationRun?.id || null,
+    targetId: publication.publicationTarget?.id || null,
+    draftId: publication.draft.id,
+    publicationReceiptFingerprint: receiptAttempt.receiptFingerprint || null,
+    publishedUrl: receiptAttempt.publicationUrl || null,
+    contentHash: publication.entry.contentHash,
+    evidenceSnapshotHash: publication.entry.evidenceSnapshotHash,
     assessmentStatus: assessment.status,
     assessmentFingerprint: assessment.assessmentFingerprint,
     baselineSnapshot: safeMeasurementSnapshot(parsed.baselineMeasurements),

@@ -38,9 +38,10 @@ function attachLineage(fixture: ContentOperationsFixture, entryId: number, targe
   const entry = fixture.entries.find(item => item.id === entryId)!
   const calendar = fixture.calendars.find(item => item.id === entry.calendarId)!
   const client = fixture.clients.find(item => item.id === calendar.clientId)!
+  entry.contentHash = BODY_HASH
   let review: Record<string, unknown> | null = null
   const job = { id: 700, ownerUserId: entry.ownerUserId, productionPlanId: calendar.productionPlanId, productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId, evidenceSnapshotHash: entry.evidenceSnapshotHash, briefId: 701, status: 'approved' }
-  const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified draft', body: 'Direct answer\n\nEvidence-bound body.', contentHash: BODY_HASH, provenance: { stage: 'optimized', selectedRuleIds: ['rule-topic'], appliedRuleIds: ['rule-topic'] }, safetyStatus: 'passed', evidenceRefs: [] }
+  const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified draft', body: 'Direct answer\n\nEvidence-bound body.', contentHash: BODY_HASH, provenance: { stage: 'optimized', providerExecution: true, provider: 'bailian', providerVersion: 'qwen-plus', model: 'bailian:qwen-plus', qualityGateVersion: 'content-risk-gate-v1', selectedRuleIds: ['rule-topic'], appliedRuleIds: ['rule-topic'] }, safetyStatus: 'passed', evidenceRefs: [] }
   const gate = { id: 703, draftId: draft.id, status: 'passed', evidenceSnapshotHash: entry.evidenceSnapshotHash }
   const repository = fixture.repository as ContentOperationsRepository
   repository.findLatestOptimizedDraft = async () => draft
@@ -76,8 +77,27 @@ describe('content operations execution orchestrator', () => {
     const replay = await createOwnerPublicationTarget(1, client.id, targetInput(), fixture.repository)
     expect(replay.replayed).toBe(true)
     await expect(createOwnerPublicationTarget(1, client.id, targetInput({ contentRoot: 'docs' }), fixture.repository)).rejects.toThrow(/idempotency/i)
-    await expect(createOwnerPublicationTarget(1, client.id, targetInput({ idempotencyKey: 'target-key-2' }), fixture.repository)).rejects.toThrow(/one active publication target/i)
+    const secondTarget = await createOwnerPublicationTarget(1, client.id, targetInput({ idempotencyKey: 'target-key-2' }), fixture.repository)
+    expect(secondTarget.target.activeSlot).toBe(2)
     await expect(createOwnerPublicationTarget(1, client.id, targetInput({ framework: 'astro', idempotencyKey: 'target-key-3' }), fixture.repository)).rejects.toThrow()
+  })
+
+  it('allocates 1–20 owner/client-scoped active targets, derives website identity, and rejects the 21st target', async () => {
+    const fixture = new ContentOperationsFixture()
+    const client = fixture.addClient(1)
+    const targets = []
+    for (let index = 1; index <= 20; index += 1) {
+      const result = await createOwnerPublicationTarget(1, client.id, targetInput({ idempotencyKey: `target-key-${index}` }), fixture.repository)
+      targets.push(result.target)
+    }
+    expect(targets).toHaveLength(20)
+    expect(targets.map(target => target.activeSlot)).toEqual(Array.from({ length: 20 }, (_, index) => index + 1))
+    expect(targets.every(target => typeof target.websiteId === 'string' && target.websiteId.length > 0)).toBe(true)
+    await expect(createOwnerPublicationTarget(1, client.id, targetInput({ idempotencyKey: 'target-key-21' }), fixture.repository)).rejects.toThrow(/20/)
+    const otherOwnerClient = fixture.addClient(2)
+    const otherOwner = await createOwnerPublicationTarget(2, otherOwnerClient.id, targetInput({ idempotencyKey: 'other-owner-target' }), fixture.repository)
+    expect(fixture.targets.find(target => target.id === otherOwner.target.id)?.ownerUserId).toBe(2)
+    expect(fixture.targets.filter(target => target.ownerUserId === 1)).toHaveLength(20)
   })
 
   it('supports owner target pause, revoke, and reactivation without exposing credential material', async () => {
@@ -131,8 +151,9 @@ describe('content operations execution orchestrator', () => {
     const client = fixture.addClient(1)
     const calendar = await fixture.addCalendar(1, '2026-01-10', 1)
     const entry = fixture.entries.find(item => item.calendarId === calendar.id)!
-    entry.status = 'materialized'
-    const targetResult = await createOwnerPublicationTarget(1, client.id, targetInput(), fixture.repository)
+      entry.status = 'materialized'
+  entry.contentHash = BODY_HASH
+  const targetResult = await createOwnerPublicationTarget(1, client.id, targetInput(), fixture.repository)
     const target = fixture.targets.find(item => item.id === targetResult.target.id)!
     if (!target) throw new Error('target missing')
     const lineage = attachLineage(fixture, entry.id, target)
@@ -161,7 +182,7 @@ describe('content operations execution orchestrator', () => {
     const client = fixture.addClient(1)
     const calendar = await fixture.addCalendar(1, '2026-01-10', 1)
     const entry = fixture.entries.find(item => item.calendarId === calendar.id)!
-    entry.status = 'ready_to_publish'; entry.jobId = 700; entry.draftId = 702
+    entry.status = 'ready_to_publish'; entry.jobId = 700; entry.draftId = 702; entry.contentHash = BODY_HASH
     const targetResult = await createOwnerPublicationTarget(1, client.id, targetInput(), fixture.repository)
     const target = fixture.targets.find(item => item.id === targetResult.target.id)!
     if (!target) throw new Error('target missing')

@@ -37,7 +37,8 @@ DISCOVERYSTACK_PUBLIC_SITE_ORIGIN=http://localhost:4321 pnpm dev
 |---|---|
 | `pnpm dev` | 啟動 private Nuxt server，預設 port 3000。 |
 | `pnpm typecheck` | 執行 Nuxt/Vue TypeScript 檢查。 |
-| `pnpm test` | 執行 private API、repository、risk-gate、training 與 CORS tests。 |
+| `pnpm test` | 執行 private API、repository、risk-gate、training、CORS 與全套 safe-default mocked tests；不發出第三方 credential/provider request。 |
+| `pnpm test:external-credentials` | 明確 opt-in 後執行 read-only Firecrawl/Hugging Face credential tests；需要部署環境注入對應 secrets，未執行或 skipped 絕不代表 provider validation passed。 |
 | `pnpm build` | 建立 Nuxt/Nitro private server artifact；不產生 public static website。 |
 | `pnpm db:generate` | 只產生 Drizzle migration SQL；必須另行審查及受控套用，本次 split 不執行 migration。 |
 
@@ -80,3 +81,7 @@ pnpm build
 ```
 
 正式 domain、OAuth、資料庫 migration runtime、第三方 provider credentials、Lighthouse、Search Console 與實際部署仍需在 production-like environment 另行人工驗收。本地 split 工作不 deploy、不合併 main、不 force-push。
+
+### External credential test boundary
+
+預設 `pnpm test` 保持完全 safe-default：Content Operations、publication routing、autopilot、outcome learning 與 provider boundary 均使用 injected mocks，不讀取或送出真實秘密。只有在具備適當授權、並由執行者明確確認後，才可執行 `pnpm test:external-credentials`；該命令只包含 read-only credential identity/health checks，仍不執行 customer-site、GitHub、WordPress、PHP agent 或 Generic HTTP publication write。缺少 secrets 時測試會失敗或被 skip，兩者都必須在稽核報告中標示為 **NOT RUN / NOT PROVIDER VALIDATION**。

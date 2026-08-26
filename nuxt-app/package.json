@@ -11,6 +11,7 @@
     "preview": "nuxt preview --host 0.0.0.0 --port 3000",
     "typecheck": "nuxt typecheck",
     "test": "vitest run",
+    "test:external-credentials": "DS_RUN_EXTERNAL_CREDENTIAL_TESTS=1 vitest run tests/provider-secrets.integration.test.ts tests/huggingface.credentials.test.ts tests/huggingface-namespace-secret.test.ts",
     "db:generate": "drizzle-kit generate",
     "prepare": "nuxt prepare"
   },

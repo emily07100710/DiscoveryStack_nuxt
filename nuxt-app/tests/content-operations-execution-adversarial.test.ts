@@ -27,7 +27,7 @@ function attachLineage(fixture: ContentOperationsFixture, entryId: number, targe
   const client = fixture.clients.find(item => item.id === calendar.clientId)!
   let review: Record<string, unknown> | null = null
   const job = { id: 700, ownerUserId: entry.ownerUserId, productionPlanId: calendar.productionPlanId, productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId, evidenceSnapshotHash: entry.evidenceSnapshotHash, briefId: 701, status: 'approved' }
-  const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified draft', body: BODY, contentHash: BODY_HASH, provenance: { stage: 'optimized', selectedRuleIds: ['rule-topic'], appliedRuleIds: ['rule-topic'] }, safetyStatus: 'passed', evidenceRefs: [] }
+  const draft = { id: 702, jobId: job.id, version: 1, title: 'Verified draft', body: BODY, contentHash: BODY_HASH, provenance: { stage: 'optimized', providerExecution: true, provider: 'bailian', providerVersion: 'qwen-plus', model: 'bailian:qwen-plus', qualityGateVersion: 'content-risk-gate-v1', selectedRuleIds: ['rule-topic'], appliedRuleIds: ['rule-topic'] }, safetyStatus: 'passed', evidenceRefs: [] }
   let gate: Record<string, unknown> = { id: 703, draftId: draft.id, status: 'passed', evidenceSnapshotHash: entry.evidenceSnapshotHash }
   const repository = fixture.repository as ContentOperationsRepository
   repository.findLatestOptimizedDraft = async () => draft
@@ -46,6 +46,7 @@ async function readyFixture(): Promise<ReturnType<typeof attachLineage>> {
   entry.status = 'ready_to_publish'
   entry.jobId = 700
   entry.draftId = 702
+  entry.contentHash = BODY_HASH
   const targetResult = await createOwnerPublicationTarget(1, client.id, targetInput(), fixture.repository)
   const target = fixture.targets.find(item => item.id === targetResult.target.id)!
   const lineage = attachLineage(fixture, entry.id, target)

@@ -155,7 +155,7 @@ export function normalizeDraft(value: unknown): NormalizedDraft {
   if (!exactKeys(value, allowed)) throw new Error('draft has unknown or missing fields')
   const draft = value as unknown as PublicationDraft
   if (draft.draftStage !== 'optimized') throw new Error('draft must be optimized')
-  if (draft.reviewDecision !== 'approved_for_delivery') throw new Error('draft must be approved_for_delivery')
+  if (draft.reviewDecision !== 'approved_for_delivery' && draft.reviewDecision !== 'governed_autopilot') throw new Error('draft must use approved_for_delivery or governed_autopilot')
   if (draft.riskGateStatus !== 'passed') throw new Error('risk gate must be passed')
   const content = normalizeMarkdownContent(draft.content)
   const contentHash = normalizeHash(draft.contentHash, 'contentHash')

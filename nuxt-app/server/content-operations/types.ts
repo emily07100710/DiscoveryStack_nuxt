@@ -1,16 +1,23 @@
 import type { ContentCalendarEntry, ContentCalendarRequest, ContentCalendarResult, DueContentWork } from '../content-calendar'
 import type { PublishedContentOutcomeAssessment, OutcomeLearningCandidateResult } from '../outcome-learning'
-import type { contentOperationAutopilotPolicies, contentOperationCalendarEntries, contentOperationCalendars, contentOperationClients, contentOperationEvents, contentOperationOutcomeAssessments, contentOperationPublicationAttempts, contentOperationPublicationTargets, contentOperationRuns } from '../database/schema'
+import type { contentOperationAutopilotPolicies, contentOperationCalendarEntries, contentOperationCalendarEntryTargets, contentOperationCalendars, contentOperationClients, contentOperationEvents, contentOperationOutcomeAssessments, contentOperationPublicationAttempts, contentOperationPublicationTargets, contentOperationRuns } from '../database/schema'
 
 export type ContentOperationClientRow = typeof contentOperationClients.$inferSelect
 export type ContentOperationCalendarRow = typeof contentOperationCalendars.$inferSelect
-export type ContentOperationCalendarEntryRow = typeof contentOperationCalendarEntries.$inferSelect
+type CalendarEntryRow = typeof contentOperationCalendarEntries.$inferSelect
+export type ContentOperationCalendarEntryRow = Omit<CalendarEntryRow, 'publicationContentHash' | 'publicationRoutingPlanId' | 'publicationAuthorityReference' | 'publicationTargetCount'> & Partial<Pick<CalendarEntryRow, 'publicationContentHash' | 'publicationRoutingPlanId' | 'publicationAuthorityReference' | 'publicationTargetCount'>>
 export type ContentOperationRunRow = typeof contentOperationRuns.$inferSelect
-export type ContentOperationPublicationTargetRow = typeof contentOperationPublicationTargets.$inferSelect
-export type ContentOperationAutopilotPolicyRow = typeof contentOperationAutopilotPolicies.$inferSelect
-export type ContentOperationPublicationAttemptRow = typeof contentOperationPublicationAttempts.$inferSelect
-export type ContentOperationEventRow = typeof contentOperationEvents.$inferSelect
-export type ContentOperationOutcomeAssessmentRow = typeof contentOperationOutcomeAssessments.$inferSelect
+type TargetRow = typeof contentOperationPublicationTargets.$inferSelect
+type AutopilotPolicyRow = typeof contentOperationAutopilotPolicies.$inferSelect
+type PublicationAttemptRow = typeof contentOperationPublicationAttempts.$inferSelect
+type EventRow = typeof contentOperationEvents.$inferSelect
+type OutcomeAssessmentRow = typeof contentOperationOutcomeAssessments.$inferSelect
+export type ContentOperationPublicationTargetRow = Omit<TargetRow, 'websiteId' | 'serviceReference' | 'destinationPublicationIdentity' | 'provenance'> & Partial<Pick<TargetRow, 'websiteId' | 'serviceReference' | 'destinationPublicationIdentity' | 'provenance'>>
+export type ContentOperationCalendarEntryTargetRow = typeof contentOperationCalendarEntryTargets.$inferSelect
+export type ContentOperationAutopilotPolicyRow = Omit<AutopilotPolicyRow, 'cadenceDays' | 'evidenceFreshnessHours' | 'maximumRiskLevel' | 'requiredQualityGateVersion' | 'allowedTargetIds' | 'allowedProviderModels' | 'activatedAt'> & Partial<Pick<AutopilotPolicyRow, 'cadenceDays' | 'evidenceFreshnessHours' | 'maximumRiskLevel' | 'requiredQualityGateVersion' | 'allowedTargetIds' | 'allowedProviderModels' | 'activatedAt'>>
+export type ContentOperationPublicationAttemptRow = Omit<PublicationAttemptRow, 'websiteId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'authorityReference' | 'receiptFingerprint' | 'publicationUrl' | 'publicationContentHash' | 'receiptLedger'> & Partial<Pick<PublicationAttemptRow, 'websiteId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'authorityReference' | 'receiptFingerprint' | 'publicationUrl' | 'publicationContentHash' | 'receiptLedger'>>
+export type ContentOperationEventRow = Omit<EventRow, 'websiteId' | 'deliverableId' | 'draftId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'contentHash' | 'evidenceSnapshotHash' | 'authorityReference'> & Partial<Pick<EventRow, 'websiteId' | 'deliverableId' | 'draftId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'contentHash' | 'evidenceSnapshotHash' | 'authorityReference'>>
+export type ContentOperationOutcomeAssessmentRow = Omit<OutcomeAssessmentRow, 'targetId' | 'draftId' | 'publicationReceiptFingerprint' | 'publishedUrl' | 'contentHash' | 'evidenceSnapshotHash'> & Partial<Pick<OutcomeAssessmentRow, 'targetId' | 'draftId' | 'publicationReceiptFingerprint' | 'publishedUrl' | 'contentHash' | 'evidenceSnapshotHash'>>
 
 export type ContentOperationClientInput = {
   displayName: string
@@ -51,9 +58,10 @@ export type MaterializeInput = {
 
 export type PublicationTargetInput = {
   idempotencyKey: string
-  framework: 'astro' | 'nuxt'
-  transport: 'first_party_git' | 'first_party_signed_api'
+  framework: 'astro' | 'nuxt' | 'wordpress' | 'php_agent' | 'generic_http' | 'geoflow_local' | 'static_site'
+  transport: 'first_party_git' | 'first_party_signed_api' | 'wordpress_rest' | 'geoflow_agent' | 'generic_http' | 'geoflow_local'
   targetOrigin: string
+  serviceReference?: string | null
   contentRoot: string
   defaultBranch?: string | null
   repositoryOwner?: string | null
@@ -69,6 +77,7 @@ export type PublicationTargetInput = {
 export type PublicationTargetPatchInput = {
   idempotencyKey?: string
   targetOrigin?: string
+  serviceReference?: string | null
   contentRoot?: string
   defaultBranch?: string
   repositoryOwner?: string | null
@@ -150,7 +159,7 @@ export type OutcomeResult = {
 
 export type WorkspaceEntryProjection = ContentOperationCalendarEntryRow & {
   topic: string
-  framework: 'astro' | 'nuxt' | null
+  framework: string | null
   target: string | null
   hasApprovedDraft: boolean
   hasPassedRiskGate: boolean
@@ -192,9 +201,12 @@ export type DeliveredPublication = {
   deliverable: Record<string, unknown> & { id: number; ownerUserId: number; planId: number; selectionId: number; contentType: string; title: string; audience: string; language: string; evidenceSnapshotHash: string; opportunityKey: string; provenance: unknown }
   job: Record<string, unknown> & { id: number; ownerUserId: number; productionPlanId: number | null; productionDeliverableId: number | null; strategyRecommendationId: number | null; evidenceSnapshotHash: string; briefId: number }
   draft: Record<string, unknown> & { id: number; jobId: number; version: number; contentHash: string; evidenceRefs: unknown; safetyStatus: string }
-  review: Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string }
+  review?: Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string } | null
   riskGate?: Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string }
   publicationRun: ContentOperationRunRow | null
+  publicationTarget?: ContentOperationPublicationTargetRow | null
+  publicationAttempt?: ContentOperationPublicationAttemptRow
+  authorityReference?: string | null
   publicationIdentity?: { publicationId: string; slug: string; path: string; identityFingerprint: string } | null
 }
 
@@ -216,7 +228,7 @@ export type PersistedCalendarEntry = ContentCalendarEntry & {
 
 export const CONTENT_OPERATIONS_LIMITATIONS = [
   'owner-only execution orchestration; no public consumer workflow',
-  'human approved_for_delivery review is required before publication',
+  'manual publication requires a current owner approved_for_delivery review; governed autopilot requires an active owner-scoped policy snapshot and never fabricates a review row',
   'mocked executor tests do not validate production credentials or customer-site connectivity',
   'outcomes are accepted only for delivered entries and remain bounded snapshots',
 ] as const

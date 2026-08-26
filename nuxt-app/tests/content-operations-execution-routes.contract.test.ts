@@ -16,6 +16,17 @@ describe('content operations execution route contracts', () => {
     expect(source).not.toContain('targetId:')
   })
 
+  it('uses an owner-only entry target binding endpoint with server-derived target authority', () => {
+    const source = route('../server/api/content-operations/entries/[id]/publication-targets.post.ts')
+    expect(source).toContain('requireOwner')
+    expect(source).toContain("getRouterParam(event, 'id')")
+    expect(source).toContain('bindOwnerEntryPublicationTargets')
+    expect(source).toContain('readBody(event)')
+    expect(source).not.toContain('executor')
+    expect(source).not.toContain('credential')
+    expect(source).not.toContain('targetId:')
+  })
+
   it('uses a fixed POST execute endpoint with server-resolved lineage and no client-controlled ids', () => {
     const source = route('../server/api/content-operations/entries/[id]/execute.post.ts')
     expect(source).toContain('requireOwner')

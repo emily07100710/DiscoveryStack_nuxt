@@ -15,6 +15,8 @@ describe('GEO content learning dataset runtime', () => {
   it('runs deterministic PII admission and keeps clean outcome payloads deidentified', () => {
     expect(scanOutcomeLearningPii({ consent: makeGrantedConsent(), assessment })).toEqual({ status: 'none_detected' })
     expect(scanOutcomeLearningPii({ reviewerNote: 'contact alice@example.com' })).toMatchObject({ status: 'detected', reasonCode: 'PII_PATTERN_DETECTED' })
+    expect(scanOutcomeLearningPii({ capturedAt: '2026-08-25T04:00:00.000Z', windowStart: '2026-08-01T00:00:00.000Z', windowEnd: '2026-08-08T00:00:00.000Z' })).toEqual({ status: 'none_detected' })
+    expect(scanOutcomeLearningPii({ phone: '+886 912 345 678' })).toMatchObject({ status: 'detected', reasonCode: 'PII_PATTERN_DETECTED' })
     const result = buildContentLearningDataset({ records: [record()] })
     expect(result.candidateResults[0]?.candidateStatus).toBe('eligible')
     expect(result.eligibleCandidates).toHaveLength(1)

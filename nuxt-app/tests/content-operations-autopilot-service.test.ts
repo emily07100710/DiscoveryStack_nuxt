@@ -36,7 +36,7 @@ describe('durable owner autopilot service', () => {
     const { fixture, client } = await configuredFixture()
     const result = await enableOwnerAutopilot(1, client.id, { expiresAt: '2026-12-31T23:59:59.000Z', allowedContentTypes: ['article'], allowedLanguages: ['en', 'zh-hant'] }, fixture.repository)
     expect(result.replayed).toBe(false)
-    expect(result.policy).toMatchObject({ ownerUserId: 1, clientId: client.id, status: 'enabled', requireApprovedForDelivery: true, requirePassedRiskGate: true })
+    expect(result.policy).toMatchObject({ ownerUserId: 1, clientId: client.id, status: 'enabled', requireApprovedForDelivery: false, requirePassedRiskGate: true })
     expect(fixture.autopilotPolicies).toHaveLength(1)
     expect(JSON.stringify(result)).not.toContain('server-ref-1')
     await expect(enableOwnerAutopilot(1, client.id, { expiresAt: '2026-12-31T23:59:59.000Z', allowedContentTypes: ['article'], allowedLanguages: ['en'] }, fixture.repository)).rejects.toThrow(/already exists/)

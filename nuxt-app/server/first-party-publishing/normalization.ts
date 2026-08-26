@@ -167,7 +167,8 @@ export function normalizeApprovedPublication(input: unknown): { readonly ok: tru
   const timestamp = strictTimestamp(scheduledAt)
   if (!isOpaqueReference(ownerScopeKey) || !isOpaqueReference(scheduleEntryId) || !isOpaqueReference(productionPlanId) || !isOpaqueReference(productionDeliverableId) || !isOpaqueReference(jobId) || !isOpaqueReference(draftId) || !isOpaqueReference(reviewId) || !isOpaqueReference(scheduleKey, 256)) return { ok: false, reason: 'publication identity is invalid' }
   if (!Number.isSafeInteger(draftVersion) || (draftVersion as number) < 1) return { ok: false, reason: 'draftVersion must be a positive safe integer' }
-  if (draftStage !== 'optimized' || reviewDecision !== 'approved_for_delivery' || riskGateStatus !== 'passed') return { ok: false, reason: 'publication approvals do not satisfy optimized delivery gates' }
+  if (draftStage !== 'optimized' || (reviewDecision !== 'approved_for_delivery' && reviewDecision !== 'governed_autopilot') || riskGateStatus !== 'passed') return { ok: false, reason: 'publication approvals do not satisfy optimized delivery gates' }
+  if (reviewDecision === 'governed_autopilot' && (typeof reviewId !== 'string' || !/^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(reviewId))) return { ok: false, reason: 'governed_autopilot requires an opaque ref-autopilot authority reference' }
   if (!isValidSha256(evidenceSnapshotHash) || !isValidSha256(contentHash)) return { ok: false, reason: 'publication hashes must be SHA-256' }
   if (typeof title !== 'string' || title.length < 1 || title.length > 512 || CONTROL.test(title)) return { ok: false, reason: 'title is invalid' }
   if (typeof body !== 'string' || body.length < 1 || body.length > 5_000_000 || CONTROL.test(body.replace(/\n/g, '').replace(/\r/g, ''))) return { ok: false, reason: 'body is invalid' }
@@ -187,7 +188,7 @@ export function normalizeApprovedPublication(input: unknown): { readonly ok: tru
       draftVersion: draftVersion as number,
       draftStage: 'optimized',
       reviewId,
-      reviewDecision: 'approved_for_delivery',
+      reviewDecision: reviewDecision as 'approved_for_delivery' | 'governed_autopilot',
       riskGateStatus: 'passed',
       evidenceSnapshotHash: evidenceSnapshotHash.toLowerCase(),
       contentHash: contentHash.toLowerCase(),

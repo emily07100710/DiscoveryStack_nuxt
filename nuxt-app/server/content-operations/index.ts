@@ -13,6 +13,7 @@ export {
   stableFingerprint,
   stableStringify,
   parseAutopilotPolicyInput,
+  parseEntryPublicationTargetsInput,
 } from './normalization'
 export type { AutopilotPolicyRequestInput } from './normalization'
 export {
@@ -35,8 +36,8 @@ export { runContentOperationsTick } from './scheduler'
 export { enableOwnerAutopilot, revokeOwnerAutopilot, getOwnerAutopilotPolicy, projectAutopilotPolicy } from './autopilot-service'
 export { enableOwnerAutopilotPolicy, evaluateOwnerAutopilotPolicy, revokeOwnerAutopilotPolicy } from './autopilot-policy'
 export type { OwnerAutopilotPolicy, AutopilotEvaluation, AutopilotDecisionCode } from './autopilot-policy'
-export { createOwnerPublicationTarget, executeContentOperationEntry, listOwnerPublicationTargets, runContentOperationsExecutionTick, updateOwnerPublicationTarget } from './orchestrator'
-export type { ContentOperationOrchestratorDependencies } from './orchestrator'
+export {   bindOwnerEntryPublicationTargets, createOwnerPublicationTarget, executeContentOperationEntry, listOwnerPublicationTargets, runContentOperationsExecutionTick, runOwnerContentEntryWorkflow, updateOwnerPublicationTarget } from './orchestrator'
+export type { ContentOperationOrchestratorDependencies, OwnerContentEntryWorkflowDependencies } from './orchestrator'
 export { buildPublicationIdentity, publicationPathFor } from './publication-identity'
 export type { ContentOperationsTickInput, ContentOperationsTickResult } from './scheduler'
 export type * from './types'
