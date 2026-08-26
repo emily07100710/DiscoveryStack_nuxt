@@ -1,0 +1,17 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro'
+import WebsiteBuilderConcept from '../../components/WebsiteBuilderConcept.vue'
+
+const title = 'AI 客製網站與 GEO 成長平台概念預覽'
+const description = '以自然語言與模組選擇建立互動網站預覽，再銜接網域、部署、GEO 追蹤與內容訂閱的 DiscoveryStack 產品概念。'
+---
+
+<BaseLayout
+  locale="zh-hant"
+  title={title}
+  description={description}
+  canonicalPath="/zh-hant/website-builder-preview"
+  noindex={true}
+>
+  <WebsiteBuilderConcept client:load />
+</BaseLayout>
