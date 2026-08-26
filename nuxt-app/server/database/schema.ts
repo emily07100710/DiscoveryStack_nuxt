@@ -1248,3 +1248,164 @@ export type LlmVisibilityProject = typeof llmVisibilityProjects.$inferSelect
 export type LlmVisibilityQuery = typeof llmVisibilityQueries.$inferSelect
 export type LlmVisibilityRun = typeof llmVisibilityRuns.$inferSelect
 export type LlmVisibilityObservation = typeof llmVisibilityObservations.$inferSelect
+
+
+/** Managed site project vault. The project stores canonical identity and references, never platform source code. */
+export const managedSiteProjects = mysqlTable('managedSiteProjects', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  canonicalClientIdentity: varchar('canonicalClientIdentity', { length: 160 }).notNull(),
+  canonicalWebsiteIdentity: varchar('canonicalWebsiteIdentity', { length: 2048 }).notNull(),
+  contentOperationClientId: int('contentOperationClientId').references(() => contentOperationClients.id),
+  status: mysqlEnum('status', ['draft', 'quoted', 'awaiting_customer_authorization', 'payment_pending', 'payment_verified', 'domain_intent_created', 'domain_purchase_pending', 'domain_registered', 'dns_pending', 'dns_verified', 'build_pending', 'building', 'deployment_failed', 'deployed', 'tls_pending', 'active', 'retry_wait', 'blocked', 'suspended']).default('draft').notNull(),
+  siteType: mysqlEnum('siteType', ['one_page', 'brand_blog', 'simple_commerce']).notNull(),
+  activeVersionId: int('activeVersionId'),
+  catalogVersion: varchar('catalogVersion', { length: 96 }).notNull(),
+  subscriptionReference: varchar('subscriptionReference', { length: 160 }),
+  projectFingerprint: varchar('projectFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_projects_owner_client_identity_unique').on(table.ownerUserId, table.canonicalClientIdentity),
+  uniqueIndex('managed_site_projects_owner_website_identity_unique').on(table.ownerUserId, table.canonicalWebsiteIdentity),
+  uniqueIndex('managed_site_projects_owner_fingerprint_unique').on(table.ownerUserId, table.projectFingerprint),
+  index('managed_site_projects_owner_status_idx').on(table.ownerUserId, table.status),
+])
+
+/** Immutable version snapshots; SiteSpec and design tokens are opaque JSON snapshots, never executable source. */
+export const managedSiteVersions = mysqlTable('managedSiteVersions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  version: int('version').notNull(),
+  siteSpecSnapshot: json('siteSpecSnapshot').notNull(),
+  designTokenSnapshot: json('designTokenSnapshot').notNull(),
+  selectedModuleSnapshot: json('selectedModuleSnapshot').notNull(),
+  contentFingerprint: varchar('contentFingerprint', { length: 128 }).notNull(),
+  parentVersionId: int('parentVersionId'),
+  lifecycleStatus: mysqlEnum('lifecycleStatus', ['draft', 'preview', 'active', 'superseded', 'archived']).default('draft').notNull(),
+  createdByAuthority: varchar('createdByAuthority', { length: 160 }).notNull(),
+  versionFingerprint: varchar('versionFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_versions_project_version_unique').on(table.projectId, table.version),
+  uniqueIndex('managed_site_versions_project_fingerprint_unique').on(table.projectId, table.versionFingerprint),
+  index('managed_site_versions_owner_project_idx').on(table.ownerUserId, table.projectId, table.createdAt),
+])
+
+/** Asset metadata only. The actual bytes live behind an opaque storage reference. */
+export const managedSiteAssets = mysqlTable('managedSiteAssets', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  assetHash: varchar('assetHash', { length: 128 }).notNull(),
+  mimeType: varchar('mimeType', { length: 160 }).notNull(),
+  byteSize: int('byteSize').notNull(),
+  purpose: varchar('purpose', { length: 120 }).notNull(),
+  storageReference: varchar('storageReference', { length: 512 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_assets_project_hash_unique').on(table.projectId, table.assetHash),
+  index('managed_site_assets_owner_project_idx').on(table.ownerUserId, table.projectId),
+])
+
+/** Fixed role membership within a project tenant. */
+export const managedSiteMemberships = mysqlTable('managedSiteMemberships', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  principalEmail: varchar('principalEmail', { length: 320 }).notNull(),
+  userId: int('userId').references(() => users.id),
+  role: mysqlEnum('role', ['owner', 'administrator', 'editor', 'reviewer', 'analyst']).notNull(),
+  status: mysqlEnum('status', ['active', 'revoked']).default('active').notNull(),
+  invitedAt: timestamp('invitedAt').defaultNow().notNull(),
+  acceptedAt: timestamp('acceptedAt'),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_memberships_project_email_unique').on(table.projectId, table.principalEmail),
+  index('managed_site_memberships_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status),
+])
+
+/** Single-use invitation ledger. Only a hash of the bearer token is stored. */
+export const managedSiteInvitations = mysqlTable('managedSiteInvitations', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  membershipId: int('membershipId').notNull().references(() => managedSiteMemberships.id),
+  recipientEmail: varchar('recipientEmail', { length: 320 }).notNull(),
+  role: mysqlEnum('role', ['owner', 'administrator', 'editor', 'reviewer', 'analyst']).notNull(),
+  tokenHash: varchar('tokenHash', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['pending', 'accepted', 'revoked', 'expired']).default('pending').notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
+  acceptedAt: timestamp('acceptedAt'),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_invitations_token_hash_unique').on(table.tokenHash),
+  index('managed_site_invitations_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status),
+])
+
+/** Append-only project audit ledger. Sensitive credentials and full payloads are never stored. */
+export const managedSiteAuditEvents = mysqlTable('managedSiteAuditEvents', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  actorUserId: int('actorUserId').references(() => users.id),
+  authority: varchar('authority', { length: 160 }).notNull(),
+  action: varchar('action', { length: 160 }).notNull(),
+  beforeFingerprint: varchar('beforeFingerprint', { length: 128 }),
+  afterFingerprint: varchar('afterFingerprint', { length: 128 }),
+  eventFingerprint: varchar('eventFingerprint', { length: 128 }).notNull(),
+  metadata: json('metadata').notNull(),
+  occurredAt: timestamp('occurredAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_audit_owner_event_unique').on(table.ownerUserId, table.eventFingerprint),
+  index('managed_site_audit_owner_project_time_idx').on(table.ownerUserId, table.projectId, table.occurredAt),
+])
+
+/** Subscription lifecycle projection; cancellation never implies data deletion. */
+export const managedSiteSubscriptions = mysqlTable('managedSiteSubscriptions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  planKey: varchar('planKey', { length: 96 }).notNull(),
+  status: mysqlEnum('status', ['active', 'past_due', 'grace_period', 'suspended', 'terminated']).default('active').notNull(),
+  subscriptionReference: varchar('subscriptionReference', { length: 160 }),
+  gracePeriodEndsAt: timestamp('gracePeriodEndsAt'),
+  termEndsAt: timestamp('termEndsAt'),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  stateFingerprint: varchar('stateFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_subscriptions_project_unique').on(table.projectId),
+  uniqueIndex('managed_site_subscriptions_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('managed_site_subscriptions_owner_status_idx').on(table.ownerUserId, table.status),
+])
+
+/** Short-lived customer portal sessions issued after a single-use invitation is accepted. Only a hash is stored. */
+export const managedSiteSessions = mysqlTable('managedSiteSessions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  membershipId: int('membershipId').notNull().references(() => managedSiteMemberships.id),
+  sessionHash: varchar('sessionHash', { length: 128 }).notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  lastSeenAt: timestamp('lastSeenAt'),
+}, table => [
+  uniqueIndex('managed_site_sessions_hash_unique').on(table.sessionHash),
+  index('managed_site_sessions_owner_project_idx').on(table.ownerUserId, table.projectId, table.expiresAt),
+])
+
+export type ManagedSiteProject = typeof managedSiteProjects.$inferSelect
+export type ManagedSiteVersion = typeof managedSiteVersions.$inferSelect
+export type ManagedSiteAsset = typeof managedSiteAssets.$inferSelect
+export type ManagedSiteMembership = typeof managedSiteMemberships.$inferSelect
+export type ManagedSiteInvitation = typeof managedSiteInvitations.$inferSelect
+export type ManagedSiteAuditEvent = typeof managedSiteAuditEvents.$inferSelect
+export type ManagedSiteSubscription = typeof managedSiteSubscriptions.$inferSelect
+export type ManagedSiteSession = typeof managedSiteSessions.$inferSelect
