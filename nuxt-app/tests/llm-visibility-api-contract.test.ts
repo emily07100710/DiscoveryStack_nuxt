@@ -10,13 +10,14 @@ const routeFiles = [
   'server/api/llm-visibility/projects.post.ts',
   'server/api/llm-visibility/queries.post.ts',
   'server/api/llm-visibility/observations.post.ts',
+  'server/api/llm-visibility/provider-observations.post.ts',
   'server/api/llm-visibility/projects/[id]/summary.get.ts',
 ]
 
 describe('LLM visibility private API and projection contracts', () => {
-  it('exposes exactly the five requested routes and every route requires owner auth', () => {
+  it('exposes exactly the six requested routes and every route requires owner auth', () => {
     const discovered = readdirSync(join(root, 'server/api/llm-visibility'), { recursive: true }).filter(name => typeof name === 'string' && name.endsWith('.ts')).map(String).sort()
-    expect(discovered).toEqual(['observations.post.ts', 'projects.post.ts', 'projects/[id]/summary.get.ts', 'queries.post.ts', 'workspace.get.ts'])
+    expect(discovered).toEqual(['observations.post.ts', 'projects.post.ts', 'projects/[id]/summary.get.ts', 'provider-observations.post.ts', 'queries.post.ts', 'workspace.get.ts'])
     for (const file of routeFiles) expect(read(file)).toContain('requireOwner(event)')
   })
 
