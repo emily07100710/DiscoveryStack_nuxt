@@ -100,17 +100,27 @@ export function parseOutcomeInput(value: unknown): OutcomeAssessmentInput {
   return parsed.data
 }
 
+const SENSITIVE_QUERY_KEY = /^(?:token|access[_-]?token|auth|authorization|password|passwd|secret|api[_-]?key|key|code|signature|sig|credential)$/iu
+const SENSITIVE_QUERY_VALUE = /(?:bearer\s+|-----begin|(?:token|secret|password|passwd|api[_-]?key|authorization|credential)(?:\s*[:=]|[-_])|eyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+|(?:sk|pk)_[a-z0-9_-]{16,})/iu
+
+export function assertPublicHttpsUrl(value: string, label = 'Public URL'): string {
+  let url: URL
+  try { url = new URL(value.trim()) } catch { throw createError({ statusCode: 422, statusMessage: `${label} must be a public HTTPS URL.` }) }
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port !== '' && url.port !== '443')) throw createError({ statusCode: 422, statusMessage: `${label} must be HTTPS on the standard port without credentials.` })
+  if (!isPublicDnsHostname(url.hostname)) throw createError({ statusCode: 422, statusMessage: `${label} must use a public, non-special-use hostname.` })
+  for (const [key, queryValue] of url.searchParams.entries()) {
+    if (SENSITIVE_QUERY_KEY.test(key) || SENSITIVE_QUERY_VALUE.test(queryValue)) throw createError({ statusCode: 422, statusMessage: `${label} must not contain sensitive query parameters.` })
+  }
+  url.hostname = url.hostname.toLowerCase()
+  url.hash = ''
+  return url.toString()
+}
+
 export function normalizePublicHttpsOrigin(value: string): string {
   let url: URL
   try { url = new URL(value.trim()) } catch { throw createError({ statusCode: 422, statusMessage: 'Site origin must be a public HTTPS origin.' }) }
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || (url.pathname !== '/' && url.pathname !== '') || (url.port !== '' && url.port !== '443')) throw createError({ statusCode: 422, statusMessage: 'Site origin must be a public HTTPS origin without credentials, path, query, fragment, or non-standard port.' })
-  const hostname = url.hostname.toLowerCase()
-  if (!isPublicDnsHostname(hostname)) throw createError({ statusCode: 422, statusMessage: 'Private, local, special-use, or malformed site origins are not allowed.' })
-  url.hostname = hostname
-  url.pathname = '/'
-  url.search = ''
-  url.hash = ''
-  return url.toString().replace(/\/$/, '')
+  if (url.search || url.hash || (url.pathname !== '/' && url.pathname !== '')) throw createError({ statusCode: 422, statusMessage: 'Site origin must be a public HTTPS origin without path, query, or fragment.' })
+  return assertPublicHttpsUrl(value, 'Site origin').replace(/\/$/u, '')
 }
 
 function isPublicDnsHostname(hostname: string): boolean {
@@ -122,8 +132,12 @@ function isPublicDnsHostname(hostname: string): boolean {
   const labels = normalized.split('.')
   if (labels.some(label => label.length < 1 || label.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label))) return false
   if (labels.every(label => /^\d+$/.test(label))) return false
-  const suffix = normalized.toLowerCase()
-  return !['localhost', 'local', 'internal', 'onion'].some(value => suffix === value || suffix.endsWith(`.${value}`))
+  const suffix = normalized.toLowerCase().replace(/\.$/u, '')
+  const reservedSuffixes = ['localhost', 'local', 'internal', 'onion', 'test', 'invalid', 'example']
+  const documentationDomains = ['example.com', 'example.net', 'example.org']
+  if (reservedSuffixes.some(value => suffix === value || suffix.endsWith(`.${value}`))) return false
+  if (documentationDomains.some(value => suffix === value || suffix.endsWith(`.${value}`))) return false
+  return true
 }
 
 function parseIpv4(hostname: string): number[] | null {
@@ -137,7 +151,7 @@ function isSpecialUseIpv4(hostname: string): boolean {
   const octets = parseIpv4(hostname)
   if (!octets) return true
   const [first, second, third] = octets as [number, number, number, number]
-  if (first === 0 || first === 10 || first === 127 || first === 169 && second === 254 || first === 172 && second >= 16 && second <= 31 || first === 192 && (second === 0 || second === 168) || first === 192 && second === 0 && third === 2 || first === 192 && second === 88 && third === 99 || first === 198 && (second === 18 || second === 19) || first === 198 && second === 51 && third === 100 || first === 203 && second === 0 && third === 113 || first >= 224) return true
+  if (first === 0 || first === 10 || first === 127 || first === 169 && second === 254 || first === 172 && second >= 16 && second <= 31 || first === 192 && second === 168 || first === 192 && second === 0 && (third === 0 || third === 2) || first === 192 && second === 88 && third === 99 || first === 198 && (second === 18 || second === 19) || first === 198 && second === 51 && third === 100 || first === 203 && second === 0 && third === 113 || first >= 224) return true
   if (first === 100 && second >= 64 && second <= 127) return true
   return false
 }
@@ -175,15 +189,23 @@ function ipv6Words(hostname: string): number[] | null {
 function isSpecialUseIpv6(hostname: string): boolean {
   const words = ipv6Words(hostname)
   if (!words || words.length !== 8) return true
-  const allZero = words.every(word => word === 0)
-  const loopback = words.every(word => word === 0 || word === 1) && words.slice(0, 7).every(word => word === 0) && words[7] === 1
   const first = words[0]!
+  const second = words[1]!
+  const third = words[2]!
+  const allZero = words.every(word => word === 0)
+  const loopback = words.slice(0, 7).every(word => word === 0) && words[7] === 1
+  const compatible = words.slice(0, 6).every(word => word === 0)
   const mapped = words.slice(0, 5).every(word => word === 0) && words[5] === 0xffff
-  if (mapped) {
-    const ipv4 = `${words[6]! >> 8}.${words[6]! & 255}.${words[7]! >> 8}.${words[7]! & 255}`
-    return isSpecialUseIpv4(ipv4)
-  }
-  return allZero || loopback || (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00 || first === 0x0100 && words[1] === 0 && words[2] === 0 && words[3] === 0 || first === 0x2001 && words[1] === 0x0db8
+  const mappedTranslated = words.slice(0, 4).every(word => word === 0) && words[4] === 0xffff && words[5] === 0
+  const nat64Translated = first === 0x0064 && second === 0xff9b
+  const sixToFour = first === 0x2002
+  const reservedDocumentation = first === 0x2001 && (second === 0x0000 || second === 0x0001 || second === 0x0002 || second === 0x0003 || second === 0x0004 || second === 0x0010 || second === 0x0020 || second === 0x0db8) || (first & 0xfff0) === 0x3ff0
+  const sixBone = first === 0x3ffe
+  const uniqueLocal = (first & 0xfe00) === 0xfc00
+  const linkLocal = (first & 0xffc0) === 0xfe80
+  const multicast = (first & 0xff00) === 0xff00
+  const benchmarking = first === 0x0100 && second === 0 && third === 0 && words[3] === 0
+  return allZero || loopback || compatible || mapped || mappedTranslated || nat64Translated || sixToFour || sixBone || uniqueLocal || linkLocal || multicast || benchmarking || reservedDocumentation
 }
 
 export function normalizeTimeZone(value: string): string {

@@ -4,7 +4,7 @@ import { createMeasurementConnection, parseMeasurementConnectionInput, retryMeas
 import type { MeasurementConnectionRow, MeasurementRepository, MeasurementRunRow } from '../server/measurement-collection/types'
 
 const ownerUserId = 10
-const connectionBase = { id: 1, ownerUserId, clientId: 20, source: 'google_search_console', status: 'configured', credentialReference: null, googleSearchConsoleProperty: 'https://client.example.com', ga4PropertyId: null, llmVisibilityProjectId: null, canonicalOrigin: 'https://client.example.com', timeZone: 'Asia/Taipei', allowedPageScope: ['https://client.example.com/articles/a'], sourceAvailabilityLagDays: 2, providerTargets: null, idempotencyKey: 'connection-idempotency', configurationFingerprint: '1'.repeat(64), connectedAt: null, revokedAt: null, createdAt: new Date('2026-08-01T00:00:00.000Z'), updatedAt: new Date('2026-08-01T00:00:00.000Z') } as unknown as MeasurementConnectionRow
+const connectionBase = { id: 1, ownerUserId, clientId: 20, source: 'google_search_console', status: 'configured', credentialReference: null, googleSearchConsoleProperty: 'https://client.acme.taipei', ga4PropertyId: null, llmVisibilityProjectId: null, canonicalOrigin: 'https://client.acme.taipei', timeZone: 'Asia/Taipei', allowedPageScope: ['https://client.acme.taipei/articles/a'], sourceAvailabilityLagDays: 2, providerTargets: null, idempotencyKey: 'connection-idempotency', configurationFingerprint: '1'.repeat(64), connectedAt: null, revokedAt: null, createdAt: new Date('2026-08-01T00:00:00.000Z'), updatedAt: new Date('2026-08-01T00:00:00.000Z') } as unknown as MeasurementConnectionRow
 
 function delivered() {
   return {
@@ -16,8 +16,8 @@ function delivered() {
     review: { id: 6, jobId: 4, draftId: 5, reviewerUserId: ownerUserId, decision: 'approved_for_delivery', evidenceSnapshotHash: 'd'.repeat(64) },
     riskGate: { id: 10, draftId: 5, status: 'passed', evidenceSnapshotHash: 'd'.repeat(64) },
     publicationRun: { id: 11, ownerUserId, entryId: 30, stage: 'publication', state: 'succeeded', completedAt: new Date('2026-08-01T01:00:00.000Z') },
-    publicationTarget: { id: 55, targetOrigin: 'https://client.example.com' },
-    publicationAttempt: { id: 12, ownerUserId, entryId: 30, runId: 11, targetId: 55, status: 'delivered', receiptFingerprint: 'a'.repeat(64), publicationUrl: 'https://client.example.com/articles/a', contentHash: 'c'.repeat(64), evidenceSnapshotHash: 'd'.repeat(64) },
+    publicationTarget: { id: 55, targetOrigin: 'https://client.acme.taipei' },
+    publicationAttempt: { id: 12, ownerUserId, entryId: 30, runId: 11, targetId: 55, status: 'delivered', receiptFingerprint: 'a'.repeat(64), publicationUrl: 'https://client.acme.taipei/articles/a', contentHash: 'c'.repeat(64), evidenceSnapshotHash: 'd'.repeat(64) },
   }
 }
 
@@ -64,12 +64,12 @@ describe('measurement windows and scheduling', () => {
 
   it('schedules target-bound windows for every delivered site without mixing receipts', async () => {
     const primary = delivered()
-    const secondTarget = { ...primary.publicationTarget, id: 56, ownerUserId, clientId: 20, targetOrigin: 'https://second.example.dev' }
-    const secondAttempt = { ...primary.publicationAttempt, id: 13, runId: 14, targetId: 56, receiptFingerprint: 'b'.repeat(64), publicationUrl: 'https://second.example.dev/articles/a' }
+    const secondTarget = { ...primary.publicationTarget, id: 56, ownerUserId, clientId: 20, targetOrigin: 'https://second.acme.taipei' }
+    const secondAttempt = { ...primary.publicationAttempt, id: 13, runId: 14, targetId: 56, receiptFingerprint: 'b'.repeat(64), publicationUrl: 'https://second.acme.taipei/articles/a' }
     const secondRun = { ...primary.publicationRun, id: 14, completedAt: new Date('2026-08-01T02:00:00.000Z') }
     const connections = [
       { ...connectionBase, publicationTargetId: 55, websiteIdentity: 'target:55' },
-      { ...connectionBase, id: 2, publicationTargetId: 56, websiteIdentity: 'target:56', canonicalOrigin: 'https://second.example.dev', allowedPageScope: ['https://second.example.dev/articles/a'], googleSearchConsoleProperty: 'https://second.example.dev', idempotencyKey: 'connection-second', configurationFingerprint: '2'.repeat(64) },
+      { ...connectionBase, id: 2, publicationTargetId: 56, websiteIdentity: 'target:56', canonicalOrigin: 'https://second.acme.taipei', allowedPageScope: ['https://second.acme.taipei/articles/a'], googleSearchConsoleProperty: 'https://second.acme.taipei', idempotencyKey: 'connection-second', configurationFingerprint: '2'.repeat(64) },
     ] as MeasurementConnectionRow[]
     const contentOperations = {
       async resolveDeliveredPublication() { return primary },
@@ -92,7 +92,7 @@ describe('measurement windows and scheduling', () => {
   })
 
   it('rejects raw credentials, headers, and malformed provider targets at the connection boundary', () => {
-    const base = { clientId: 20, source: 'google_search_console', googleSearchConsoleProperty: 'https://client.example.com', canonicalOrigin: 'https://client.example.com', timeZone: 'Asia/Taipei', allowedPageScope: ['https://client.example.com/articles/a'], idempotencyKey: 'connection-key' }
+    const base = { clientId: 20, source: 'google_search_console', googleSearchConsoleProperty: 'https://client.acme.taipei', canonicalOrigin: 'https://client.acme.taipei', timeZone: 'Asia/Taipei', allowedPageScope: ['https://client.acme.taipei/articles/a'], idempotencyKey: 'connection-key' }
     expect(() => parseMeasurementConnectionInput({ ...base, accessToken: 'raw-token' })).toThrowError()
     expect(() => parseMeasurementConnectionInput({ ...base, credentialReference: 'Bearer raw-token' })).toThrowError()
     expect(() => parseMeasurementConnectionInput({ ...base, providerTargets: [{ provider: 'chatgpt', modelLabel: 'model', adapterKey: 'adapter', allowedLocales: ['zh-hant'], headers: { authorization: 'raw-token' } }] })).toThrowError()
@@ -109,15 +109,15 @@ describe('measurement windows and scheduling', () => {
     const revoked = { ...connectionBase, activeSource: null, status: 'revoked', websiteIdentity: 'target:55', publicationTargetId: 55 } as MeasurementConnectionRow
     let inserted: any = null
     const repository = {
-      async findClient() { return { id: 20, ownerUserId, canonicalSiteOrigin: 'https://client.example.com', timeZone: 'Asia/Taipei' } },
+      async findClient() { return { id: 20, ownerUserId, canonicalSiteOrigin: 'https://client.acme.taipei', timeZone: 'Asia/Taipei' } },
       async findConnectionByIdempotency() { return null },
       async listConnections() { return [revoked] },
       async insertConnection(input: any) { inserted = { ...input, id: 2, createdAt: new Date(), updatedAt: new Date() }; return inserted },
       async findConnection() { return inserted || revoked },
       async updateConnection(_owner: number, _id: number, patch: any) { return { ...(inserted || revoked), ...patch } },
     } as unknown as MeasurementRepository
-    const contentOperations = { async findPublicationTarget() { return { id: 55, ownerUserId, clientId: 20, targetOrigin: 'https://client.example.com', status: 'active' } } } as any
-    const input = { clientId: 20, publicationTargetId: 55, source: 'google_search_console', googleSearchConsoleProperty: 'https://client.example.com', canonicalOrigin: 'https://client.example.com', timeZone: 'Asia/Taipei', allowedPageScope: ['https://client.example.com/articles/a'], idempotencyKey: 'replacement-key' }
+    const contentOperations = { async findPublicationTarget() { return { id: 55, ownerUserId, clientId: 20, targetOrigin: 'https://client.acme.taipei', status: 'active' } } } as any
+    const input = { clientId: 20, publicationTargetId: 55, source: 'google_search_console', googleSearchConsoleProperty: 'https://client.acme.taipei', canonicalOrigin: 'https://client.acme.taipei', timeZone: 'Asia/Taipei', allowedPageScope: ['https://client.acme.taipei/articles/a'], idempotencyKey: 'replacement-key' }
     const result = await createMeasurementConnection(ownerUserId, input, { repository, contentOperations })
     expect(result.replayed).toBe(false)
     expect(result.connection).toMatchObject({ publicationTargetId: 55, websiteIdentity: 'target:55', activeSource: 'google_search_console', status: 'configured' })

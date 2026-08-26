@@ -10,6 +10,11 @@ function requireDatabase() {
   return database
 }
 
+function isDuplicateError(error: unknown): boolean {
+  const candidate = error as { code?: string; errno?: number; message?: string }
+  return candidate?.code === 'ER_DUP_ENTRY' || candidate?.errno === 1062 || /duplicate entry|unique constraint/i.test(candidate?.message || '')
+}
+
 function rowId(result: unknown): number {
   const id = Number((result as { [key: string]: unknown }[] | undefined)?.[0]?.insertId)
   if (!Number.isSafeInteger(id) || id < 1) throw createError({ statusCode: 500, statusMessage: 'Managed site provisioning record could not be recorded.' })
@@ -25,19 +30,26 @@ function makeRepository(database: any): ProvisioningRepository {
       const [row] = await database.select().from(managedSiteDomainIntents).where(eq(managedSiteDomainIntents.id, id)).limit(1)
       return row || null
     },
-    async findDomainIntentByProject(projectId) {
-      const [row] = await database.select().from(managedSiteDomainIntents).where(eq(managedSiteDomainIntents.projectId, projectId)).limit(1)
+    async findDomainIntentByProject(ownerUserId, projectId) {
+      const [row] = await database.select().from(managedSiteDomainIntents).where(and(eq(managedSiteDomainIntents.ownerUserId, ownerUserId), eq(managedSiteDomainIntents.projectId, projectId))).limit(1)
       return row || null
     },
-    async findDomainIntentByIdempotency(idempotencyKey) {
-      const [row] = await database.select().from(managedSiteDomainIntents).where(eq(managedSiteDomainIntents.idempotencyKey, idempotencyKey)).limit(1)
+    async findDomainIntentByIdempotency(ownerUserId, idempotencyKey) {
+      const [row] = await database.select().from(managedSiteDomainIntents).where(and(eq(managedSiteDomainIntents.ownerUserId, ownerUserId), eq(managedSiteDomainIntents.idempotencyKey, idempotencyKey))).limit(1)
       return row || null
     },
     async insertDomainIntent(input) {
-      const id = rowId(await database.insert(managedSiteDomainIntents).values(input as any))
-      const row = await repository.findDomainIntentById(id)
-      if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed site domain intent could not be loaded.' })
-      return row
+      try {
+        const id = rowId(await database.insert(managedSiteDomainIntents).values(input as any))
+        const row = await repository.findDomainIntentById(id)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed site domain intent could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!isDuplicateError(error)) throw error
+        const replay = typeof input.ownerUserId === 'number' ? await repository.findDomainIntentByIdempotency(input.ownerUserId, input.idempotencyKey) : null
+        if (replay && replay.configurationFingerprint === input.configurationFingerprint) return replay
+        throw createError({ statusCode: 409, statusMessage: 'Managed site domain intent conflicts with an existing owner-scoped record.' })
+      }
     },
     async updateDomainIntent(id, patch) {
       await database.update(managedSiteDomainIntents).set(patch as any).where(eq(managedSiteDomainIntents.id, id))
@@ -47,19 +59,28 @@ function makeRepository(database: any): ProvisioningRepository {
       const [row] = await database.select().from(managedSiteProvisioningPlans).where(eq(managedSiteProvisioningPlans.id, id)).limit(1)
       return row || null
     },
-    async findPlanByFingerprint(fingerprint) {
-      const [row] = await database.select().from(managedSiteProvisioningPlans).where(eq(managedSiteProvisioningPlans.intentFingerprint, fingerprint)).limit(1)
+    async findPlanByFingerprint(ownerUserId, fingerprint) {
+      const [row] = await database.select().from(managedSiteProvisioningPlans).where(and(eq(managedSiteProvisioningPlans.ownerUserId, ownerUserId), eq(managedSiteProvisioningPlans.intentFingerprint, fingerprint))).limit(1)
       return row || null
     },
-    async findPlanByIdempotency(idempotencyKey) {
-      const [row] = await database.select().from(managedSiteProvisioningPlans).where(eq(managedSiteProvisioningPlans.idempotencyKey, idempotencyKey)).limit(1)
+    async findPlanByIdempotency(ownerUserId, idempotencyKey) {
+      const [row] = await database.select().from(managedSiteProvisioningPlans).where(and(eq(managedSiteProvisioningPlans.ownerUserId, ownerUserId), eq(managedSiteProvisioningPlans.idempotencyKey, idempotencyKey))).limit(1)
       return row || null
     },
     async insertPlan(input) {
-      const id = rowId(await database.insert(managedSiteProvisioningPlans).values(input as any))
-      const row = await repository.findPlanById(id)
-      if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed site provisioning plan could not be loaded.' })
-      return row
+      try {
+        const id = rowId(await database.insert(managedSiteProvisioningPlans).values(input as any))
+        const row = await repository.findPlanById(id)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed site provisioning plan could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!isDuplicateError(error)) throw error
+        const replay = await repository.findPlanByIdempotency(input.ownerUserId, input.idempotencyKey)
+        if (replay && replay.intentFingerprint === input.intentFingerprint) return replay
+        const sameFingerprint = await repository.findPlanByFingerprint(input.ownerUserId, input.intentFingerprint)
+        if (sameFingerprint) return sameFingerprint
+        throw createError({ statusCode: 409, statusMessage: 'Managed site provisioning plan conflicts with an existing owner-scoped record.' })
+      }
     },
     async updatePlan(id, patch) {
       await database.update(managedSiteProvisioningPlans).set(patch as any).where(eq(managedSiteProvisioningPlans.id, id))
@@ -94,10 +115,15 @@ function makeRepository(database: any): ProvisioningRepository {
       return database.select().from(managedSiteProvisioningSteps).where(eq(managedSiteProvisioningSteps.planId, planId)).orderBy(asc(managedSiteProvisioningSteps.ordinal)).limit(20)
     },
     async insertStep(input) {
-      const id = rowId(await database.insert(managedSiteProvisioningSteps).values(input as any))
-      const [row] = await database.select().from(managedSiteProvisioningSteps).where(eq(managedSiteProvisioningSteps.id, id)).limit(1)
-      if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed site provisioning step could not be loaded.' })
-      return row
+      try {
+        const id = rowId(await database.insert(managedSiteProvisioningSteps).values(input as any))
+        const [row] = await database.select().from(managedSiteProvisioningSteps).where(eq(managedSiteProvisioningSteps.id, id)).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed site provisioning step could not be loaded.' })
+        return row
+      } catch (error) {
+        if (isDuplicateError(error)) throw createError({ statusCode: 409, statusMessage: 'Managed site provisioning step already exists for this plan.' })
+        throw error
+      }
     },
     async updateStep(id, patch) {
       await database.update(managedSiteProvisioningSteps).set(patch as any).where(eq(managedSiteProvisioningSteps.id, id))

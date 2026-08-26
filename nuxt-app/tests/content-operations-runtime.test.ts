@@ -8,7 +8,7 @@ import { ContentOperationsFixture, HASH, fixtureClient } from './fixtures/conten
 
 const clock = { now: () => new Date('2026-01-01T12:00:00.000Z'), localDate: () => '2026-01-01' }
 
-function validClientInput(idempotencyKey = 'client-key', origin = 'https://example.com') {
+function validClientInput(idempotencyKey = 'client-key', origin = 'https://content.acme.taipei') {
   return { displayName: 'Example', canonicalSiteOrigin: origin, framework: 'nuxt' as const, publicationTransport: 'first_party_git' as const, timeZone: 'UTC', defaultCadenceDays: 3 as const, defaultPublishLocalTime: '09:00', monthlyBudgetUnits: 100, idempotencyKey }
 }
 
@@ -30,12 +30,12 @@ describe('Content Operations Persistence & Scheduler Core V1', () => {
     const first = await createOwnerContentClient(1, validClientInput(), fixture.repository)
     const replay = await createOwnerContentClient(1, validClientInput(), fixture.repository)
     expect(replay.id).toBe(first.id)
-    await expect(createOwnerContentClient(1, validClientInput('client-key', 'https://other.example'), fixture.repository)).rejects.toMatchObject({ statusCode: 409 })
-    const otherOwner = await createOwnerContentClient(2, validClientInput('client-key', 'https://example.com'), fixture.repository)
+    await expect(createOwnerContentClient(1, validClientInput('client-key', 'https://different-content.acme.taipei'), fixture.repository)).rejects.toMatchObject({ statusCode: 409 })
+    const otherOwner = await createOwnerContentClient(2, validClientInput('client-key', 'https://other-content.acme.taipei'), fixture.repository)
     expect(otherOwner.ownerUserId).toBe(2)
     expect(JSON.stringify(first)).not.toMatch(/token|secret|authorization|credential/i)
     for (const origin of ['http://example.com', 'https://localhost', 'https://127.0.0.1', 'https://10.0.0.1', 'https://169.254.1.1', 'https://example.com/path', 'https://user:pass@example.com']) await expect(createOwnerContentClient(1, validClientInput(`bad-${origin}`, origin), fixture.repository)).rejects.toMatchObject({ statusCode: 422 })
-    expect(normalizePublicHttpsOrigin('https://EXAMPLE.com/')).toBe('https://example.com')
+    expect(normalizePublicHttpsOrigin('https://CONTENT.acme.taipei/')).toBe('https://content.acme.taipei')
   })
 
   it('builds calendar opportunities only from persisted plan provenance and replays deterministically', async () => {

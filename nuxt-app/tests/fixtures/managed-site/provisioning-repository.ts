@@ -20,14 +20,14 @@ export function createProvisioningMemoryRepository() {
       try { return await work(make()) } catch (error) { Object.assign(state, saved); throw error } finally { release() }
     },
     async findDomainIntentById(id) { return state.intents.find(row => row.id === id) || null },
-    async findDomainIntentByProject(projectId) { return state.intents.find(row => row.projectId === projectId) || null },
-    async findDomainIntentByIdempotency(key) { return state.intents.find(row => row.idempotencyKey === key) || null },
-    async insertDomainIntent(input) { return insert(state.intents, input as Omit<ManagedSiteDomainIntent, 'id'>) },
+    async findDomainIntentByProject(ownerUserId, projectId) { return state.intents.find(row => row.ownerUserId === ownerUserId && row.projectId === projectId) || null },
+    async findDomainIntentByIdempotency(ownerUserId, key) { return state.intents.find(row => row.ownerUserId === ownerUserId && row.idempotencyKey === key) || null },
+    async insertDomainIntent(input) { if (state.intents.some(row => row.ownerUserId === input.ownerUserId && (row.idempotencyKey === input.idempotencyKey || row.projectId === input.projectId))) throw Object.assign(new Error('owner-scoped domain intent conflict'), { statusCode: 409, statusMessage: 'Managed site domain intent conflicts with an existing owner-scoped record.' }); return insert(state.intents, input as Omit<ManagedSiteDomainIntent, 'id'>) },
     async updateDomainIntent(id, patch) { const row = state.intents.find(item => item.id === id); if (!row) return null; Object.assign(row, patch); return row },
     async findPlanById(id) { return state.plans.find(row => row.id === id) || null },
-    async findPlanByFingerprint(fingerprint) { return state.plans.find(row => row.intentFingerprint === fingerprint) || null },
-    async findPlanByIdempotency(key) { return state.plans.find(row => row.idempotencyKey === key) || null },
-    async insertPlan(input) { return insert(state.plans, input as Omit<ManagedSiteProvisioningPlan, 'id'>) },
+    async findPlanByFingerprint(ownerUserId, fingerprint) { return state.plans.find(row => row.ownerUserId === ownerUserId && row.intentFingerprint === fingerprint) || null },
+    async findPlanByIdempotency(ownerUserId, key) { return state.plans.find(row => row.ownerUserId === ownerUserId && row.idempotencyKey === key) || null },
+    async insertPlan(input) { if (state.plans.some(row => row.ownerUserId === input.ownerUserId && (row.idempotencyKey === input.idempotencyKey || row.intentFingerprint === input.intentFingerprint || row.projectId === input.projectId && row.versionId === input.versionId))) throw Object.assign(new Error('owner-scoped provisioning plan conflict'), { statusCode: 409, statusMessage: 'Managed site provisioning plan conflicts with an existing owner-scoped record.' }); return insert(state.plans, input as Omit<ManagedSiteProvisioningPlan, 'id'>) },
     async updatePlan(id, patch) { const row = state.plans.find(item => item.id === id); if (!row) return null; Object.assign(row, patch); return row },
     async acquirePlanLease(ownerUserId, planId, leaseOwner, now, leaseMs) {
       const row = state.plans.find(item => item.ownerUserId === ownerUserId && item.id === planId)

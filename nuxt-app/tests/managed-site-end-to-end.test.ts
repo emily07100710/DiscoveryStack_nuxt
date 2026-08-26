@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
-import { createManagedSiteDraftOrder, createManagedSiteLeadIntent, createManagedSitePreview, createManagedSiteQuote, recordVerifiedPaymentEvent } from '../server/managed-sites/ordering-service'
-import { convertPaidOrderToManagedProject } from '../server/managed-sites/conversion-service'
+import { createManagedSiteDraftOrder, createManagedSiteLeadIntent, createManagedSitePreview, createManagedSiteQuote } from '../server/managed-sites/ordering-service'
+import { processManagedSitePaymentAndConversion } from '../server/managed-sites/conversion-service'
 import { createManagedSiteDomainIntent, createManagedSiteProvisioningPlan, executeManagedSiteProvisioningPlan } from '../server/managed-sites/provisioning-service'
 import { createShopifyIntegrationIntent, linkManagedSiteContentOperations, runManagedSiteAssistant } from '../server/managed-sites/modules-service'
 import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
@@ -22,21 +22,20 @@ it('runs the managed platform path end to end with server-owned payment conversi
   const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'business', cadenceDays: 7, domainOption: 'new', idempotencyKey: 'e2e-quote-1' }, ordering.repository)
   const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Acme Owner', email: 'owner@acme.taipei', company: 'Acme Studio', privacyConsent: true, recontactConsent: true, idempotencyKey: 'e2e-lead-1' }, ordering.repository)
   const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'e2e-order-1' }, ordering.repository)
-  const payment = await recordVerifiedPaymentEvent({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'e2e-payment-event-1', providerReference: 'mock-provider-ref-1', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'b'.repeat(64) }, mockedPaymentVerifier, ordering.repository)
-  expect(payment.order.status).toBe('payment_verified')
-
-  const conversion = await convertPaidOrderToManagedProject(1, { draftOrderId: order.order.id, idempotencyKey: 'e2e-conversion-1' }, { ordering: ordering.repository, managed: managed.repository })
+  const conversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'e2e-payment-event-1', providerReference: 'mock-provider-ref-1', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'b'.repeat(64), idempotencyKey: 'e2e-conversion-1' }, mockedPaymentVerifier, { ordering: ordering.repository, managed: managed.repository })
+  expect(conversion.order.status).toBe('payment_verified')
   expect(conversion.project.status).toBe('active')
   expect(conversion.version.lifecycleStatus).toBe('active')
   expect(conversion.subscription.status).toBe('active')
   expect(conversion.order.projectId).toBe(conversion.project.id)
-  const replayConversion = await convertPaidOrderToManagedProject(1, { draftOrderId: order.order.id, idempotencyKey: 'e2e-conversion-1' }, { ordering: ordering.repository, managed: managed.repository })
-  expect(replayConversion.replayed).toBe(true)
+  const replayConversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'e2e-payment-event-1', providerReference: 'mock-provider-ref-1', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'b'.repeat(64), idempotencyKey: 'e2e-conversion-1' }, mockedPaymentVerifier, { ordering: ordering.repository, managed: managed.repository })
+  expect(replayConversion.paymentReplayed).toBe(true)
+  expect(replayConversion.conversionReplayed).toBe(true)
 
   const domain = await createManagedSiteDomainIntent(1, { projectId: conversion.project.id, draftOrderId: order.order.id, mode: 'new_registration', requestedDomain: 'acme-demo.taipei', providerKey: 'registrar-neutral', idempotencyKey: 'e2e-domain-1' }, provisioning.repository, managed.repository)
   const plan = await createManagedSiteProvisioningPlan(1, { projectId: conversion.project.id, versionId: conversion.version.id, domainIntentId: domain.intent.id, platform: 'vercel', deploymentMode: 'preview_only', idempotencyKey: 'e2e-plan-1' }, provisioning.repository, managed.repository)
   const provisioningResult = await executeManagedSiteProvisioningPlan(1, plan.plan.id, 'dry_run', undefined, provisioning.repository, managed.repository)
-  expect(provisioningResult.plan?.status).toBe('blocked')
+  expect(provisioningResult.plan?.status).toBe('draft')
   expect(provisioningResult.externalCalls).toBe(false)
   expect(provisioningResult.plan?.deployedUrl).toBeNull()
 
@@ -45,6 +44,6 @@ it('runs the managed platform path end to end with server-owned payment conversi
   const linked = await linkManagedSiteContentOperations(1, conversion.project.id, { displayName: 'Acme Studio', canonicalSiteOrigin: 'https://managed-site.acme.taipei', framework: 'astro', publicationTransport: 'first_party_git', timeZone: 'Asia/Taipei', defaultCadenceDays: 7, defaultPublishLocalTime: '09:00', monthlyBudgetUnits: 100, idempotencyKey: 'e2e-content-link-1' }, managed.repository, content.repository)
   expect(linked.notDuplicated).toBe(true)
   const assistant = await runManagedSiteAssistant(1, { projectId: conversion.project.id, question: '這個網站何時可以上線？' }, undefined, managed.repository, content.repository)
-  expect(assistant.status).toBe('blocked')
+  expect(assistant.status).toBe('needs_authorization')
   expect(assistant.externalCalls).toBe(false)
 })

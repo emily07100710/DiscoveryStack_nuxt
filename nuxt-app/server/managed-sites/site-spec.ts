@@ -1,6 +1,7 @@
 import { createError } from 'h3'
 import { stableFingerprint } from '../seo-geo-core/repository'
 import { MANAGED_SITE_CATALOG_VERSION, MANAGED_SITE_TYPES, type ManagedSiteType } from './types'
+import { assertPublicHttpsUrl } from '../content-operations/normalization'
 
 export const SITE_SPEC_VERSION = 'site-spec-v1'
 export const STYLE_PROFILE_VERSION = 'style-profile-v1'
@@ -16,11 +17,6 @@ export const STYLE_PREFERENCES = ['color', 'typography_mood', 'whitespace_densit
 export type StylePreference = typeof STYLE_PREFERENCES[number]
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
-const PUBLIC_SPECIAL_USE = new Set(['localhost', 'localhost.localdomain', 'metadata.google.internal', 'metadata.google.internal.', 'broadcasthost', 'ip6-allnodes', 'ip6-allrouters'])
-const PRIVATE_IPV4 = /^(0\.|10\.|100\.(?:6[4-9]|[78]\d)\.|127\.|169\.254\.|192\.0\.0\.|192\.0\.2\.|192\.168\.|198\.18\.|198\.19\.|198\.51\.100\.|203\.0\.113\.|172\.(?:1[6-9]|2\d|3[01])\.)/
-const PRIVATE_IPV6 = /^(?:::1|::ffff:|::ffff:0:|fc[0-9a-f]{2}:|fd[0-9a-f]{2}:|fe[89ab][0-9a-f]:|ff[0-9a-f]{2}:|2001:(?:0?0?0?0|0?0?0?2|0?0?0?10|0?0?0?20|0?0?0?30|db8|3f{2,3}):|100:)/i
-const RESERVED_PUBLIC_SUFFIXES = ['.localhost', '.local', '.onion', '.test', '.invalid', '.example']
-const SENSITIVE_QUERY_KEYS = /^(?:token|access_token|auth|authorization|password|passwd|secret|api[_-]?key|key|code|signature|sig)$/i
 
 export type StyleReferenceInput = {
   url: string
@@ -126,23 +122,12 @@ function stringField(value: unknown, label: string, max: number): string {
   return value.trim()
 }
 
-function assertHttpsPublicUrl(value: string, label: string, rejectSensitiveQuery: boolean): string {
-  let parsed: URL
-  try { parsed = new URL(value) } catch { invalid(`${label} is invalid.`) }
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) invalid(`${label} must be public HTTPS on the standard port.`)
-  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '')
-  const queryKeys = [...parsed.searchParams.keys()]
-  if (!hostname || PUBLIC_SPECIAL_USE.has(hostname) || RESERVED_PUBLIC_SUFFIXES.some(suffix => hostname === suffix.slice(1) || hostname.endsWith(suffix)) || PRIVATE_IPV4.test(hostname) || PRIVATE_IPV6.test(hostname) || hostname.includes(':') || !hostname.includes('.') || (rejectSensitiveQuery && queryKeys.some(key => SENSITIVE_QUERY_KEYS.test(key)))) invalid(`${label} is not an allowed public host.`)
-  parsed.hash = ''
-  return parsed.toString()
-}
-
 export function assertPublicReferenceUrl(value: string): string {
-  return assertHttpsPublicUrl(value, 'Style reference URL', false)
+  return assertPublicHttpsUrl(value, 'Style reference URL')
 }
 
 export function assertExistingSiteUrl(value: string): string {
-  return assertHttpsPublicUrl(value, 'Existing site URL', true)
+  return assertPublicHttpsUrl(value, 'Existing site URL')
 }
 
 export function normalizeStyleReferences(input: unknown): StyleReferenceInput[] {

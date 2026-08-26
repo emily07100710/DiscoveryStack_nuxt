@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createManagedSitePreview, createManagedSiteQuote, createManagedSiteDraftOrder, createManagedSiteLeadIntent, recordVerifiedPaymentEvent } from '../server/managed-sites/ordering-service'
-import { convertPaidOrderToManagedProject } from '../server/managed-sites/conversion-service'
+import { createManagedSitePreview, createManagedSiteQuote, createManagedSiteDraftOrder, createManagedSiteLeadIntent } from '../server/managed-sites/ordering-service'
+import { processManagedSitePaymentAndConversion } from '../server/managed-sites/conversion-service'
 import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
 import type { ProvisioningAdapters } from '../server/managed-sites/provisioning-types'
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
@@ -19,9 +19,8 @@ async function makeLineage() {
   const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 7, domainOption: 'new', idempotencyKey: 'provisioning-quote-001' }, ordering.repository)
   const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Provisioning Owner', email: 'owner@acme.taipei', company: 'Provisioning Client', website: 'https://provisioning-client.acme.taipei', privacyConsent: true, recontactConsent: false, idempotencyKey: 'provisioning-lead-001' }, ordering.repository)
   const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'provisioning-order-001' }, ordering.repository)
-  await recordVerifiedPaymentEvent({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'provisioning-payment-001', providerReference: 'provisioning-payment-ref-001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'd'.repeat(64) }, mockPaymentVerifier, ordering.repository)
-  const conversion = await convertPaidOrderToManagedProject(1, { draftOrderId: order.order.id, idempotencyKey: 'provisioning-conversion-001' }, { ordering: ordering.repository, managed: managed.repository })
-  return { managed, provisioning, ordering, project: { project: conversion.project }, version: conversion.version, order: order.order }
+  const conversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'provisioning-payment-001', providerReference: 'provisioning-payment-ref-001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'd'.repeat(64), idempotencyKey: 'provisioning-conversion-001' }, mockPaymentVerifier, { ordering: ordering.repository, managed: managed.repository })
+  return { managed, provisioning, ordering, project: { project: conversion.project }, version: conversion.version, order: conversion.order }
 }
 
 describe('managed site provisioning core', () => {
@@ -49,9 +48,10 @@ describe('managed site provisioning core', () => {
     const plan = await createManagedSiteProvisioningPlan(1, { projectId: line.project.project.id, versionId: line.version.id, domainIntentId: intent.intent.id, platform: 'vercel', deploymentMode: 'preview_only', idempotencyKey: 'plan-dry-run-1' }, line.provisioning.repository, line.managed.repository)
     expect(plan.steps.map(step => step.stepKey)).toEqual(['domain_intent', 'domain_registration', 'dns_configuration', 'tls_verification', 'deployment'])
     const result = await executeManagedSiteProvisioningPlan(1, plan.plan.id, 'dry_run', undefined, line.provisioning.repository, line.managed.repository)
-    expect(result.plan?.status).toBe('blocked')
+    expect(result.plan?.status).toBe('draft')
     expect(result.externalCalls).toBe(false)
     expect(result.plan?.deployedUrl).toBeNull()
+    expect(result.steps.every(step => step.status === 'pending' && step.attemptNumber === 0 && step.completedAt === null)).toBe(true)
     expect(result.results.find(step => step.stepKey === 'domain_registration')?.providerConfigured).toBe(false)
     expect(result.events).toHaveLength(5)
   })
@@ -70,7 +70,8 @@ describe('managed site provisioning core', () => {
     expect(result.plan?.status).toBe('succeeded')
     expect(result.plan?.deploymentStatus).toBe('built')
     expect(result.externalCalls).toBe(false)
-    expect(result.plan?.deployedUrl).toBeNull()
+    expect(result.plan?.deployedUrl).toBe('https://mocked.acme.taipei')
+    expect((result.results.find(step => step.stepKey === 'deployment') as any)?.deployedUrl).toBe('https://mocked.acme.taipei')
     expect(result.results.every(step => step.externalCalls === false)).toBe(true)
   })
 
@@ -109,7 +110,7 @@ describe('managed site provisioning hardening', () => {
     }
     const result = await executeManagedSiteProvisioningPlan(1, plan.plan.id, 'dry_run', adapters, line.provisioning.repository, line.managed.repository, undefined, line.ordering.repository)
     expect(calls).toBe(0)
-    expect(result.plan?.status).toBe('blocked')
+    expect(result.plan?.status).toBe('draft')
     expect(result.plan?.deployedUrl).toBeNull()
     expect(result.results.every(item => item.externalCalls === false)).toBe(true)
   })
@@ -159,12 +160,13 @@ describe('managed site provisioning hardening', () => {
   it('allows only one leased worker to execute a plan concurrently', async () => {
     const line = await makeLineage()
     const plan = await makePlan(line, { key: 'lease-race' })
+    let adapterCalls = 0
     const adapters: ProvisioningAdapters = {
-      async checkDomainAvailability(input) { await new Promise(resolve => setTimeout(resolve, 5)); return { status: 'available', normalizedDomain: input.normalizedDomain, providerKey: input.providerKey, externalCalls: false, limitation: 'Injected mock only.' } },
-      async registerDomain(input) { return { status: 'registered', normalizedDomain: input.normalizedDomain, providerKey: input.providerKey, externalReference: 'race-domain-ref', externalCalls: false, limitation: 'Injected mock only.' } },
-      async configureDns(input) { return { status: 'configured', normalizedDomain: input.normalizedDomain, records: [{ type: 'CNAME', name: '@', value: 'synthetic.pages.dev' }], externalCalls: false, limitation: 'Injected mock only.' } },
-      async verifyTls(input) { return { status: 'verified', normalizedDomain: input.normalizedDomain, certificateReference: 'race-tls-ref', externalCalls: false, limitation: 'Injected mock only.' } },
-      async deploySite(input) { return { status: 'deployed', platform: input.platform, deployedUrl: `https://${input.normalizedDomain}`, externalReference: 'race-deploy-ref', externalCalls: false, limitation: 'Injected mock only.' } },
+      async checkDomainAvailability(input) { adapterCalls++; await new Promise(resolve => setTimeout(resolve, 5)); return { status: 'available', normalizedDomain: input.normalizedDomain, providerKey: input.providerKey, externalCalls: false, limitation: 'Injected mock only.' } },
+      async registerDomain(input) { adapterCalls++; return { status: 'registered', normalizedDomain: input.normalizedDomain, providerKey: input.providerKey, externalReference: 'race-domain-ref', externalCalls: false, limitation: 'Injected mock only.' } },
+      async configureDns(input) { adapterCalls++; return { status: 'configured', normalizedDomain: input.normalizedDomain, records: [{ type: 'CNAME', name: '@', value: 'synthetic.pages.dev' }], externalCalls: false, limitation: 'Injected mock only.' } },
+      async verifyTls(input) { adapterCalls++; return { status: 'verified', normalizedDomain: input.normalizedDomain, certificateReference: 'race-tls-ref', externalCalls: false, limitation: 'Injected mock only.' } },
+      async deploySite(input) { adapterCalls++; return { status: 'deployed', platform: input.platform, deployedUrl: `https://${input.normalizedDomain}`, externalReference: 'race-deploy-ref', externalCalls: false, limitation: 'Injected mock only.' } },
     }
     const results = await Promise.allSettled([
       executeManagedSiteProvisioningPlan(1, plan.plan.id, 'mocked', adapters, line.provisioning.repository, line.managed.repository, undefined, line.ordering.repository),
@@ -172,7 +174,87 @@ describe('managed site provisioning hardening', () => {
     ])
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
     expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+    expect(adapterCalls).toBe(5)
     expect(line.provisioning.state.events.filter(event => event.status === 'succeeded')).toHaveLength(5)
+  })
+
+  it('keeps a dry-run non-mutating and then executes the same plan through injected mocks', async () => {
+    const line = await makeLineage()
+    const plan = await makePlan(line, { key: 'dry-then-mocked', deploymentMode: 'preview_only' })
+    const dryRun = await executeManagedSiteProvisioningPlan(1, plan.plan.id, 'dry_run', undefined, line.provisioning.repository, line.managed.repository, undefined, line.ordering.repository)
+    expect(dryRun.plan?.status).toBe('draft')
+    const calls: string[] = []
+    const adapters: ProvisioningAdapters = {
+      async checkDomainAvailability(input) { calls.push('availability'); return { status: 'available', normalizedDomain: input.normalizedDomain, providerKey: input.providerKey, externalCalls: false, limitation: 'Injected mock only.' } },
+      async registerDomain(input) { calls.push('register'); return { status: 'registered', normalizedDomain: input.normalizedDomain, providerKey: input.providerKey, externalReference: 'dry-then-domain-ref', externalCalls: false, limitation: 'Injected mock only.' } },
+      async configureDns(input) { calls.push('dns'); return { status: 'configured', normalizedDomain: input.normalizedDomain, records: [{ type: 'CNAME', name: '@', value: 'dry-then.pages.dev' }], externalCalls: false, limitation: 'Injected mock only.' } },
+      async verifyTls(input) { calls.push('tls'); return { status: 'verified', normalizedDomain: input.normalizedDomain, certificateReference: 'dry-then-tls-ref', externalCalls: false, limitation: 'Injected mock only.' } },
+      async deploySite(input) { calls.push('deploy'); return { status: 'deployed', platform: input.platform, deployedUrl: `https://${input.normalizedDomain}`, externalReference: 'dry-then-deploy-ref', externalCalls: false, limitation: 'Injected mock only.' } },
+    }
+    const executed = await executeManagedSiteProvisioningPlan(1, plan.plan.id, 'mocked', adapters, line.provisioning.repository, line.managed.repository, undefined, line.ordering.repository)
+    expect(calls).toEqual(['availability', 'register', 'dns', 'tls', 'deploy'])
+    expect(executed.plan?.status).toBe('succeeded')
+    expect(executed.plan?.deployedUrl).toBe('https://dry-then-mocked.acme.taipei')
+    expect(executed.events.filter(event => event.executionMode === 'dry_run')).toHaveLength(5)
+    expect(executed.events.filter(event => event.status === 'succeeded')).toHaveLength(5)
+  })
+
+  it('restarts after a fourth-step retry without repeating the first three adapters and preserves receipt lineage', async () => {
+    const line = await makeLineage()
+    const plan = await makePlan(line, { key: 'restart-retry' })
+    let now = new Date('2026-08-27T00:00:00.000Z')
+    const calls = { availability: 0, register: 0, dns: 0, tls: 0, deploy: 0 }
+    const adapters: ProvisioningAdapters = {
+      async checkDomainAvailability(input) { calls.availability++; return { status: 'available', normalizedDomain: input.normalizedDomain, providerKey: input.providerKey, externalCalls: false, limitation: 'Injected mock only.' } },
+      async registerDomain(input) { calls.register++; return { status: 'registered', normalizedDomain: input.normalizedDomain, providerKey: input.providerKey, externalReference: 'restart-domain-ref', externalCalls: false, limitation: 'Injected mock only.' } },
+      async configureDns(input) { calls.dns++; return { status: 'configured', normalizedDomain: input.normalizedDomain, records: [{ type: 'CNAME', name: '@', value: 'restart.pages.dev' }], externalCalls: false, limitation: 'Injected mock only.' } },
+      async verifyTls(input) { calls.tls++; if (calls.tls === 1) throw Object.assign(new Error('synthetic TLS timeout'), { retryable: true, code: 'TIMEOUT' }); return { status: 'verified', normalizedDomain: input.normalizedDomain, certificateReference: 'restart-tls-ref', externalCalls: false, limitation: 'Injected mock only.' } },
+      async deploySite(input) { calls.deploy++; return { status: 'deployed', platform: input.platform, deployedUrl: `https://${input.normalizedDomain}`, externalReference: 'restart-deploy-ref', externalCalls: false, limitation: 'Injected mock only.' } },
+    }
+    const first = await executeManagedSiteProvisioningPlan(1, plan.plan.id, 'mocked', adapters, line.provisioning.repository, line.managed.repository, () => now, line.ordering.repository)
+    expect(first.plan?.status).toBe('retry_wait')
+    expect(first.steps.filter(step => step.status === 'succeeded')).toHaveLength(3)
+    expect(first.steps.find(step => step.stepKey === 'domain_registration')?.externalReference).toBe('restart-domain-ref')
+    expect(first.plan?.providerProjectReference).toBe('restart-domain-ref')
+    now = new Date('2026-08-27T00:06:00.000Z')
+    const second = await executeManagedSiteProvisioningPlan(1, plan.plan.id, 'mocked', adapters, line.provisioning.repository, line.managed.repository, () => now, line.ordering.repository)
+    expect(second.plan?.status).toBe('succeeded')
+    expect(calls).toEqual({ availability: 1, register: 1, dns: 1, tls: 2, deploy: 1 })
+    expect(second.plan?.tlsCertificateReference).toBe('restart-tls-ref')
+    expect(second.plan?.providerDeploymentReference).toBe('restart-deploy-ref')
+    expect(second.plan?.deployedUrl).toBe('https://restart-retry.acme.taipei')
+    expect(second.steps.find(step => step.stepKey === 'domain_registration')?.externalReference).toBe('restart-domain-ref')
+    expect(second.steps.find(step => step.stepKey === 'tls_verification')?.externalReference).toBe('restart-tls-ref')
+    expect(second.steps.find(step => step.stepKey === 'deployment')?.externalReference).toBe('restart-deploy-ref')
+    expect(second.events.filter(event => event.status === 'succeeded')).toHaveLength(5)
+    await expect(executeManagedSiteProvisioningPlan(1, plan.plan.id, 'mocked', adapters, line.provisioning.repository, line.managed.repository, () => now, line.ordering.repository)).rejects.toMatchObject({ statusCode: 409 })
+    expect(second.events.filter(event => event.status === 'succeeded')).toHaveLength(5)
+  })
+
+  it('does not exceed the bounded retry attempt cap', async () => {
+    const line = await makeLineage()
+    const plan = await makePlan(line, { key: 'attempt-cap' })
+    let now = new Date('2026-08-27T00:00:00.000Z')
+    let tlsCalls = 0
+    const adapters: ProvisioningAdapters = {
+      async checkDomainAvailability(input) { return { status: 'available', normalizedDomain: input.normalizedDomain, providerKey: input.providerKey, externalCalls: false, limitation: 'Injected mock only.' } },
+      async registerDomain(input) { return { status: 'registered', normalizedDomain: input.normalizedDomain, providerKey: input.providerKey, externalReference: 'cap-domain-ref', externalCalls: false, limitation: 'Injected mock only.' } },
+      async configureDns(input) { return { status: 'configured', normalizedDomain: input.normalizedDomain, records: [{ type: 'CNAME', name: '@', value: 'cap.pages.dev' }], externalCalls: false, limitation: 'Injected mock only.' } },
+      async verifyTls() { tlsCalls++; throw Object.assign(new Error('synthetic persistent timeout'), { retryable: true, code: 'TIMEOUT' }) },
+      async deploySite() { throw new Error('deployment must remain downstream') },
+    }
+    const first = await executeManagedSiteProvisioningPlan(1, plan.plan.id, 'mocked', adapters, line.provisioning.repository, line.managed.repository, () => now, line.ordering.repository)
+    expect(first.plan?.status).toBe('retry_wait')
+    now = new Date('2026-08-27T00:06:00.000Z')
+    const second = await executeManagedSiteProvisioningPlan(1, plan.plan.id, 'mocked', adapters, line.provisioning.repository, line.managed.repository, () => now, line.ordering.repository)
+    expect(second.plan?.status).toBe('retry_wait')
+    now = new Date('2026-08-27T00:37:00.000Z')
+    const third = await executeManagedSiteProvisioningPlan(1, plan.plan.id, 'mocked', adapters, line.provisioning.repository, line.managed.repository, () => now, line.ordering.repository)
+    expect(third.plan?.status).toBe('failed')
+    expect(third.steps.find(step => step.stepKey === 'tls_verification')?.attemptNumber).toBe(3)
+    expect(tlsCalls).toBe(3)
+    await expect(executeManagedSiteProvisioningPlan(1, plan.plan.id, 'mocked', adapters, line.provisioning.repository, line.managed.repository, () => new Date('2026-08-27T01:00:00.000Z'), line.ordering.repository)).rejects.toMatchObject({ statusCode: 409 })
+    expect(tlsCalls).toBe(3)
   })
 
   it('rejects a deployment receipt whose URL or platform does not match the requested target', async () => {

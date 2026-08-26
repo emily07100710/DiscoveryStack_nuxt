@@ -27,13 +27,13 @@ export type ProvisioningPlanInput = {
 export type ProvisioningRepository = {
   transaction<T>(work: (repository: ProvisioningRepository) => Promise<T>): Promise<T>
   findDomainIntentById(id: number): Promise<ManagedSiteDomainIntent | null>
-  findDomainIntentByProject(projectId: number): Promise<ManagedSiteDomainIntent | null>
-  findDomainIntentByIdempotency(idempotencyKey: string): Promise<ManagedSiteDomainIntent | null>
+  findDomainIntentByProject(ownerUserId: number, projectId: number): Promise<ManagedSiteDomainIntent | null>
+  findDomainIntentByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSiteDomainIntent | null>
   insertDomainIntent(input: Omit<ManagedSiteDomainIntent, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteDomainIntent>
   updateDomainIntent(id: number, patch: Partial<Omit<ManagedSiteDomainIntent, 'id' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteDomainIntent | null>
   findPlanById(id: number): Promise<ManagedSiteProvisioningPlan | null>
-  findPlanByFingerprint(fingerprint: string): Promise<ManagedSiteProvisioningPlan | null>
-  findPlanByIdempotency(idempotencyKey: string): Promise<ManagedSiteProvisioningPlan | null>
+  findPlanByFingerprint(ownerUserId: number, fingerprint: string): Promise<ManagedSiteProvisioningPlan | null>
+  findPlanByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSiteProvisioningPlan | null>
   insertPlan(input: Omit<ManagedSiteProvisioningPlan, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteProvisioningPlan>
   updatePlan(id: number, patch: Partial<Omit<ManagedSiteProvisioningPlan, 'id' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteProvisioningPlan | null>
   acquirePlanLease(ownerUserId: number, planId: number, leaseOwner: string, now: Date, leaseMs: number): Promise<ManagedSiteProvisioningPlan | null>

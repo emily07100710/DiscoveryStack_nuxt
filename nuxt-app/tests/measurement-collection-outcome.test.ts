@@ -3,7 +3,7 @@ import { processMeasurementRun } from '../server/measurement-collection/service'
 import type { MeasurementConnectionRow, MeasurementRepository, MeasurementRunRow, MeasurementSnapshotRow } from '../server/measurement-collection/types'
 
 const ownerUserId = 10
-const canonicalPage = 'https://client.example.com/articles/a'
+const canonicalPage = 'https://client.acme.taipei/articles/a'
 const contentHash = 'c'.repeat(64)
 const evidenceHash = 'd'.repeat(64)
 const receiptHash = 'a'.repeat(64)
@@ -18,7 +18,7 @@ function delivered() {
     review: { id: 6, jobId: 4, draftId: 5, reviewerUserId: ownerUserId, decision: 'approved_for_delivery', evidenceSnapshotHash: evidenceHash },
     riskGate: { id: 10, draftId: 5, status: 'passed', evidenceSnapshotHash: evidenceHash },
     publicationRun: { id: 11, ownerUserId, entryId: 30, stage: 'publication', state: 'succeeded', completedAt: new Date('2026-08-01T01:00:00.000Z') },
-    publicationTarget: { id: 55, targetOrigin: 'https://client.example.com' },
+    publicationTarget: { id: 55, targetOrigin: 'https://client.acme.taipei' },
     publicationAttempt: { id: 12, ownerUserId, entryId: 30, runId: 11, targetId: 55, status: 'delivered', receiptFingerprint: receiptHash, publicationUrl: canonicalPage, contentHash, evidenceSnapshotHash: evidenceHash },
   }
 }
@@ -28,7 +28,7 @@ function run(source: 'google_search_console' | 'llm_visibility'): MeasurementRun
 }
 
 function connection(source: 'google_search_console' | 'llm_visibility'): MeasurementConnectionRow {
-  return { id: source === 'google_search_console' ? 1 : 2, ownerUserId, clientId: 20, source, status: 'configured', credentialReference: source === 'google_search_console' ? 'secret-manager:google-readonly' : null, googleSearchConsoleProperty: source === 'google_search_console' ? 'https://client.example.com' : null, ga4PropertyId: null, llmVisibilityProjectId: source === 'llm_visibility' ? 77 : null, canonicalOrigin: 'https://client.example.com', timeZone: 'Asia/Taipei', allowedPageScope: [canonicalPage], sourceAvailabilityLagDays: 2, providerTargets: source === 'llm_visibility' ? [{ provider: 'chatgpt', modelLabel: 'synthetic', adapterKey: 'synthetic', allowedLocales: ['zh-hant'], maximumResponseBytes: 120000, timeoutMs: 30000 }] : null, idempotencyKey: `connection-${source}`, configurationFingerprint: `${source === 'google_search_console' ? '1' : '2'}`.repeat(64).slice(0, 64), connectedAt: null, revokedAt: null, createdAt: new Date(), updatedAt: new Date() } as unknown as MeasurementConnectionRow
+  return { id: source === 'google_search_console' ? 1 : 2, ownerUserId, clientId: 20, source, status: 'configured', credentialReference: source === 'google_search_console' ? 'secret-manager:google-readonly' : null, googleSearchConsoleProperty: source === 'google_search_console' ? 'https://client.acme.taipei' : null, ga4PropertyId: null, llmVisibilityProjectId: source === 'llm_visibility' ? 77 : null, canonicalOrigin: 'https://client.acme.taipei', timeZone: 'Asia/Taipei', allowedPageScope: [canonicalPage], sourceAvailabilityLagDays: 2, providerTargets: source === 'llm_visibility' ? [{ provider: 'chatgpt', modelLabel: 'synthetic', adapterKey: 'synthetic', allowedLocales: ['zh-hant'], maximumResponseBytes: 120000, timeoutMs: 30000 }] : null, idempotencyKey: `connection-${source}`, configurationFingerprint: `${source === 'google_search_console' ? '1' : '2'}`.repeat(64).slice(0, 64), connectedAt: null, revokedAt: null, createdAt: new Date(), updatedAt: new Date() } as unknown as MeasurementConnectionRow
 }
 
 function contentRepository(outcomes: any[]) {
@@ -57,7 +57,7 @@ function measurementRepository(current: MeasurementRunRow, currentConnection: Me
     async listSnapshots() { return snapshots },
     async findSnapshot(_owner: number, _runId: number, phase: any) { return snapshots.find(snapshot => snapshot.phase === phase) || null },
     async insertSnapshot(input: any) { const row = { ...input, id: snapshots.length + 1, createdAt: new Date() } as MeasurementSnapshotRow; snapshots.push(row); return row },
-    async listLlmScope() { return { project: { id: 77, ownerUserId, canonicalDomain: 'client.example.com', brandName: 'Client', brandAliases: [], competitorBrands: [], locale: 'zh-hant', status: 'active' }, queries: [{ id: 88, ownerUserId, projectId: 77, promptText: 'Which product?', promptHash: 'p'.repeat(64), intent: 'commercial', locale: 'zh-hant', active: true }] } },
+    async listLlmScope() { return { project: { id: 77, ownerUserId, canonicalDomain: 'client.acme.taipei', brandName: 'Client', brandAliases: [], competitorBrands: [], locale: 'zh-hant', status: 'active' }, queries: [{ id: 88, ownerUserId, projectId: 77, promptText: 'Which product?', promptHash: 'p'.repeat(64), intent: 'commercial', locale: 'zh-hant', active: true }] } },
   }
   return { repository: repository as unknown as MeasurementRepository, snapshots }
 }
@@ -81,7 +81,7 @@ describe('measurement outcome integration', () => {
     const outcomes: any[] = []
     const content = contentRepository(outcomes)
     const measurement = measurementRepository(current, connection('llm_visibility'))
-    const candidate = { probeId: 'probe-1', requestFingerprint: 'a'.repeat(64), provider: 'chatgpt', modelLabel: 'synthetic', brandMentioned: true, citationUrls: ['https://client.example.com/articles/a'] }
+    const candidate = { probeId: 'probe-1', requestFingerprint: 'a'.repeat(64), provider: 'chatgpt', modelLabel: 'synthetic', brandMentioned: true, citationUrls: ['https://client.acme.taipei/articles/a'] }
     const result = await processMeasurementRun(ownerUserId, current.id, { repository: measurement.repository, contentOperations: content.repository, runProviderObservation: async () => ({ ownerScopeKey: `visibility-owner:${ownerUserId}`, plan: {} as any, runtime: { batch: { status: 'completed', results: [{ status: 'completed', candidate }], counts: { completed: 1, blocked: 0, failed: 0, retryable: 0 } }, persisted: [], persistenceFailures: [] } }) as any, now: new Date('2026-12-01T00:00:00.000Z') })
     expect(result.run.state).toBe('succeeded')
     expect(measurement.snapshots).toHaveLength(2)

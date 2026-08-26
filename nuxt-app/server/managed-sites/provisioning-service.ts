@@ -122,12 +122,12 @@ export async function createManagedSiteDomainIntent(ownerUserId: number, input: 
   if (!project) notFound('Managed site project was not found.')
   if (project.status === 'suspended') conflict('Suspended managed-site projects cannot create new domain work.')
   const fingerprint = stableFingerprint({ projectId: input.projectId, normalizedDomain, mode, providerKey: input.providerKey || null })
-  const replay = await repository.findDomainIntentByIdempotency(input.idempotencyKey)
+  const replay = await repository.findDomainIntentByIdempotency(ownerUserId, input.idempotencyKey)
   if (replay) {
     if (replay.configurationFingerprint !== fingerprint) conflict('Domain intent idempotency key was already used for a different configuration.')
     return { intent: replay, replayed: true, execution: { externalCalls: false, providerConfigured: false } }
   }
-  const existing = await repository.findDomainIntentByProject(input.projectId)
+  const existing = await repository.findDomainIntentByProject(ownerUserId, input.projectId)
   if (existing) {
     if (existing.configurationFingerprint !== fingerprint) conflict('This managed site project already has a different domain intent.')
     return { intent: existing, replayed: true, execution: { externalCalls: false, providerConfigured: false } }
@@ -147,12 +147,12 @@ export async function createManagedSiteProvisioningPlan(ownerUserId: number, inp
   if (project.status === 'suspended') conflict('Suspended managed-site projects cannot create new provisioning work.')
   if (deploymentMode !== 'preview_only') await assertPaidProvisioningLineage(ownerUserId, project, version, domainIntent, managedRepository, orderingRepository || getPreviewRepository())
   const intentFingerprint = stableFingerprint({ ownerUserId, projectId: input.projectId, versionId: input.versionId, domainIntentId: input.domainIntentId, platform, deploymentMode })
-  const replay = await repository.findPlanByIdempotency(input.idempotencyKey)
+  const replay = await repository.findPlanByIdempotency(ownerUserId, input.idempotencyKey)
   if (replay) {
     if (replay.intentFingerprint !== intentFingerprint) conflict('Provisioning plan idempotency key was already used for a different configuration.')
     return { plan: replay, steps: await repository.listSteps(replay.id), replayed: true }
   }
-  const existing = await repository.findPlanByFingerprint(intentFingerprint)
+  const existing = await repository.findPlanByFingerprint(ownerUserId, intentFingerprint)
   if (existing) return { plan: existing, steps: await repository.listSteps(existing.id), replayed: true }
   const createdAt = validDate(clock(), 'Provisioning clock')
   const plan = await repository.transaction(async transaction => {
@@ -165,7 +165,24 @@ export async function createManagedSiteProvisioningPlan(ownerUserId: number, inp
 }
 
 function eventInput(ownerUserId: number, plan: any, step: any, eventType: string, executionMode: ProvisioningExecutionMode, status: 'planned' | 'blocked' | 'succeeded' | 'failed', providerKey: string | null, externalReference: string | null, metadata: Record<string, unknown>) {
-  const receiptFingerprint = stableFingerprint({ ownerUserId, planId: plan.id, stepId: step.id, eventType, executionMode, status, externalReference, metadata })
+  const receiptFingerprint = stableFingerprint({
+    ownerUserId,
+    planId: plan.id,
+    stepId: step.id,
+    eventType,
+    executionMode,
+    status,
+    providerKey,
+    receipt: {
+      domain: metadata.normalizedDomain ?? null,
+      platform: metadata.platform ?? null,
+      stepKey: metadata.stepKey ?? null,
+      attemptNumber: metadata.attemptNumber ?? null,
+      externalReference,
+      deployedUrl: metadata.deployedUrl ?? null,
+      certificateReference: metadata.certificateReference ?? null,
+    },
+  })
   return { ownerUserId, projectId: plan.projectId, planId: plan.id, stepId: step.id, eventType, executionMode, status, providerKey, externalReference, receiptFingerprint, metadata }
 }
 
@@ -187,6 +204,33 @@ export async function executeManagedSiteProvisioningPlan(ownerUserId: number, pl
   const initialPlan = await repository.findPlanById(planId)
   if (!initialPlan || initialPlan.ownerUserId !== ownerUserId) notFound('Managed site provisioning plan was not found.')
   if (executionMode === 'external') throw createError({ statusCode: 403, statusMessage: 'External provisioning is disabled in this V1 environment.' })
+  const initialProject = await managedRepository.findProject(ownerUserId, initialPlan.projectId)
+  if (!initialProject) notFound('Managed site provisioning lineage was not found.')
+  if (initialProject.status === 'suspended') conflict('Suspended managed-site projects cannot execute provisioning work.')
+  if (executionMode === 'dry_run') {
+    const domainIntent = await repository.findDomainIntentById(initialPlan.domainIntentId)
+    if (!domainIntent) notFound('Managed site provisioning lineage was not found.')
+    const steps = await repository.listSteps(initialPlan.id)
+    const events = await repository.transaction(async transaction => {
+      for (const step of steps) {
+        await transaction.insertEvent(eventInput(ownerUserId, initialPlan, step, `provisioning_${step.stepKey}`, 'dry_run', 'planned', step.providerKey, null, {
+          sequence: step.ordinal,
+          attemptNumber: step.attemptNumber,
+          stepKey: step.stepKey,
+          normalizedDomain: domainIntent.normalizedDomain,
+          platform: initialPlan.platform,
+          providerConfigured: false,
+          externalCalls: false,
+          deployedUrl: null,
+          certificateReference: null,
+          stepStatus: step.status,
+          limitation: 'Dry-run only; no adapter was invoked and no provider success is claimed.',
+        }) as any)
+      }
+      return transaction.listEvents(ownerUserId, initialPlan.id)
+    })
+    return { plan: initialPlan, steps, events, results: steps.map(step => ({ stepKey: step.stepKey, status: 'planned' as const, providerConfigured: false, externalCalls: false, limitation: 'Dry-run only; no adapter was invoked and no provider success is claimed.', stepId: step.id })), externalCalls: false, providerConfigured: false, executionMode }
+  }
   const nowDate = validDate(clock(), 'Provisioning clock')
   const leaseOwner = `provisioning:${randomBytes(24).toString('base64url')}`
   const plan = await repository.transaction(transaction => transaction.acquirePlanLease(ownerUserId, planId, leaseOwner, nowDate, PROVISIONING_LEASE_MS))
@@ -198,35 +242,49 @@ export async function executeManagedSiteProvisioningPlan(ownerUserId: number, pl
     const domainIntent = await repository.findDomainIntentById(plan.domainIntentId)
     if (!project || !version || !domainIntent || domainIntent.projectId !== project.id || version.projectId !== project.id) notFound('Managed site provisioning lineage was not found.')
     if (project.status === 'suspended') conflict('Suspended managed-site projects cannot execute provisioning work.')
-    if (executionMode !== 'dry_run') await assertPaidProvisioningLineage(ownerUserId, project, version, domainIntent, managedRepository, orderingRepository || getPreviewRepository())
+    await assertPaidProvisioningLineage(ownerUserId, project, version, domainIntent, managedRepository, orderingRepository || getPreviewRepository())
     const steps = await repository.listSteps(plan.id)
     const results: Array<Record<string, unknown>> = []
     let hasRetryWait = false
     let maxRetryAttempt = 0
     let hasFailure = false
-    let domainStatus: any = 'not_started'
-    let dnsStatus: any = 'not_started'
-    let tlsStatus: any = 'not_started'
-    let deploymentStatus: any = 'not_started'
-    let providerProjectReference: string | null = null
-    let providerDeploymentReference: string | null = null
-    let tlsCertificateReference: string | null = null
+    let domainStatus: any = plan.domainStatus
+    let dnsStatus: any = plan.dnsStatus
+    let tlsStatus: any = plan.tlsStatus
+    let deploymentStatus: any = plan.deploymentStatus
+    let providerProjectReference: string | null = plan.providerProjectReference
+    let providerDeploymentReference: string | null = plan.providerDeploymentReference
+    let deployedUrl: string | null = plan.deployedUrl
+    let tlsCertificateReference: string | null = plan.tlsCertificateReference
     for (const step of steps) {
       const stepKey = PROVISIONING_STEPS.find(candidate => candidate === step.stepKey)
       if (!stepKey) conflict('Provisioning step key is not allowlisted.')
-      if (step.status === 'succeeded') { results.push({ stepKey, status: step.status, replayed: true, externalCalls: false }); continue }
+      if (step.status === 'succeeded') {
+        if (stepKey === 'domain_intent') domainStatus = domainIntent.mode === 'customer_owned' ? 'awaiting_customer' : domainStatus
+        if (stepKey === 'domain_registration') { domainStatus = domainStatus === 'not_started' ? 'provider_pending' : domainStatus; providerProjectReference = providerProjectReference || step.externalReference }
+        if (stepKey === 'dns_configuration') dnsStatus = dnsStatus === 'not_started' ? 'provider_pending' : dnsStatus
+        if (stepKey === 'tls_verification') { tlsStatus = tlsStatus === 'not_started' ? 'verified' : tlsStatus; tlsCertificateReference = tlsCertificateReference || step.externalReference }
+        if (stepKey === 'deployment') { deploymentStatus = deploymentStatus === 'not_started' ? 'built' : deploymentStatus; providerDeploymentReference = providerDeploymentReference || step.externalReference }
+        results.push({ stepKey, status: step.status, replayed: true, externalCalls: false, providerConfigured: false, externalReference: step.externalReference, deployedUrl: stepKey === 'deployment' ? deployedUrl : null }); continue
+      }
+      const canRetryStep = step.status === 'retry_wait' || (step.status === 'failed' && step.errorCode === 'RETRYABLE_PROVIDER_FAILURE')
+      const dependencyRecheck = step.status === 'blocked' && step.errorCode === 'DEPENDENCY_BLOCKED'
+      if (step.status !== 'pending' && !canRetryStep && !dependencyRecheck) {
+        if (step.status === 'retry_wait') {
+          hasRetryWait = true
+          maxRetryAttempt = Math.max(maxRetryAttempt, step.attemptNumber)
+        }
+        if (step.status === 'failed') hasFailure = true
+        results.push({ stepKey, status: step.status, replayed: true, externalCalls: false, providerConfigured: false, limitation: step.errorSummary || 'Persisted provisioning step state was not retryable.', stepId: step.id, externalReference: step.externalReference, deployedUrl: stepKey === 'deployment' ? deployedUrl : null })
+        continue
+      }
       const changedAt = validDate(clock(), 'Provisioning clock')
       let result: any
       let stepStatus: 'succeeded' | 'blocked' | 'retry_wait' | 'failed' = 'blocked'
       let errorCode: string | null = null
       let errorSummary: string | null = null
-      let dependencyBlocked = results.some(item => item.status === 'blocked' || item.status === 'retry_wait' || item.status === 'failed')
-      if (executionMode === 'dry_run') {
-        result = { status: 'planned', normalizedDomain: domainIntent.normalizedDomain, externalCalls: false, limitation: 'Dry-run only; no adapter was invoked and no provider success is claimed.' }
-        stepStatus = 'blocked'
-        errorCode = 'DRY_RUN_ONLY'
-        errorSummary = result.limitation
-      } else if (dependencyBlocked) {
+      const dependencyBlocked = results.some(item => item.status === 'blocked' || item.status === 'retry_wait' || item.status === 'failed')
+      if (dependencyBlocked) {
         result = { status: 'blocked', normalizedDomain: domainIntent.normalizedDomain, externalCalls: false, limitation: 'Step dependency is blocked; downstream adapters were not invoked.' }
         stepStatus = 'blocked'
         errorCode = 'DEPENDENCY_BLOCKED'
@@ -279,6 +337,8 @@ export async function executeManagedSiteProvisioningPlan(ownerUserId: number, pl
             stepStatus = 'succeeded'
             deploymentStatus = 'built'
             providerDeploymentReference = receiptExternalReference(result, stepKey)
+            deployedUrl = normalizePublicHttpsOrigin(result.deployedUrl)
+
           }
         } catch (error) {
           result = { status: 'blocked', normalizedDomain: domainIntent.normalizedDomain, externalCalls: false, limitation: safeErrorSummary(error) }
@@ -304,14 +364,16 @@ export async function executeManagedSiteProvisioningPlan(ownerUserId: number, pl
         maxRetryAttempt = Math.max(maxRetryAttempt, step.attemptNumber + 1)
       }
       if (stepStatus === 'failed') hasFailure = true
-      const outputFingerprint = stableFingerprint({ result: { status: result?.status, normalizedDomain: result?.normalizedDomain, externalCalls: result?.externalCalls, limitation: result?.limitation }, stepStatus, errorCode, errorSummary })
-      const updatedStep = await repository.updateStep(step.id, { status: stepStatus, attemptNumber: step.attemptNumber + (executionMode === 'dry_run' ? 0 : 1), outputFingerprint, errorCode, errorSummary, externalReference: receiptExternalReference(result, stepKey), completedAt: stepStatus === 'succeeded' ? changedAt : null, updatedAt: changedAt } as any)
-      const eventStatus = executionMode === 'dry_run' ? 'planned' : stepStatus === 'succeeded' ? 'succeeded' : stepStatus === 'failed' ? 'failed' : 'blocked'
-      await repository.insertEvent(eventInput(ownerUserId, plan, step, `provisioning_${stepKey}`, executionMode, eventStatus, step.providerKey, receiptExternalReference(result, stepKey), { sequence: step.ordinal, attemptNumber: step.attemptNumber + (executionMode === 'dry_run' ? 0 : 1), stepKey: stepKey, normalizedDomain: domainIntent.normalizedDomain, providerConfigured: false, externalCalls: false, stepStatus, errorCode, result: { status: result?.status, limitation: typeof result?.limitation === 'string' ? result.limitation.slice(0, 480) : null } }) as any)
-      results.push({ stepKey: stepKey, status: stepStatus, providerConfigured: false, externalCalls: false, limitation: result?.limitation, stepId: updatedStep?.id || step.id })
+      const outputFingerprint = stableFingerprint({ result: { status: result?.status, normalizedDomain: result?.normalizedDomain, platform: result?.platform, externalCalls: result?.externalCalls, externalReference: receiptExternalReference(result, stepKey), deployedUrl: stepKey === 'deployment' && typeof result?.deployedUrl === 'string' ? normalizePublicHttpsOrigin(result.deployedUrl) : null, certificateReference: stepKey === 'tls_verification' ? receiptExternalReference(result, stepKey) : null, limitation: result?.limitation }, stepStatus, errorCode, errorSummary })
+      const attemptNumber = step.attemptNumber + 1
+      const updatedStep = await repository.updateStep(step.id, { status: stepStatus, attemptNumber, outputFingerprint, errorCode, errorSummary, externalReference: receiptExternalReference(result, stepKey), completedAt: stepStatus === 'succeeded' ? changedAt : null, updatedAt: changedAt } as any)
+      const eventStatus = stepStatus === 'succeeded' ? 'succeeded' : stepStatus === 'failed' ? 'failed' : 'blocked'
+      await repository.insertEvent(eventInput(ownerUserId, plan, step, `provisioning_${stepKey}`, executionMode, eventStatus, step.providerKey, receiptExternalReference(result, stepKey), { sequence: step.ordinal, attemptNumber, stepKey: stepKey, normalizedDomain: domainIntent.normalizedDomain, platform: plan.platform, providerConfigured: false, externalCalls: false, stepStatus, errorCode, externalReference: receiptExternalReference(result, stepKey), deployedUrl: stepKey === 'deployment' && typeof result?.deployedUrl === 'string' ? normalizePublicHttpsOrigin(result.deployedUrl) : null, certificateReference: stepKey === 'tls_verification' ? receiptExternalReference(result, stepKey) : null, result: { status: result?.status, limitation: typeof result?.limitation === 'string' ? result.limitation.slice(0, 480) : null } }) as any)
+      results.push({ stepKey: stepKey, status: stepStatus, providerConfigured: false, externalCalls: false, limitation: result?.limitation, stepId: updatedStep?.id || step.id, externalReference: receiptExternalReference(result, stepKey), deployedUrl: stepKey === 'deployment' && typeof result?.deployedUrl === 'string' ? normalizePublicHttpsOrigin(result.deployedUrl) : null })
     }
-    const finalStatus = executionMode === 'dry_run' ? 'blocked' : hasFailure ? 'failed' : hasRetryWait ? 'retry_wait' : results.some(item => item.status === 'blocked') ? 'blocked' : 'succeeded'
-    const updatedPlan = await release({ status: finalStatus, domainStatus, dnsStatus, tlsStatus, deploymentStatus, providerProjectReference, providerDeploymentReference, deployedUrl: null, tlsCertificateReference, retryEligibleAt: finalStatus === 'retry_wait' ? retryAt(maxRetryAttempt || 1, nowDate) : null })
+          const finalStatus = hasFailure ? 'failed' : hasRetryWait ? 'retry_wait' : results.some(item => item.status === 'blocked') ? 'blocked' : 'succeeded'
+
+    const updatedPlan = await release({ status: finalStatus, domainStatus, dnsStatus, tlsStatus, deploymentStatus, providerProjectReference, providerDeploymentReference, deployedUrl, tlsCertificateReference, retryEligibleAt: finalStatus === 'retry_wait' ? retryAt(maxRetryAttempt || 1, nowDate) : null })
     if (!updatedPlan) conflict('Provisioning plan lease was lost before the receipt was committed.')
     return { plan: updatedPlan, steps: await repository.listSteps(plan.id), events: await repository.listEvents(ownerUserId, plan.id), results, externalCalls: false, providerConfigured: false, executionMode }
   } catch (error) {
