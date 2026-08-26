@@ -27,8 +27,12 @@ export async function assertPaidManagedSiteProject(ownerUserId: number, projectI
   return { project, version, spec, subscription }
 }
 
+export function assertSiteSpecEntitlement(spec: { selectedModules: readonly string[] }, moduleKey: string): void {
+  if (!spec.selectedModules.includes(moduleKey)) conflict('The requested managed-site capability is not entitled by the active SiteSpec.')
+}
+
 export async function assertPaidManagedSiteModuleEntitlement(ownerUserId: number, projectId: number, moduleKey: ManagedSiteModuleKey, repository: ManagedSiteRepository) {
   const authority = await assertPaidManagedSiteProject(ownerUserId, projectId, repository)
-  if (SITE_SPEC_ENTITLEMENT_KEYS.has(moduleKey) && !authority.spec.selectedModules.includes(moduleKey as typeof authority.spec.selectedModules[number])) conflict('The requested managed-site integration is not entitled by the active SiteSpec.')
+  if (SITE_SPEC_ENTITLEMENT_KEYS.has(moduleKey)) assertSiteSpecEntitlement(authority.spec, moduleKey)
   return authority
 }

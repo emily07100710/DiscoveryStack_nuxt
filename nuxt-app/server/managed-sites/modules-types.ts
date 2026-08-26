@@ -24,17 +24,30 @@ export type BoundedAssistantRequest = {
   maxAnswerCharacters?: number
 }
 
+export type BoundedAssistantKnowledge = {
+  citationId: string
+  knowledgeKey: string
+  evidenceHash: string
+  tenantScope: string
+}
+
+export type BoundedAssistantCitation = {
+  citationId: string
+  evidenceHash: string
+}
+
 export type BoundedAssistantResponse = {
   status: 'answered' | 'blocked' | 'needs_authorization'
   answer: string | null
-  citations: string[]
+  citations: BoundedAssistantCitation[]
+  knowledgeSnapshotHash: string | null
   providerConfigured: boolean
   externalCalls: false
   limitation: string | null
 }
 
 export type BoundedAssistantAdapter = {
-  answer(input: { projectId: number; question: string; contextKeys: string[]; maxAnswerCharacters: number }): Promise<BoundedAssistantResponse>
+  answer(input: { projectId: number; question: string; contextKeys: string[]; knowledge: BoundedAssistantKnowledge[]; knowledgeSnapshotHash: string; maxAnswerCharacters: number }): Promise<BoundedAssistantResponse>
 }
 
 export type IntegrationRepository = {

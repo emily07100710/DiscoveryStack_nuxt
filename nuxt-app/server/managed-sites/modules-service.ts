@@ -2,11 +2,12 @@ import { createError } from 'h3'
 import { stableFingerprint } from '../seo-geo-core/repository'
 import { createOwnerContentClient } from '../content-operations/service'
 import { createContentOperationsRepository, type ContentOperationsRepository } from '../content-operations/repository'
+import { getOwnerContentOperationsWorkspace } from '../content-operations/service'
 import { getIntegrationRepository } from './modules-repository'
 import { getManagedSiteRepository } from './repository'
 import { assertPaidManagedSiteModuleEntitlement, assertPaidManagedSiteProject } from './module-authority'
 import { normalizeShopifyShopDomain } from './shopify-service'
-import { MANAGED_SITE_MODULE_KEYS, type BoundedAssistantAdapter, type BoundedAssistantRequest, type BoundedAssistantResponse, type IntegrationRepository, type ManagedSiteIntegrationIntentInput, type ManagedSiteModuleKey, type ManagedSiteModuleWorkspace, type ModuleCapability, type ShopifyIntegrationIntent } from './modules-types'
+import { MANAGED_SITE_MODULE_KEYS, type BoundedAssistantAdapter, type BoundedAssistantKnowledge, type BoundedAssistantRequest, type BoundedAssistantResponse, type IntegrationRepository, type ManagedSiteIntegrationIntentInput, type ManagedSiteModuleKey, type ManagedSiteModuleWorkspace, type ModuleCapability, type ShopifyIntegrationIntent } from './modules-types'
 import type { ManagedSiteRepository } from './types'
 
 function invalid(message: string): never { throw createError({ statusCode: 422, statusMessage: message }) }
@@ -56,15 +57,34 @@ function moduleProjection(row: any): ModuleCapability {
 }
 
 export const FAIL_CLOSED_ASSISTANT_ADAPTER: BoundedAssistantAdapter = {
-  async answer() { return { status: 'blocked', answer: null, citations: [], providerConfigured: false, externalCalls: false, limitation: 'Bounded assistant provider is not configured; no AI response was generated.' } },
+  async answer() { return { status: 'blocked', answer: null, citations: [], knowledgeSnapshotHash: null, providerConfigured: false, externalCalls: false, limitation: 'Bounded assistant provider is not configured; no AI response was generated.' } },
 }
 
-function validateAssistantResponse(response: BoundedAssistantResponse, maxAnswerCharacters: number): BoundedAssistantResponse {
+function validateAssistantResponse(response: BoundedAssistantResponse, maxAnswerCharacters: number, knowledgeSnapshotHash: string, knowledge: BoundedAssistantKnowledge[]): BoundedAssistantResponse {
   if (!['answered', 'blocked', 'needs_authorization'].includes(response.status) || response.providerConfigured !== true && response.status === 'answered') invalid('Bounded assistant response failed closed validation.')
   if (response.externalCalls !== false) invalid('Bounded assistant response declared an external call in a mocked boundary.')
   if (response.answer !== null && (typeof response.answer !== 'string' || response.answer.length > maxAnswerCharacters || /<script\b|javascript:/i.test(response.answer))) invalid('Bounded assistant response contains unsafe or oversized content.')
-  if (!Array.isArray(response.citations) || response.citations.length > 20 || response.citations.some(citation => typeof citation !== 'string' || citation.length > 500)) invalid('Bounded assistant citations are malformed.')
+  if (response.status !== 'answered' && response.answer !== null) invalid('Blocked assistant responses cannot contain an answer.')
+  if (!Array.isArray(response.citations) || response.citations.length > 20 || response.citations.some(citation => !citation || typeof citation !== 'object' || typeof citation.citationId !== 'string' || typeof citation.evidenceHash !== 'string')) invalid('Bounded assistant citations are malformed.')
+  const byId = new Map(knowledge.map(item => [item.citationId, item]))
+  const citations = response.citations as Array<{ citationId: string; evidenceHash: string }>
+  if (new Set(citations.map(citation => citation.citationId)).size !== citations.length || citations.some(citation => byId.get(citation.citationId)?.evidenceHash !== citation.evidenceHash)) invalid('Bounded assistant citation is outside the server-resolved knowledge snapshot.')
+  if (response.status === 'answered' && response.knowledgeSnapshotHash !== knowledgeSnapshotHash) invalid('Bounded assistant knowledge snapshot hash does not match the server-resolved tenant knowledge.')
+  if (response.status !== 'answered' && response.knowledgeSnapshotHash !== null && response.knowledgeSnapshotHash !== knowledgeSnapshotHash) invalid('Bounded assistant blocked response carries an invalid knowledge snapshot hash.')
   return response
+}
+
+async function resolveAssistantKnowledge(ownerUserId: number, projectId: number, requestedContextKeys: unknown, managedRepository: ManagedSiteRepository, operationsRepository: ContentOperationsRepository) {
+  const authority = await assertPaidManagedSiteModuleEntitlement(ownerUserId, projectId, 'bounded_ai_assistant', managedRepository)
+  if (authority.project.contentOperationClientId === null) return { knowledge: [] as BoundedAssistantKnowledge[], knowledgeSnapshotHash: stableFingerprint([]) }
+  const workspace = await getOwnerContentOperationsWorkspace(ownerUserId, operationsRepository)
+  const calendars = workspace.calendars.filter(calendar => calendar.clientId === authority.project.contentOperationClientId)
+  const calendarIds = new Set(calendars.map(calendar => calendar.id))
+  const tenantScope = `owner:${ownerUserId}:project:${projectId}:client:${authority.project.contentOperationClientId}`
+  const candidates: BoundedAssistantKnowledge[] = [{ citationId: `site-spec:${authority.version.id}`, knowledgeKey: `site-spec:${authority.version.id}`, evidenceHash: authority.version.versionFingerprint, tenantScope }, ...workspace.entries.filter(entry => calendarIds.has(entry.calendarId)).map(entry => ({ citationId: `content-entry:${entry.id}`, knowledgeKey: `calendar:${entry.calendarId}:entry:${entry.id}`, evidenceHash: entry.evidenceSnapshotHash, tenantScope }))].slice(0, 100)
+  const requested = Array.isArray(requestedContextKeys) ? [...new Set(requestedContextKeys.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean))].slice(0, 20) : []
+  const knowledge = requested.length ? candidates.filter(item => requested.includes(item.citationId) || requested.includes(item.knowledgeKey)) : candidates.slice(0, 20)
+  return { knowledge, knowledgeSnapshotHash: stableFingerprint(knowledge) }
 }
 
 export async function createManagedSiteIntegrationIntent(ownerUserId: number, input: ManagedSiteIntegrationIntentInput, repository = getIntegrationRepository(), managedRepository: ManagedSiteRepository = getManagedSiteRepository(), clock: () => Date = () => new Date()) {
@@ -120,14 +140,15 @@ export async function linkManagedSiteContentOperations(ownerUserId: number, proj
   return { project: updated, client, linked: true, reused: true, notDuplicated: true }
 }
 
-export async function runManagedSiteAssistant(ownerUserId: number, input: BoundedAssistantRequest, adapter: BoundedAssistantAdapter = FAIL_CLOSED_ASSISTANT_ADAPTER, managedRepository: ManagedSiteRepository = getManagedSiteRepository()): Promise<BoundedAssistantResponse> {
+export async function runManagedSiteAssistant(ownerUserId: number, input: BoundedAssistantRequest, adapter: BoundedAssistantAdapter = FAIL_CLOSED_ASSISTANT_ADAPTER, managedRepository: ManagedSiteRepository = getManagedSiteRepository(), operationsRepository: ContentOperationsRepository = createContentOperationsRepository()): Promise<BoundedAssistantResponse> {
   const project = await managedRepository.findProject(ownerUserId, input.projectId)
   if (!project) notFound('Managed site project was not found.')
   if (typeof input.question !== 'string' || !input.question.trim() || input.question.trim().length > 2000) invalid('Assistant question is invalid.')
-  const contextKeys = Array.isArray(input.contextKeys) ? [...new Set(input.contextKeys.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean))].slice(0, 20) : []
+  const resolved = await resolveAssistantKnowledge(ownerUserId, project.id, input.contextKeys, managedRepository, operationsRepository)
+  if (!resolved.knowledge.length) return { status: 'needs_authorization', answer: null, citations: [], knowledgeSnapshotHash: null, providerConfigured: false, externalCalls: false, limitation: 'No owner-approved tenant knowledge is available for this managed-site assistant.' }
   const maxAnswerCharacters = Number.isSafeInteger(input.maxAnswerCharacters) ? Math.min(6000, Math.max(300, input.maxAnswerCharacters!)) : 2000
-  const response = await adapter.answer({ projectId: project.id, question: input.question.trim(), contextKeys, maxAnswerCharacters })
-  return validateAssistantResponse(response, maxAnswerCharacters)
+  const response = await adapter.answer({ projectId: project.id, question: input.question.trim(), contextKeys: resolved.knowledge.map(item => item.knowledgeKey), knowledge: resolved.knowledge, knowledgeSnapshotHash: resolved.knowledgeSnapshotHash, maxAnswerCharacters })
+  return validateAssistantResponse(response, maxAnswerCharacters, resolved.knowledgeSnapshotHash, resolved.knowledge)
 }
 
 export function getCanonicalGeoReuseContract() {
