@@ -59,7 +59,10 @@ export async function claimManagedSiteCheckout(ownerUserId: number, input: unkno
   const claimedAt = assertFiniteDate(clock(), 'Checkout claim time')
 
   return repository.transaction(async transaction => {
-    const preview = await transaction.findPreviewById(previewId)
+    // Every claim for this lineage shares the preview row. A locking read makes it
+    // the serialization point so two owners cannot both observe an unclaimed
+    // snapshot and then overwrite one another under MySQL transaction isolation.
+    const preview = await transaction.findPreviewByIdForUpdate(previewId)
     const quote = await transaction.findQuoteById(quoteId)
     const leadIntent = await transaction.findLeadIntentById(leadIntentId)
     const draftOrder = await transaction.findDraftOrderById(draftOrderId)

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createManagedSiteDraftOrder, createManagedSiteLeadIntent, createManagedSitePreview, createManagedSiteQuote, createManagedSiteCheckoutAuthorityResolver } from '../server/managed-sites/ordering-service'
 import { claimManagedSiteCheckout } from '../server/managed-sites/checkout-claim-service'
 import { processManagedSitePaymentAndConversion } from '../server/managed-sites/conversion-service'
-import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
+import type { PaymentEventVerifier, PreviewRepository } from '../server/managed-sites/ordering-types'
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
 import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
 
@@ -85,5 +85,37 @@ describe('managed site checkout claim authority', () => {
     expect(rejected[0]).toMatchObject({ status: 'rejected', reason: { statusCode: 409 } })
     expect(fulfilled.map(result => result.status === 'fulfilled' ? result.value.replayed : null).sort()).toEqual([false, true])
     expect(new Set([line.ordering.state.previews[0]?.ownerUserId, line.ordering.state.quotes[0]?.ownerUserId, line.ordering.state.orders[0]?.ownerUserId])).toEqual(new Set([1]))
+  })
+
+  it('uses the preview locking read as the first persisted lineage read inside the claim transaction', async () => {
+    const line = await makeClaimLineage()
+    const calls: string[] = []
+    const repository: PreviewRepository = {
+      ...line.ordering.repository,
+      transaction<T>(work: (transaction: PreviewRepository) => Promise<T>): Promise<T> {
+        return line.ordering.repository.transaction(async transaction => {
+          const lockingRepository: PreviewRepository = {
+            ...transaction,
+            async findPreviewById() {
+              calls.push('unlocked-preview')
+              throw new Error('Checkout claim must not use an unlocked preview read.')
+            },
+            async findPreviewByIdForUpdate(id: number) {
+              calls.push('locked-preview')
+              return transaction.findPreviewByIdForUpdate(id)
+            },
+            async findQuoteById(id: number) {
+              calls.push('quote')
+              return transaction.findQuoteById(id)
+            },
+          }
+          return work(lockingRepository)
+        })
+      },
+    }
+
+    await expect(claimManagedSiteCheckout(1, line.input, repository)).resolves.toMatchObject({ ownerUserId: 1, replayed: false })
+    expect(calls.slice(0, 2)).toEqual(['locked-preview', 'quote'])
+    expect(calls).not.toContain('unlocked-preview')
   })
 })

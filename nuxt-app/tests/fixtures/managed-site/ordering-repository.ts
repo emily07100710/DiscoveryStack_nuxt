@@ -35,6 +35,7 @@ export function createOrderingMemoryRepository() {
       try { return await work(make()) } catch (error) { restore(saved); throw error } finally { release() }
     },
     async findPreviewById(id) { return state.previews.find(row => row.id === id) || null },
+    async findPreviewByIdForUpdate(id) { return state.previews.find(row => row.id === id) || null },
     async findPreviewByDraftKey(key) { return state.previews.find(row => row.draftKey === key) || null },
     async findPreviewByAccessTokenHash(hash) { return state.previews.find(row => row.accessTokenHash === hash) || null },
     async findPreviewByFingerprint(fingerprint) { return state.previews.find(row => row.previewFingerprint === fingerprint) || null },

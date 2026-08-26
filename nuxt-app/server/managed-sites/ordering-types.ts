@@ -12,6 +12,8 @@ import type { SiteBriefInput, SiteSpec } from './site-spec'
 export type PreviewRepository = {
   transaction<T>(work: (repository: PreviewRepository) => Promise<T>): Promise<T>
   findPreviewById(previewId: number): Promise<ManagedSitePreview | null>
+  /** Locking read used as the single serialization point for checkout ownership claims. */
+  findPreviewByIdForUpdate(previewId: number): Promise<ManagedSitePreview | null>
   findPreviewByDraftKey(draftKey: string): Promise<ManagedSitePreview | null>
   findPreviewByAccessTokenHash(accessTokenHash: string): Promise<ManagedSitePreview | null>
   findPreviewByFingerprint(fingerprint: string): Promise<ManagedSitePreview | null>

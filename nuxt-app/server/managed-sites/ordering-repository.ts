@@ -25,6 +25,10 @@ export function makeOrderingRepository(database: any): PreviewRepository {
       const [row] = await database.select().from(managedSitePreviews).where(eq(managedSitePreviews.id, previewId)).limit(1)
       return row || null
     },
+    async findPreviewByIdForUpdate(previewId) {
+      const [row] = await database.select().from(managedSitePreviews).where(eq(managedSitePreviews.id, previewId)).limit(1).for('update')
+      return row || null
+    },
     async findPreviewByDraftKey(draftKey) {
       const [row] = await database.select().from(managedSitePreviews).where(eq(managedSitePreviews.draftKey, draftKey)).limit(1)
       return row || null
