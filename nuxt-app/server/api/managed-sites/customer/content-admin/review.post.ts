@@ -8,5 +8,6 @@ export default defineEventHandler(async (event) => {
   const entryId = parsePathId(getRouterParam(event, 'entryId'), 'Content operation entry id')
   setResponseHeader(event, 'Cache-Control', 'private, no-store')
   setResponseHeader(event, 'Referrer-Policy', 'no-referrer')
+  setResponseHeader(event, 'X-Robots-Tag', 'noindex, nofollow, noarchive')
   return recordManagedContentReview(access.project.ownerUserId, access.project.id, entryId, access.membership.role, await readBody(event) || {})
 })

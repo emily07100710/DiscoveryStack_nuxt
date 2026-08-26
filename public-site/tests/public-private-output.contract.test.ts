@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const publicRoot = join(process.cwd(), 'dist')
 const readableExtensions = new Set(['.html', '.js', '.txt', '.xml', '.json'])
-const allowedPublicApiPaths = new Set(['/api/leads', '/api/site-analysis'])
+const allowedPublicApiPaths = new Set(['/api/leads', '/api/site-analysis', '/api/managed-sites/previews'])
 const route = (...parts: string[]) => `/${parts.join('/')}`
 const compound = (...parts: string[]) => parts.join('-')
 const privateRoutePatterns = [
@@ -37,10 +37,10 @@ function readPublicFiles(directory: string): string[] {
 }
 
 describe('Astro public build output boundary', () => {
-  it('contains only the two explicitly public API paths', () => {
+  it('contains only explicitly public API paths', () => {
     expect(existsSync(publicRoot), 'run `pnpm test` so the package script builds dist first').toBe(true)
     const output = readPublicFiles(publicRoot).join('\n')
-    const apiPaths = [...output.matchAll(/\/api\/[a-z0-9/_-]+/gi)].map(match => match[0].replace(/[.,;)]+$/, ''))
+    const apiPaths = [...output.matchAll(/\/api\/[a-z0-9/_-]+/gi)].map(match => match[0].replace(/[.,;)]+$/, '').replace(/\/+$/u, ''))
 
     expect(new Set(apiPaths)).toEqual(new Set([...allowedPublicApiPaths]))
     for (const marker of secretMarkers.slice(-2)) expect(output).not.toContain(marker)
