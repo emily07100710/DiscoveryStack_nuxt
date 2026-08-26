@@ -1,5 +1,5 @@
 import type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent } from '../../../server/database/schema'
-import type { PreviewRepository } from '../../../server/managed-sites/ordering-types'
+import type { ManagedSiteCheckoutAuthorityResolver, PreviewRepository } from '../../../server/managed-sites/ordering-types'
 
 type State = {
   previews: ManagedSitePreview[]
@@ -14,6 +14,10 @@ type State = {
 }
 
 function copy<T>(rows: T[]): T[] { return rows.map(row => ({ ...(row as any) })) }
+
+export function createInjectedManagedSiteCheckoutAuthorityResolver(ownerUserId: number): ManagedSiteCheckoutAuthorityResolver {
+  return { resolve: async () => ({ ownerUserId, source: 'injected_mock' }) }
+}
 
 export function createOrderingMemoryRepository() {
   const state: State = { previews: [], quotes: [], lines: [], leadIntents: [], orders: [], paymentEvents: [], subscriptionIntents: [], leads: [], nextId: 1 }
@@ -46,7 +50,7 @@ export function createOrderingMemoryRepository() {
     async listQuoteLines(quoteId) { return state.lines.filter(row => row.quoteId === quoteId).sort((a, b) => a.id - b.id) },
     async findLeadByFingerprint(fingerprint) { return state.leads.find(row => row.requestFingerprint === fingerprint) || null },
     async findLeadById(id) { return (state.leads.find(row => row.id === id) as any) || null },
-    async findUserIdByEmail(email) { return email.includes('@') && state.leads.some(row => row.email === email) ? 1 : null },
+    async findUserIdByEmail() { return null },
     async findLeadIntentById(id) { return state.leadIntents.find(row => row.id === id) || null },
     async findLeadIntentByLineage(previewId, quoteId, leadId) { return state.leadIntents.find(row => row.previewId === previewId && row.quoteId === quoteId && row.leadId === leadId) || null },
     async insertLead(input) { const row = { id: state.nextId++, name: input.name, email: input.email, company: input.company, website: input.website, requestFingerprint: input.requestFingerprint }; state.leads.push(row); return { id: row.id } },

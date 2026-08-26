@@ -4,7 +4,7 @@ import { processManagedSitePaymentAndConversion } from '../server/managed-sites/
 import { createManagedSiteDomainIntent, createManagedSiteProvisioningPlan, executeManagedSiteProvisioningPlan } from '../server/managed-sites/provisioning-service'
 import { createShopifyIntegrationIntent, linkManagedSiteContentOperations, runManagedSiteAssistant } from '../server/managed-sites/modules-service'
 import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
-import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
+import { createInjectedManagedSiteCheckoutAuthorityResolver, createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
 import { createProvisioningMemoryRepository } from './fixtures/managed-site/provisioning-repository'
 import { createIntegrationMemoryRepository } from './fixtures/managed-site/modules-repository'
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
@@ -22,13 +22,14 @@ it('runs the managed platform path end to end with server-owned payment conversi
   const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'business', cadenceDays: 7, domainOption: 'new', idempotencyKey: 'e2e-quote-1' }, ordering.repository)
   const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Acme Owner', email: 'owner@acme.taipei', company: 'Acme Studio', privacyConsent: true, recontactConsent: true, idempotencyKey: 'e2e-lead-1' }, ordering.repository)
   const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'e2e-order-1' }, ordering.repository)
-  const conversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'e2e-payment-event-1', providerReference: 'mock-provider-ref-1', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'b'.repeat(64), idempotencyKey: 'e2e-conversion-1' }, mockedPaymentVerifier, { ordering: ordering.repository, managed: managed.repository })
+  const authorityResolver = createInjectedManagedSiteCheckoutAuthorityResolver(1)
+  const conversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'e2e-payment-event-1', providerReference: 'mock-provider-ref-1', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'b'.repeat(64), idempotencyKey: 'e2e-conversion-1' }, mockedPaymentVerifier, { ordering: ordering.repository, managed: managed.repository }, authorityResolver)
   expect(conversion.order.status).toBe('payment_verified')
   expect(conversion.project.status).toBe('active')
   expect(conversion.version.lifecycleStatus).toBe('active')
   expect(conversion.subscription.status).toBe('active')
   expect(conversion.order.projectId).toBe(conversion.project.id)
-  const replayConversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'e2e-payment-event-1', providerReference: 'mock-provider-ref-1', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'b'.repeat(64), idempotencyKey: 'e2e-conversion-1' }, mockedPaymentVerifier, { ordering: ordering.repository, managed: managed.repository })
+  const replayConversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'e2e-payment-event-1', providerReference: 'mock-provider-ref-1', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'b'.repeat(64), idempotencyKey: 'e2e-conversion-1' }, mockedPaymentVerifier, { ordering: ordering.repository, managed: managed.repository }, authorityResolver)
   expect(replayConversion.paymentReplayed).toBe(true)
   expect(replayConversion.conversionReplayed).toBe(true)
 

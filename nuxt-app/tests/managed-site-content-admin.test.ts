@@ -6,7 +6,7 @@ import { createCalendarFromProductionPlan } from '../server/content-operations/s
 import { getManagedSiteContentAdminWorkspace, recordManagedContentReview, requestManagedContentRevision } from '../server/managed-sites/content-admin-service'
 import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
-import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
+import { createInjectedManagedSiteCheckoutAuthorityResolver, createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
 import { ContentOperationsFixture } from './fixtures/content-operations/repository'
 
 const paymentVerifier: PaymentEventVerifier = { verify: async () => true }
@@ -19,7 +19,7 @@ async function makeLine() {
   const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'business', cadenceDays: 7, domainOption: 'new', idempotencyKey: 'content-admin-quote-001' }, ordering.repository)
   const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Content Admin Owner', email: 'content-admin-owner@acme.taipei', company: 'Content Admin Client', website: 'https://content-admin.acme.taipei', privacyConsent: true, recontactConsent: false, idempotencyKey: 'content-admin-lead-001' }, ordering.repository)
   const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'content-admin-order-001' }, ordering.repository)
-  await recordVerifiedPaymentEvent({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'content-admin-payment-001', providerReference: 'content-admin-payment-ref-001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'd'.repeat(64) }, paymentVerifier, ordering.repository)
+  await recordVerifiedPaymentEvent({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'content-admin-payment-001', providerReference: 'content-admin-payment-ref-001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'd'.repeat(64) }, paymentVerifier, ordering.repository, undefined, createInjectedManagedSiteCheckoutAuthorityResolver(1))
   const conversion = await convertPaidOrderToManagedProject(1, { draftOrderId: order.order.id, idempotencyKey: 'content-admin-conversion-001' }, { ordering: ordering.repository, managed: managed.repository })
   const linked = await linkManagedSiteContentOperations(1, conversion.project.id, { displayName: 'Content Admin Client', canonicalSiteOrigin: 'https://content-admin.acme.taipei', framework: 'astro', publicationTransport: 'first_party_git', timeZone: 'Asia/Taipei', defaultCadenceDays: 7, defaultPublishLocalTime: '09:00', monthlyBudgetUnits: 100, idempotencyKey: 'content-admin-client-001' }, managed.repository, content.repository)
   content.addPlan(1, 1)

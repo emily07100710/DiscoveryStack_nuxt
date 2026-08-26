@@ -7,7 +7,7 @@ import { canonicalizeShopifyOAuthQuery, completeShopifyAuthorization, createShop
 import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
 import type { ShopifyOAuthExchangeAdapter, ShopifyReadOnlyAdminAdapter, ShopifyWebhookVerifier } from '../server/managed-sites/shopify-types'
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
-import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
+import { createInjectedManagedSiteCheckoutAuthorityResolver, createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
 import { createIntegrationMemoryRepository, createShopifyMemoryRepository } from './fixtures/managed-site/modules-repository'
 
 const mockPaymentVerifier: PaymentEventVerifier = { verify: async () => true }
@@ -32,7 +32,7 @@ async function makeProject() {
   const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'business', cadenceDays: 7, domainOption: 'new', idempotencyKey: 'shopify-contract-quote-001' }, ordering.repository)
   const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Shopify Owner', email: 'shopify-owner@acme.taipei', company: 'Shopify Contract Client', website: 'https://shopify-contract.acme.taipei', privacyConsent: true, recontactConsent: false, idempotencyKey: 'shopify-contract-lead-001' }, ordering.repository)
   const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'shopify-contract-order-001' }, ordering.repository)
-  const conversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'shopify-contract-payment-001', providerReference: 'shopify-contract-payment-ref-001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'f'.repeat(64), idempotencyKey: 'shopify-contract-conversion-001' }, mockPaymentVerifier, { ordering: ordering.repository, managed: managed.repository })
+  const conversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'shopify-contract-payment-001', providerReference: 'shopify-contract-payment-ref-001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'f'.repeat(64), idempotencyKey: 'shopify-contract-conversion-001' }, mockPaymentVerifier, { ordering: ordering.repository, managed: managed.repository }, createInjectedManagedSiteCheckoutAuthorityResolver(1))
   const integration = await createShopifyIntegrationIntent(1, { projectId: conversion.project.id, moduleKey: 'shopify_commerce', redactedConfig: { shopDomain: 'merchant.myshopify.com', storefrontToken: 'must-not-persist', adminApiKey: 'must-not-persist' }, idempotencyKey: 'shopify-contract-intent-001' }, integrations.repository, managed.repository)
   return { managed, ordering, integrations, shopify, project: conversion.project, integration: integration.integration }
 }

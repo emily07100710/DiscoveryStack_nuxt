@@ -5,7 +5,7 @@ import type { PaymentEventVerifier } from '../server/managed-sites/ordering-type
 import { createManagedSiteIntegrationIntent, createShopifyIntegrationIntent, getCanonicalGeoReuseContract, getManagedSiteModuleWorkspace, linkManagedSiteContentOperations, runManagedSiteAssistant } from '../server/managed-sites/modules-service'
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
 import { createIntegrationMemoryRepository } from './fixtures/managed-site/modules-repository'
-import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
+import { createInjectedManagedSiteCheckoutAuthorityResolver, createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
 import { ContentOperationsFixture, HASH } from './fixtures/content-operations/repository'
 
 const actor = { ownerUserId: 1, actorUserId: 1, authority: 'owner_session' as const, role: 'owner' as const, principal: 'owner@acme.taipei' }
@@ -19,7 +19,7 @@ async function makeProject() {
   const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'business', cadenceDays: 7, domainOption: 'new', idempotencyKey: 'modules-quote-001' }, ordering.repository)
   const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Modules Owner', email: 'owner@acme.taipei', company: 'Modules Client', website: 'https://modules-client.acme.taipei', privacyConsent: true, recontactConsent: false, idempotencyKey: 'modules-lead-001' }, ordering.repository)
   const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'modules-order-001' }, ordering.repository)
-  const conversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'modules-payment-001', providerReference: 'modules-payment-ref-001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'e'.repeat(64), idempotencyKey: 'modules-conversion-001' }, mockPaymentVerifier, { ordering: ordering.repository, managed: managed.repository })
+  const conversion = await processManagedSitePaymentAndConversion({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'modules-payment-001', providerReference: 'modules-payment-ref-001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'e'.repeat(64), idempotencyKey: 'modules-conversion-001' }, mockPaymentVerifier, { ordering: ordering.repository, managed: managed.repository }, createInjectedManagedSiteCheckoutAuthorityResolver(1))
   return { managed, ordering, project: { project: conversion.project } }
 }
 
