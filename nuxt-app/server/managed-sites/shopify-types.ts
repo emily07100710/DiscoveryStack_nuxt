@@ -19,8 +19,32 @@ export type ShopifyOAuthExchangeResult = {
   limitation: string
 }
 
+/**
+ * V1 uses Shopify's standalone authorization-code exchange only. Shopify does
+ * not receive or return a DiscoveryStack nonce or PKCE verifier here.
+ */
 export type ShopifyOAuthExchangeAdapter = {
-  exchange(input: { code: string; codeVerifier: string; redirectUri: string; shopDomain: string; nonce: string }): Promise<ShopifyOAuthExchangeResult>
+  exchange(input: { code: string; redirectUri: string; shopDomain: string }): Promise<ShopifyOAuthExchangeResult>
+}
+
+export type ShopifyOAuthCallbackVerificationInput = {
+  rawQuery: string
+  canonicalQuery: string
+  hmac: string
+  shopDomain: string
+  state: string
+  timestamp: number
+  redirectUri: string
+}
+
+export type ShopifyOAuthCallbackVerifier = {
+  verify(input: ShopifyOAuthCallbackVerificationInput): Promise<unknown>
+}
+
+export type ShopifyAuthorizationInsert = Omit<ManagedSiteShopifyAuthorization, 'id' | 'createdAt' | 'nonceHash' | 'codeVerifierHash'> & {
+  /** Legacy columns remain nullable for 0025 compatibility and are never populated in V1. */
+  nonceHash?: null
+  codeVerifierHash?: null
 }
 
 export type ShopifyWebhookVerificationRequest = {
@@ -42,7 +66,7 @@ export type ShopifyReadOnlyAdminAdapter = {
 export type ShopifyRepository = {
   transaction<T>(work: (repository: ShopifyRepository) => Promise<T>): Promise<T>
   findAuthorizationByStateHash(stateHash: string): Promise<ManagedSiteShopifyAuthorization | null>
-  insertAuthorization(input: Omit<ManagedSiteShopifyAuthorization, 'id' | 'createdAt'>): Promise<ManagedSiteShopifyAuthorization>
+  insertAuthorization(input: ShopifyAuthorizationInsert): Promise<ManagedSiteShopifyAuthorization>
   claimAuthorization(stateHash: string, consumedAt: Date): Promise<ManagedSiteShopifyAuthorization | null>
   findWebhookByIntegrationEvent(integrationId: number, webhookId: string): Promise<ManagedSiteShopifyWebhook | null>
   findWebhookByFingerprint(ownerUserId: number, eventFingerprint: string): Promise<ManagedSiteShopifyWebhook | null>
