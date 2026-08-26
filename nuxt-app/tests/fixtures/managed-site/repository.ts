@@ -42,6 +42,7 @@ function dateDesc<T extends { createdAt?: Date; updatedAt?: Date; occurredAt?: D
 
 export function createManagedSiteMemoryRepository() {
   const state: State = { projects: [], versions: [], assets: [], memberships: [], invitations: [], audits: [], subscriptions: [], sessions: [], nextId: 1 }
+  let transactionQueue = Promise.resolve()
   const create = <T extends { id: number }>(rows: T[], input: Omit<T, 'id'>): T => {
     const row = { ...input, id: state.nextId++ } as T
     rows.push(row)
@@ -49,11 +50,15 @@ export function createManagedSiteMemoryRepository() {
   }
   const make = (): ManagedSiteRepository => ({
     async transaction(work) {
+      const previous = transactionQueue
+      let release!: () => void
+      transactionQueue = new Promise(resolve => { release = resolve })
+      await previous
       const snapshot = cloneState(state)
       try { return await work(make()) } catch (error) {
         Object.assign(state, cloneState(snapshot))
         throw error
-      }
+      } finally { release() }
     },
     async findProject(ownerUserId, projectId) { return state.projects.find(row => row.ownerUserId === ownerUserId && row.id === projectId) || null },
     async findProjectByClientIdentity(ownerUserId, value) { return state.projects.find(row => row.ownerUserId === ownerUserId && row.canonicalClientIdentity === value) || null },
@@ -88,6 +93,12 @@ export function createManagedSiteMemoryRepository() {
       const row = state.invitations.find(item => item.ownerUserId === ownerUserId && item.id === invitationId)
       if (!row) return null
       Object.assign(row, patch)
+      return row
+    },
+    async claimInvitation(ownerUserId, invitationId, acceptedAt) {
+      const row = state.invitations.find(item => item.ownerUserId === ownerUserId && item.id === invitationId && item.status === 'pending' && item.expiresAt.getTime() > acceptedAt.getTime())
+      if (!row) return null
+      Object.assign(row, { status: 'accepted', acceptedAt })
       return row
     },
     async insertAsset(input) { return create(state.assets, input as Omit<ManagedSiteAsset, 'id'>) },

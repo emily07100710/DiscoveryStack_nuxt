@@ -94,6 +94,7 @@ export type ManagedSiteRepository = {
   listInvitations(ownerUserId: number, projectId: number): Promise<ManagedSiteInvitation[]>
   insertInvitation(input: Omit<ManagedSiteInvitation, 'id' | 'createdAt'>): Promise<ManagedSiteInvitation>
   updateInvitation(ownerUserId: number, invitationId: number, patch: Partial<Omit<ManagedSiteInvitation, 'id' | 'ownerUserId' | 'projectId' | 'createdAt'>>): Promise<ManagedSiteInvitation | null>
+  claimInvitation(ownerUserId: number, invitationId: number, acceptedAt: Date): Promise<ManagedSiteInvitation | null>
   insertAsset(input: Omit<ManagedSiteAsset, 'id' | 'createdAt'>): Promise<ManagedSiteAsset>
   listAssets(ownerUserId: number, projectId: number): Promise<ManagedSiteAsset[]>
   findAuditEventByFingerprint(ownerUserId: number, eventFingerprint: string): Promise<ManagedSiteAuditEvent | null>

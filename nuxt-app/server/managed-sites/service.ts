@@ -226,7 +226,7 @@ export async function createManagedSiteVersion(ownerUserId: number, projectId: n
       versionFingerprint: fingerprint,
       createdAt,
     } as any)
-    await transaction.updateProject(ownerUserId, projectId, { activeVersionId: version.id, updatedAt: createdAt } as any)
+    if (version.lifecycleStatus === 'active') await transaction.updateProject(ownerUserId, projectId, { activeVersionId: version.id, updatedAt: createdAt } as any)
     await appendAudit(transaction, {
       ownerUserId,
       projectId,
@@ -349,11 +349,15 @@ export async function acceptManagedSiteInvitation(rawToken: string, repository =
   const sessionCreatedAt = now()
   const session = await repository.transaction(async transaction => {
     const acceptedAt = now()
-    const updatedInvitation = await transaction.updateInvitation(invitation.ownerUserId, invitation.id, { status: 'accepted', acceptedAt } as any)
-    const updatedMembership = await transaction.updateMembership(invitation.ownerUserId, membership.id, { acceptedAt, updatedAt: acceptedAt } as any)
-    if (!updatedInvitation || !updatedMembership) invitationNotFound()
+    const claimedInvitation = await transaction.claimInvitation(invitation.ownerUserId, invitation.id, acceptedAt)
+    if (!claimedInvitation) invitationNotFound()
+    const currentMembership = await transaction.findMembership(invitation.ownerUserId, invitation.membershipId)
+    const currentProject = await transaction.findProject(invitation.ownerUserId, invitation.projectId)
+    if (!currentMembership || !currentProject || currentMembership.projectId !== currentProject.id || currentMembership.status !== 'active') invitationNotFound()
+    const updatedMembership = await transaction.updateMembership(invitation.ownerUserId, currentMembership.id, { acceptedAt, updatedAt: acceptedAt } as any)
+    if (!updatedMembership) invitationNotFound()
     const created = await transaction.insertSession({ ownerUserId: invitation.ownerUserId, projectId: invitation.projectId, membershipId: invitation.membershipId, sessionHash: tokenHash(sessionToken), expiresAt: new Date(sessionCreatedAt.getTime() + MANAGED_SITE_SESSION_TTL_MS), revokedAt: null, lastSeenAt: sessionCreatedAt } as any)
-    await appendAudit(transaction, { ownerUserId: invitation.ownerUserId, projectId: invitation.projectId, actorUserId: membership.userId, authority: 'customer_session', action: 'managed_site_invitation_accepted', beforeFingerprint: stableFingerprint({ invitationId: invitation.id, status: invitation.status }), afterFingerprint: stableFingerprint({ invitationId: invitation.id, status: 'accepted', sessionId: created.id }), idempotencyKey: `accept:${invitation.id}:${created.id}`, metadata: { invitationId: invitation.id, membershipId: membership.id, sessionId: created.id } })
+    await appendAudit(transaction, { ownerUserId: invitation.ownerUserId, projectId: invitation.projectId, actorUserId: currentMembership.userId, authority: 'customer_session', action: 'managed_site_invitation_accepted', beforeFingerprint: stableFingerprint({ invitationId: invitation.id, status: 'pending' }), afterFingerprint: stableFingerprint({ invitationId: invitation.id, status: 'accepted', sessionId: created.id }), idempotencyKey: `accept:${invitation.id}:${created.id}`, metadata: { invitationId: invitation.id, membershipId: currentMembership.id, sessionId: created.id } })
     return created
   })
   return { sessionToken, session, project: { id: project.id, status: project.status, siteType: project.siteType, canonicalClientIdentity: project.canonicalClientIdentity } }

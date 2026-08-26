@@ -1,5 +1,5 @@
 import { createError } from 'h3'
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, gt } from 'drizzle-orm'
 import { getDatabase } from '../database'
 import {
   managedSiteAssets,
@@ -115,6 +115,11 @@ export function makeManagedSiteRepository(database: any): ManagedSiteRepository 
     async updateInvitation(ownerUserId, invitationId, patch) {
       await database.update(managedSiteInvitations).set(patch as any).where(and(eq(managedSiteInvitations.ownerUserId, ownerUserId), eq(managedSiteInvitations.id, invitationId)))
       return repository.findInvitation(ownerUserId, invitationId)
+    },
+    async claimInvitation(ownerUserId, invitationId, acceptedAt) {
+      await database.update(managedSiteInvitations).set({ status: 'accepted', acceptedAt } as any).where(and(eq(managedSiteInvitations.ownerUserId, ownerUserId), eq(managedSiteInvitations.id, invitationId), eq(managedSiteInvitations.status, 'pending'), gt(managedSiteInvitations.expiresAt, acceptedAt)))
+      const claimed = await repository.findInvitation(ownerUserId, invitationId)
+      return claimed?.status === 'accepted' && claimed.acceptedAt?.getTime() === acceptedAt.getTime() ? claimed : null
     },
     async insertAsset(input) {
       const id = rowId(await database.insert(managedSiteAssets).values(input as any))
