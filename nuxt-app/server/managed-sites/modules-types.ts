@@ -41,6 +41,7 @@ export type IntegrationRepository = {
   transaction<T>(work: (repository: IntegrationRepository) => Promise<T>): Promise<T>
   findById(id: number): Promise<ManagedSiteIntegration | null>
   findByProjectModule(projectId: number, moduleKey: ManagedSiteModuleKey): Promise<ManagedSiteIntegration | null>
+  findByShopDomain(shopDomain: string): Promise<ManagedSiteIntegration | null>
   findByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSiteIntegration | null>
   findByFingerprint(intentFingerprint: string): Promise<ManagedSiteIntegration | null>
   insert(input: Omit<ManagedSiteIntegration, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteIntegration>

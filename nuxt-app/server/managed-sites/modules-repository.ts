@@ -27,6 +27,10 @@ function makeRepository(database: any): IntegrationRepository {
       const [row] = await database.select().from(managedSiteIntegrations).where(and(eq(managedSiteIntegrations.projectId, projectId), eq(managedSiteIntegrations.moduleKey, moduleKey))).limit(1)
       return row || null
     },
+    async findByShopDomain(shopDomain) {
+      const [row] = await database.select().from(managedSiteIntegrations).where(and(eq(managedSiteIntegrations.shopDomain, shopDomain), eq(managedSiteIntegrations.moduleKey, 'shopify_commerce'))).limit(1)
+      return row || null
+    },
     async findByIdempotency(ownerUserId, idempotencyKey) {
       const [row] = await database.select().from(managedSiteIntegrations).where(and(eq(managedSiteIntegrations.ownerUserId, ownerUserId), eq(managedSiteIntegrations.idempotencyKey, idempotencyKey))).limit(1)
       return row || null

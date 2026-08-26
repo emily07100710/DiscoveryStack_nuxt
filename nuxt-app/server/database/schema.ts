@@ -1689,6 +1689,7 @@ export const managedSiteIntegrations = mysqlTable('managedSiteIntegrations', {
   authorizationMode: mysqlEnum('authorizationMode', ['none', 'customer_oauth', 'customer_api_key', 'owner_configured', 'manual_assistance']).notNull(),
   requiredScopes: json('requiredScopes').notNull(),
   redactedConfig: json('redactedConfig').notNull(),
+  shopDomain: varchar('shopDomain', { length: 253 }),
   intentFingerprint: varchar('intentFingerprint', { length: 128 }).notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   externalReference: varchar('externalReference', { length: 160 }),
@@ -1698,7 +1699,51 @@ export const managedSiteIntegrations = mysqlTable('managedSiteIntegrations', {
   uniqueIndex('managed_site_integrations_project_module_unique').on(table.projectId, table.moduleKey),
   uniqueIndex('managed_site_integrations_intent_unique').on(table.intentFingerprint),
   uniqueIndex('managed_site_integrations_idempotency_unique').on(table.idempotencyKey),
+  uniqueIndex('managed_site_integrations_shop_domain_unique').on(table.shopDomain),
   index('managed_site_integrations_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
 ])
 
 export type ManagedSiteIntegration = typeof managedSiteIntegrations.$inferSelect
+
+/** Shopify OAuth state ledger; state, nonce, and PKCE verifier are stored only as hashes. */
+export const managedSiteShopifyAuthorizations = mysqlTable('managedSiteShopifyAuthorizations', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  integrationId: int('integrationId').notNull().references(() => managedSiteIntegrations.id),
+  stateHash: varchar('stateHash', { length: 128 }).notNull(),
+  nonceHash: varchar('nonceHash', { length: 128 }).notNull(),
+  codeVerifierHash: varchar('codeVerifierHash', { length: 128 }).notNull(),
+  shopDomain: varchar('shopDomain', { length: 253 }).notNull(),
+  redirectUri: varchar('redirectUri', { length: 2048 }).notNull(),
+  status: mysqlEnum('status', ['pending', 'consumed', 'expired', 'revoked']).default('pending').notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
+  consumedAt: timestamp('consumedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_shopify_authorizations_state_unique').on(table.stateHash),
+  index('managed_site_shopify_authorizations_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status, table.expiresAt),
+])
+
+/** Shopify webhook replay ledger; payload bodies and secrets are never persisted. */
+export const managedSiteShopifyWebhooks = mysqlTable('managedSiteShopifyWebhooks', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  integrationId: int('integrationId').notNull().references(() => managedSiteIntegrations.id),
+  shopDomain: varchar('shopDomain', { length: 253 }).notNull(),
+  webhookId: varchar('webhookId', { length: 160 }).notNull(),
+  topic: varchar('topic', { length: 160 }).notNull(),
+  payloadHash: varchar('payloadHash', { length: 128 }).notNull(),
+  signatureHash: varchar('signatureHash', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['accepted', 'replayed', 'rejected']).notNull(),
+  eventFingerprint: varchar('eventFingerprint', { length: 128 }).notNull(),
+  receivedAt: timestamp('receivedAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_shopify_webhooks_integration_event_unique').on(table.integrationId, table.webhookId),
+  uniqueIndex('managed_site_shopify_webhooks_fingerprint_unique').on(table.ownerUserId, table.eventFingerprint),
+  index('managed_site_shopify_webhooks_owner_project_idx').on(table.ownerUserId, table.projectId, table.receivedAt),
+])
+
+export type ManagedSiteShopifyAuthorization = typeof managedSiteShopifyAuthorizations.$inferSelect
+export type ManagedSiteShopifyWebhook = typeof managedSiteShopifyWebhooks.$inferSelect

@@ -4,6 +4,8 @@ import { createOwnerContentClient } from '../content-operations/service'
 import { createContentOperationsRepository, type ContentOperationsRepository } from '../content-operations/repository'
 import { getIntegrationRepository } from './modules-repository'
 import { getManagedSiteRepository } from './repository'
+import { assertPaidManagedSiteModuleEntitlement, assertPaidManagedSiteProject } from './module-authority'
+import { normalizeShopifyShopDomain } from './shopify-service'
 import { MANAGED_SITE_MODULE_KEYS, type BoundedAssistantAdapter, type BoundedAssistantRequest, type BoundedAssistantResponse, type IntegrationRepository, type ManagedSiteIntegrationIntentInput, type ManagedSiteModuleKey, type ManagedSiteModuleWorkspace, type ModuleCapability, type ShopifyIntegrationIntent } from './modules-types'
 import type { ManagedSiteRepository } from './types'
 
@@ -37,9 +39,8 @@ function redactConfig(value: unknown): Record<string, unknown> {
 function normalizeShopifyConfig(input: ManagedSiteIntegrationIntentInput): Record<string, unknown> {
   const config = redactConfig(input.redactedConfig)
   if (input.moduleKey === 'shopify_commerce') {
-    const shopDomain = typeof config.shopDomain === 'string' ? config.shopDomain.toLowerCase().replace(/\.$/, '') : ''
-    if (shopDomain && (!shopDomain.includes('.') || shopDomain.includes('/') || shopDomain.includes('://') || shopDomain.includes(':'))) invalid('Shopify shopDomain must be a hostname without protocol, path, port, or credentials.')
-    return { shopDomain: shopDomain || null, storefrontMode: 'storefront_api', checkoutMode: 'shopify_hosted', adminMode: 'admin_graphql_api' }
+    const shopDomain = typeof config.shopDomain === 'string' && config.shopDomain.trim() ? normalizeShopifyShopDomain(config.shopDomain) : null
+    return { shopDomain, storefrontMode: 'storefront_api', checkoutMode: 'shopify_hosted', adminMode: 'admin_graphql_api' }
   }
   return config
 }
@@ -68,11 +69,11 @@ function validateAssistantResponse(response: BoundedAssistantResponse, maxAnswer
 
 export async function createManagedSiteIntegrationIntent(ownerUserId: number, input: ManagedSiteIntegrationIntentInput, repository = getIntegrationRepository(), managedRepository: ManagedSiteRepository = getManagedSiteRepository(), clock: () => Date = () => new Date()) {
   const moduleKey = validateModuleKey(input.moduleKey)
-  const project = await managedRepository.findProject(ownerUserId, input.projectId)
-  if (!project) notFound('Managed site project was not found.')
+  await assertPaidManagedSiteModuleEntitlement(ownerUserId, input.projectId, moduleKey, managedRepository)
   const spec = MODULE_SPECS[moduleKey]
   const providerKey = typeof input.providerKey === 'string' && input.providerKey.trim() ? input.providerKey.trim().slice(0, 96) : spec.providerKey
   const redactedConfig = normalizeShopifyConfig({ ...input, moduleKey, providerKey })
+  const shopDomain = moduleKey === 'shopify_commerce' && typeof redactedConfig.shopDomain === 'string' ? redactedConfig.shopDomain : null
   const intentFingerprint = stableFingerprint({ ownerUserId, projectId: input.projectId, moduleKey, providerKey, redactedConfig })
   const replay = await repository.findByIdempotency(ownerUserId, input.idempotencyKey)
   if (replay) {
@@ -84,8 +85,9 @@ export async function createManagedSiteIntegrationIntent(ownerUserId: number, in
     if (existing.intentFingerprint !== intentFingerprint) conflict('This project already has a different intent for the selected module.')
     return { integration: existing, replayed: true, externalCalls: false, providerConfigured: false, capability: moduleProjection(existing) }
   }
-  const createdAt = clock()
-  const integration = await repository.insert({ ownerUserId, projectId: input.projectId, moduleKey, providerKey, status: spec.status === 'requires_authorization' ? 'awaiting_authorization' : 'not_configured', authorizationMode: spec.authorizationMode, requiredScopes: spec.requiredScopes, redactedConfig, intentFingerprint, idempotencyKey: input.idempotencyKey, externalReference: null, createdAt, updatedAt: createdAt } as any)
+    const createdAt = clock()
+  const integration = await repository.insert({ ownerUserId, projectId: input.projectId, moduleKey, providerKey, status: spec.status === 'requires_authorization' ? 'awaiting_authorization' : 'not_configured', authorizationMode: spec.authorizationMode, requiredScopes: spec.requiredScopes, redactedConfig, shopDomain, intentFingerprint, idempotencyKey: input.idempotencyKey, externalReference: null, createdAt, updatedAt: createdAt } as any)
+
   return { integration, replayed: false, externalCalls: false, providerConfigured: false, capability: moduleProjection(integration) }
 }
 
@@ -105,8 +107,8 @@ export async function getManagedSiteModuleWorkspace(ownerUserId: number, project
 }
 
 export async function linkManagedSiteContentOperations(ownerUserId: number, projectId: number, input: { displayName: string; canonicalSiteOrigin: string; framework: 'astro' | 'nuxt'; publicationTransport: 'first_party_git' | 'first_party_signed_api'; timeZone: string; defaultCadenceDays: 3 | 7 | 15 | 30; defaultPublishLocalTime: string; monthlyBudgetUnits: number; idempotencyKey: string }, managedRepository: ManagedSiteRepository = getManagedSiteRepository(), operationsRepository: ContentOperationsRepository = createContentOperationsRepository()) {
-  const project = await managedRepository.findProject(ownerUserId, projectId)
-  if (!project) notFound('Managed site project was not found.')
+  const authority = await assertPaidManagedSiteProject(ownerUserId, projectId, managedRepository)
+  const project = authority.project
   if (project.contentOperationClientId !== null) {
     const client = await operationsRepository.findClient(ownerUserId, project.contentOperationClientId)
     if (!client) conflict('Managed site points to a missing Content Operations client.')

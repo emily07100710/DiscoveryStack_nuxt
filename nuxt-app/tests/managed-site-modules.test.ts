@@ -1,16 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { createManagedSiteProject } from '../server/managed-sites/service'
+import { createManagedSitePreview, createManagedSiteQuote, createManagedSiteDraftOrder, createManagedSiteLeadIntent, recordVerifiedPaymentEvent } from '../server/managed-sites/ordering-service'
+import { convertPaidOrderToManagedProject } from '../server/managed-sites/conversion-service'
+import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
 import { createManagedSiteIntegrationIntent, createShopifyIntegrationIntent, getCanonicalGeoReuseContract, getManagedSiteModuleWorkspace, linkManagedSiteContentOperations, runManagedSiteAssistant } from '../server/managed-sites/modules-service'
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
 import { createIntegrationMemoryRepository } from './fixtures/managed-site/modules-repository'
+import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
 import { ContentOperationsFixture } from './fixtures/content-operations/repository'
 
-const actor = { ownerUserId: 1, actorUserId: 1, authority: 'owner_session' as const, role: 'owner' as const, principal: 'owner@example.test' }
+const actor = { ownerUserId: 1, actorUserId: 1, authority: 'owner_session' as const, role: 'owner' as const, principal: 'owner@acme.taipei' }
+const mockPaymentVerifier: PaymentEventVerifier = { verify: async () => true }
 
 async function makeProject() {
   const managed = createManagedSiteMemoryRepository()
-  const project = await createManagedSiteProject(1, actor, { canonicalClientIdentity: 'modules-client', canonicalWebsiteIdentity: 'https://modules.example.test', siteType: 'simple_commerce', idempotencyKey: 'modules-project-1' }, managed.repository)
-  return { managed, project }
+  const ordering = createOrderingMemoryRepository()
+  const selectedModules = ['managed_content_admin', 'bounded_ai_assistant', 'shopify_commerce', 'line_assisted_integration', 'google_booking_assisted_integration', 'geo_content_subscription', 'geo_measurement_dashboard', 'pwa_reference_only'] as any
+  const preview = await createManagedSitePreview(1, { draftIdentity: 'modules-preview-001', brandName: 'Modules Client', audience: 'Taiwan customers', brief: 'A paid modular managed site.', businessGoals: ['sell_online', 'increase_inquiries'], siteType: 'simple_commerce', selectedModules, styleReferences: [] }, ordering.repository)
+  const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'business', cadenceDays: 7, domainOption: 'new', idempotencyKey: 'modules-quote-001' }, ordering.repository)
+  const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Modules Owner', email: 'owner@acme.taipei', company: 'Modules Client', website: 'https://modules-client.acme.taipei', privacyConsent: true, recontactConsent: false, idempotencyKey: 'modules-lead-001' }, ordering.repository)
+  const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'modules-order-001' }, ordering.repository)
+  await recordVerifiedPaymentEvent({ draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'modules-payment-001', providerReference: 'modules-payment-ref-001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'e'.repeat(64) }, mockPaymentVerifier, ordering.repository)
+  const conversion = await convertPaidOrderToManagedProject(1, { draftOrderId: order.order.id, idempotencyKey: 'modules-conversion-001' }, { ordering: ordering.repository, managed: managed.repository })
+  return { managed, ordering, project: { project: conversion.project } }
 }
 
 describe('managed site modules and canonical GEO reuse', () => {
@@ -41,7 +52,7 @@ describe('managed site modules and canonical GEO reuse', () => {
     const line = await makeProject()
     const integrations = createIntegrationMemoryRepository()
     const content = new ContentOperationsFixture()
-    const linked = await linkManagedSiteContentOperations(1, line.project.project.id, { displayName: 'Modules Site', canonicalSiteOrigin: 'https://modules.example.test', framework: 'astro', publicationTransport: 'first_party_git', timeZone: 'Asia/Taipei', defaultCadenceDays: 7, defaultPublishLocalTime: '09:00', monthlyBudgetUnits: 100, idempotencyKey: 'content-link-1' }, line.managed.repository, content.repository)
+    const linked = await linkManagedSiteContentOperations(1, line.project.project.id, { displayName: 'Modules Site', canonicalSiteOrigin: 'https://modules.acme.taipei', framework: 'astro', publicationTransport: 'first_party_git', timeZone: 'Asia/Taipei', defaultCadenceDays: 7, defaultPublishLocalTime: '09:00', monthlyBudgetUnits: 100, idempotencyKey: 'content-link-1' }, line.managed.repository, content.repository)
     expect(linked.linked).toBe(true)
     expect(linked.reused).toBe(true)
     expect(linked.notDuplicated).toBe(true)
