@@ -1,0 +1,2 @@
+ALTER TABLE `contentOperationAutopilotPolicies` MODIFY COLUMN `requireApprovedForDelivery` boolean NOT NULL DEFAULT false;--> statement-breakpoint
+ALTER TABLE `contentOperationAutopilotPolicies` MODIFY COLUMN `requiredQualityGateVersion` varchar(96) NOT NULL DEFAULT 'content-risk-gate-v1';
