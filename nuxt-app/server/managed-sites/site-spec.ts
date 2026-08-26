@@ -16,9 +16,11 @@ export const STYLE_PREFERENCES = ['color', 'typography_mood', 'whitespace_densit
 export type StylePreference = typeof STYLE_PREFERENCES[number]
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
-const PUBLIC_SPECIAL_USE = new Set(['localhost', 'localhost.localdomain', 'metadata.google.internal', 'metadata.google.internal.'])
-const PRIVATE_IPV4 = /^(10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/
-const PRIVATE_IPV6 = /^(::1|fc|fd|fe80:)/i
+const PUBLIC_SPECIAL_USE = new Set(['localhost', 'localhost.localdomain', 'metadata.google.internal', 'metadata.google.internal.', 'broadcasthost', 'ip6-allnodes', 'ip6-allrouters'])
+const PRIVATE_IPV4 = /^(0\.|10\.|100\.(?:6[4-9]|[78]\d)\.|127\.|169\.254\.|192\.0\.0\.|192\.0\.2\.|192\.168\.|198\.18\.|198\.19\.|198\.51\.100\.|203\.0\.113\.|172\.(?:1[6-9]|2\d|3[01])\.)/
+const PRIVATE_IPV6 = /^(?:::1|::ffff:|::ffff:0:|fc[0-9a-f]{2}:|fd[0-9a-f]{2}:|fe[89ab][0-9a-f]:|ff[0-9a-f]{2}:|2001:(?:0?0?0?0|0?0?0?2|0?0?0?10|0?0?0?20|0?0?0?30|db8|3f{2,3}):|100:)/i
+const RESERVED_PUBLIC_SUFFIXES = ['.localhost', '.local', '.onion', '.test', '.invalid', '.example']
+const SENSITIVE_QUERY_KEYS = /^(?:token|access_token|auth|authorization|password|passwd|secret|api[_-]?key|key|code|signature|sig)$/i
 
 export type StyleReferenceInput = {
   url: string
@@ -35,12 +37,12 @@ export type StyleProfile = {
     captureStatus: 'not_fetched'
   }>
   extractedFeatures: {
-    palette: 'inferred_from_reference' | 'not_available'
-    typographyMood: 'inferred_from_reference' | 'not_available'
-    whitespaceDensity: 'inferred_from_reference' | 'not_available'
-    homepageStructure: 'inferred_from_reference' | 'not_available'
-    imageRatio: 'inferred_from_reference' | 'not_available'
-    animationRhythm: 'inferred_from_reference' | 'not_available'
+    palette: 'customer_selected_preference' | 'not_analyzed'
+    typographyMood: 'customer_selected_preference' | 'not_analyzed'
+    whitespaceDensity: 'customer_selected_preference' | 'not_analyzed'
+    homepageStructure: 'customer_selected_preference' | 'not_analyzed'
+    imageRatio: 'customer_selected_preference' | 'not_analyzed'
+    animationRhythm: 'customer_selected_preference' | 'not_analyzed'
   }
   limitations: string[]
   profileFingerprint: string
@@ -79,11 +81,12 @@ export type SiteSpec = {
     internalLinkPlan: true
     aiReadableSummary: true
   }
-  approvedEvidenceReferences: Array<{ sourceId: number; artifactId?: number | null; purpose: 'diagnosis' | 'recommendation' | 'content_draft' }>
+  approvedEvidenceReferences: Array<{ sourceId: number; artifactId?: number | null; locator?: string; artifactHash?: string; approvedAt?: string; purpose: 'diagnosis' | 'recommendation' | 'content_draft' }>
   contentProvenance: {
     source: 'customer_brief' | 'diagnosis_projection' | 'approved_evidence'
     evidenceSnapshotHash: string | null
   }
+  diagnosisBinding: { diagnosisId: number; findingIds: string[] } | null
   styleReferenceProfile: StyleProfile | null
   limitations: string[]
   generatorVersion: string
@@ -101,8 +104,13 @@ export type SiteBriefInput = {
   siteType?: ManagedSiteType
   selectedModules?: SiteModule[]
   styleReferences?: StyleReferenceInput[]
-  approvedEvidenceReferences?: Array<{ sourceId: number; artifactId?: number | null; purpose: 'diagnosis' | 'recommendation' | 'content_draft' }>
+  approvedEvidenceReferences?: Array<{ sourceId: number; artifactId?: number | null; locator?: string; artifactHash?: string; approvedAt?: string; purpose: 'diagnosis' | 'recommendation' | 'content_draft' }>
   diagnosisProjection?: { issueKeys: string[]; limitations: string[] }
+  existingSiteUrl?: string
+  diagnosisId?: number
+  diagnosisFindingIds?: string[]
+  resolvedEvidenceSnapshotHash?: string
+  diagnosisBinding?: { diagnosisId: number; findingIds?: string[] }
 }
 
 function invalid(message: string): never {
@@ -118,14 +126,23 @@ function stringField(value: unknown, label: string, max: number): string {
   return value.trim()
 }
 
-export function assertPublicReferenceUrl(value: string): string {
+function assertHttpsPublicUrl(value: string, label: string, rejectSensitiveQuery: boolean): string {
   let parsed: URL
-  try { parsed = new URL(value) } catch { invalid('Style reference URL is invalid.') }
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) invalid('Style reference URL must be public HTTPS on the standard port.')
+  try { parsed = new URL(value) } catch { invalid(`${label} is invalid.`) }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) invalid(`${label} must be public HTTPS on the standard port.`)
   const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '')
-  if (!hostname || PUBLIC_SPECIAL_USE.has(hostname) || hostname.endsWith('.localhost') || hostname.endsWith('.local') || PRIVATE_IPV4.test(hostname) || PRIVATE_IPV6.test(hostname) || !hostname.includes('.')) invalid('Style reference URL is not an allowed public host.')
+  const queryKeys = [...parsed.searchParams.keys()]
+  if (!hostname || PUBLIC_SPECIAL_USE.has(hostname) || RESERVED_PUBLIC_SUFFIXES.some(suffix => hostname === suffix.slice(1) || hostname.endsWith(suffix)) || PRIVATE_IPV4.test(hostname) || PRIVATE_IPV6.test(hostname) || hostname.includes(':') || !hostname.includes('.') || (rejectSensitiveQuery && queryKeys.some(key => SENSITIVE_QUERY_KEYS.test(key)))) invalid(`${label} is not an allowed public host.`)
   parsed.hash = ''
   return parsed.toString()
+}
+
+export function assertPublicReferenceUrl(value: string): string {
+  return assertHttpsPublicUrl(value, 'Style reference URL', false)
+}
+
+export function assertExistingSiteUrl(value: string): string {
+  return assertHttpsPublicUrl(value, 'Existing site URL', true)
 }
 
 export function normalizeStyleReferences(input: unknown): StyleReferenceInput[] {
@@ -155,12 +172,12 @@ export function buildStyleProfile(input: unknown, capturedAt = new Date()): Styl
     schemaVersion: STYLE_PROFILE_VERSION,
     sources,
     extractedFeatures: {
-      palette: selected.has('color') ? 'inferred_from_reference' : 'not_available',
-      typographyMood: selected.has('typography_mood') ? 'inferred_from_reference' : 'not_available',
-      whitespaceDensity: selected.has('whitespace_density') ? 'inferred_from_reference' : 'not_available',
-      homepageStructure: selected.has('homepage_structure') ? 'inferred_from_reference' : 'not_available',
-      imageRatio: selected.has('image_ratio') ? 'inferred_from_reference' : 'not_available',
-      animationRhythm: selected.has('animation_rhythm') ? 'inferred_from_reference' : 'not_available',
+      palette: selected.has('color') ? 'customer_selected_preference' : 'not_analyzed',
+      typographyMood: selected.has('typography_mood') ? 'customer_selected_preference' : 'not_analyzed',
+      whitespaceDensity: selected.has('whitespace_density') ? 'customer_selected_preference' : 'not_analyzed',
+      homepageStructure: selected.has('homepage_structure') ? 'customer_selected_preference' : 'not_analyzed',
+      imageRatio: selected.has('image_ratio') ? 'customer_selected_preference' : 'not_analyzed',
+      animationRhythm: selected.has('animation_rhythm') ? 'customer_selected_preference' : 'not_analyzed',
     },
     limitations: ['No external fetch or crawler execution is performed in V1.', 'Only design characteristics are used; source code, copy, logo, images and scripts are never copied.', 'A preview is not a deployed customer website.'],
     profileFingerprint: stableFingerprint({ schemaVersion: STYLE_PROFILE_VERSION, sources, selected: [...selected].sort() }),
@@ -221,13 +238,17 @@ export function buildSiteSpec(input: unknown, capturedAt = new Date()): SiteSpec
   if (siteType === 'simple_commerce' && !selectedModules.includes('shopify_commerce')) invalid('Simple commerce requires the Shopify commerce module in V1.')
   const pages = pagesFor(siteType, businessGoals)
   const navigation = pages.map(page => ({ page, label: page === 'home' ? brandName : page.replace('_', ' ') }))
-  const evidence = Array.isArray(candidate.approvedEvidenceReferences) ? candidate.approvedEvidenceReferences.map(reference => ({ sourceId: Number(reference.sourceId), artifactId: reference.artifactId === null || reference.artifactId === undefined ? null : Number(reference.artifactId), purpose: reference.purpose })) : []
+  const evidence = Array.isArray(candidate.approvedEvidenceReferences) ? candidate.approvedEvidenceReferences.map(reference => ({ sourceId: Number(reference.sourceId), artifactId: reference.artifactId === null || reference.artifactId === undefined ? null : Number(reference.artifactId), locator: typeof reference.locator === 'string' ? reference.locator : undefined, artifactHash: typeof reference.artifactHash === 'string' ? reference.artifactHash : undefined, approvedAt: typeof reference.approvedAt === 'string' ? reference.approvedAt : undefined, purpose: reference.purpose })) : []
   if (evidence.some(reference => !Number.isSafeInteger(reference.sourceId) || reference.sourceId < 1 || (reference.artifactId !== null && (!Number.isSafeInteger(reference.artifactId) || reference.artifactId < 1)) || !['diagnosis', 'recommendation', 'content_draft'].includes(reference.purpose))) invalid('Approved evidence reference is invalid.')
   const limitations = [
     'AI visibility, ranking, traffic, conversion and revenue are not guaranteed or inferred from this preview.',
     'External provider calls, domain purchase, DNS, payment and deployment are not executed in concept or preview mode.',
     ...(candidate.diagnosisProjection?.limitations || []),
   ].filter((value, index, list) => typeof value === 'string' && value.trim() && list.indexOf(value) === index).slice(0, 12)
+  const resolvedEvidenceSnapshotHash = typeof candidate.resolvedEvidenceSnapshotHash === 'string' ? candidate.resolvedEvidenceSnapshotHash : null
+  if (resolvedEvidenceSnapshotHash !== null && !/^[a-f0-9]{64}$/i.test(resolvedEvidenceSnapshotHash)) invalid('Resolved evidence snapshot hash is invalid.')
+  const diagnosisBinding = candidate.diagnosisBinding ? { diagnosisId: Number(candidate.diagnosisBinding.diagnosisId), findingIds: Array.isArray(candidate.diagnosisBinding.findingIds) ? candidate.diagnosisBinding.findingIds.map(value => String(value)).sort() : [] } : null
+  if (diagnosisBinding && (!Number.isSafeInteger(diagnosisBinding.diagnosisId) || diagnosisBinding.diagnosisId < 1 || new Set(diagnosisBinding.findingIds).size !== diagnosisBinding.findingIds.length)) invalid('Diagnosis binding is invalid.')
   const draft: Omit<SiteSpec, 'deterministicFingerprint'> = {
     schemaVersion: SITE_SPEC_VERSION,
     draftIdentity,
@@ -249,7 +270,8 @@ export function buildSiteSpec(input: unknown, capturedAt = new Date()): SiteSpec
       aiReadableSummary: true,
     },
     approvedEvidenceReferences: evidence,
-    contentProvenance: { source: candidate.diagnosisProjection ? 'diagnosis_projection' : evidence.length ? 'approved_evidence' : 'customer_brief', evidenceSnapshotHash: null },
+    contentProvenance: { source: candidate.diagnosisProjection ? 'diagnosis_projection' : evidence.length ? 'approved_evidence' : 'customer_brief', evidenceSnapshotHash: resolvedEvidenceSnapshotHash },
+    diagnosisBinding,
     styleReferenceProfile,
     limitations,
     generatorVersion: 'managed-site-generator-v1',
@@ -267,14 +289,18 @@ export function parseSiteSpecSnapshot(input: unknown): SiteSpec {
   if (new Set(candidate.selectedModules).size !== candidate.selectedModules.length) invalid('Persisted SiteSpec modules contain duplicates.')
   if (!candidate.siteType || !(MANAGED_SITE_TYPES as readonly string[]).includes(candidate.siteType)) invalid('Persisted SiteSpec site type is invalid.')
   if (!Array.isArray(candidate.approvedEvidenceReferences)) invalid('Persisted SiteSpec evidence references are invalid.')
-  const evidenceKeys = candidate.approvedEvidenceReferences.map(reference => `${reference.sourceId}:${reference.artifactId ?? 'none'}:${reference.purpose}`)
+  const evidenceKeys = candidate.approvedEvidenceReferences.map(reference => `${reference.sourceId}:${reference.artifactId ?? 'none'}`)
   if (new Set(evidenceKeys).size !== evidenceKeys.length) invalid('Persisted SiteSpec evidence references contain duplicates.')
-  if (candidate.approvedEvidenceReferences.some(reference => !Number.isSafeInteger(reference.sourceId) || reference.sourceId < 1 || (reference.artifactId !== null && reference.artifactId !== undefined && (!Number.isSafeInteger(reference.artifactId) || reference.artifactId < 1)) || !['diagnosis', 'recommendation', 'content_draft'].includes(reference.purpose))) invalid('Persisted SiteSpec evidence reference is invalid.')
+  if (candidate.approvedEvidenceReferences.some(reference => !Number.isSafeInteger(reference.sourceId) || reference.sourceId < 1 || (reference.artifactId !== null && reference.artifactId !== undefined && (!Number.isSafeInteger(reference.artifactId) || reference.artifactId < 1)) || (reference.artifactHash !== undefined && !/^[a-f0-9]{64}$/i.test(reference.artifactHash)) || (reference.approvedAt !== undefined && (!Number.isFinite(Date.parse(reference.approvedAt)) || Date.parse(reference.approvedAt) > Date.now())) || !['diagnosis', 'recommendation', 'content_draft'].includes(reference.purpose))) invalid('Persisted SiteSpec evidence reference is invalid.')
   if (!candidate.contentProvenance || typeof candidate.contentProvenance !== 'object') invalid('Persisted SiteSpec content provenance is invalid.')
   const provenance = candidate.contentProvenance
   if (!['customer_brief', 'diagnosis_projection', 'approved_evidence'].includes(provenance.source)) invalid('Persisted SiteSpec provenance source is invalid.')
   if (provenance.source !== 'customer_brief' && (typeof provenance.evidenceSnapshotHash !== 'string' || !/^[a-f0-9]{64}$/i.test(provenance.evidenceSnapshotHash))) invalid('Persisted SiteSpec requires a canonical evidence snapshot hash.')
   if (provenance.source === 'customer_brief' && provenance.evidenceSnapshotHash !== null) invalid('Customer-brief SiteSpec cannot claim an evidence snapshot.')
+  if (candidate.diagnosisBinding !== null) {
+    if (!candidate.diagnosisBinding || !Number.isSafeInteger(candidate.diagnosisBinding.diagnosisId) || candidate.diagnosisBinding.diagnosisId < 1 || !Array.isArray(candidate.diagnosisBinding.findingIds) || new Set(candidate.diagnosisBinding.findingIds).size !== candidate.diagnosisBinding.findingIds.length) invalid('Persisted SiteSpec diagnosis binding is invalid.')
+    if (provenance.source !== 'diagnosis_projection') invalid('Persisted SiteSpec diagnosis binding has an invalid provenance source.')
+  }
   const { deterministicFingerprint, ...withoutFingerprint } = candidate as SiteSpec
   if (stableFingerprint(withoutFingerprint) !== deterministicFingerprint) invalid('Persisted SiteSpec fingerprint mismatch.')
   return candidate as SiteSpec

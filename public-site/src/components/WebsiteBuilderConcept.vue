@@ -110,6 +110,10 @@ async function apiRequest(path: string, body?: Record<string, unknown>) {
 
 async function generatePreview() {
   if (isGenerating.value) return
+  if (entryMode.value === 'existing') {
+    apiError.value = '既有網站重建需要 owner 登入、已完成的 Website Diagnosis 與 server-resolved evidence；公開概念頁不會接受自行貼上的診斷結果。'
+    return
+  }
   isGenerating.value = true
   generationStep.value = 0
   apiError.value = ''
@@ -125,8 +129,7 @@ async function generatePreview() {
       businessGoals: businessGoals(),
       siteType: siteTypeContract[siteType.value],
       selectedModules: contractModules(),
-      existingSiteUrl: entryMode.value === 'existing' ? existingUrl.value : null,
-      diagnosisProjection: entryMode.value === 'existing' && diagnosisRevealed.value ? { issueKeys: ['answer_depth', 'entity_clarity', 'content_cadence'], limitations: ['公開診斷概念投影；正式版需客戶授權後再執行。'] } : undefined,
+      existingSiteUrl: null,
     })
     previewResult.value = result
     previewToken.value = result.previewAccessToken || previewToken.value

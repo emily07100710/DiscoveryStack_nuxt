@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createManagedSitePreview, createManagedSiteQuote, createManagedSiteDraftOrder, createManagedSiteLeadIntent, getManagedSitePublicPreview, getManagedSitePriceCatalog, recordVerifiedPaymentEvent } from '../server/managed-sites/ordering-service'
 import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
+import type { ExistingSiteDiagnosisResolver } from '../server/managed-sites/diagnosis-binding'
 import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
 
 const mockPaymentVerifier: PaymentEventVerifier = { verify: async () => true }
@@ -30,13 +31,9 @@ describe('managed site preview and ordering flow', () => {
     expect(result.preview.accessTokenHash).not.toBe(result.accessToken)
   })
 
-  it('supports existing-site diagnosis input without fetching or copying a reference site', async () => {
+  it('does not accept caller-provided existing-site diagnosis projection', async () => {
     const test = createOrderingMemoryRepository()
-    const result = await createManagedSitePreview(7, { ...brief, draftIdentity: 'preview-existing-001', existingSiteUrl: 'https://client.example.test', diagnosisProjection: { issueKeys: ['missing_faq'], limitations: ['diagnosis is bounded'] } }, test.repository)
-    expect(result.preview.sourceMode).toBe('existing_site')
-    expect(result.preview.existingSiteUrl).toBe('https://client.example.test')
-    expect(result.spec.contentProvenance.source).toBe('diagnosis_projection')
-    expect((result.preview.styleProfile as any).sources[0].captureStatus).toBe('not_fetched')
+    await expect(createManagedSitePreview(7, { ...brief, draftIdentity: 'preview-existing-001', existingSiteUrl: 'https://acme.taipei', diagnosisId: 42, diagnosisProjection: { issueKeys: ['missing_faq'], limitations: ['diagnosis is bounded'] } }, test.repository)).rejects.toMatchObject({ statusCode: 422 })
   })
 
   it('rejects private reference URLs and unsupported modules before persistence', async () => {
@@ -144,5 +141,42 @@ describe('managed site payment hardening', () => {
     const first = await createManagedSiteLeadIntent({ ...base, recontactConsent: false }, test.repository)
     expect(first.replayed).toBe(false)
     await expect(createManagedSiteLeadIntent({ ...base, recontactConsent: true }, test.repository)).rejects.toMatchObject({ statusCode: 409 })
+  })
+})
+
+
+describe('existing-site diagnosis authority', () => {
+  it('binds an existing-site preview to an injected owner Diagnosis and canonical evidence snapshot', async () => {
+    const test = createOrderingMemoryRepository()
+    const evidenceHash = 'd'.repeat(64)
+    const resolver: ExistingSiteDiagnosisResolver = {
+      async resolve(ownerUserId: number, input: { existingSiteUrl: string; diagnosisId: number; findingIds?: string[] }) {
+        expect(ownerUserId).toBe(7)
+        expect(input.existingSiteUrl).toBe('https://acme.taipei/')
+        expect(input.diagnosisId).toBe(42)
+        return {
+          diagnosisId: 42,
+          normalizedSiteUrl: input.existingSiteUrl,
+          findings: [{ id: 'missing_faq', issueCode: 'content.answer_readiness', area: 'answer_content', severity: 'medium', priority: 'medium', title: 'FAQ', explanation: 'Add answer blocks.', affectedUrls: ['https://acme.taipei/'], evidence: [], recommendationKey: 'add_answer_content', engine: 'deterministic-diagnosis-v1', limitations: ['bounded diagnosis'] }],
+          limitations: ['bounded diagnosis'],
+          engine: 'deterministic-diagnosis-v1' as const,
+          evidenceSnapshot: { refs: [{ sourceId: 7, artifactId: 8, locator: 'https://acme.taipei/about', artifactHash: evidenceHash, approvedAt: '2026-08-01T00:00:00.000Z', reason: 'approved content evidence' }], context: 'approved', hash: evidenceHash, materials: [{ sourceId: 7, artifactId: 8, artifactType: 'html', artifactHash: evidenceHash, reviewedText: 'approved facts' }], approvalTimestamps: ['2026-08-01T00:00:00.000Z'], freshnessBasis: '2026-08-01T00:00:00.000Z' },
+        }
+      },
+    }
+    const result = await createManagedSitePreview(7, { ...brief, draftIdentity: 'existing-authority-001', existingSiteUrl: 'https://acme.taipei', diagnosisId: 42, diagnosisFindingIds: ['missing_faq'] }, test.repository, () => new Date('2026-08-27T00:00:00.000Z'), resolver)
+    expect(result.preview.sourceMode).toBe('existing_site')
+    expect(result.spec.diagnosisBinding).toEqual({ diagnosisId: 42, findingIds: ['missing_faq'] })
+    expect(result.spec.contentProvenance).toEqual({ source: 'diagnosis_projection', evidenceSnapshotHash: evidenceHash })
+    expect(result.spec.approvedEvidenceReferences[0]?.approvedAt).toBe('2026-08-01T00:00:00.000Z')
+  })
+
+  it('fails closed when caller supplies a diagnosis projection or unsafe existing URL', async () => {
+    const test = createOrderingMemoryRepository()
+    const resolver = { resolve: async () => { throw new Error('must not be called') } }
+    await expect(createManagedSitePreview(7, { ...brief, draftIdentity: 'existing-client-projection-001', existingSiteUrl: 'https://acme.taipei', diagnosisId: 42, diagnosisProjection: { issueKeys: ['fake'], limitations: [] } }, test.repository, undefined, resolver)).rejects.toMatchObject({ statusCode: 422 })
+    await expect(createManagedSitePreview(7, { ...brief, draftIdentity: 'existing-private-001', existingSiteUrl: 'https://127.0.0.1/admin', diagnosisId: 42 }, test.repository, undefined, resolver)).rejects.toMatchObject({ statusCode: 422 })
+    await expect(createManagedSitePreview(7, { ...brief, draftIdentity: 'existing-sensitive-001', existingSiteUrl: 'https://acme.taipei/?token=secret', diagnosisId: 42 }, test.repository, undefined, resolver)).rejects.toMatchObject({ statusCode: 422 })
+    await expect(createManagedSitePreview(null, { ...brief, draftIdentity: 'existing-anonymous-001', existingSiteUrl: 'https://acme.taipei', diagnosisId: 42 }, test.repository, undefined, resolver)).rejects.toMatchObject({ statusCode: 401 })
   })
 })

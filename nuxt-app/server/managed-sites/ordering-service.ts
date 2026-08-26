@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto'
 import { createError } from 'h3'
 import { stableFingerprint } from '../seo-geo-core/repository'
 import { getPreviewRepository } from './ordering-repository'
-import { buildPreviewProjection, buildSiteSpec, BUSINESS_GOALS, SITE_MODULES, type SiteBriefInput, type SiteModule, type SiteSpec } from './site-spec'
+import { assertExistingSiteUrl, buildPreviewProjection, buildSiteSpec, BUSINESS_GOALS, SITE_MODULES, type SiteBriefInput, type SiteModule, type SiteSpec } from './site-spec'
+import { FAIL_CLOSED_EXISTING_SITE_DIAGNOSIS_RESOLVER, type ExistingSiteDiagnosisResolver } from './diagnosis-binding'
 import { normalizeRecipientEmail, tokenHash } from './normalization'
 import type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent } from '../database/schema'
 import type { DraftOrderInput, LeadInput, PaymentEventVerifier, PreviewGenerationResult, PreviewRepository, QuoteInput } from './ordering-types'
@@ -81,8 +82,31 @@ export function getManagedSitePriceCatalog() {
   }
 }
 
-export async function createManagedSitePreview(ownerUserId: number | null, input: unknown, repository = getPreviewRepository(), clock: () => Date = () => new Date()): Promise<PreviewGenerationResult> {
-  const spec = buildSiteSpec(input, clock())
+export async function createManagedSitePreview(ownerUserId: number | null, input: unknown, repository = getPreviewRepository(), clock: () => Date = () => new Date(), diagnosisResolver: ExistingSiteDiagnosisResolver = FAIL_CLOSED_EXISTING_SITE_DIAGNOSIS_RESOLVER): Promise<PreviewGenerationResult> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) invalid('Site brief is invalid.')
+  const candidate = input as Record<string, unknown>
+  const isExistingSite = typeof candidate.existingSiteUrl === 'string'
+  let specInput: Record<string, unknown> = { ...candidate }
+  if (isExistingSite) {
+    if (ownerUserId === null) throw createError({ statusCode: 401, statusMessage: 'Existing-site generation requires an owner-scoped Diagnosis session.' })
+    if (candidate.diagnosisProjection || candidate.approvedEvidenceReferences || candidate.resolvedEvidenceSnapshotHash) throw createError({ statusCode: 422, statusMessage: 'Existing-site Diagnosis and evidence must be resolved by the server.' })
+    const normalizedExistingSiteUrl = assertExistingSiteUrl(candidate.existingSiteUrl as string)
+    const diagnosisId = Number(candidate.diagnosisId)
+    if (!Number.isSafeInteger(diagnosisId) || diagnosisId < 1) invalid('Existing-site Diagnosis ID is required.')
+    const diagnosis = await diagnosisResolver.resolve(ownerUserId, { existingSiteUrl: normalizedExistingSiteUrl, diagnosisId, findingIds: candidate.diagnosisFindingIds as string[] | undefined })
+    specInput = {
+      ...candidate,
+      existingSiteUrl: diagnosis.normalizedSiteUrl,
+      diagnosisBinding: { diagnosisId: diagnosis.diagnosisId, findingIds: diagnosis.findings.map(finding => finding.id).sort() },
+      diagnosisProjection: { issueKeys: diagnosis.findings.map(finding => finding.issueCode), limitations: diagnosis.limitations },
+      approvedEvidenceReferences: diagnosis.evidenceSnapshot.refs.map(reference => ({ sourceId: reference.sourceId, artifactId: reference.artifactId ?? null, locator: reference.locator, artifactHash: reference.artifactHash, approvedAt: reference.approvedAt, purpose: 'content_draft' as const })),
+      resolvedEvidenceSnapshotHash: diagnosis.evidenceSnapshot.hash,
+    }
+  } else {
+    if (candidate.diagnosisProjection || candidate.approvedEvidenceReferences || candidate.diagnosisId || candidate.diagnosisFindingIds || candidate.resolvedEvidenceSnapshotHash) throw createError({ statusCode: 422, statusMessage: 'Diagnosis and evidence inputs are server-resolved only.' })
+    specInput = { ...candidate, approvedEvidenceReferences: [] }
+  }
+  const spec = buildSiteSpec(specInput, clock())
   const existing = await repository.findPreviewByDraftKey(spec.draftIdentity)
   if (existing) {
     if (existing.previewFingerprint !== stableFingerprint({ draftIdentity: spec.draftIdentity, specFingerprint: spec.deterministicFingerprint })) throw createError({ statusCode: 409, statusMessage: 'Draft identity is already used by a different preview.' })
@@ -100,8 +124,8 @@ export async function createManagedSitePreview(ownerUserId: number | null, input
     ownerUserId,
     draftKey: spec.draftIdentity,
     accessTokenHash: tokenHash(accessToken),
-    sourceMode: input && typeof input === 'object' && 'diagnosisProjection' in input ? 'existing_site' : 'new_site',
-    existingSiteUrl: input && typeof input === 'object' && typeof (input as { existingSiteUrl?: unknown }).existingSiteUrl === 'string' ? (input as { existingSiteUrl: string }).existingSiteUrl : null,
+    sourceMode: isExistingSite ? 'existing_site' : 'new_site',
+    existingSiteUrl: isExistingSite ? specInput.existingSiteUrl as string : null,
     brief: spec.businessIdentity.brief,
     businessGoals: spec.businessGoals,
     styleProfile: spec.styleReferenceProfile || {},
