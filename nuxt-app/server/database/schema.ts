@@ -1559,3 +1559,106 @@ export type ManagedSiteLeadIntent = typeof managedSiteLeadIntents.$inferSelect
 export type ManagedSiteDraftOrder = typeof managedSiteDraftOrders.$inferSelect
 export type ManagedSitePaymentEvent = typeof managedSitePaymentEvents.$inferSelect
 export type ManagedSiteSubscriptionIntent = typeof managedSiteSubscriptionIntents.$inferSelect
+
+
+/** Customer domain ownership and purchase intent; provider execution is deliberately separate. */
+export const managedSiteDomainIntents = mysqlTable('managedSiteDomainIntents', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  draftOrderId: int('draftOrderId').references(() => managedSiteDraftOrders.id),
+  mode: mysqlEnum('mode', ['customer_owned', 'new_registration', 'assisted']).notNull(),
+  requestedDomain: varchar('requestedDomain', { length: 253 }).notNull(),
+  normalizedDomain: varchar('normalizedDomain', { length: 253 }).notNull(),
+  ownershipStatus: mysqlEnum('ownershipStatus', ['unknown', 'customer_confirmed', 'provider_verified', 'needs_customer_action']).default('unknown').notNull(),
+  purchaseStatus: mysqlEnum('purchaseStatus', ['not_requested', 'intent_created', 'pending_provider', 'registered', 'failed', 'cancelled']).default('not_requested').notNull(),
+  dnsStatus: mysqlEnum('dnsStatus', ['not_requested', 'pending_customer', 'pending_provider', 'verified', 'failed']).default('not_requested').notNull(),
+  providerKey: varchar('providerKey', { length: 96 }),
+  providerReference: varchar('providerReference', { length: 160 }),
+  configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_domain_intents_project_unique').on(table.projectId),
+  uniqueIndex('managed_site_domain_intents_idempotency_unique').on(table.idempotencyKey),
+  index('managed_site_domain_intents_owner_status_idx').on(table.ownerUserId, table.purchaseStatus, table.dnsStatus),
+])
+
+/** Provider-neutral deployment plan. It records intent and receipts, not credentials or generated executable source. */
+export const managedSiteProvisioningPlans = mysqlTable('managedSiteProvisioningPlans', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  versionId: int('versionId').notNull().references(() => managedSiteVersions.id),
+  domainIntentId: int('domainIntentId').notNull().references(() => managedSiteDomainIntents.id),
+  platform: mysqlEnum('platform', ['vercel', 'cloudflare_pages', 'manual_export']).notNull(),
+  deploymentMode: mysqlEnum('deploymentMode', ['preview_only', 'customer_authorized', 'owner_authorized']).default('preview_only').notNull(),
+  status: mysqlEnum('status', ['draft', 'awaiting_payment', 'awaiting_authorization', 'queued', 'processing', 'blocked', 'failed', 'succeeded', 'cancelled']).default('draft').notNull(),
+  domainStatus: mysqlEnum('domainStatus', ['not_started', 'awaiting_customer', 'provider_pending', 'verified', 'blocked']).default('not_started').notNull(),
+  dnsStatus: mysqlEnum('dnsStatus', ['not_started', 'awaiting_customer', 'provider_pending', 'verified', 'blocked']).default('not_started').notNull(),
+  tlsStatus: mysqlEnum('tlsStatus', ['not_started', 'provider_pending', 'verified', 'blocked']).default('not_started').notNull(),
+  deploymentStatus: mysqlEnum('deploymentStatus', ['not_started', 'provider_pending', 'built', 'released', 'blocked', 'failed']).default('not_started').notNull(),
+  intentFingerprint: varchar('intentFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  providerProjectReference: varchar('providerProjectReference', { length: 160 }),
+  providerDeploymentReference: varchar('providerDeploymentReference', { length: 160 }),
+  deployedUrl: varchar('deployedUrl', { length: 2048 }),
+  tlsCertificateReference: varchar('tlsCertificateReference', { length: 160 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_provisioning_plans_project_version_unique').on(table.projectId, table.versionId),
+  uniqueIndex('managed_site_provisioning_plans_intent_unique').on(table.intentFingerprint),
+  uniqueIndex('managed_site_provisioning_plans_idempotency_unique').on(table.idempotencyKey),
+  index('managed_site_provisioning_plans_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+])
+
+/** Ordered, retryable, provider-neutral provisioning steps. */
+export const managedSiteProvisioningSteps = mysqlTable('managedSiteProvisioningSteps', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  planId: int('planId').notNull().references(() => managedSiteProvisioningPlans.id),
+  stepKey: varchar('stepKey', { length: 96 }).notNull(),
+  ordinal: int('ordinal').notNull(),
+  status: mysqlEnum('status', ['pending', 'awaiting_customer', 'blocked', 'processing', 'retry_wait', 'succeeded', 'failed', 'cancelled']).default('pending').notNull(),
+  providerKey: varchar('providerKey', { length: 96 }),
+  attemptNumber: int('attemptNumber').default(0).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  outputFingerprint: varchar('outputFingerprint', { length: 128 }),
+  errorCode: varchar('errorCode', { length: 120 }),
+  errorSummary: varchar('errorSummary', { length: 500 }),
+  externalReference: varchar('externalReference', { length: 160 }),
+  completedAt: timestamp('completedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_provisioning_steps_plan_key_unique').on(table.planId, table.stepKey),
+  index('managed_site_provisioning_steps_owner_plan_status_idx').on(table.ownerUserId, table.planId, table.status),
+])
+
+/** Append-only provisioning receipts; external provider calls are never implied by an intent record. */
+export const managedSiteProvisioningEvents = mysqlTable('managedSiteProvisioningEvents', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  planId: int('planId').notNull().references(() => managedSiteProvisioningPlans.id),
+  stepId: int('stepId').references(() => managedSiteProvisioningSteps.id),
+  eventType: varchar('eventType', { length: 120 }).notNull(),
+  executionMode: mysqlEnum('executionMode', ['dry_run', 'mocked', 'external']).notNull(),
+  status: mysqlEnum('status', ['planned', 'blocked', 'succeeded', 'failed']).notNull(),
+  providerKey: varchar('providerKey', { length: 96 }),
+  externalReference: varchar('externalReference', { length: 160 }),
+  receiptFingerprint: varchar('receiptFingerprint', { length: 128 }).notNull(),
+  metadata: json('metadata').notNull(),
+  occurredAt: timestamp('occurredAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_provisioning_events_receipt_unique').on(table.ownerUserId, table.receiptFingerprint),
+  index('managed_site_provisioning_events_owner_plan_idx').on(table.ownerUserId, table.planId, table.occurredAt),
+])
+
+export type ManagedSiteDomainIntent = typeof managedSiteDomainIntents.$inferSelect
+export type ManagedSiteProvisioningPlan = typeof managedSiteProvisioningPlans.$inferSelect
+export type ManagedSiteProvisioningStep = typeof managedSiteProvisioningSteps.$inferSelect
+export type ManagedSiteProvisioningEvent = typeof managedSiteProvisioningEvents.$inferSelect
