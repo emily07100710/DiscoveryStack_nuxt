@@ -1,6 +1,7 @@
 import { fingerprint } from '../../server/geo-outcome-model/canonical'
 import { observationIdentity } from '../../server/geo-outcome-model/observation-contract'
-import type { DatasetManifest, DatasetMember, EvidenceLocatorRecord, GeoOutcomeRepositoryPort, MemoryGeoOutcomeRepository, MemoryGeoOutcomeState, ModelArtifact, ModelDecision, MutationClaim, MutationClaimResult, ObservationGovernanceAction, ObservationVerificationDecision, OutcomeObservation, TrainingRun, TrainingRunClaimResult } from '../../server/geo-outcome-model/types'
+import { projectAuthoritativeEvidenceBinding } from '../../server/geo-outcome-model/evidence-resolver'
+import type { AuthoritativeEvidenceSource, DatasetDecision, DatasetManifest, DatasetMember, GeoOutcomeRepositoryPort, MemoryGeoOutcomeRepository, MemoryGeoOutcomeState, ModelArtifact, ModelDecision, MutationClaim, MutationClaimResult, ObservationGovernanceAction, ObservationVerificationDecision, OutcomeObservation, TrainingRun, TrainingRunClaimResult } from '../../server/geo-outcome-model/types'
 
 function clone<T>(value: T): T { return structuredClone(value) }
 function assertOwner(expected: number, actual: number) { if (expected !== actual) throw new Error('Owner scope mismatch.') }
@@ -10,9 +11,10 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
   private state: MemoryGeoOutcomeState
   private lock: Promise<void> = Promise.resolve()
   constructor(initial?: MemoryGeoOutcomeState) {
-    this.state = initial ? { ...clone(initial), evidenceLocators: clone(initial.evidenceLocators || []) } : { observations: [], datasets: [], datasetMembers: {}, trainingRuns: [], artifacts: [], decisions: [], verificationDecisions: [], evidenceLocators: [], claims: [] }
+    this.state = initial ? { ...clone(initial), datasetDecisions: clone(initial.datasetDecisions || []), evidenceBindings: clone(initial.evidenceBindings || []), authoritativeEvidenceSources: clone(initial.authoritativeEvidenceSources || []) } : { observations: [], datasets: [], datasetMembers: {}, trainingRuns: [], artifacts: [], datasetDecisions: [], decisions: [], verificationDecisions: [], evidenceBindings: [], authoritativeEvidenceSources: [], claims: [] }
   }
   exportState(): MemoryGeoOutcomeState { return clone(this.state) }
+  seedAuthoritativeEvidence(source: AuthoritativeEvidenceSource): void { this.state.authoritativeEvidenceSources.push(clone(source)) }
 
   private projectGovernance(observation: OutcomeObservation): OutcomeObservation {
     if (observation.verificationAuthority === 'consumer_surface_server') return clone(observation)
@@ -22,7 +24,7 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
     const consent = facts.some(item => item.factType === 'consent_review' && item.factStatus === 'approved')
     const pii = facts.some(item => item.factType === 'pii_review' && item.factStatus === 'approved')
     const reviewFingerprint = facts.length ? fingerprint(facts.map(item => item.decisionFingerprint).sort()) : null
-    return { ...observation, verificationStatus: revoked ? 'revoked' : evidence ? 'verified' : 'unverified', consentStatus: revoked ? 'revoked' : consent ? 'approved' : 'unknown', piiStatus: revoked ? 'unknown' : pii ? 'clean' : 'unknown', verificationAuthority: evidence ? 'owner_review' : 'intake', reviewFingerprint }
+    return { ...observation, verificationStatus: revoked ? 'revoked' : evidence && consent && pii ? 'verified' : 'unverified', consentStatus: revoked ? 'revoked' : consent ? 'approved' : 'unknown', piiStatus: revoked ? 'unknown' : pii ? 'clean' : 'unknown', verificationAuthority: evidence && consent && pii ? 'owner_review' : 'intake', reviewFingerprint }
   }
   async listObservations(ownerUserId: number) { return clone(this.state.observations.filter(o => o.ownerUserId === ownerUserId).map(o => this.projectGovernance(o))) }
   async getObservation(ownerUserId: number, observationFingerprint: string) { const row = this.state.observations.find(o => o.ownerUserId === ownerUserId && o.observationFingerprint === observationFingerprint); return row ? clone(this.projectGovernance(row)) : null }
@@ -36,16 +38,17 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
       return clone(observation)
     })
   }
-  async registerEvidenceLocatorTransactional(record: EvidenceLocatorRecord) {
+  async bindAuthoritativeEvidenceTransactional(ownerUserId: number, observationFingerprint: string, sourceRecordId: number) {
     return this.withLock(async () => {
-      const observation = this.state.observations.find(item => item.ownerUserId === record.ownerUserId && item.observationFingerprint === record.observationFingerprint)
+      const observation = this.state.observations.find(item => item.ownerUserId === ownerUserId && item.observationFingerprint === observationFingerprint)
       if (!observation) throw new Error('Observation not found.')
-      if (!observation.evidenceLocatorHashes.includes(record.evidenceLocatorHash)) throw new Error('Evidence locator is not approved for this observation.')
-      if (record.purpose !== 'geo_outcome_verification' || record.evidenceSnapshotHash !== observation.evidenceSnapshotHash || record.artifactHash !== observation.evidenceSnapshotHash) throw new Error('Evidence locator lineage mismatch.')
-      const existing = this.state.evidenceLocators.find(item => item.ownerUserId === record.ownerUserId && item.evidenceLocatorHash === record.evidenceLocatorHash)
-      if (existing) { if (fingerprint(existing) !== fingerprint(record)) throw new Error('Evidence locator collision.'); return clone(existing) }
-      this.state.evidenceLocators.push(clone(record))
-      return clone(record)
+      const source = this.state.authoritativeEvidenceSources.find(item => item.ownerUserId === ownerUserId && item.sourceRecordId === sourceRecordId)
+      if (!source) throw new Error('Authoritative LLM visibility evidence was not found for this owner.')
+      const binding = projectAuthoritativeEvidenceBinding(ownerUserId, observation, source)
+      const existing = this.state.evidenceBindings.find(item => item.ownerUserId === ownerUserId && item.observationFingerprint === observationFingerprint && item.sourceKind === binding.sourceKind && item.sourceRecordId === sourceRecordId)
+      if (existing) { if (fingerprint({ ...existing, createdAt: null }) !== fingerprint({ ...binding, createdAt: null })) throw new Error('Authoritative evidence binding collision.'); return clone(existing) }
+      this.state.evidenceBindings.push(clone(binding))
+      return clone(binding)
     })
   }
   async verifyObservationTransactional(ownerUserId: number, observationFingerprint: string, reviewerUserId: number, action: ObservationGovernanceAction, reason: string, evidenceLocatorHash: string | null = null) {
@@ -59,8 +62,8 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
       if (this.state.verificationDecisions.some(item => item.ownerUserId === ownerUserId && item.observationFingerprint === observationFingerprint && item.factType === factType)) throw new Error('Duplicate governance fact.')
       if (action === 'verify_evidence') {
         if (!evidenceLocatorHash || !current.evidenceLocatorHashes.includes(evidenceLocatorHash)) throw new Error('Evidence locator is not approved for this observation.')
-        const resolved = this.state.evidenceLocators.find(item => item.ownerUserId === ownerUserId && item.observationFingerprint === observationFingerprint && item.evidenceLocatorHash === evidenceLocatorHash && item.purpose === 'geo_outcome_verification' && item.artifactHash === current.evidenceSnapshotHash && item.evidenceSnapshotHash === current.evidenceSnapshotHash)
-        if (!resolved) throw new Error('Evidence locator could not be resolved with matching owner, purpose and artifact lineage.')
+        const resolved = this.state.evidenceBindings.find(item => item.ownerUserId === ownerUserId && item.observationFingerprint === observationFingerprint && item.evidenceLocatorHash === evidenceLocatorHash && item.purpose === 'geo_outcome_verification' && item.sourceKind === 'llm_visibility_observation' && item.sourceResponseHash === current.evidenceSnapshotHash)
+        if (!resolved) throw new Error('Evidence locator has not been bound from authoritative owner-scoped consumer-surface evidence.')
       } else if (evidenceLocatorHash !== null) throw new Error('Only evidence verification may include an evidence locator.')
       const before = this.projectGovernance(current)
       const factStatus = action === 'revoke' ? 'revoked' : 'approved'
@@ -84,15 +87,20 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
       this.state.datasets.push(clone(manifest)); this.state.datasetMembers[manifest.manifestId] = clone(members); return clone(manifest)
     })
   }
-  async transitionDataset(ownerUserId: number, manifestId: string, status: DatasetManifest['status']) {
+  async transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetManifest['status'], reviewerUserId: number, reason: string) {
     return this.withLock(async () => {
       const index = this.state.datasets.findIndex(d => d.ownerUserId === ownerUserId && d.manifestId === manifestId)
       if (index < 0) throw new Error('Dataset manifest not found.')
       const current = this.state.datasets[index]!; if (current.status === 'revoked' || current.status === 'archived') throw new Error('Dataset is terminal and cannot be modified.')
       if (status === 'approved' && current.status !== 'ready_for_review') throw new Error('Only ready_for_review datasets may be approved.')
-      const updated = { ...current, status }; this.state.datasets.splice(index, 1, updated); return clone(updated)
+      if (status !== 'approved' && status !== 'revoked') throw new Error('Dataset review may only approve or revoke.')
+      const decisionFingerprint = fingerprint({ ownerUserId, manifestId, previousStatus: current.status, newStatus: status, reviewerUserId, reason, manifestFingerprint: current.manifestFingerprint })
+      const decision: DatasetDecision = { decisionId: `geo-dataset-decision-${decisionFingerprint.slice(0, 20)}`, ownerUserId, manifestId, previousStatus: current.status, newStatus: status, reviewerUserId, reason, manifestFingerprint: current.manifestFingerprint, createdAt: new Date().toISOString() }
+      if (this.state.datasetDecisions.some(item => item.decisionId === decision.decisionId)) throw new Error('Duplicate or stale dataset decision.')
+      const updated = { ...current, status }; this.state.datasets.splice(index, 1, updated); this.state.datasetDecisions.push(clone(decision)); return { manifest: clone(updated), decision: clone(decision) }
     })
   }
+  async listDatasetDecisions(ownerUserId: number) { return clone(this.state.datasetDecisions.filter(item => item.ownerUserId === ownerUserId)) }
 
   async createTrainingRun(ownerUserId: number, run: TrainingRun) { assertOwner(ownerUserId, run.ownerUserId); return this.withLock(async () => { if (this.state.trainingRuns.some(r => r.ownerUserId === ownerUserId && r.trainingRunId === run.trainingRunId)) throw new Error('Training run collision.'); this.state.trainingRuns.push(clone(run)); return clone(run) }) }
   async getTrainingRun(ownerUserId: number, trainingRunId: string) { return clone(this.state.trainingRuns.find(r => r.ownerUserId === ownerUserId && r.trainingRunId === trainingRunId) || null) }

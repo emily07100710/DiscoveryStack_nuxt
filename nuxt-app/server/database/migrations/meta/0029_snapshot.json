@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "f09b1528-ba97-40bf-b550-b136cfe773af",
+  "id": "e8edcfe4-f9fd-4581-87e4-a09ccb944c43",
   "prevId": "428a10b6-7b01-404d-aff8-c30b17fc1e0d",
   "tables": {
     "auditEvidenceLedger": {
@@ -4558,6 +4558,151 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "geoOutcomeDatasetDecisions": {
+      "name": "geoOutcomeDatasetDecisions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "decisionId": {
+          "name": "decisionId",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ownerUserId": {
+          "name": "ownerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "datasetManifestId": {
+          "name": "datasetManifestId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reviewerUserId": {
+          "name": "reviewerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "previousStatus": {
+          "name": "previousStatus",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "newStatus": {
+          "name": "newStatus",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "manifestFingerprint": {
+          "name": "manifestFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "geo_outcome_dataset_decisions_owner_manifest_idx": {
+          "name": "geo_outcome_dataset_decisions_owner_manifest_idx",
+          "columns": [
+            "ownerUserId",
+            "datasetManifestId",
+            "createdAt"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "geoOutcomeDatasetDecisions_ownerUserId_users_id_fk": {
+          "name": "geoOutcomeDatasetDecisions_ownerUserId_users_id_fk",
+          "tableFrom": "geoOutcomeDatasetDecisions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeDatasetDecisions_datasetManifestId_geoOutcomeDatasetManifests_id_fk": {
+          "name": "geoOutcomeDatasetDecisions_datasetManifestId_geoOutcomeDatasetManifests_id_fk",
+          "tableFrom": "geoOutcomeDatasetDecisions",
+          "tableTo": "geoOutcomeDatasetManifests",
+          "columnsFrom": [
+            "datasetManifestId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeDatasetDecisions_reviewerUserId_users_id_fk": {
+          "name": "geoOutcomeDatasetDecisions_reviewerUserId_users_id_fk",
+          "tableFrom": "geoOutcomeDatasetDecisions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "reviewerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "geoOutcomeDatasetDecisions_id": {
+          "name": "geoOutcomeDatasetDecisions_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "geoOutcomeDatasetDecisions_decisionId_unique": {
+          "name": "geoOutcomeDatasetDecisions_decisionId_unique",
+          "columns": [
+            "decisionId"
+          ]
+        }
+      },
+      "checkConstraint": {}
+    },
     "geoOutcomeDatasetManifests": {
       "name": "geoOutcomeDatasetManifests",
       "columns": {
@@ -4715,6 +4860,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "readiness": {
+          "name": "readiness",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "status": {
           "name": "status",
           "type": "enum('draft','gate_blocked','ready_for_review','approved','revoked','archived')",
@@ -4851,6 +5003,36 @@
           "notNull": true,
           "autoincrement": false
         },
+        "splitAssignment": {
+          "name": "splitAssignment",
+          "type": "enum('train','validation','test','site_holdout','query_holdout','temporal_holdout')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "consentStatus": {
+          "name": "consentStatus",
+          "type": "enum('approved','revoked','unknown')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "piiStatus": {
+          "name": "piiStatus",
+          "type": "enum('clean','contains_pii','unknown')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "reviewFingerprint": {
+          "name": "reviewFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "featureVector": {
           "name": "featureVector",
           "type": "json",
@@ -4916,6 +5098,341 @@
       "compositePrimaryKeys": {
         "geoOutcomeDatasetMembers_id": {
           "name": "geoOutcomeDatasetMembers_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "geoOutcomeEvidenceLocators": {
+      "name": "geoOutcomeEvidenceLocators",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "ownerUserId": {
+          "name": "ownerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "observationFingerprint": {
+          "name": "observationFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceLocatorHash": {
+          "name": "evidenceLocatorHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "enum('geo_outcome_verification')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceKind": {
+          "name": "sourceKind",
+          "type": "enum('llm_visibility_observation')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceRecordId": {
+          "name": "sourceRecordId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceProjectId": {
+          "name": "sourceProjectId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceQueryId": {
+          "name": "sourceQueryId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceRunId": {
+          "name": "sourceRunId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceResponseHash": {
+          "name": "sourceResponseHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceObservedAt": {
+          "name": "sourceObservedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "geo_outcome_evidence_binding_unique": {
+          "name": "geo_outcome_evidence_binding_unique",
+          "columns": [
+            "ownerUserId",
+            "observationFingerprint"
+          ],
+          "isUnique": true
+        },
+        "geo_outcome_evidence_observation_idx": {
+          "name": "geo_outcome_evidence_observation_idx",
+          "columns": [
+            "ownerUserId",
+            "observationFingerprint"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "geoOutcomeEvidenceLocators_ownerUserId_users_id_fk": {
+          "name": "geoOutcomeEvidenceLocators_ownerUserId_users_id_fk",
+          "tableFrom": "geoOutcomeEvidenceLocators",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeEvidenceLocators_sourceRecordId_llmVisibilityObservations_id_fk": {
+          "name": "geoOutcomeEvidenceLocators_sourceRecordId_llmVisibilityObservations_id_fk",
+          "tableFrom": "geoOutcomeEvidenceLocators",
+          "tableTo": "llmVisibilityObservations",
+          "columnsFrom": [
+            "sourceRecordId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeEvidenceLocators_sourceProjectId_llmVisibilityProjects_id_fk": {
+          "name": "geoOutcomeEvidenceLocators_sourceProjectId_llmVisibilityProjects_id_fk",
+          "tableFrom": "geoOutcomeEvidenceLocators",
+          "tableTo": "llmVisibilityProjects",
+          "columnsFrom": [
+            "sourceProjectId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeEvidenceLocators_sourceQueryId_llmVisibilityQueries_id_fk": {
+          "name": "geoOutcomeEvidenceLocators_sourceQueryId_llmVisibilityQueries_id_fk",
+          "tableFrom": "geoOutcomeEvidenceLocators",
+          "tableTo": "llmVisibilityQueries",
+          "columnsFrom": [
+            "sourceQueryId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeEvidenceLocators_sourceRunId_llmVisibilityRuns_id_fk": {
+          "name": "geoOutcomeEvidenceLocators_sourceRunId_llmVisibilityRuns_id_fk",
+          "tableFrom": "geoOutcomeEvidenceLocators",
+          "tableTo": "llmVisibilityRuns",
+          "columnsFrom": [
+            "sourceRunId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "geoOutcomeEvidenceLocators_id": {
+          "name": "geoOutcomeEvidenceLocators_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "geoOutcomeIdempotencyClaims": {
+      "name": "geoOutcomeIdempotencyClaims",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "ownerUserId": {
+          "name": "ownerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "routeIdentity": {
+          "name": "routeIdentity",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "idempotencyKey": {
+          "name": "idempotencyKey",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "inputFingerprint": {
+          "name": "inputFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "enum('claimed','completed','failed')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'claimed'"
+        },
+        "responseProjection": {
+          "name": "responseProjection",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "responseFingerprint": {
+          "name": "responseFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leaseOwner": {
+          "name": "leaseOwner",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leaseExpiresAt": {
+          "name": "leaseExpiresAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "completedAt": {
+          "name": "completedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "geo_outcome_idempotency_owner_route_key_unique": {
+          "name": "geo_outcome_idempotency_owner_route_key_unique",
+          "columns": [
+            "ownerUserId",
+            "routeIdentity",
+            "idempotencyKey"
+          ],
+          "isUnique": true
+        },
+        "geo_outcome_idempotency_lease_idx": {
+          "name": "geo_outcome_idempotency_lease_idx",
+          "columns": [
+            "state",
+            "leaseExpiresAt"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "geoOutcomeIdempotencyClaims_ownerUserId_users_id_fk": {
+          "name": "geoOutcomeIdempotencyClaims_ownerUserId_users_id_fk",
+          "tableFrom": "geoOutcomeIdempotencyClaims",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "geoOutcomeIdempotencyClaims_id": {
+          "name": "geoOutcomeIdempotencyClaims_id",
           "columns": [
             "id"
           ]
@@ -5065,6 +5582,13 @@
           "type": "varchar(128)",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "rollbackArtifactHash": {
+          "name": "rollbackArtifactHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "status": {
@@ -5432,6 +5956,51 @@
           "notNull": true,
           "autoincrement": false
         },
+        "consentStatus": {
+          "name": "consentStatus",
+          "type": "enum('approved','revoked','unknown')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "piiStatus": {
+          "name": "piiStatus",
+          "type": "enum('clean','contains_pii','unknown')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "verificationAuthority": {
+          "name": "verificationAuthority",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'none'"
+        },
+        "intakeFingerprint": {
+          "name": "intakeFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reviewFingerprint": {
+          "name": "reviewFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "observationPayload": {
+          "name": "observationPayload",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "evidenceLocatorHashes": {
           "name": "evidenceLocatorHashes",
           "type": "json",
@@ -5727,6 +6296,167 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "geoOutcomeObservationVerifications": {
+      "name": "geoOutcomeObservationVerifications",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "ownerUserId": {
+          "name": "ownerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "observationFingerprint": {
+          "name": "observationFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reviewerUserId": {
+          "name": "reviewerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "previousVerificationStatus": {
+          "name": "previousVerificationStatus",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "newVerificationStatus": {
+          "name": "newVerificationStatus",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceLocatorHash": {
+          "name": "evidenceLocatorHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "factType": {
+          "name": "factType",
+          "type": "enum('evidence_verification','consent_review','pii_review','revocation')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "factStatus": {
+          "name": "factStatus",
+          "type": "enum('approved','rejected','revoked')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decisionFingerprint": {
+          "name": "decisionFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "consentStatus": {
+          "name": "consentStatus",
+          "type": "enum('approved','revoked','unknown')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "piiStatus": {
+          "name": "piiStatus",
+          "type": "enum('clean','contains_pii','unknown')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "geo_outcome_verification_decision_unique": {
+          "name": "geo_outcome_verification_decision_unique",
+          "columns": [
+            "ownerUserId",
+            "decisionFingerprint"
+          ],
+          "isUnique": true
+        },
+        "geo_outcome_verification_observation_idx": {
+          "name": "geo_outcome_verification_observation_idx",
+          "columns": [
+            "ownerUserId",
+            "observationFingerprint",
+            "createdAt"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "geoOutcomeObservationVerifications_ownerUserId_users_id_fk": {
+          "name": "geoOutcomeObservationVerifications_ownerUserId_users_id_fk",
+          "tableFrom": "geoOutcomeObservationVerifications",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeObservationVerifications_reviewerUserId_users_id_fk": {
+          "name": "geoOutcomeObservationVerifications_reviewerUserId_users_id_fk",
+          "tableFrom": "geoOutcomeObservationVerifications",
+          "tableTo": "users",
+          "columnsFrom": [
+            "reviewerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "geoOutcomeObservationVerifications_id": {
+          "name": "geoOutcomeObservationVerifications_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
     "geoOutcomeTrainingRuns": {
       "name": "geoOutcomeTrainingRuns",
       "columns": {
@@ -5772,6 +6502,42 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'queued'"
+        },
+        "startedAt": {
+          "name": "startedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "completedAt": {
+          "name": "completedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leaseOwner": {
+          "name": "leaseOwner",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leaseExpiresAt": {
+          "name": "leaseExpiresAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         },
         "configuration": {
           "name": "configuration",

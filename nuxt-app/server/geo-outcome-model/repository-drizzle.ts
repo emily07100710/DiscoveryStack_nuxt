@@ -1,8 +1,9 @@
-import { and, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, sql } from 'drizzle-orm'
 import { getDatabase } from '../database'
 import {
   geoOutcomeDatasetManifests,
   geoOutcomeDatasetMembers,
+  geoOutcomeDatasetDecisions,
   geoOutcomeEvidenceLocators,
   geoOutcomeIdempotencyClaims,
   geoOutcomeModelArtifacts,
@@ -13,6 +14,7 @@ import {
   geoOutcomeTrainingRuns,
   type GeoOutcomeDatasetManifest,
   type GeoOutcomeDatasetMember,
+  type GeoOutcomeDatasetDecision,
   type GeoOutcomeModelArtifact,
   type GeoOutcomeModelDecision,
   type GeoOutcomeObservationCandidate,
@@ -27,11 +29,13 @@ import { getDatasetReadiness } from './dataset-builder'
 import { normalizeManualObservation } from './normalization'
 import { parseTrainingConfig } from './trainer'
 import { splitFingerprint } from './split-policy'
+import { resolveAuthoritativeLlmVisibilityEvidence } from './evidence-resolver'
 import type {
+  DatasetDecision,
   DatasetManifest,
   DatasetMember,
   DatasetReadiness,
-  EvidenceLocatorRecord,
+  EvidenceBinding,
   EvaluationBundle,
   FeatureVector,
   GeoOutcomeRepositoryPort,
@@ -183,26 +187,40 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     return this.governanceProjection(immutable, facts)
   }
 
+  private async revalidateAuthoritativeEvidence(observation: OutcomeObservation, facts: readonly GeoOutcomeObservationVerification[]): Promise<OutcomeObservation> {
+    if (facts.some(item => item.factType === 'revocation' && item.factStatus === 'revoked')) return observation
+    if (!facts.some(item => item.factType === 'evidence_verification' && item.factStatus === 'approved')) return observation
+    const bindings = await this.db.select().from(geoOutcomeEvidenceLocators).where(and(eq(geoOutcomeEvidenceLocators.ownerUserId, observation.ownerUserId), eq(geoOutcomeEvidenceLocators.observationFingerprint, observation.observationFingerprint), eq(geoOutcomeEvidenceLocators.purpose, 'geo_outcome_verification'), eq(geoOutcomeEvidenceLocators.sourceKind, 'llm_visibility_observation')))
+    if (bindings.length !== 1) throw new Error('Durable evidence governance must have exactly one authoritative binding.')
+    const stored = bindings[0]!
+    const resolved = await resolveAuthoritativeLlmVisibilityEvidence(this.db, observation.ownerUserId, observation, stored.sourceRecordId)
+    if (stored.evidenceLocatorHash !== resolved.evidenceLocatorHash || stored.sourceResponseHash !== resolved.sourceResponseHash || stored.sourceProjectId !== resolved.sourceProjectId || stored.sourceQueryId !== resolved.sourceQueryId || stored.sourceRunId !== resolved.sourceRunId || toIso(stored.sourceObservedAt) !== resolved.sourceObservedAt) throw new Error('Durable authoritative evidence binding no longer matches source lineage.')
+    return observation
+  }
+
   async listObservations(ownerUserId: number): Promise<OutcomeObservation[]> {
     const runs = await this.db.select().from(geoOutcomeObservationRuns).where(eq(geoOutcomeObservationRuns.ownerUserId, ownerUserId))
     const candidates = await this.db.select().from(geoOutcomeObservationCandidates).where(eq(geoOutcomeObservationCandidates.ownerUserId, ownerUserId))
     const facts = await this.db.select().from(geoOutcomeObservationVerifications).where(eq(geoOutcomeObservationVerifications.ownerUserId, ownerUserId))
     const runById = new Map(runs.map(run => [run.id, run]))
-    return candidates.map(candidate => {
+    return Promise.all(candidates.map(async candidate => {
       const run = runById.get(candidate.observationRunId)
       if (!run) throw new Error('Dangling observation run.')
-      return this.mapObservation(run, candidate, facts.filter(item => item.observationFingerprint === candidate.observationFingerprint))
-    })
+      const observationFacts = facts.filter(item => item.observationFingerprint === candidate.observationFingerprint)
+      return this.revalidateAuthoritativeEvidence(this.mapObservation(run, candidate, observationFacts), observationFacts)
+    }))
   }
 
-  async getObservation(ownerUserId: number, observationFingerprint: string): Promise<OutcomeObservation | null> {
+  private async readObservation(ownerUserId: number, observationFingerprint: string, revalidateEvidence: boolean): Promise<OutcomeObservation | null> {
     const [candidate] = await this.db.select().from(geoOutcomeObservationCandidates).where(and(eq(geoOutcomeObservationCandidates.ownerUserId, ownerUserId), eq(geoOutcomeObservationCandidates.observationFingerprint, observationFingerprint))).limit(1)
     if (!candidate) return null
     const [run] = await this.db.select().from(geoOutcomeObservationRuns).where(and(eq(geoOutcomeObservationRuns.ownerUserId, ownerUserId), eq(geoOutcomeObservationRuns.id, candidate.observationRunId))).limit(1)
     if (!run) throw new Error('Dangling observation run.')
     const facts = await this.db.select().from(geoOutcomeObservationVerifications).where(and(eq(geoOutcomeObservationVerifications.ownerUserId, ownerUserId), eq(geoOutcomeObservationVerifications.observationFingerprint, observationFingerprint)))
-    return this.mapObservation(run, candidate, facts)
+    const observation = this.mapObservation(run, candidate, facts)
+    return revalidateEvidence ? this.revalidateAuthoritativeEvidence(observation, facts) : observation
   }
+  async getObservation(ownerUserId: number, observationFingerprint: string): Promise<OutcomeObservation | null> { return this.readObservation(ownerUserId, observationFingerprint, true) }
 
   async saveObservationTransactional(ownerUserId: number, observation: OutcomeObservation): Promise<OutcomeObservation> {
     if (observation.ownerUserId !== ownerUserId) throw new Error('Owner scope mismatch.')
@@ -236,28 +254,27 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     })
   }
 
-  async registerEvidenceLocatorTransactional(record: EvidenceLocatorRecord): Promise<EvidenceLocatorRecord> {
-    if (!isSha256(record.evidenceLocatorHash) || !isSha256(record.artifactHash) || !isSha256(record.evidenceSnapshotHash)) throw new Error('Evidence locator hashes are invalid.')
+  async bindAuthoritativeEvidenceTransactional(ownerUserId: number, observationFingerprint: string, sourceRecordId: number): Promise<EvidenceBinding> {
     return this.db.transaction(async tx => {
       const repo = new DrizzleGeoOutcomeRepository(tx)
-      const observation = await repo.getObservation(record.ownerUserId, record.observationFingerprint)
+      const observation = await repo.readObservation(ownerUserId, observationFingerprint, false)
       if (!observation) throw new Error('Observation not found.')
-      if (!observation.evidenceLocatorHashes.includes(record.evidenceLocatorHash)) throw new Error('Evidence locator is not approved for this observation.')
-      if (record.purpose !== 'geo_outcome_verification' || record.evidenceSnapshotHash !== observation.evidenceSnapshotHash || record.artifactHash !== observation.evidenceSnapshotHash) throw new Error('Evidence locator lineage mismatch.')
+      const binding = await resolveAuthoritativeLlmVisibilityEvidence(tx, ownerUserId, observation, sourceRecordId)
       try {
-        await tx.insert(geoOutcomeEvidenceLocators).values({ ...record, createdAt: new Date(record.createdAt) })
+        await tx.insert(geoOutcomeEvidenceLocators).values({ ...binding, sourceObservedAt: new Date(binding.sourceObservedAt), createdAt: new Date(binding.createdAt) })
       } catch {
-        const [existing] = await tx.select().from(geoOutcomeEvidenceLocators).where(and(eq(geoOutcomeEvidenceLocators.ownerUserId, record.ownerUserId), eq(geoOutcomeEvidenceLocators.evidenceLocatorHash, record.evidenceLocatorHash))).limit(1)
-        if (!existing || fingerprint({ ...existing, id: undefined, createdAt: toIso(existing.createdAt) }) !== fingerprint({ ...record, id: undefined })) throw new Error('Evidence locator collision.')
+        const [existing] = await tx.select().from(geoOutcomeEvidenceLocators).where(and(eq(geoOutcomeEvidenceLocators.ownerUserId, ownerUserId), eq(geoOutcomeEvidenceLocators.observationFingerprint, observationFingerprint), eq(geoOutcomeEvidenceLocators.sourceKind, 'llm_visibility_observation'), eq(geoOutcomeEvidenceLocators.sourceRecordId, sourceRecordId))).limit(1)
+        if (!existing || existing.evidenceLocatorHash !== binding.evidenceLocatorHash || existing.sourceResponseHash !== binding.sourceResponseHash || existing.sourceProjectId !== binding.sourceProjectId || existing.sourceQueryId !== binding.sourceQueryId || existing.sourceRunId !== binding.sourceRunId || toIso(existing.sourceObservedAt) !== binding.sourceObservedAt) throw new Error('Authoritative evidence binding collision.')
+        return { ...binding, createdAt: toIso(existing.createdAt)! }
       }
-      return record
+      return binding
     })
   }
 
   async verifyObservationTransactional(ownerUserId: number, observationFingerprint: string, reviewerUserId: number, action: ObservationGovernanceAction, reason: string, evidenceLocatorHash: string | null = null) {
     return this.db.transaction(async tx => {
       const repo = new DrizzleGeoOutcomeRepository(tx)
-      const observation = await repo.getObservation(ownerUserId, observationFingerprint)
+      const observation = await repo.readObservation(ownerUserId, observationFingerprint, false)
       if (!observation) throw new Error('Observation not found.')
       const existingFacts = await tx.select().from(geoOutcomeObservationVerifications).where(and(eq(geoOutcomeObservationVerifications.ownerUserId, ownerUserId), eq(geoOutcomeObservationVerifications.observationFingerprint, observationFingerprint)))
       if (existingFacts.some(item => item.factType === 'revocation')) throw new Error('Observation version is terminally revoked.')
@@ -265,8 +282,8 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
       if (existingFacts.some(item => item.factType === factType)) throw new Error('Duplicate governance fact.')
       if (action === 'verify_evidence') {
         if (!evidenceLocatorHash || !observation.evidenceLocatorHashes.includes(evidenceLocatorHash)) throw new Error('Evidence locator is not approved for this observation.')
-        const [evidence] = await tx.select().from(geoOutcomeEvidenceLocators).where(and(eq(geoOutcomeEvidenceLocators.ownerUserId, ownerUserId), eq(geoOutcomeEvidenceLocators.observationFingerprint, observationFingerprint), eq(geoOutcomeEvidenceLocators.evidenceLocatorHash, evidenceLocatorHash), eq(geoOutcomeEvidenceLocators.purpose, 'geo_outcome_verification'), eq(geoOutcomeEvidenceLocators.artifactHash, observation.evidenceSnapshotHash), eq(geoOutcomeEvidenceLocators.evidenceSnapshotHash, observation.evidenceSnapshotHash))).limit(1)
-        if (!evidence) throw new Error('Evidence locator could not be resolved with matching owner, purpose and artifact lineage.')
+        const [evidence] = await tx.select().from(geoOutcomeEvidenceLocators).where(and(eq(geoOutcomeEvidenceLocators.ownerUserId, ownerUserId), eq(geoOutcomeEvidenceLocators.observationFingerprint, observationFingerprint), eq(geoOutcomeEvidenceLocators.evidenceLocatorHash, evidenceLocatorHash), eq(geoOutcomeEvidenceLocators.purpose, 'geo_outcome_verification'), eq(geoOutcomeEvidenceLocators.sourceKind, 'llm_visibility_observation'), eq(geoOutcomeEvidenceLocators.sourceResponseHash, observation.evidenceSnapshotHash))).limit(1)
+        if (!evidence) throw new Error('Evidence locator has not been bound from authoritative owner-scoped consumer-surface evidence.')
       } else if (evidenceLocatorHash !== null) throw new Error('Only evidence verification may include an evidence locator.')
       const factStatus = action === 'revoke' ? 'revoked' : 'approved'
       const decisionFingerprint = fingerprint({ ownerUserId, observationFingerprint, reviewerUserId, factType, factStatus, reason, evidenceLocatorHash })
@@ -368,14 +385,35 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
       return repo.mapDataset(row)
     })
   }
-  async transitionDataset(ownerUserId: number, manifestId: string, status: DatasetManifest['status']) {
-    const current = await this.getDataset(ownerUserId, manifestId)
-    if (!current) throw new Error('Dataset manifest not found.')
-    if (current.status === 'revoked' || current.status === 'archived') throw new Error('Dataset is terminal and cannot be modified.')
-    if (status === 'approved' && current.status !== 'ready_for_review') throw new Error('Only ready_for_review datasets may be approved.')
-    const result = await this.db.update(geoOutcomeDatasetManifests).set({ status }).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, ownerUserId), eq(geoOutcomeDatasetManifests.manifestId, manifestId), eq(geoOutcomeDatasetManifests.status, current.status)))
-    if (affectedRows(result) !== 1) throw new Error('Dataset transition lost its compare-and-swap.')
-    return (await this.getDataset(ownerUserId, manifestId))!
+  async transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetManifest['status'], reviewerUserId: number, reason: string) {
+    return this.db.transaction(async tx => {
+      const repo = new DrizzleGeoOutcomeRepository(tx)
+      const current = await repo.getDataset(ownerUserId, manifestId)
+      if (!current) throw new Error('Dataset manifest not found.')
+      if (current.status === 'revoked' || current.status === 'archived') throw new Error('Dataset is terminal and cannot be modified.')
+      if (status === 'approved' && current.status !== 'ready_for_review') throw new Error('Only ready_for_review datasets may be approved.')
+      if (status !== 'approved' && status !== 'revoked') throw new Error('Dataset review may only approve or revoke.')
+      const [row] = await tx.select({ id: geoOutcomeDatasetManifests.id }).from(geoOutcomeDatasetManifests).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, ownerUserId), eq(geoOutcomeDatasetManifests.manifestId, manifestId))).limit(1)
+      if (!row) throw new Error('Dataset manifest row not found.')
+      const decisionFingerprint = fingerprint({ ownerUserId, manifestId, previousStatus: current.status, newStatus: status, reviewerUserId, reason, manifestFingerprint: current.manifestFingerprint })
+      const decision: DatasetDecision = { decisionId: `geo-dataset-decision-${decisionFingerprint.slice(0, 20)}`, ownerUserId, manifestId, previousStatus: current.status, newStatus: status, reviewerUserId, reason, manifestFingerprint: current.manifestFingerprint, createdAt: new Date().toISOString() }
+      await tx.insert(geoOutcomeDatasetDecisions).values({ ...decision, datasetManifestId: row.id, createdAt: new Date(decision.createdAt) })
+      const result = await tx.update(geoOutcomeDatasetManifests).set({ status }).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, ownerUserId), eq(geoOutcomeDatasetManifests.manifestId, manifestId), eq(geoOutcomeDatasetManifests.status, current.status)))
+      if (affectedRows(result) !== 1) throw new Error('Dataset decision lost its compare-and-swap.')
+      return { manifest: (await repo.getDataset(ownerUserId, manifestId))!, decision }
+    })
+  }
+  async listDatasetDecisions(ownerUserId: number): Promise<DatasetDecision[]> {
+    const rows = await this.db.select().from(geoOutcomeDatasetDecisions).where(eq(geoOutcomeDatasetDecisions.ownerUserId, ownerUserId)).orderBy(asc(geoOutcomeDatasetDecisions.id))
+    const manifests = await this.db.select({ id: geoOutcomeDatasetManifests.id, manifestId: geoOutcomeDatasetManifests.manifestId, manifestFingerprint: geoOutcomeDatasetManifests.manifestFingerprint }).from(geoOutcomeDatasetManifests).where(eq(geoOutcomeDatasetManifests.ownerUserId, ownerUserId))
+    const manifestsByPrimaryKey = new Map(manifests.map(item => [item.id, item]))
+    return rows.map((row: GeoOutcomeDatasetDecision): DatasetDecision => {
+      const manifest = manifestsByPrimaryKey.get(row.datasetManifestId)
+      if (!manifest || manifest.manifestFingerprint !== row.manifestFingerprint) throw new Error('Dangling or corrupt dataset decision manifest lineage.')
+      const decisionFingerprint = fingerprint({ ownerUserId: row.ownerUserId, manifestId: manifest.manifestId, previousStatus: row.previousStatus, newStatus: row.newStatus, reviewerUserId: row.reviewerUserId, reason: row.reason, manifestFingerprint: row.manifestFingerprint })
+      if (row.decisionId !== `geo-dataset-decision-${decisionFingerprint.slice(0, 20)}`) throw new Error('Corrupt durable dataset decision business id.')
+      return { decisionId: row.decisionId, ownerUserId: row.ownerUserId, manifestId: manifest.manifestId, previousStatus: row.previousStatus as DatasetManifest['status'], newStatus: row.newStatus as DatasetManifest['status'], reviewerUserId: row.reviewerUserId, reason: row.reason, manifestFingerprint: row.manifestFingerprint, createdAt: toIso(row.createdAt)! }
+    })
   }
 
   private async mapTraining(row: GeoOutcomeTrainingRun): Promise<TrainingRun> {

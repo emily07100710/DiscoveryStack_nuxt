@@ -28,7 +28,7 @@ This is not Qwen fine-tuning. Content generation remains replaceable provider ca
 
 Every observation stores a schema version, owner scope, de-identified website/query/page identities, canonical/content/evidence hashes, optional publication receipt fingerprint, engine/model/interface, locale/region, run identity and timestamps, observable/retrieval/citation/mention/recommendation statuses, label basis, verification status, evidence locator hashes, AutoGEO rule hashes, server-derived content features, and an observation fingerprint.
 
-Raw email, telephone, name, cookies, sessions, credentials, OAuth tokens, raw provider responses, private backend content, unauthorized full text, and non-deidentified user input are rejected at the boundary and are not part of artifacts. Unknown fields are rejected. Hashes must be valid SHA-256 values. Timestamps are normalized to canonical ISO UTC and reversed windows fail closed. Evidence verification, consent approval, and PII review are independent durable governance facts. Evidence locators must resolve server-side to the same owner, purpose, artifact hash, and evidence snapshot; revocation is terminal for that observation version.
+Raw email, telephone, name, cookies, sessions, credentials, OAuth tokens, raw provider responses, private backend content, unauthorized full text, and non-deidentified user input are rejected at the boundary and are not part of artifacts. Unknown fields are rejected. Hashes must be valid SHA-256 values. Timestamps are normalized to canonical ISO UTC and reversed windows fail closed. Evidence verification, consent approval, and PII review are independent durable governance facts. Primary evidence binding accepts only a source record ID, then resolves owner/project/query/run identity, `manual_verified`, `verifiedByOwner`, response hash, observed time, and canonical locator fingerprint from the authoritative LLM Visibility tables. Provider observations and caller-supplied authority facts cannot be promoted. Revocation is terminal for that observation version.
 
 Allowed label bases are:
 
@@ -82,7 +82,7 @@ Ranking metrics include query-group count, MRR, NDCG@5, NDCG@10, Precision@1, Pr
 
 Model lifecycle states are development, evaluation failed, ready for owner review, approved for shadow, shadow failed, revoked, and archived. V1 has no `production_active` state and cannot auto-promote. Dataset creation does not auto-approve. Owner review is explicit and can advance a valid artifact only to `approved_for_shadow`.
 
-The promotion gate checks dataset approval, artifact hash, feature/label contract versions, complete test/holdout metrics, leakage, PII, revoked consent, rollback artifact, explicit owner review, and target policy. Production promotion is blocked by design. Every decision is append-only and records decision ID, owner/reviewer scope, artifact/dataset hashes, status transition, reason, and timestamp. Revoked models are terminal and cannot automatically recover.
+The promotion gate checks durable dataset approval lineage, artifact hash, feature/label contract versions, complete test/holdout metrics, leakage, PII, revoked consent, rollback artifact, explicit owner review, and target policy. Dataset and model decisions are append-only and record business decision ID, owner/reviewer scope, business ID plus database foreign key, immutable hash, status transition, reason, and timestamp. Revoked datasets and models are terminal and cannot automatically recover.
 
 ## 10. Existing data inventory
 
@@ -98,7 +98,7 @@ The owner workbench at `/audit-lab/geo-outcome-model` shows asset counts, the ex
 
 ## 12. Completed and NOT RUN
 
-Completed offline capabilities include the observation contract, normalization, sensitive-field rejection, independent evidence/consent/PII governance, hard-negative policy, feature catalog, immutable manifest construction, connected-component and temporal split policy, deterministic logistic/ranking baselines, metrics, artifacts, release gates, owner repository/service/API contracts, atomic idempotent mutations, leased training-run compare-and-swap, durable Drizzle schema/migration generation, a strict injectable Drizzle boundary harness, owner workbench, adapters, and synthetic acceptance coverage.
+Completed offline capabilities include the observation contract, normalization, sensitive-field rejection, authoritative LLM Visibility evidence resolution, independent evidence/consent/PII governance, hard-negative policy, feature catalog, immutable manifest construction, connected-component and temporal split policy, deterministic logistic/ranking baselines, metrics, artifacts, release gates, owner repository/service/API contracts, atomic idempotent mutations, stale-recoverable leased training-run compare-and-swap, durable dataset decision lineage, canonical observation-based workspace readiness, one consolidated branch migration generated from the authoritative base snapshot, a strict injectable Drizzle boundary harness, owner workbench, adapters, and synthetic acceptance coverage.
 
 The synthetic application scenario uses only synthetic observations and no external provider. It demonstrates verified observations → dataset build → owner dataset review → deterministic training → evaluation → artifact → rollback lineage → owner shadow approval → experimental prediction → append-only ledger.
 

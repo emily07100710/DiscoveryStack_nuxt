@@ -252,6 +252,18 @@ export interface ModelDecision {
   createdAt: string
 }
 
+export interface DatasetDecision {
+  decisionId: string
+  ownerUserId: number
+  manifestId: string
+  previousStatus: DatasetStatus
+  newStatus: DatasetStatus
+  reviewerUserId: number
+  reason: string
+  manifestFingerprint: string
+  createdAt: string
+}
+
 export interface ExperimentalPrediction {
   predictionIsVerifiedOutcome: false
   modelArtifactHash: string
@@ -286,6 +298,7 @@ export interface WorkspaceSummary {
   datasets: DatasetManifest[]
   trainingRuns: TrainingRun[]
   models: ModelArtifactSummary[]
+  datasetDecisions: DatasetDecision[]
   decisions: ModelDecision[]
 }
 
@@ -325,13 +338,18 @@ export interface ObservationVerificationDecision {
   createdAt: string
 }
 
-export interface EvidenceLocatorRecord {
+export interface EvidenceBinding {
   ownerUserId: number
   observationFingerprint: string
   evidenceLocatorHash: string
   purpose: 'geo_outcome_verification'
-  artifactHash: string
-  evidenceSnapshotHash: string
+  sourceKind: 'llm_visibility_observation'
+  sourceRecordId: number
+  sourceProjectId: number
+  sourceQueryId: number
+  sourceRunId: number
+  sourceResponseHash: string
+  sourceObservedAt: string
   createdAt: string
 }
 
@@ -379,12 +397,13 @@ export interface GeoOutcomeRepositoryPort {
   getObservation(ownerUserId: number, observationFingerprint: string): Promise<OutcomeObservation | null>
   saveObservationTransactional(ownerUserId: number, observation: OutcomeObservation): Promise<OutcomeObservation>
   verifyObservationTransactional(ownerUserId: number, observationFingerprint: string, reviewerUserId: number, action: ObservationGovernanceAction, reason: string, evidenceLocatorHash?: string): Promise<{ observation: OutcomeObservation, verificationDecision: ObservationVerificationDecision }>
-  registerEvidenceLocatorTransactional(record: EvidenceLocatorRecord): Promise<EvidenceLocatorRecord>
+  bindAuthoritativeEvidenceTransactional(ownerUserId: number, observationFingerprint: string, sourceRecordId: number): Promise<EvidenceBinding>
   listDatasets(ownerUserId: number): Promise<DatasetManifest[]>
   getDataset(ownerUserId: number, manifestId: string): Promise<DatasetManifest | null>
   getDatasetMembers(ownerUserId: number, manifestId: string): Promise<DatasetMember[]>
   saveDatasetTransactional(ownerUserId: number, manifest: DatasetManifest, members: DatasetMember[]): Promise<DatasetManifest>
-  transitionDataset(ownerUserId: number, manifestId: string, status: DatasetStatus): Promise<DatasetManifest>
+  transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetStatus, reviewerUserId: number, reason: string): Promise<{ manifest: DatasetManifest, decision: DatasetDecision }>
+  listDatasetDecisions(ownerUserId: number): Promise<DatasetDecision[]>
   createTrainingRun(ownerUserId: number, run: TrainingRun): Promise<TrainingRun>
   getTrainingRun(ownerUserId: number, trainingRunId: string): Promise<TrainingRun | null>
   claimTrainingRun(ownerUserId: number, trainingRunId: string, leaseOwner: string, leaseExpiresAt: string): Promise<TrainingRunClaimResult>
@@ -404,6 +423,28 @@ export interface GeoOutcomeRepositoryPort {
 /** Explicitly injected in-memory adapter for tests only; production code uses the Drizzle adapter. */
 export interface MemoryGeoOutcomeRepository extends GeoOutcomeRepositoryPort {
   exportState(): MemoryGeoOutcomeState
+  seedAuthoritativeEvidence(source: AuthoritativeEvidenceSource): void
+}
+
+export interface AuthoritativeEvidenceSource {
+  sourceRecordId: number
+  ownerUserId: number
+  projectId: number
+  queryId: number
+  runId: number
+  projectStatus: 'active' | 'archived'
+  queryActive: boolean
+  observationMode: 'manual_verified' | 'provider_api_observation'
+  runStatus: 'queued' | 'completed' | 'blocked' | 'failed'
+  verifiedByOwner: boolean
+  provider: string
+  modelLabel: string
+  locale: string
+  requestFingerprint: string
+  promptHash: string
+  responseHash: string
+  evidenceLocator: string
+  observedAt: string
 }
 
 export interface MemoryGeoOutcomeState {
@@ -412,8 +453,10 @@ export interface MemoryGeoOutcomeState {
   datasetMembers: Record<string, DatasetMember[]>
   trainingRuns: TrainingRun[]
   artifacts: ModelArtifact[]
+  datasetDecisions: DatasetDecision[]
   decisions: ModelDecision[]
   verificationDecisions: ObservationVerificationDecision[]
-  evidenceLocators: EvidenceLocatorRecord[]
+  evidenceBindings: EvidenceBinding[]
+  authoritativeEvidenceSources: AuthoritativeEvidenceSource[]
   claims: MutationClaim[]
 }

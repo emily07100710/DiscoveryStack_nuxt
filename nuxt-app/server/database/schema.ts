@@ -2109,6 +2109,22 @@ export const geoOutcomeDatasetMembers = mysqlTable('geoOutcomeDatasetMembers', {
   index('geo_outcome_members_owner_query_idx').on(table.ownerUserId, table.normalizedQueryHash),
 ])
 
+/** Append-only owner dataset decision ledger; the manifest row is only a current projection. */
+export const geoOutcomeDatasetDecisions = mysqlTable('geoOutcomeDatasetDecisions', {
+  id: int('id').autoincrement().primaryKey(),
+  decisionId: varchar('decisionId', { length: 160 }).notNull().unique(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  datasetManifestId: int('datasetManifestId').notNull().references(() => geoOutcomeDatasetManifests.id),
+  reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
+  previousStatus: varchar('previousStatus', { length: 96 }).notNull(),
+  newStatus: varchar('newStatus', { length: 96 }).notNull(),
+  reason: varchar('reason', { length: 500 }).notNull(),
+  manifestFingerprint: varchar('manifestFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  index('geo_outcome_dataset_decisions_owner_manifest_idx').on(table.ownerUserId, table.datasetManifestId, table.createdAt),
+])
+
 export const geoOutcomeTrainingRuns = mysqlTable('geoOutcomeTrainingRuns', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
@@ -2184,6 +2200,7 @@ export type GeoOutcomeObservationRun = typeof geoOutcomeObservationRuns.$inferSe
 export type GeoOutcomeObservationCandidate = typeof geoOutcomeObservationCandidates.$inferSelect
 export type GeoOutcomeDatasetManifest = typeof geoOutcomeDatasetManifests.$inferSelect
 export type GeoOutcomeDatasetMember = typeof geoOutcomeDatasetMembers.$inferSelect
+export type GeoOutcomeDatasetDecision = typeof geoOutcomeDatasetDecisions.$inferSelect
 export type GeoOutcomeTrainingRun = typeof geoOutcomeTrainingRuns.$inferSelect
 export type GeoOutcomeModelArtifact = typeof geoOutcomeModelArtifacts.$inferSelect
 export type GeoOutcomeModelDecision = typeof geoOutcomeModelDecisions.$inferSelect
@@ -2236,11 +2253,16 @@ export const geoOutcomeEvidenceLocators = mysqlTable('geoOutcomeEvidenceLocators
   observationFingerprint: varchar('observationFingerprint', { length: 128 }).notNull(),
   evidenceLocatorHash: varchar('evidenceLocatorHash', { length: 128 }).notNull(),
   purpose: mysqlEnum('purpose', ['geo_outcome_verification']).notNull(),
-  artifactHash: varchar('artifactHash', { length: 128 }).notNull(),
-  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  sourceKind: mysqlEnum('sourceKind', ['llm_visibility_observation']).notNull(),
+  sourceRecordId: int('sourceRecordId').notNull().references(() => llmVisibilityObservations.id),
+  sourceProjectId: int('sourceProjectId').notNull().references(() => llmVisibilityProjects.id),
+  sourceQueryId: int('sourceQueryId').notNull().references(() => llmVisibilityQueries.id),
+  sourceRunId: int('sourceRunId').notNull().references(() => llmVisibilityRuns.id),
+  sourceResponseHash: varchar('sourceResponseHash', { length: 64 }).notNull(),
+  sourceObservedAt: timestamp('sourceObservedAt').notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
-  uniqueIndex('geo_outcome_evidence_locator_unique').on(table.ownerUserId, table.evidenceLocatorHash),
+  uniqueIndex('geo_outcome_evidence_binding_unique').on(table.ownerUserId, table.observationFingerprint),
   index('geo_outcome_evidence_observation_idx').on(table.ownerUserId, table.observationFingerprint),
 ])
 

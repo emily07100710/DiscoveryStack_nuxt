@@ -1,5 +1,6 @@
 import { getTableName, type SQL } from 'drizzle-orm'
 import { MySqlDialect } from 'drizzle-orm/mysql-core'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { GeoOutcomeDrizzleDatabase } from '../../server/geo-outcome-model/repository-drizzle'
 
 type Row = Record<string, unknown>
@@ -10,12 +11,17 @@ const UNIQUE_KEYS: Record<string, string[][]> = {
   geoOutcomeObservationCandidates: [['ownerUserId', 'observationFingerprint'], ['ownerUserId', 'observationRunId', 'candidatePageIdentityHash']],
   geoOutcomeDatasetManifests: [['ownerUserId', 'manifestId'], ['ownerUserId', 'manifestFingerprint']],
   geoOutcomeDatasetMembers: [['datasetManifestId', 'observationFingerprint']],
+  geoOutcomeDatasetDecisions: [['decisionId']],
   geoOutcomeTrainingRuns: [['ownerUserId', 'trainingRunId']],
   geoOutcomeModelArtifacts: [['ownerUserId', 'artifactId'], ['ownerUserId', 'artifactHash']],
   geoOutcomeModelDecisions: [['decisionId']],
   geoOutcomeIdempotencyClaims: [['ownerUserId', 'routeIdentity', 'idempotencyKey']],
   geoOutcomeObservationVerifications: [['ownerUserId', 'decisionFingerprint']],
-  geoOutcomeEvidenceLocators: [['ownerUserId', 'evidenceLocatorHash']],
+  geoOutcomeEvidenceLocators: [['ownerUserId', 'observationFingerprint']],
+  llmVisibilityProjects: [],
+  llmVisibilityQueries: [['projectId', 'promptHash']],
+  llmVisibilityRuns: [['ownerUserId', 'requestFingerprint']],
+  llmVisibilityObservations: [['runId', 'queryId']],
 }
 
 function copy<T>(value: T): T { return structuredClone(value) }
@@ -38,6 +44,7 @@ class SelectBuilder implements PromiseLike<Row[]> {
   private maximum: number | undefined
   constructor(private readonly harness: StrictGeoDrizzleHarness, private readonly tableName: string, private readonly projection: unknown) {}
   where(condition: SQL): this { this.condition = condition; return this }
+  orderBy(..._columns: unknown[]): this { return this }
   limit(maximum: number): this { this.maximum = maximum; return this }
   then<TResult1 = Row[], TResult2 = never>(onfulfilled?: ((value: Row[]) => TResult1 | PromiseLike<TResult1>) | null, onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null): PromiseLike<TResult1 | TResult2> {
     return this.harness.selectRows(this.tableName, this.projection, this.condition, this.maximum).then(onfulfilled, onrejected)
@@ -47,6 +54,8 @@ class SelectBuilder implements PromiseLike<Row[]> {
 export class StrictGeoDrizzleHarness {
   private state: State
   private readonly dialect = new MySqlDialect()
+  private readonly transactionContext = new AsyncLocalStorage<boolean>()
+  private transactionLock: Promise<void> = Promise.resolve()
 
   constructor(initial?: State) {
     this.state = initial ? copy(initial) : { tables: {}, nextIds: {} }
@@ -72,8 +81,13 @@ export class StrictGeoDrizzleHarness {
     return { set: (patch: Row) => ({ where: async (condition: SQL) => this.updateRows(tableName, patch, condition) }) }
   }
   async transaction<T>(work: (transaction: GeoOutcomeDrizzleDatabase) => Promise<T>): Promise<T> {
+    if (this.transactionContext.getStore()) return work(this.asDatabase())
+    const previous = this.transactionLock
+    let release!: () => void
+    this.transactionLock = new Promise<void>(resolve => { release = resolve })
+    await previous
     const snapshot = copy(this.state)
-    try { return await work(this.asDatabase()) } catch (error) { this.state = snapshot; throw error }
+    try { return await this.transactionContext.run(true, () => work(this.asDatabase())) } catch (error) { this.state = snapshot; throw error } finally { release() }
   }
 
   async selectRows(tableName: string, projection: unknown, condition?: SQL, maximum?: number): Promise<Row[]> {
@@ -91,8 +105,13 @@ export class StrictGeoDrizzleHarness {
     const has = (target: string, id: unknown) => (this.state.tables[target] || []).some(item => item.id === id)
     if (tableName === 'geoOutcomeObservationCandidates' && !has('geoOutcomeObservationRuns', row.observationRunId)) throw new Error('Strict harness foreign key violation: observation run.')
     if ((tableName === 'geoOutcomeDatasetMembers' || tableName === 'geoOutcomeTrainingRuns') && !has('geoOutcomeDatasetManifests', row.datasetManifestId)) throw new Error('Strict harness foreign key violation: dataset manifest.')
+    if (tableName === 'geoOutcomeDatasetDecisions' && !has('geoOutcomeDatasetManifests', row.datasetManifestId)) throw new Error('Strict harness foreign key violation: dataset decision manifest.')
     if (tableName === 'geoOutcomeModelDecisions' && !has('geoOutcomeModelArtifacts', row.modelArtifactId)) throw new Error('Strict harness foreign key violation: model artifact.')
     if ((tableName === 'geoOutcomeObservationVerifications' || tableName === 'geoOutcomeEvidenceLocators') && !(this.state.tables.geoOutcomeObservationCandidates || []).some(item => item.ownerUserId === row.ownerUserId && item.observationFingerprint === row.observationFingerprint)) throw new Error('Strict harness foreign key violation: observation fingerprint.')
+    if (tableName === 'geoOutcomeEvidenceLocators' && !has('llmVisibilityObservations', row.sourceRecordId)) throw new Error('Strict harness foreign key violation: authoritative evidence source.')
+    if (tableName === 'llmVisibilityQueries' && !has('llmVisibilityProjects', row.projectId)) throw new Error('Strict harness foreign key violation: LLM visibility query project.')
+    if (tableName === 'llmVisibilityRuns' && !has('llmVisibilityProjects', row.projectId)) throw new Error('Strict harness foreign key violation: LLM visibility run project.')
+    if (tableName === 'llmVisibilityObservations' && (!has('llmVisibilityProjects', row.projectId) || !has('llmVisibilityQueries', row.queryId) || !has('llmVisibilityRuns', row.runId))) throw new Error('Strict harness foreign key violation: LLM visibility observation provenance.')
   }
   private async insertRow(tableName: string, value: Row) {
     const rows = this.state.tables[tableName] || (this.state.tables[tableName] = [])
