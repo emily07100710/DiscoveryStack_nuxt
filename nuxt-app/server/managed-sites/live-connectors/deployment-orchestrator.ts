@@ -373,7 +373,8 @@ export async function rollbackManagedSiteRelease(ownerUserId: number, input: { f
   const configuration = await deploymentProvider(ownerUserId, input.executionMode, repository, resolver)
   const from = await repository.findRelease(ownerUserId, input.fromReleaseId)
   const to = await repository.findRelease(ownerUserId, input.toReleaseId)
-  if (!from || !to || from.id === to.id || from.projectId !== to.projectId || from.canonicalDomain !== to.canonicalDomain || !['live_verified', 'geo_active', 'rolled_back'].includes(from.status) || !to.activeDeploymentReceiptFingerprint) conflict('Rollback requires two owner-scoped releases for the same project/domain and a prior verified deployment receipt.')
+  const retryingGovernedRollback = from?.status === 'retry_wait' && from.blockedReasonCode === 'ROLLBACK_FAILED' && from.nextSafeAction === 'retry_rollback_after_eligibility'
+  if (!from || !to || from.id === to.id || from.projectId !== to.projectId || from.canonicalDomain !== to.canonicalDomain || (!['live_verified', 'geo_active', 'rolled_back'].includes(from.status) && !retryingGovernedRollback) || !to.activeDeploymentReceiptFingerprint) conflict('Rollback requires two owner-scoped releases for the same project/domain and a prior verified deployment receipt.')
   const replayAttempt = await repository.findAttemptByIdempotency(ownerUserId, input.idempotencyKey)
   if (replayAttempt?.status === 'succeeded' && from.status === 'rolled_back') {
     const receipt = (await repository.listReceipts(ownerUserId, to.projectId)).find(item => item.attemptId === replayAttempt.id && item.receiptType === 'rollback_deployment_verified')

@@ -1,8 +1,9 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { stableFingerprint } from '../server/seo-geo-core/repository'
 import { createMockRawBodyPaymentWebhookAdapter } from '../server/managed-sites/live-connectors/adapters'
 import { createManagedSiteCheckoutSession, createMockManagedSiteCheckoutSessionAdapter } from '../server/managed-sites/live-connectors/checkout-session'
-import { buildManagedSitePreview, createMockManagedSiteDeploymentAdapter, deployManagedSiteProduction } from '../server/managed-sites/live-connectors/deployment-orchestrator'
+import { buildManagedSitePreview, createMockManagedSiteDeploymentAdapter, deployManagedSiteProduction, rollbackManagedSiteRelease } from '../server/managed-sites/live-connectors/deployment-orchestrator'
 import { createManagedSiteDomainPurchaseIntent, createMockManagedSiteDnsTlsAdapter, createMockManagedSiteDomainAdapter, executeManagedSiteDnsTls, managedSiteDomainConfirmationFingerprint, quoteManagedSiteDomain } from '../server/managed-sites/live-connectors/domain-connectors'
 import { processManagedSiteRawPaymentWebhook } from '../server/managed-sites/live-connectors/payment-webhook'
 import { createAuthoritativeManagedSiteReleaseFixture, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
@@ -49,5 +50,29 @@ describe('managed-site external-success/local-commit recovery sagas', () => {
     await expect(executeManagedSiteDnsTls(1, dnsInput, dnsAdapter, { repository: dnsRepository, clock: () => now })).rejects.toThrow('synthetic local commit fault'); now = new Date(now.getTime() + 31_000); await executeManagedSiteDnsTls(1, dnsInput, dnsAdapter, { repository: dnsRepository, clock: () => now }); expect(dnsCreations).toBe(1)
     let deployCreations = 0; const deployCache = new Map<string, any>(); const deployBase = createMockManagedSiteDeploymentAdapter({ now: () => now }); const deployAdapter = { ...deployBase, deployProduction: async (input: any) => { if (deployCache.has(input.requestFingerprint)) return deployCache.get(input.requestFingerprint); deployCreations++; const value = await deployBase.deployProduction(input); deployCache.set(input.requestFingerprint, value); return value } }; const deployRepository = failOneLocalCommit(line.live.repository); const deployInput = { releaseId: line.release.release.id, executionMode: 'mocked' as const, idempotencyKey: 'saga-production-deploy' }
     await expect(deployManagedSiteProduction(1, deployInput, deployAdapter, { repository: deployRepository, managedRepository: line.managed.repository, clock: () => now })).rejects.toThrow('synthetic local commit fault'); now = new Date(now.getTime() + 5 * 60_000 + 1_000); const deployed = await deployManagedSiteProduction(1, deployInput, deployAdapter, { repository: deployRepository, managedRepository: line.managed.repository, clock: () => now }); expect(deployed.release.status).toBe('live_verified'); expect(deployCreations).toBe(1)
+  })
+
+  it('reconciles rollback with the same provider idempotency after a local commit fault', async () => {
+    const line = await createAuthoritativeManagedSiteReleaseFixture({ canonicalDomain: 'rollback-saga.acme.taipei', buildPreview: false, createCheckout: false })
+    let now = new Date(managedSiteFixedNow)
+    const priorReceiptFingerprint = stableFingerprint({ receipt: 'rollback-saga-prior' })
+    const prior = await line.live.repository.insertRelease({ ownerUserId: 1, projectId: line.prePurchase.project.id, generationCandidateId: line.generation.candidate!.id, versionId: line.prePurchase.version.id, previewId: null, quoteId: null, draftOrderId: null, commerceSnapshotFingerprint: null, releaseKind: 'generated_site', targetKey: 'rollback-saga-prior', canonicalDomain: 'rollback-saga.acme.taipei', contentHash: stableFingerprint({ release: 'rollback-saga-prior' }), status: 'live_verified', previewUrl: 'https://prior.preview.discoverystack.dev', providerPreviewId: 'rollback-saga-prior-preview', approvalFingerprint: stableFingerprint({ approval: 'rollback-saga-prior' }), approvedAt: now, activeDeploymentReceiptFingerprint: priorReceiptFingerprint, rollbackFromReleaseId: null, blockedReasonCode: null, nextSafeAction: 'retain_verified_release', projectionFingerprint: stableFingerprint({ projection: 'rollback-saga-prior' }), idempotencyKey: 'rollback-saga-prior-release' } as any)
+    await line.live.repository.insertReceipt({ ownerUserId: 1, projectId: line.prePurchase.project.id, draftOrderId: null, releaseId: prior.id, attemptId: null, capability: 'deployment', providerKey: 'mock-deployment', providerEventId: 'rollback-saga-prior-event', receiptType: 'production_deployment_verified', receiptStatus: 'verified', externalReference: 'rollback-saga-prior-deployment', exactResponseIdentity: 'rollback-saga-prior-response', requestFingerprint: stableFingerprint({ rollbackSagaPrior: true }), contentHash: prior.contentHash, canonicalDomain: prior.canonicalDomain, metadata: { deploymentUrl: `https://${prior.canonicalDomain}` }, receiptFingerprint: priorReceiptFingerprint, verifiedAt: now } as any)
+    const current = await line.live.repository.insertRelease({ ownerUserId: 1, projectId: line.prePurchase.project.id, generationCandidateId: line.generation.candidate!.id, versionId: line.prePurchase.version.id, releaseKind: 'generated_site', targetKey: 'rollback-saga-current', canonicalDomain: prior.canonicalDomain, contentHash: stableFingerprint({ release: 'rollback-saga-current' }), status: 'live_verified', previewUrl: 'https://current.preview.discoverystack.dev', providerPreviewId: 'rollback-saga-current-preview', approvalFingerprint: stableFingerprint({ approval: 'rollback-saga-current' }), approvedAt: now, activeDeploymentReceiptFingerprint: stableFingerprint({ receipt: 'rollback-saga-current' }), rollbackFromReleaseId: null, blockedReasonCode: null, nextSafeAction: 'rollback_available', projectionFingerprint: stableFingerprint({ projection: 'rollback-saga-current' }), idempotencyKey: 'rollback-saga-current-release' } as any)
+    let externalCreations = 0
+    const cache = new Map<string, any>()
+    const base = createMockManagedSiteDeploymentAdapter({ now: () => now })
+    const adapter = { ...base, rollback: async (input: any) => { if (cache.has(input.requestFingerprint)) return cache.get(input.requestFingerprint); externalCreations++; const value = await base.rollback(input); cache.set(input.requestFingerprint, value); return value } }
+    const repository = failOneLocalCommit(line.live.repository)
+    const input = { fromReleaseId: current.id, toReleaseId: prior.id, executionMode: 'mocked' as const, idempotencyKey: 'rollback-saga-operation' }
+    await expect(rollbackManagedSiteRelease(1, input, adapter, { repository, clock: () => now })).rejects.toThrow('synthetic local commit fault')
+    expect(line.live.state.receipts.filter(row => row.receiptType === 'rollback_deployment_verified')).toHaveLength(0)
+    expect(line.live.state.releases.find(row => row.id === current.id)).toMatchObject({ status: 'retry_wait', blockedReasonCode: 'ROLLBACK_FAILED' })
+    now = new Date(now.getTime() + 5 * 60_000 + 1_000)
+    const retried = await rollbackManagedSiteRelease(1, input, adapter, { repository, clock: () => now })
+    expect(retried.release.status).toBe('live_verified')
+    expect(line.live.state.releases.find(row => row.id === current.id)?.status).toBe('rolled_back')
+    expect(externalCreations).toBe(1)
+    expect(line.live.state.receipts.filter(row => row.receiptType === 'rollback_deployment_verified')).toHaveLength(1)
   })
 })
