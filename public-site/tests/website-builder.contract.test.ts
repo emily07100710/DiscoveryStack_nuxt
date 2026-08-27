@@ -38,6 +38,13 @@ describe('website builder safety and presentation contracts', () => {
     expect(component).toContain('網域原則上歸客戶所有')
   })
 
+  it('keeps primary CTA label and arrow readable across enabled and disabled states', () => {
+    expect(styles).toContain('.builder-experience .builder-primary {')
+    expect(styles).toContain('.builder-experience .builder-primary > span')
+    expect(styles).toContain('.builder-experience .builder-primary:disabled { opacity: 1;')
+    expect(styles).toContain('color: rgba(255,255,255,.82)')
+  })
+
   it('supports elaborate motion without locking out reduced-motion users or relying on infinite animation loops', () => {
     expect(styles).toContain('@media (prefers-reduced-motion: reduce)')
     expect(styles).toContain('animation-iteration-count: 1')
