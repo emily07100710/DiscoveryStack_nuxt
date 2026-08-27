@@ -4,7 +4,7 @@ import { createMockRawBodyPaymentWebhookAdapter } from '../server/managed-sites/
 import { processManagedSiteRawPaymentWebhook } from '../server/managed-sites/live-connectors/payment-webhook'
 import { activateManagedSiteGeoOperations, approveManagedSitePreview, bindManagedSiteReleasePayment, deployManagedSiteProduction } from '../server/managed-sites/live-connectors/deployment-orchestrator'
 import { createMockManagedSiteDnsTlsAdapter, createMockManagedSiteDomainAdapter, createManagedSiteDomainPurchaseIntent, executeManagedSiteDnsTls, managedSiteDomainConfirmationFingerprint, quoteManagedSiteDomain } from '../server/managed-sites/live-connectors/domain-connectors'
-import { createAuthoritativeManagedSiteReleaseFixture, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
+import { createAuthoritativeManagedSiteReleaseFixture, managedSiteExactPaymentWebhookPayload, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
 
 describe('managed-site authoritative mocked application path', () => {
   it('generates and gates preview before checkout/payment, then requires exact domain/deploy receipts before GEO activation', async () => {
@@ -21,7 +21,7 @@ describe('managed-site authoritative mocked application path', () => {
     expect(line.live.state.receipts.some(receipt => receipt.receiptType === 'checkout_succeeded')).toBe(false)
 
     const webhookCredential = randomBytes(32).toString('hex')
-    const event = { providerKey: 'mock-payment', providerEventId: 'payment-success-authoritative-001', providerReference: 'payment-ref-authoritative-001', eventType: 'checkout_succeeded', draftOrderId: line.order.order.id, amountMinor: line.quote.quote.totalMinor, currency: line.quote.quote.currency, occurredAt: managedSiteFixedNow.toISOString(), exactResponseIdentity: 'payment-response:authoritative-001' }
+    const event = await managedSiteExactPaymentWebhookPayload(line, { providerEventId: 'payment-success-authoritative-001', providerReference: 'payment-ref-authoritative-001', eventType: 'checkout_succeeded', exactResponseIdentity: 'payment-response:authoritative-001' })
     const rawBody = Buffer.from(JSON.stringify(event)); const signatureHeader = createHmac('sha256', webhookCredential).update(rawBody).digest('hex')
     const payment = await processManagedSiteRawPaymentWebhook({ rawBody, signatureHeader, credentialReference: 'vault:payment-webhook-test', executionMode: 'mocked' }, createMockRawBodyPaymentWebhookAdapter('mock-payment'), { jointTransaction: line.jointTransaction, credentialResolver: async reference => reference === 'vault:payment-webhook-test' ? { ok: true, value: webhookCredential } : { ok: false, reason: 'missing_reference' }, clock: () => managedSiteFixedNow })
     expect(payment.effective).toBe(true)

@@ -6,7 +6,7 @@ import { createManagedSiteCheckoutSession, createMockManagedSiteCheckoutSessionA
 import { buildManagedSitePreview, createMockManagedSiteDeploymentAdapter, deployManagedSiteProduction, rollbackManagedSiteRelease } from '../server/managed-sites/live-connectors/deployment-orchestrator'
 import { createManagedSiteDomainPurchaseIntent, createMockManagedSiteDnsTlsAdapter, createMockManagedSiteDomainAdapter, executeManagedSiteDnsTls, managedSiteDomainConfirmationFingerprint, quoteManagedSiteDomain } from '../server/managed-sites/live-connectors/domain-connectors'
 import { processManagedSiteRawPaymentWebhook } from '../server/managed-sites/live-connectors/payment-webhook'
-import { createAuthoritativeManagedSiteReleaseFixture, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
+import { createAuthoritativeManagedSiteReleaseFixture, managedSiteExactPaymentWebhookPayload, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
 
 function failOneLocalCommit<T extends { transaction: any }>(repository: T): T {
   let fail = true
@@ -38,7 +38,7 @@ describe('managed-site external-success/local-commit recovery sagas', () => {
 
   it('reconciles domain purchase, DNS/TLS, and production deploy with the same provider idempotency after local faults', async () => {
     const line = await createAuthoritativeManagedSiteReleaseFixture(); let now = new Date(managedSiteFixedNow); const credential = 'runtime-only-saga-payment-key'
-    const event = { providerKey: 'mock-payment', providerEventId: 'saga-payment-success-001', providerReference: 'saga-payment-ref-001', eventType: 'checkout_succeeded', draftOrderId: line.order.order.id, amountMinor: line.quote.quote.totalMinor, currency: line.quote.quote.currency, occurredAt: now.toISOString(), exactResponseIdentity: 'payment-response:saga-001' }
+    const event = await managedSiteExactPaymentWebhookPayload(line, { providerEventId: 'saga-payment-success-001', providerReference: 'saga-payment-ref-001', eventType: 'checkout_succeeded', exactResponseIdentity: 'payment-response:saga-001' })
     const rawBody = Buffer.from(JSON.stringify(event)); const signatureHeader = createHmac('sha256', credential).update(rawBody).digest('hex')
     await processManagedSiteRawPaymentWebhook({ rawBody, signatureHeader, credentialReference: 'vault:saga-payment', executionMode: 'mocked' }, createMockRawBodyPaymentWebhookAdapter('mock-payment'), { jointTransaction: line.jointTransaction, credentialResolver: async () => ({ ok: true, value: credential }), clock: () => now })
     const quoteAdapter = createMockManagedSiteDomainAdapter({ now: () => now }); const quoted = await quoteManagedSiteDomain(1, { projectId: line.prePurchase.project.id, releaseId: line.release.release.id, requestedDomain: line.release.release.canonicalDomain, executionMode: 'mocked', idempotencyKey: 'saga-domain-quote' }, quoteAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => now })

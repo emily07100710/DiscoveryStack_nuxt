@@ -82,6 +82,41 @@ describe('managed-site provider registry and generation admission', () => {
     await expect(generateManagedSiteCandidate(1, { ...request, sourceVersionId: secondVersion.version.id }, { adapter, vault, repository: line.live.repository, managedRepository: line.managed.repository, clock: () => now })).rejects.toMatchObject({ statusCode: 409 })
   })
 
+  it('reconciles a provider-success and vault-success candidate after the local transaction fails without calling Qwen twice', async () => {
+    const line = await sourceLineage(); let now = new Date('2026-08-27T00:00:00.000Z'); let providerCalls = 0; let fail = true
+    const base = createMockManagedSiteGenerationAdapter(); const adapter = { generate: async (...args: Parameters<typeof base.generate>) => { providerCalls++; return base.generate(...args) } }
+    const vault = createMemoryManagedSiteArtifactVault()
+    const repository = new Proxy(line.live.repository, { get(target, key, receiver) {
+      if (key !== 'transaction') return Reflect.get(target, key, receiver)
+      return async (work: any) => target.transaction(async transaction => { const result = await work(transaction); if (fail) { fail = false; throw new Error('synthetic candidate commit fault') } return result })
+    } })
+    const input = { projectId: line.project.id, sourceVersionId: line.version.id, templateIntent: 'astro' as const, executionMode: 'mocked' as const, idempotencyKey: 'generation-vault-reconcile-001' }
+    await expect(generateManagedSiteCandidate(1, input, { adapter, vault, repository, managedRepository: line.managed.repository, clock: () => now })).rejects.toMatchObject({ statusCode: 503 })
+    expect(providerCalls).toBe(1); expect(vault.records.size).toBe(1); expect(line.live.state.candidates).toHaveLength(0)
+    expect(line.live.state.attempts[0]).toMatchObject({ status: 'retry_wait', errorCode: 'LOCAL_COMMIT_RECONCILE_REQUIRED' })
+    now = new Date('2026-08-27T00:06:00.000Z')
+    const reconciled = await generateManagedSiteCandidate(1, input, { adapter, vault, repository, managedRepository: line.managed.repository, clock: () => now })
+    expect(reconciled.reconciledFromVault).toBe(true); expect(providerCalls).toBe(1)
+    expect(line.live.state.candidates).toHaveLength(1); expect(line.live.state.receipts.filter(row => row.receiptType === 'generation_candidate_admitted')).toHaveLength(1)
+  })
+
+  it.each([
+    ['wrong owner', (bundle: any) => { bundle.ownerUserId = 999 }],
+    ['wrong project', (bundle: any) => { bundle.projectId = 999 }],
+    ['wrong request', (bundle: any) => { bundle.requestFingerprint = 'f'.repeat(64) }],
+    ['tampered content hash', (bundle: any) => { bundle.manifest.contentHash = 'f'.repeat(64) }],
+    ['tampered file', (bundle: any) => { bundle.files[0].content += 'tampered' }],
+  ])('fails closed on a vault %s before another provider call', async (_label, tamper) => {
+    const line = await sourceLineage(); let now = new Date('2026-08-27T00:00:00.000Z'); let providerCalls = 0; let fail = true
+    const base = createMockManagedSiteGenerationAdapter(); const adapter = { generate: async (...args: Parameters<typeof base.generate>) => { providerCalls++; return base.generate(...args) } }; const vault = createMemoryManagedSiteArtifactVault()
+    const repository = new Proxy(line.live.repository, { get(target, key, receiver) { if (key !== 'transaction') return Reflect.get(target, key, receiver); return async (work: any) => target.transaction(async transaction => { const result = await work(transaction); if (fail) { fail = false; throw new Error('synthetic candidate commit fault') } return result }) } })
+    const input = { projectId: line.project.id, sourceVersionId: line.version.id, templateIntent: 'astro' as const, executionMode: 'mocked' as const, idempotencyKey: `generation-vault-tamper-${_label.replace(/ /gu, '-')}` }
+    await expect(generateManagedSiteCandidate(1, input, { adapter, vault, repository, managedRepository: line.managed.repository, clock: () => now })).rejects.toMatchObject({ statusCode: 503 })
+    const stored = [...vault.records.values()][0]!; tamper(stored); now = new Date('2026-08-27T00:06:00.000Z')
+    await expect(generateManagedSiteCandidate(1, input, { adapter, vault, repository, managedRepository: line.managed.repository, clock: () => now })).rejects.toMatchObject({ statusCode: 409 })
+    expect(providerCalls).toBe(1); expect(line.live.state.candidates).toHaveLength(0)
+  })
+
   it('fails closed before adapter execution when live provider verification is missing', async () => {
     const line = await sourceLineage()
     line.live.state.configurations.length = 0

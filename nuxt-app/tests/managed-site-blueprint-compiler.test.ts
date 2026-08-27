@@ -53,7 +53,35 @@ describe('ManagedSiteBlueprintV1 validation and deterministic first-party compil
   })
 
   it('rejects malformed Qwen JSON without compiling provider code or files', async () => {
-    const current = request(); const adapter = createBailianQwenManagedSiteGenerationAdapter({ endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', fetchImpl: async () => new Response(JSON.stringify({ id: 'provider-1', model: 'qwen-plus', choices: [{ message: { content: '{malformed' } }] }), { status: 200 }) })
+    const current = request(); const adapter = createBailianQwenManagedSiteGenerationAdapter({ endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', fetchImpl: async () => new Response(JSON.stringify({ id: 'provider-1', model: 'qwen-plus', choices: [{ index: 0, message: { role: 'assistant', content: '{malformed' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }), { status: 200, headers: { 'x-request-id': 'provider-1' } }) })
+    await expect(adapter.generate(current, { executionMode: 'live', credentialReference: 'vault:qwen-test', resolveCredential: async () => ({ ok: true, value: 'runtime-only-test-value' }), timeoutMs: 1_000, attemptNumber: 1 })).rejects.toMatchObject({ code: 'PROVIDER_OUTPUT_BLOCKED' })
+  })
+
+  it('retains exact configured and actual Qwen model provenance with a stable request lineage', async () => {
+    const current = request(); const blueprint = createDeterministicManagedSiteBlueprint(current); const requestIds: string[] = []
+    const adapter = createBailianQwenManagedSiteGenerationAdapter({ endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus', fetchImpl: async (_url, init) => {
+      requestIds.push(new Headers(init?.headers).get('x-discoverystack-request-id') || '')
+      return new Response(JSON.stringify({ id: 'provider-exact-001', model: 'qwen-plus', choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(blueprint) }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } }), { status: 200, headers: { 'x-request-id': 'provider-exact-001' } })
+    } })
+    const context = { executionMode: 'live' as const, credentialReference: 'vault:qwen-test', resolveCredential: async () => ({ ok: true as const, value: 'runtime-only-test-value' }), timeoutMs: 1_000, attemptNumber: 1 }
+    const first = await adapter.generate(current, context); const second = await adapter.generate(current, { ...context, attemptNumber: 2 })
+    expect(first).toMatchObject({ providerModel: 'qwen-plus', providerRequestId: 'provider-exact-001', requestFingerprint: current.requestFingerprint })
+    expect(second.providerModel).toBe(first.providerModel)
+    expect(requestIds).toEqual([`managed-site-${current.requestFingerprint.slice(0, 48)}`, `managed-site-${current.requestFingerprint.slice(0, 48)}`])
+  })
+
+  it.each([
+    ['model mismatch', (value: any) => { value.model = 'qwen-turbo' }, 'provider-1'],
+    ['multiple choices', (value: any) => { value.choices.push(structuredClone(value.choices[0])) }, 'provider-1'],
+    ['unknown envelope field', (value: any) => { value.system_fingerprint = 'unexpected' }, 'provider-1'],
+    ['truncated finish', (value: any) => { value.choices[0].finish_reason = 'length' }, 'provider-1'],
+    ['malformed usage', (value: any) => { value.usage.total_tokens = 99 }, 'provider-1'],
+    ['provider request identity mismatch', (_value: any) => {}, 'different-request-id'],
+  ])('fails closed on Qwen %s', async (_label, mutate, responseRequestId) => {
+    const current = request(); const blueprint = createDeterministicManagedSiteBlueprint(current)
+    const envelope: any = { id: 'provider-1', model: 'qwen-plus', choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(blueprint) }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } }
+    mutate(envelope)
+    const adapter = createBailianQwenManagedSiteGenerationAdapter({ endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus', fetchImpl: async () => new Response(JSON.stringify(envelope), { status: 200, headers: { 'x-request-id': responseRequestId } }) })
     await expect(adapter.generate(current, { executionMode: 'live', credentialReference: 'vault:qwen-test', resolveCredential: async () => ({ ok: true, value: 'runtime-only-test-value' }), timeoutMs: 1_000, attemptNumber: 1 })).rejects.toMatchObject({ code: 'PROVIDER_OUTPUT_BLOCKED' })
   })
 })

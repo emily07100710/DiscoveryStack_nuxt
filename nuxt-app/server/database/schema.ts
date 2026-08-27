@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import { boolean, decimal, index, int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/mysql-core'
 
 /** OAuth identities are private and are used only for owner-gated administration. */
@@ -1689,6 +1690,7 @@ export const managedSiteProviderConfigurations = mysqlTable('managedSiteProvider
   transportConfiguration: json('transportConfiguration').notNull(),
   configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
   verificationReceiptFingerprint: varchar('verificationReceiptFingerprint', { length: 128 }),
+  capabilityIdentity: varchar('capabilityIdentity', { length: 160 }),
   blockedReasonCode: varchar('blockedReasonCode', { length: 120 }),
   verifiedAt: timestamp('verifiedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
@@ -1831,7 +1833,7 @@ export const managedSiteGateResults = mysqlTable('managedSiteGateResults', {
 export const managedSiteDomainClaims = mysqlTable('managedSiteDomainClaims', {
   id: int('id').autoincrement().primaryKey(),
   canonicalDomain: varchar('canonicalDomain', { length: 253 }).notNull(),
-  activeCanonicalDomainKey: varchar('activeCanonicalDomainKey', { length: 253 }),
+  activeCanonicalDomainKey: varchar('activeCanonicalDomainKey', { length: 253 }).generatedAlwaysAs(sql`CASE WHEN \`status\` = 'released' THEN NULL ELSE \`canonicalDomain\` END`, { mode: 'stored' }),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
   releaseId: int('releaseId').notNull().references(() => managedSiteReleaseProjections.id),

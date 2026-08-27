@@ -13,13 +13,14 @@ import {
   type ManagedSiteProviderReadinessItem,
 } from './types'
 import { MANAGED_SITE_PROVIDER_VERIFIERS, resolveManagedSiteProviderVerifier, type ManagedSiteProviderVerifierRegistry } from './provider-verifiers'
+import { assertManagedSiteCheckoutOrigin } from './canonical'
 
 const MAX_REGISTRY_BYTES = 64 * 1024
 const MAX_CREDENTIAL_BYTES = 8 * 1024
 const SENSITIVE_KEY = /(secret|token|password|authorization|api.?key|credential.?value)/iu
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u
 const CREDENTIAL_REFERENCE = /^(?:vault|secret-ref|kms|envref):[A-Za-z0-9][A-Za-z0-9._:/-]{2,154}$/u
-const TRANSPORT_CONFIGURATION_FIELDS = new Set(['endpointOrigin', 'model'])
+const TRANSPORT_CONFIGURATION_FIELDS = new Set(['endpointOrigin', 'model', 'checkoutOrigin'])
 
 function isManagedSiteCredentialReference(value: unknown): value is string { return typeof value === 'string' && CREDENTIAL_REFERENCE.test(value) && !/(?:sk-[A-Za-z0-9]|bearer\s|-----BEGIN)/iu.test(value) }
 function isManagedSiteProviderKey(value: unknown): value is string { return typeof value === 'string' && value.length >= 1 && value.length <= 96 && /^[a-z0-9][a-z0-9._-]*$/u.test(value) && !value.includes('..') }
@@ -95,9 +96,12 @@ export async function configureManagedSiteProvider(
   const hmacBroker = input.providerKey === 'internal_hmac_v1' && input.capability === 'payment'
     || input.providerKey === 'internal-domain-broker-hmac-v1' && input.capability === 'domain_registration'
     || input.providerKey === 'internal-dns-tls-broker-hmac-v1' && input.capability === 'dns_tls'
-  const allowedTransportFields = input.providerKey === 'bailian-qwen' && input.capability === 'website_generator' ? new Set(['endpointOrigin', 'model']) : input.providerKey === 'internal-deployment-bearer-v1' && input.capability === 'deployment' || hmacBroker ? new Set(['endpointOrigin']) : new Set<string>()
+  const allowedTransportFields = input.providerKey === 'bailian-qwen' && input.capability === 'website_generator' ? new Set(['endpointOrigin', 'model']) : input.providerKey === 'internal_hmac_v1' && input.capability === 'payment' ? new Set(['endpointOrigin', 'checkoutOrigin']) : input.providerKey === 'internal-deployment-bearer-v1' && input.capability === 'deployment' || hmacBroker ? new Set(['endpointOrigin']) : new Set<string>()
   if (Object.keys(transportConfiguration).some(key => !allowedTransportFields.has(key))) invalid('Transport configuration is not allowlisted for this exact provider and capability.')
+  if (input.providerKey === 'internal_hmac_v1' && input.capability === 'payment' && input.readinessStatus === 'configured') transportConfiguration.checkoutOrigin = assertManagedSiteCheckoutOrigin(transportConfiguration.checkoutOrigin)
   const configurationFingerprint = stableFingerprint({ capability: input.capability, providerKey: input.providerKey, readinessStatus: input.readinessStatus, credentialReference, transportConfiguration })
+  const mockCapabilityIdentity = input.readinessStatus === 'mock' ? `mock-capability:${configurationFingerprint.slice(0, 48)}` : null
+  const mockVerificationReceiptFingerprint = input.readinessStatus === 'mock' ? stableFingerprint({ authority: 'test-only-mock-provider-configuration', configurationFingerprint }) : null
   const existing = await repository.findProviderConfiguration(ownerUserId, input.capability)
   const sameFingerprint = await repository.findProviderConfigurationByFingerprint(ownerUserId, configurationFingerprint)
   if (sameFingerprint && sameFingerprint.capability !== input.capability) conflict('Provider configuration fingerprint collides with another capability.')
@@ -110,14 +114,15 @@ export async function configureManagedSiteProvider(
       credentialReference,
       transportConfiguration,
       configurationFingerprint,
-      verificationReceiptFingerprint: null,
+      verificationReceiptFingerprint: mockVerificationReceiptFingerprint,
+      capabilityIdentity: mockCapabilityIdentity,
       blockedReasonCode: null,
       verifiedAt: null,
     })
     if (!configuration) conflict('Provider configuration changed concurrently.')
     return { configuration, replayed: false }
   }
-  const configuration = await repository.insertProviderConfiguration({ ownerUserId, capability: input.capability, providerKey: input.providerKey, readinessStatus: input.readinessStatus, credentialReference, transportConfiguration, configurationFingerprint, verificationReceiptFingerprint: null, blockedReasonCode: null, verifiedAt: null } as any)
+  const configuration = await repository.insertProviderConfiguration({ ownerUserId, capability: input.capability, providerKey: input.providerKey, readinessStatus: input.readinessStatus, credentialReference, transportConfiguration, configurationFingerprint, verificationReceiptFingerprint: mockVerificationReceiptFingerprint, capabilityIdentity: mockCapabilityIdentity, blockedReasonCode: null, verifiedAt: null } as any)
   return { configuration, replayed: false, configuredAt: now.toISOString() }
 }
 
@@ -157,7 +162,7 @@ export async function verifyManagedSiteProviderConfiguration(
   const verifiedAt = clock()
   if (receipt.capability !== capability || receipt.providerKey !== configuration.providerKey || receipt.configurationFingerprint !== configuration.configurationFingerprint || !isOpaqueReference(receipt.capabilityIdentity, 160) || !isOpaqueReference(receipt.providerEventId, 160) || !/^[a-f0-9]{64}$/u.test(receipt.payloadHash) || !isOpaqueReference(receipt.exactResponseIdentity, 256) || !Number.isFinite(observedAt.getTime()) || Math.abs(verifiedAt.getTime() - observedAt.getTime()) > 10 * 60_000) conflict('Provider verification receipt identity or timestamp is incomplete or mismatched.')
   const receiptFingerprint = stableFingerprint(receipt)
-  const verified = await repository.verifyProviderConfigurationCas(ownerUserId, configuration.id, configuration.configurationFingerprint, { readinessStatus: 'verified', blockedReasonCode: null, verificationReceiptFingerprint: receiptFingerprint, verifiedAt })
+  const verified = await repository.verifyProviderConfigurationCas(ownerUserId, configuration.id, configuration.configurationFingerprint, { readinessStatus: 'verified', blockedReasonCode: null, verificationReceiptFingerprint: receiptFingerprint, capabilityIdentity: receipt.capabilityIdentity, verifiedAt })
   if (!verified) conflict('Provider configuration changed before verification completed.')
   return { configuration: verified, receiptFingerprint }
 }

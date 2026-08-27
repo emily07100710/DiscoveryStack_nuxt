@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "fca413e7-1eb9-4eee-b4ae-02ba1a771159",
+  "id": "428a10b6-7b01-404d-aff8-c30b17fc1e0d",
   "prevId": "7b9b495c-1ad2-423c-96f0-cc171cc8b21b",
   "tables": {
     "auditEvidenceLedger": {
@@ -6193,7 +6193,11 @@
           "type": "varchar(253)",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "autoincrement": false,
+          "generated": {
+            "as": "CASE WHEN `status` = 'released' THEN NULL ELSE `canonicalDomain` END",
+            "type": "stored"
+          }
         },
         "ownerUserId": {
           "name": "ownerUserId",
@@ -8893,6 +8897,13 @@
         "verificationReceiptFingerprint": {
           "name": "verificationReceiptFingerprint",
           "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "capabilityIdentity": {
+          "name": "capabilityIdentity",
+          "type": "varchar(160)",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { createError } from 'h3'
 import { stableFingerprint } from '../../seo-geo-core/repository'
-import { assertPublicHttpsUrl } from '../../content-operations/normalization'
 import { isOpaqueReference } from '../../first-party-publishing/normalization'
 import { getPreviewRepository } from '../ordering-repository'
 import type { PreviewRepository } from '../ordering-types'
@@ -9,7 +8,7 @@ import { getManagedSiteLiveConnectorRepository } from './repository'
 import { requireVerifiedManagedSiteProvider, resolveManagedSiteCredential } from './provider-registry'
 import { managedSiteCommerceSnapshotFingerprint } from '../prepurchase-service'
 import type { ManagedSiteCheckoutSessionAdapter, ManagedSiteCheckoutSessionReceipt, ManagedSiteCredentialResolver, ManagedSiteLiveConnectorRepository } from './types'
-import { compareCodeUnits } from './canonical'
+import { assertManagedSiteCheckoutUrl, compareCodeUnits } from './canonical'
 
 const CHECKOUT_TIMEOUT_MS = 15_000
 
@@ -39,9 +38,11 @@ export async function createManagedSiteCheckoutSession(ownerUserId: number, inpu
   if (binding.commerceSnapshotFingerprint !== commerceSnapshotFingerprint || release.commerceSnapshotFingerprint !== commerceSnapshotFingerprint) conflict('Checkout commercial snapshot changed after pre-purchase release creation.')
   const configuration = input.executionMode === 'live' ? await requireVerifiedManagedSiteProvider(ownerUserId, 'payment', repository, resolver) : await repository.findProviderConfiguration(ownerUserId, 'payment')
   if (!configuration || input.executionMode === 'mocked' && !['mock', 'verified'].includes(configuration.readinessStatus)) unavailable('Payment provider is not configured for this execution mode.')
+  if (!configuration.verificationReceiptFingerprint || !configuration.capabilityIdentity) unavailable('Payment provider configuration lacks exact verified capability lineage.')
+  const checkoutOrigin = input.executionMode === 'live' && configuration.transportConfiguration && typeof configuration.transportConfiguration === 'object' && !Array.isArray(configuration.transportConfiguration) && typeof (configuration.transportConfiguration as any).checkoutOrigin === 'string' ? String((configuration.transportConfiguration as any).checkoutOrigin) : 'https://checkout.acme-payments.com'
   const snapshot = { draftOrderId: order.id, quoteId: quote.id, amountMinor: quote.totalMinor, currency: quote.currency, planKey: quote.planKey, cadenceDays: quote.cadenceDays, domainOption: quote.domainOption, lineSnapshot, taxStatus: quote.taxStatus }
   const snapshotFingerprint = commerceSnapshotFingerprint
-  const requestFingerprint = stableFingerprint({ ownerUserId, releaseId: release.id, approvalFingerprint: release.approvalFingerprint, providerKey: configuration.providerKey, snapshotFingerprint })
+  const requestFingerprint = stableFingerprint({ ownerUserId, releaseId: release.id, approvalFingerprint: release.approvalFingerprint, providerKey: configuration.providerKey, configurationFingerprint: configuration.configurationFingerprint, verificationReceiptFingerprint: configuration.verificationReceiptFingerprint, capabilityIdentity: configuration.capabilityIdentity, snapshotFingerprint })
   let attempt = await repository.findAttemptByIdempotency(ownerUserId, input.idempotencyKey)
   if (attempt && attempt.requestFingerprint !== requestFingerprint) conflict('Checkout session idempotency key collides with another commercial snapshot.')
   if (attempt?.status === 'succeeded') {
@@ -55,12 +56,12 @@ export async function createManagedSiteCheckoutSession(ownerUserId: number, inpu
   const leased = await repository.acquireAttemptLease(ownerUserId, attempt.id, leaseOwner, clock(), 25_000)
   if (!leased) conflict('Checkout session is already leased, terminal, or waiting for retry.')
   try {
-    const result = await adapter.createSession({ ownerUserId, projectId: release.projectId, releaseId: release.id, previewId: release.previewId!, approvalFingerprint: release.approvalFingerprint, ...snapshot, snapshotFingerprint, idempotencyKey: input.idempotencyKey, timeoutMs: CHECKOUT_TIMEOUT_MS })
-    if (result.providerKey !== configuration.providerKey || result.draftOrderId !== order.id || result.amountMinor !== quote.totalMinor || result.currency !== quote.currency || result.snapshotFingerprint !== snapshotFingerprint || !isOpaqueReference(result.providerEventId, 160) || !isOpaqueReference(result.providerReference, 160) || !isOpaqueReference(result.exactResponseIdentity, 256)) conflict('Checkout provider receipt does not match the exact server-derived commercial snapshot.')
-    const checkoutUrl = assertPublicHttpsUrl(result.checkoutUrl, 'Checkout session URL')
+    const result = await adapter.createSession({ ownerUserId, projectId: release.projectId, releaseId: release.id, previewId: release.previewId!, approvalFingerprint: release.approvalFingerprint, ...snapshot, snapshotFingerprint, configurationFingerprint: configuration.configurationFingerprint, verificationReceiptFingerprint: configuration.verificationReceiptFingerprint, capabilityIdentity: configuration.capabilityIdentity, idempotencyKey: input.idempotencyKey, timeoutMs: CHECKOUT_TIMEOUT_MS })
+    if (result.providerKey !== configuration.providerKey || result.draftOrderId !== order.id || result.amountMinor !== quote.totalMinor || result.currency !== quote.currency || result.snapshotFingerprint !== snapshotFingerprint || result.configurationFingerprint !== configuration.configurationFingerprint || result.verificationReceiptFingerprint !== configuration.verificationReceiptFingerprint || result.capabilityIdentity !== configuration.capabilityIdentity || !isOpaqueReference(result.providerEventId, 160) || !isOpaqueReference(result.providerReference, 160) || !isOpaqueReference(result.exactResponseIdentity, 256)) conflict('Checkout provider receipt does not match the exact server-derived commercial and configuration snapshot.')
+    const checkoutUrl = assertManagedSiteCheckoutUrl(result.checkoutUrl, checkoutOrigin)
     const receiptFingerprint = stableFingerprint({ ownerUserId, requestFingerprint, result: { ...result, checkoutUrl } })
     const { receipt } = await repository.transaction(async transaction => {
-      const receipt = await transaction.insertReceipt({ ownerUserId, projectId: order.projectId, draftOrderId: order.id, releaseId: release.id, attemptId: leased.id, capability: 'payment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'checkout_session_created', receiptStatus: 'verified', externalReference: result.providerReference, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { checkoutUrl, snapshotFingerprint, previewId: release.previewId, quoteId: release.quoteId, draftOrderId: release.draftOrderId, amountMinor: quote.totalMinor, currency: quote.currency, planKey: quote.planKey, cadenceDays: quote.cadenceDays, domainOption: quote.domainOption, lineSnapshotFingerprint: stableFingerprint(lines.map(line => line.lineFingerprint).sort()), taxStatus: quote.taxStatus }, receiptFingerprint, verifiedAt: clock() } as any)
+      const receipt = await transaction.insertReceipt({ ownerUserId, projectId: order.projectId, draftOrderId: order.id, releaseId: release.id, attemptId: leased.id, capability: 'payment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'checkout_session_created', receiptStatus: 'verified', externalReference: result.providerReference, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { checkoutUrl, snapshotFingerprint, previewId: release.previewId, quoteId: release.quoteId, draftOrderId: release.draftOrderId, amountMinor: quote.totalMinor, currency: quote.currency, planKey: quote.planKey, cadenceDays: quote.cadenceDays, domainOption: quote.domainOption, lineSnapshotFingerprint: stableFingerprint(lines.map(line => line.lineFingerprint).sort()), taxStatus: quote.taxStatus, configurationFingerprint: configuration.configurationFingerprint, verificationReceiptFingerprint: configuration.verificationReceiptFingerprint, capabilityIdentity: configuration.capabilityIdentity }, receiptFingerprint, verifiedAt: clock() } as any)
       const transitioned = await transaction.transitionRelease(ownerUserId, release.id, 'approved', release.projectionFingerprint, { status: 'checkout_pending', blockedReasonCode: null, nextSafeAction: 'wait_for_verified_payment_webhook', projectionFingerprint: stableFingerprint({ previous: release.projectionFingerprint, checkoutReceiptFingerprint: receipt.receiptFingerprint }) })
       if (!transitioned) conflict('Release changed concurrently before checkout session authority committed.')
       const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
@@ -75,5 +76,5 @@ export async function createManagedSiteCheckoutSession(ownerUserId: number, inpu
 }
 
 export function createMockManagedSiteCheckoutSessionAdapter(providerKey = 'mock-payment'): ManagedSiteCheckoutSessionAdapter {
-  return { async createSession(input): Promise<ManagedSiteCheckoutSessionReceipt> { return { providerKey, providerEventId: `checkout-${stableFingerprint(input).slice(0, 24)}`, providerReference: `checkout-ref-${input.draftOrderId}`, checkoutUrl: `https://checkout.acme-payments.com/session/${stableFingerprint(input).slice(0, 24)}`, draftOrderId: input.draftOrderId, amountMinor: input.amountMinor, currency: input.currency, snapshotFingerprint: input.snapshotFingerprint, exactResponseIdentity: `checkout-response:${stableFingerprint(input).slice(0, 32)}` } } }
+  return { async createSession(input): Promise<ManagedSiteCheckoutSessionReceipt> { return { providerKey, providerEventId: `checkout-${stableFingerprint(input).slice(0, 24)}`, providerReference: `checkout-ref-${input.draftOrderId}`, checkoutUrl: `https://checkout.acme-payments.com/session/${stableFingerprint(input).slice(0, 24)}`, draftOrderId: input.draftOrderId, amountMinor: input.amountMinor, currency: input.currency, snapshotFingerprint: input.snapshotFingerprint, configurationFingerprint: input.configurationFingerprint, verificationReceiptFingerprint: input.verificationReceiptFingerprint, capabilityIdentity: input.capabilityIdentity, exactResponseIdentity: `checkout-response:${stableFingerprint(input).slice(0, 32)}` } } }
 }

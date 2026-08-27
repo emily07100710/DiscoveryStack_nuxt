@@ -156,6 +156,9 @@ export type ManagedSiteVerifiedPaymentWebhook = {
   occurredAt: string
   exactResponseIdentity: string
   canonicalPayloadHash: string
+  configurationFingerprint: string
+  verificationReceiptFingerprint: string
+  checkoutReceiptFingerprint: string
 }
 
 export type ManagedSitePaymentWebhookAdapter = {
@@ -176,11 +179,14 @@ export type ManagedSiteCheckoutSessionReceipt = {
   amountMinor: number
   currency: string
   snapshotFingerprint: string
+  configurationFingerprint: string
+  verificationReceiptFingerprint: string
+  capabilityIdentity: string
   exactResponseIdentity: string
 }
 
 export type ManagedSiteCheckoutSessionAdapter = {
-  createSession(input: { ownerUserId: number; projectId: number; releaseId: number; previewId: number; approvalFingerprint: string; draftOrderId: number; quoteId: number; amountMinor: number; currency: string; planKey: string; cadenceDays: number; domainOption: string; lineSnapshot: Array<{ lineKey: string; quantity: number; unitAmountMinor: number; lineAmountMinor: number }>; taxStatus: string; snapshotFingerprint: string; idempotencyKey: string; timeoutMs: number }): Promise<ManagedSiteCheckoutSessionReceipt>
+  createSession(input: { ownerUserId: number; projectId: number; releaseId: number; previewId: number; approvalFingerprint: string; draftOrderId: number; quoteId: number; amountMinor: number; currency: string; planKey: string; cadenceDays: number; domainOption: string; lineSnapshot: Array<{ lineKey: string; quantity: number; unitAmountMinor: number; lineAmountMinor: number }>; taxStatus: string; snapshotFingerprint: string; configurationFingerprint: string; verificationReceiptFingerprint: string; capabilityIdentity: string; idempotencyKey: string; timeoutMs: number }): Promise<ManagedSiteCheckoutSessionReceipt>
 }
 
 export type ManagedSiteDomainQuote = {
@@ -285,8 +291,8 @@ export type ManagedSiteLiveConnectorRepository = {
   findDomainClaim(canonicalDomain: string): Promise<ManagedSiteDomainClaim | null>
   findDomainClaimByRelease(ownerUserId: number, releaseId: number): Promise<ManagedSiteDomainClaim | null>
   findDomainClaimByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSiteDomainClaim | null>
-  insertDomainClaim(input: Omit<ManagedSiteDomainClaim, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteDomainClaim>
-  transitionDomainClaim(ownerUserId: number, claimId: number, expectedStatus: ManagedSiteDomainClaim['status'], expectedProjectionFingerprint: string, patch: Partial<Omit<ManagedSiteDomainClaim, 'id' | 'ownerUserId' | 'canonicalDomain' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteDomainClaim | null>
+  insertDomainClaim(input: Omit<ManagedSiteDomainClaim, 'id' | 'createdAt' | 'updatedAt' | 'activeCanonicalDomainKey'>): Promise<ManagedSiteDomainClaim>
+  transitionDomainClaim(ownerUserId: number, claimId: number, expectedStatus: ManagedSiteDomainClaim['status'], expectedProjectionFingerprint: string, patch: Partial<Omit<ManagedSiteDomainClaim, 'id' | 'ownerUserId' | 'canonicalDomain' | 'activeCanonicalDomainKey' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteDomainClaim | null>
   findPaymentWebhookInbox(providerKey: string, providerEventId: string): Promise<ManagedSitePaymentWebhookInbox | null>
   insertPaymentWebhookInbox(input: Omit<ManagedSitePaymentWebhookInbox, 'id' | 'receivedAt'>): Promise<ManagedSitePaymentWebhookInbox>
   transitionPaymentWebhookInbox(inboxId: number, expectedStatus: ManagedSitePaymentWebhookInbox['processingStatus'], expectedProcessingFingerprint: string, patch: Partial<Omit<ManagedSitePaymentWebhookInbox, 'id' | 'providerKey' | 'providerEventId' | 'eventFingerprint' | 'receivedAt'>>): Promise<ManagedSitePaymentWebhookInbox | null>

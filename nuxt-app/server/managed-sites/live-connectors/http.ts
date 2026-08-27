@@ -9,6 +9,7 @@ import type { ManagedSiteArtifactVault } from './generation-service'
 import type { ManagedSiteDeploymentAdapter, ManagedSiteDomainAdapter, ManagedSiteDnsTlsAdapter, ManagedSiteExistingSiteOwnershipAdapter, ManagedSiteGenerationAdapter, ManagedSiteLiveConnectorRepository, ManagedSiteCheckoutSessionAdapter } from './types'
 import type { ManagedSiteCredentialResolver } from './types'
 import type { ManagedSiteProviderVerifierRegistry } from './provider-verifiers'
+import type { ManagedSiteJointTransaction } from './payment-webhook'
 
 export type ManagedSiteRouteDependencies = {
   ownerUserId: number
@@ -25,14 +26,25 @@ export type ManagedSiteRouteDependencies = {
   credentialResolver?: ManagedSiteCredentialResolver
   verifierRegistry?: ManagedSiteProviderVerifierRegistry
   fetchImpl?: typeof fetch
+  paymentWebhookAdapter?: import('./types').ManagedSitePaymentWebhookAdapter
+  paymentWebhookCredentialReference?: string
+  paymentWebhookExecutionMode?: 'mocked' | 'live'
+  paymentWebhookJointTransaction?: ManagedSiteJointTransaction
+  geoActivator?: (...args: any[]) => Promise<any>
 }
 
 let testDependencyFactory: ((event: H3Event) => Promise<ManagedSiteRouteDependencies> | ManagedSiteRouteDependencies) | null = null
+let testPaymentWebhookDependencies: ManagedSiteRouteDependencies | null = null
 
 /** Production-equivalent fixed-route seam. It is test-only and cannot replace server authority in production. */
 export function setManagedSiteRouteDependencyFactoryForTests(factory: ((event: H3Event) => Promise<ManagedSiteRouteDependencies> | ManagedSiteRouteDependencies) | null): void {
   if (process.env.NODE_ENV !== 'test') throw createError({ statusCode: 403, statusMessage: 'Managed-site route dependency injection is test-only.' })
   testDependencyFactory = factory
+}
+
+export function setManagedSitePaymentWebhookDependenciesForTests(dependencies: ManagedSiteRouteDependencies | null): void {
+  if (process.env.NODE_ENV !== 'test') throw createError({ statusCode: 403, statusMessage: 'Managed-site webhook dependency injection is test-only.' })
+  testPaymentWebhookDependencies = dependencies
 }
 
 export function privateManagedSiteHeaders(event: H3Event): void {
@@ -44,6 +56,11 @@ export async function managedSiteOwnerContext(event: H3Event) {
   if (testDependencyFactory) return testDependencyFactory(event)
   const owner = await requireOwner(event)
   return { ownerUserId: await getOwnerDatabaseUserId(owner.openId), repository: getManagedSiteLiveConnectorRepository() }
+}
+
+/** Webhooks have no owner session. This seam exists only in NODE_ENV=test; production always resolves its server authority below the route. */
+export function managedSitePaymentWebhookContextForTests(): ManagedSiteRouteDependencies | null {
+  return process.env.NODE_ENV === 'test' ? testPaymentWebhookDependencies : null
 }
 
 export async function strictManagedSiteBody(event: H3Event, allowedFields: readonly string[]): Promise<Record<string, unknown>> {

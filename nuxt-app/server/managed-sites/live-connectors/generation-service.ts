@@ -17,6 +17,8 @@ import type {
   ManagedSiteGenerationAdapter,
   ManagedSiteGenerationRequest,
   ManagedSiteLiveConnectorRepository,
+  ManagedSiteBlueprintProviderOutput,
+  ManagedSiteBlueprintV1,
 } from './types'
 import { compareCodeUnits } from './canonical'
 
@@ -25,17 +27,26 @@ const GENERATION_TIMEOUT_MS = 30_000
 const GENERATION_LEASE_MS = 45_000
 const GENERATION_MAX_ATTEMPTS = 3
 
+export type ManagedSiteArtifactVaultBundle = {
+  schemaVersion: 'managed-site-owner-vault-bundle-v2'
+  ownerUserId: number
+  projectId: number
+  requestFingerprint: string
+  providerOutput: ManagedSiteBlueprintProviderOutput
+  blueprint: ManagedSiteBlueprintV1
+  blueprintHash: string
+  compilerFingerprint: string
+  manifest: ManagedSiteAdmittedManifest
+  files: readonly ManagedSiteGeneratedFile[]
+}
+
 export type ManagedSiteArtifactVault = {
-  storeImmutableCandidate(input: {
-    ownerUserId: number
-    projectId: number
-    requestFingerprint: string
-    manifest: ManagedSiteAdmittedManifest
-    files: readonly ManagedSiteGeneratedFile[]
-  }): Promise<{ vaultReference: string; contentHash: string; exactResponseIdentity: string }>
+  lookupImmutableCandidate(input: { ownerUserId: number; projectId: number; requestFingerprint: string }): Promise<{ bundle: unknown; vaultReference: string; exactResponseIdentity: string } | null>
+  storeImmutableCandidate(input: ManagedSiteArtifactVaultBundle): Promise<{ vaultReference: string; contentHash: string; exactResponseIdentity: string }>
 }
 
 export const FAIL_CLOSED_MANAGED_SITE_ARTIFACT_VAULT: ManagedSiteArtifactVault = {
+  async lookupImmutableCandidate() { throw createError({ statusCode: 503, statusMessage: 'Managed-site owner artifact vault is not configured.' }) },
   async storeImmutableCandidate() { throw createError({ statusCode: 503, statusMessage: 'Managed-site owner artifact vault is not configured.' }) },
 }
 
@@ -50,6 +61,26 @@ export type GenerateManagedSiteCandidateInput = {
 function invalid(message: string): never { throw createError({ statusCode: 422, statusMessage: message }) }
 function conflict(message: string): never { throw createError({ statusCode: 409, statusMessage: message }) }
 function unavailable(message: string): never { throw createError({ statusCode: 503, statusMessage: message }) }
+
+function vaultCollision(message = 'Managed-site owner vault object identity collided with different content.'): never {
+  throw Object.assign(createError({ statusCode: 409, statusMessage: message }), { code: 'VAULT_COLLISION', retryable: false })
+}
+
+function validateVaultBundle(value: unknown, expected: { ownerUserId: number; projectId: number; request: ManagedSiteGenerationRequest; providerKey: string; expectedModel: string | null }) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) vaultCollision()
+  const bundle = value as ManagedSiteArtifactVaultBundle
+  const keys = ['schemaVersion', 'ownerUserId', 'projectId', 'requestFingerprint', 'providerOutput', 'blueprint', 'blueprintHash', 'compilerFingerprint', 'manifest', 'files']
+  if (Object.keys(bundle).length !== keys.length || Object.keys(bundle).some(key => !keys.includes(key)) || bundle.schemaVersion !== 'managed-site-owner-vault-bundle-v2' || bundle.ownerUserId !== expected.ownerUserId || bundle.projectId !== expected.projectId || bundle.requestFingerprint !== expected.request.requestFingerprint) vaultCollision()
+  const structured = validateManagedSiteBlueprintProviderOutput(bundle.providerOutput, expected.request, expected.providerKey)
+  if (expected.expectedModel && structured.output.providerModel !== expected.expectedModel) vaultCollision('Managed-site vault provider model does not match the configured model.')
+  if (stableFingerprint(structured.blueprint) !== stableFingerprint(bundle.blueprint) || structured.blueprintHash !== bundle.blueprintHash) vaultCollision()
+  const compiledFiles = compileManagedSiteBlueprint(structured.blueprint)
+  const compilerFingerprint = blueprintCompilerFingerprint(structured.blueprint, compiledFiles)
+  if (compilerFingerprint !== bundle.compilerFingerprint || stableFingerprint(compiledFiles) !== stableFingerprint(bundle.files)) vaultCollision('Managed-site vault compiler lineage is mismatched.')
+  const admitted = admitManagedSiteGenerationOutput({ schemaVersion: 'managed-site-generation-provider-response-v1', providerKey: structured.output.providerKey, providerModel: structured.output.providerModel, providerRequestId: structured.output.providerRequestId, requestFingerprint: expected.request.requestFingerprint, files: bundle.files, manifestHash: stableFingerprint(bundle.files.map(file => ({ path: file.path, mediaType: file.mediaType, sha256: file.sha256 })).sort((left, right) => compareCodeUnits(left.path, right.path))) }, { requestFingerprint: expected.request.requestFingerprint, providerKey: expected.providerKey })
+  if (stableFingerprint(admitted.manifest) !== stableFingerprint(bundle.manifest)) vaultCollision('Managed-site vault manifest or content hash is mismatched.')
+  return { bundle, structured, admitted, compilerFingerprint }
+}
 
 function retryAt(attemptNumber: number, now: Date): Date | null {
   if (attemptNumber >= GENERATION_MAX_ATTEMPTS) return null
@@ -158,24 +189,43 @@ export async function generateManagedSiteCandidate(
   const leased = await repository.acquireAttemptLease(ownerUserId, attempt.id, leaseOwner, now, GENERATION_LEASE_MS)
   if (!leased) conflict('Generation attempt is already leased, terminal, or waiting for its retry window.')
   const attemptNumber = leased.attemptNumber + 1
+  const expectedModel = input.executionMode === 'live' && configured?.transportConfiguration && typeof configured.transportConfiguration === 'object' && !Array.isArray(configured.transportConfiguration) && typeof (configured.transportConfiguration as any).model === 'string' ? String((configured.transportConfiguration as any).model) : null
+  let immutableVaultAuthorityAvailable = false
   try {
-    const output = await boundedTimeout(dependencies.adapter.generate(request, { executionMode: input.executionMode, credentialReference: configured?.credentialReference || null, resolveCredential: credentialResolver, timeoutMs: GENERATION_TIMEOUT_MS, attemptNumber }), GENERATION_TIMEOUT_MS)
-    const structured = validateManagedSiteBlueprintProviderOutput(output, request, providerKey)
-    const compiledFiles = compileManagedSiteBlueprint(structured.blueprint)
-    const compilerFingerprint = blueprintCompilerFingerprint(structured.blueprint, compiledFiles)
-    const admitted = admitManagedSiteGenerationOutput({ schemaVersion: 'managed-site-generation-provider-response-v1', providerKey: structured.output.providerKey, providerModel: structured.output.providerModel, providerRequestId: structured.output.providerRequestId, requestFingerprint: request.requestFingerprint, files: compiledFiles, manifestHash: stableFingerprint(compiledFiles.map(file => ({ path: file.path, mediaType: file.mediaType, sha256: file.sha256 })).sort((left, right) => compareCodeUnits(left.path, right.path))) }, { requestFingerprint: request.requestFingerprint, providerKey })
-    const stored = await dependencies.vault.storeImmutableCandidate({ ownerUserId, projectId: project.id, requestFingerprint: request.requestFingerprint, manifest: admitted.manifest, files: admitted.files })
+    const recovered = await dependencies.vault.lookupImmutableCandidate({ ownerUserId, projectId: project.id, requestFingerprint: request.requestFingerprint })
+    let structured: ReturnType<typeof validateManagedSiteBlueprintProviderOutput>
+    let admitted: ReturnType<typeof admitManagedSiteGenerationOutput>
+    let compilerFingerprint: string
+    let stored: { vaultReference: string; contentHash: string; exactResponseIdentity: string }
+    if (recovered) {
+      const validated = validateVaultBundle(recovered.bundle, { ownerUserId, projectId: project.id, request, providerKey, expectedModel })
+      structured = validated.structured; admitted = validated.admitted; compilerFingerprint = validated.compilerFingerprint
+      stored = { vaultReference: recovered.vaultReference, contentHash: admitted.manifest.contentHash, exactResponseIdentity: recovered.exactResponseIdentity }
+      immutableVaultAuthorityAvailable = true
+    } else {
+      const output = await boundedTimeout(dependencies.adapter.generate(request, { executionMode: input.executionMode, credentialReference: configured?.credentialReference || null, resolveCredential: credentialResolver, timeoutMs: GENERATION_TIMEOUT_MS, attemptNumber }), GENERATION_TIMEOUT_MS)
+      structured = validateManagedSiteBlueprintProviderOutput(output, request, providerKey)
+      if (expectedModel && structured.output.providerModel !== expectedModel) conflict('Generation provider model does not match the exact configured model.')
+      const compiledFiles = compileManagedSiteBlueprint(structured.blueprint)
+      compilerFingerprint = blueprintCompilerFingerprint(structured.blueprint, compiledFiles)
+      admitted = admitManagedSiteGenerationOutput({ schemaVersion: 'managed-site-generation-provider-response-v1', providerKey: structured.output.providerKey, providerModel: structured.output.providerModel, providerRequestId: structured.output.providerRequestId, requestFingerprint: request.requestFingerprint, files: compiledFiles, manifestHash: stableFingerprint(compiledFiles.map(file => ({ path: file.path, mediaType: file.mediaType, sha256: file.sha256 })).sort((left, right) => compareCodeUnits(left.path, right.path))) }, { requestFingerprint: request.requestFingerprint, providerKey })
+      const bundle: ManagedSiteArtifactVaultBundle = { schemaVersion: 'managed-site-owner-vault-bundle-v2', ownerUserId, projectId: project.id, requestFingerprint: request.requestFingerprint, providerOutput: structured.output, blueprint: structured.blueprint, blueprintHash: structured.blueprintHash, compilerFingerprint, manifest: admitted.manifest, files: admitted.files }
+      stored = await dependencies.vault.storeImmutableCandidate(bundle)
+      immutableVaultAuthorityAvailable = true
+    }
     if (!/^vault:[A-Za-z0-9_.:-]{1,500}$/u.test(stored.vaultReference) || stored.contentHash !== admitted.manifest.contentHash || !isOpaqueReference(stored.exactResponseIdentity, 256)) conflict('Owner vault receipt identity is incomplete or mismatched.')
     const candidate = await repository.transaction(async transaction => {
       const created = await transaction.insertGenerationCandidate({ ownerUserId, projectId: project.id, sourceVersionId: version.id, requestSchemaVersion: request.schemaVersion, requestFingerprint: request.requestFingerprint, idempotencyKey: input.idempotencyKey, providerKey: admitted.output.providerKey, providerModel: admitted.output.providerModel, providerRequestId: admitted.output.providerRequestId, manifest: { ...admitted.manifest, blueprintHash: structured.blueprintHash, compilerFingerprint, blueprint: structured.blueprint }, manifestHash: admitted.manifest.manifestHash, contentHash: admitted.manifest.contentHash, vaultReference: stored.vaultReference, gateSummary: { artifactAdmission: 'passed', deterministicCompiler: 'passed', previewBuild: 'not_run', securityStaticActiveContent: 'not_run', geoContentStructure: 'not_run', humanReview: 'required' } } as any)
       const receiptFingerprint = stableFingerprint({ ownerUserId, projectId: project.id, capability: 'website_generator', providerKey, providerEventId: admitted.output.providerRequestId, requestFingerprint: request.requestFingerprint, contentHash: admitted.manifest.contentHash, manifestHash: admitted.manifest.manifestHash, vaultIdentity: stored.exactResponseIdentity })
       await transaction.insertReceipt({ ownerUserId, projectId: project.id, draftOrderId: null, releaseId: null, attemptId: leased.id, capability: 'website_generator', providerKey, providerEventId: admitted.output.providerRequestId, receiptType: 'generation_candidate_admitted', receiptStatus: 'verified', externalReference: stored.vaultReference, exactResponseIdentity: stored.exactResponseIdentity, requestFingerprint: request.requestFingerprint, contentHash: admitted.manifest.contentHash, canonicalDomain: null, metadata: { manifestHash: admitted.manifest.manifestHash, blueprintHash: structured.blueprintHash, compilerFingerprint, providerModel: admitted.output.providerModel, fileCount: admitted.manifest.fileCount, totalBytes: admitted.manifest.totalBytes }, receiptFingerprint, verifiedAt: clock() } as any)
+      const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber, retryEligibleAt: null, exactResponseIdentity: admitted.output.providerRequestId, errorCode: null, errorSummary: null })
+      if (!completed) conflict('Generation attempt lease changed before candidate authority commit.')
       return created
     })
-    await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber, retryEligibleAt: null, exactResponseIdentity: admitted.output.providerRequestId, errorCode: null, errorSummary: null })
-    return { candidate, replayed: false, executionMode: input.executionMode, nextSafeAction: 'run_preview_build_and_security_gates' }
+    return { candidate, replayed: false, reconciledFromVault: Boolean(recovered), executionMode: input.executionMode, nextSafeAction: 'run_preview_build_and_security_gates' }
   } catch (error) {
-    const safe = safeError(error)
+    const classified = safeError(error)
+    const safe = immutableVaultAuthorityAvailable && classified.code === 'GENERATION_FAILED' ? { code: 'LOCAL_COMMIT_RECONCILE_REQUIRED', summary: 'Immutable provider output is stored; retry will reconcile from the exact vault object.', retryable: true } : classified
     const nextRetry = safe.retryable ? retryAt(attemptNumber, clock()) : null
     await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: nextRetry ? 'retry_wait' : safe.retryable ? 'failed' : 'blocked', attemptNumber, retryEligibleAt: nextRetry, exactResponseIdentity: null, errorCode: safe.code, errorSummary: safe.summary }).catch(() => null)
     throw error instanceof Error && 'statusCode' in error ? error : createError({ statusCode: safe.retryable ? 503 : 422, statusMessage: safe.summary })

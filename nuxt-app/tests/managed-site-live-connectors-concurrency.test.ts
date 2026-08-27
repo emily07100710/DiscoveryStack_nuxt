@@ -33,7 +33,7 @@ describe('managed-site connector CAS, provider race, and atomic domain claim bou
   })
 
   it('atomically rejects concurrent cross-owner claims for one canonical domain', async () => {
-    const live = createLiveConnectorMemoryRepository(); const base = { canonicalDomain: 'unique.acme.taipei', activeCanonicalDomainKey: 'unique.acme.taipei', projectId: 10, releaseId: 20, claimKind: 'generated' as const, status: 'pending' as const, authorityReceiptFingerprint: null, requestFingerprint: 'a'.repeat(64), projectionFingerprint: 'b'.repeat(64) }
+    const live = createLiveConnectorMemoryRepository(); const base = { canonicalDomain: 'unique.acme.taipei', projectId: 10, releaseId: 20, claimKind: 'generated' as const, status: 'pending' as const, authorityReceiptFingerprint: null, requestFingerprint: 'a'.repeat(64), projectionFingerprint: 'b'.repeat(64) }
     const results = await Promise.allSettled([
       live.repository.insertDomainClaim({ ...base, ownerUserId: 1, idempotencyKey: 'domain-owner-one' } as any),
       live.repository.insertDomainClaim({ ...base, ownerUserId: 2, projectId: 11, releaseId: 21, requestFingerprint: 'c'.repeat(64), idempotencyKey: 'domain-owner-two' } as any),

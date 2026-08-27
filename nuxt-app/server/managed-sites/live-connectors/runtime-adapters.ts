@@ -23,7 +23,7 @@ async function verifiedBroker(ownerUserId: number, capability: 'payment' | 'doma
   const configuration = await repository.findProviderConfiguration(ownerUserId, capability)
   const transport = configuration?.transportConfiguration && typeof configuration.transportConfiguration === 'object' && !Array.isArray(configuration.transportConfiguration) ? configuration.transportConfiguration as Record<string, unknown> : {}
   if (!configuration || configuration.readinessStatus !== 'verified' || configuration.providerKey !== providerKey || !configuration.credentialReference || typeof transport.endpointOrigin !== 'string') throw createError({ statusCode: 503, statusMessage: `Verified ${providerKey} transport is not configured.` })
-  return { endpointOrigin: transport.endpointOrigin, providerKey, credentialReference: configuration.credentialReference, resolveCredential: resolveManagedSiteCredential }
+  return { endpointOrigin: transport.endpointOrigin, ...(capability === 'payment' && typeof transport.checkoutOrigin === 'string' ? { checkoutOrigin: transport.checkoutOrigin } : {}), providerKey, credentialReference: configuration.credentialReference, resolveCredential: resolveManagedSiteCredential }
 }
 
 export async function managedSiteLiveCheckoutAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalHmacV1CheckoutAdapter(await verifiedBroker(ownerUserId, 'payment', 'internal_hmac_v1', repository)) }

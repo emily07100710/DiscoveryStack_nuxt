@@ -12,6 +12,26 @@ import { createLiveConnectorMemoryRepository } from './live-connectors-repositor
 
 export const managedSiteFixedNow = new Date('2026-08-27T00:00:00.000Z')
 
+export async function managedSiteExactPaymentWebhookPayload(line: Awaited<ReturnType<typeof createAuthoritativeManagedSiteReleaseFixture>>, input: { providerEventId: string; eventType: string; providerReference?: string; exactResponseIdentity?: string }) {
+  const configuration = await line.live.repository.findProviderConfiguration(line.ownerUserId, 'payment')
+  const checkoutReceipt = line.live.state.receipts.find(row => row.receiptType === 'checkout_session_created' && row.releaseId === line.release.release.id)
+  if (!configuration?.verificationReceiptFingerprint || !checkoutReceipt) throw new Error('fixture payment configuration or checkout authority is missing')
+  return {
+    providerKey: configuration.providerKey,
+    providerEventId: input.providerEventId,
+    providerReference: input.providerReference || 'payment-ref-001',
+    eventType: input.eventType,
+    draftOrderId: line.order.order.id,
+    amountMinor: line.quote.quote.totalMinor,
+    currency: line.quote.quote.currency,
+    configurationFingerprint: configuration.configurationFingerprint,
+    verificationReceiptFingerprint: configuration.verificationReceiptFingerprint,
+    checkoutReceiptFingerprint: checkoutReceipt.receiptFingerprint,
+    occurredAt: managedSiteFixedNow.toISOString(),
+    exactResponseIdentity: input.exactResponseIdentity || `payment-response:${input.providerEventId}`,
+  }
+}
+
 export async function createAuthoritativeManagedSiteReleaseFixture(options: { ownerUserId?: number; siteType?: 'one_page' | 'brand_blog' | 'simple_commerce'; selectedModules?: any[]; canonicalDomain?: string; buildPreview?: boolean; createCheckout?: boolean } = {}) {
   const ownerUserId = options.ownerUserId || 1
   const managed = createManagedSiteMemoryRepository(); const ordering = createOrderingMemoryRepository(); const live = createLiveConnectorMemoryRepository()

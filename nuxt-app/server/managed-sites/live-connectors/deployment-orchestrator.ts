@@ -72,8 +72,10 @@ export async function createExistingSiteRelease(ownerUserId: number, input: { pr
   const repository = dependencies.repository || getManagedSiteLiveConnectorRepository()
   const managedRepository = dependencies.managedRepository || getManagedSiteRepository()
   const project = await managedRepository.findProject(ownerUserId, input.projectId)
-  if (!project?.activeVersionId) throw createError({ statusCode: 404, statusMessage: 'Existing managed-site project and active version were not found.' })
-  const version = await managedRepository.findVersion(ownerUserId, project.activeVersionId)
+  const prePurchaseBinding = project ? await repository.findPrePurchaseBinding(ownerUserId, project.id) : null
+  const sourceVersionId = project?.activeVersionId || prePurchaseBinding?.sourceVersionId || null
+  if (!project || !sourceVersionId) throw createError({ statusCode: 404, statusMessage: 'Existing managed-site project and exact source version were not found.' })
+  const version = await managedRepository.findVersion(ownerUserId, sourceVersionId)
   if (!version || version.projectId !== project.id) conflict('Existing-site active version lineage is invalid.')
   const domain = canonicalizeManagedDomain(input.canonicalDomain)
   const projectDomain = (() => { try { return canonicalizeManagedDomain(new URL(project.canonicalWebsiteIdentity).hostname).canonicalDomain } catch { return null } })()
@@ -284,7 +286,7 @@ export async function createExistingSiteOwnershipChallenge(ownerUserId: number, 
   if (!release || release.releaseKind !== 'existing_site' || release.status !== 'candidate') conflict('Ownership challenge requires an existing-site release candidate.')
   const requestFingerprint = stableFingerprint({ ownerUserId, projectId: release.projectId, releaseId: release.id, canonicalDomain: release.canonicalDomain, contentHash: release.contentHash, operation: 'existing_site_challenge_create' })
   const claimProjectionFingerprint = stableFingerprint({ requestFingerprint, status: 'pending' })
-  const claim = await repository.insertDomainClaim({ canonicalDomain: release.canonicalDomain, activeCanonicalDomainKey: release.canonicalDomain, ownerUserId, projectId: release.projectId, releaseId: release.id, claimKind: 'existing', status: 'pending', authorityReceiptFingerprint: null, requestFingerprint, idempotencyKey: input.idempotencyKey, projectionFingerprint: claimProjectionFingerprint } as any)
+  const claim = await repository.insertDomainClaim({ canonicalDomain: release.canonicalDomain, ownerUserId, projectId: release.projectId, releaseId: release.id, claimKind: 'existing', status: 'pending', authorityReceiptFingerprint: null, requestFingerprint, idempotencyKey: input.idempotencyKey, projectionFingerprint: claimProjectionFingerprint } as any)
   if (claim.ownerUserId !== ownerUserId || claim.projectId !== release.projectId || claim.releaseId !== release.id || claim.requestFingerprint !== requestFingerprint) conflict('Existing-site atomic domain claim replay is mismatched.')
   const providerChallenge = adapter ? await adapter.createChallenge({ ownerUserId, projectId: release.projectId, releaseId: release.id, canonicalDomain: release.canonicalDomain, verificationMethod: 'dns_txt', requestFingerprint, idempotencyKey: input.idempotencyKey, timeoutMs: DEPLOYMENT_TIMEOUT_MS }) : null
   if (providerChallenge && (providerChallenge.canonicalDomain !== release.canonicalDomain || providerChallenge.projectId !== release.projectId || providerChallenge.verificationMethod !== 'dns_txt' || !isOpaqueReference(providerChallenge.providerEventId, 160) || !isOpaqueReference(providerChallenge.challengeReference, 160) || !isOpaqueReference(providerChallenge.exactResponseIdentity, 256))) conflict('Existing-site challenge provider response is mismatched.')
