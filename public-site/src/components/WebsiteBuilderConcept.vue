@@ -1,77 +1,236 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { publicApiFetch } from '../lib/publicApi'
+import {
+  builderSteps,
+  cadences,
+  generationStages,
+  moduleOptions,
+  normalizeDomain,
+  normalizePublicUrl,
+  pageLabels,
+  pagesForSiteType,
+  planFor,
+  plans,
+  siteTypeFor,
+  siteTypes,
+  stylePreferences,
+  themeFor,
+  themes,
+  timeline,
+  type BuilderStep,
+  type EntryMode,
+  type PlanKey,
+  type PreviewPage,
+  type SiteType,
+  type ThemeKey,
+  type Viewport,
+  formatMoney,
+} from '../lib/website-builder-model'
+import '../styles/website-builder.css'
 
-type SiteType = 'one-page' | 'brand-blog' | 'commerce'
-type ThemeKey = 'mineral' | 'forest' | 'sunset'
-type PlanKey = 'launch' | 'growth' | 'autopilot'
+type SiteAnalysis = {
+  finalUrl: string
+  hostname: string
+  analysedAt: string
+  scope: string
+  scores: { overall?: number; seo?: number; geo?: number; brandContent?: number; ux?: number }
+  checks?: Record<string, unknown>
+  recommendationKeys?: string[]
+}
 
-const siteTypes: Array<{ id: SiteType; label: string; note: string }> = [
-  { id: 'one-page', label: '一頁式網站', note: '快速說清服務與收集詢問' },
-  { id: 'brand-blog', label: '品牌＋部落格', note: '建立內容與長期 GEO 能見度' },
-  { id: 'commerce', label: '電商網站', note: '商品、購物流程與成長內容' },
-]
+type DomainMode = 'new' | 'existing'
 
-const moduleOptions = [
-  { id: 'admin', label: '內容後台', tag: '推薦' },
-  { id: 'ai', label: 'AI 問答助手', tag: 'AI' },
-  { id: 'booking', label: 'Google 預約', tag: 'API' },
-  { id: 'payment', label: '線上金流', tag: 'API' },
-  { id: 'invoice', label: '電子發票', tag: 'API' },
-  { id: 'line', label: 'LINE 導入', tag: 'API' },
-  { id: 'member', label: '會員系統', tag: '系統' },
-  { id: 'app', label: 'PWA／App', tag: '加購' },
-]
-
-const themes: Array<{ id: ThemeKey; label: string; colors: string[] }> = [
-  { id: 'mineral', label: '理性清晰', colors: ['#17233b', '#dbe7ed', '#ff7a59'] },
-  { id: 'forest', label: '自然信任', colors: ['#173f35', '#e5eee6', '#d6a85f'] },
-  { id: 'sunset', label: '溫暖精品', colors: ['#5c2d3b', '#f7e8dc', '#c85e43'] },
-]
-
-const plans: Array<{ id: PlanKey; label: string; price: number; description: string }> = [
-  { id: 'launch', label: '網站上線', price: 0, description: '完成網站、網域與部署，不含持續 GEO 營運。' },
-  { id: 'growth', label: 'GEO 持續成長', price: 12800, description: '12 個月監測、成效儀表板與定期內容改善。' },
-  { id: 'autopilot', label: 'GEO 自動營運', price: 28800, description: '監測、文章排程、AI 助手與每月人工品質檢查。' },
-]
-
-const brandName = ref('山嶼牙醫診所')
-const businessBrief = ref('我們是台北的家庭牙醫，重視安心、透明與兒童友善，希望讓第一次來看牙的人不再緊張。')
-const entryMode = ref<'existing' | 'new'>('new')
-const existingUrl = ref('https://example-business.tw')
-const diagnosisRevealed = ref(false)
-const siteType = ref<SiteType>('brand-blog')
-const selectedModules = ref<string[]>(['admin', 'ai', 'booking', 'line'])
-const theme = ref<ThemeKey>('mineral')
-const cadence = ref(15)
-const plan = ref<PlanKey>('growth')
-const domain = ref('shanyu-dental.tw')
-const isGenerating = ref(false)
-const generationStep = ref(4)
+const currentStep = ref<BuilderStep>('entry')
+const entryMode = ref<EntryMode | null>(null)
+const brandName = ref('')
+const businessBrief = ref('')
+const audience = ref('')
+const desiredAction = ref('')
+const existingUrl = ref('')
+const urlError = ref('')
+const analysisError = ref('')
+const analysisStage = ref(0)
+const analysisResult = ref<SiteAnalysis | null>(null)
+const analysisAccepted = ref(false)
+const siteType = ref<SiteType | null>(null)
+const selectedModules = ref<string[]>(['admin'])
+const theme = ref<ThemeKey | null>(null)
+const selectedStyles = ref<string[]>(['space'])
+const styleReferenceUrl = ref('')
+const styleReferenceError = ref('')
+const generationStage = ref(0)
+const generationFinished = ref(false)
+const viewport = ref<Viewport>('desktop')
+const previewPage = ref<PreviewPage>('home')
+const assistantQuestion = ref('')
+const assistantAnswer = ref('')
+const demoNotice = ref('')
+const plan = ref<PlanKey | null>(null)
+const cadence = ref<(typeof cadences)[number]>(15)
+const domainMode = ref<DomainMode | null>(null)
+const domainInput = ref('')
+const domainSimulation = ref<'idle' | 'checked'>('idle')
+const domainError = ref('')
+const reviewConfirmed = ref(false)
 const showHandoff = ref(false)
-const viewport = ref<'desktop' | 'mobile'>('desktop')
-const previewResult = ref<any>(null)
-const previewToken = ref<string | null>(null)
-const quoteResult = ref<any>(null)
-const apiMessage = ref('')
-const apiError = ref('')
-const contactName = ref('')
-const contactEmail = ref('')
-const contactCompany = ref('')
-const privacyConsent = ref(false)
-const isSubmittingOrder = ref(false)
+const handoffSaved = ref(false)
+const handoffCloseButton = ref<HTMLButtonElement | null>(null)
+const handoffDialog = ref<HTMLElement | null>(null)
+const handoffStepTrigger = ref<HTMLButtonElement | null>(null)
+const reviewHandoffTrigger = ref<HTMLButtonElement | null>(null)
+const lastHandoffTrigger = ref<HTMLElement | null>(null)
+const timers = new Set<number>()
+const viewportOptions: Array<[Viewport, string]> = [['desktop', '桌面'], ['tablet', '平板'], ['mobile', '手機']]
 
-const currentTheme = computed(() => themes.find((item) => item.id === theme.value) ?? themes[0])
-const currentPlan = computed(() => plans.find((item) => item.id === plan.value) ?? plans[0])
-const moduleTotal = computed(() => selectedModules.value.length * 3800)
-const siteBasePrice = computed(() => siteType.value === 'commerce' ? 128800 : siteType.value === 'brand-blog' ? 88800 : 58800)
-const launchPrice = computed(() => siteBasePrice.value + moduleTotal.value)
-const cadencePrice = computed(() => {
-  if (plan.value === 'launch') return 0
-  const multiplier: Record<number, number> = { 3: 2.1, 7: 1.45, 15: 1, 30: 0.72 }
-  return Math.round(currentPlan.value.price * (multiplier[cadence.value] ?? 1))
+const currentIndex = computed(() => builderSteps.findIndex((step) => step.id === currentStep.value))
+const currentStepMeta = computed(() => builderSteps[currentIndex.value] ?? builderSteps[0])
+const isExistingPath = computed(() => entryMode.value === 'existing')
+const currentSiteType = computed(() => siteTypeFor(siteType.value))
+const currentTheme = computed(() => themeFor(theme.value ?? 'mineral'))
+const currentPlan = computed(() => planFor(plan.value))
+const currentPages = computed(() => pagesForSiteType(siteType.value ?? 'brand-blog'))
+const selectedModuleDetails = computed(() => moduleOptions.filter((item) => selectedModules.value.includes(item.id)))
+const selectedModuleLabels = computed(() => selectedModuleDetails.value.map((item) => item.label))
+const currentDomain = computed(() => normalizeDomain(domainInput.value) || 'your-brand.tw')
+const hasBrief = computed(() => Boolean(brandName.value.trim() && businessBrief.value.trim() && audience.value.trim() && desiredAction.value.trim()))
+const canProceedFromBrief = computed(() => {
+  if (isExistingPath.value) return Boolean(analysisResult.value && analysisAccepted.value)
+  return hasBrief.value
 })
-const selectedLabels = computed(() => moduleOptions.filter((item) => selectedModules.value.includes(item.id)).map((item) => item.label))
-const previewDescription = computed(() => businessBrief.value.trim() || '把品牌、服務與專業內容整理成容易被搜尋與 AI 理解的網站。')
+const canProceedFromStyle = computed(() => Boolean(theme.value && normalizeReferenceUrl(styleReferenceUrl.value) !== false))
+const canProceedFromDomain = computed(() => Boolean(domainMode.value && domainInput.value.trim() && !domainError.value))
+const basePrice = computed(() => (siteType.value === 'commerce' ? 128800 : siteType.value === 'brand-blog' ? 88800 : 58800))
+const modulePrice = computed(() => selectedModules.value.length * 3800)
+const oneTimeEstimate = computed(() => basePrice.value + modulePrice.value)
+const cadenceMultiplier: Record<number, number> = { 3: 2.1, 7: 1.45, 15: 1, 30: 0.72 }
+const monthlyEstimate = computed(() => {
+  if (!plan.value || plan.value === 'launch') return 0
+  return Math.round(currentPlan.value.price * (cadenceMultiplier[cadence.value] ?? 1))
+})
+const previewTitle = computed(() => {
+  if (siteType.value === 'commerce') return '把喜歡的日常，帶回你的生活。'
+  if (siteType.value === 'one-page') return '讓每一次詢問，都更靠近你。'
+  return '專業不該讓人緊張，應該讓人更安心。'
+})
+const previewDescription = computed(() => businessBrief.value.trim() || '把品牌、服務與專業內容整理成容易被理解的網站。')
+const themeStyle = computed(() => ({
+  '--builder-primary': currentTheme.value.colors[0],
+  '--builder-paper': currentTheme.value.colors[1],
+  '--builder-accent': currentTheme.value.colors[2],
+}))
+
+function addTimer(callback: () => void, delay: number) {
+  const id = window.setTimeout(() => {
+    timers.delete(id)
+    callback()
+  }, delay)
+  timers.add(id)
+  return id
+}
+
+function clearTimers() {
+  timers.forEach((id) => window.clearTimeout(id))
+  timers.clear()
+}
+
+function normalizeReferenceUrl(value: string): string | null | false {
+  if (!value.trim()) return null
+  return normalizePublicUrl(value) ?? false
+}
+
+function setStep(step: BuilderStep) {
+  currentStep.value = step
+  demoNotice.value = ''
+  if (step === 'interactive_preview') {
+    previewPage.value = currentPages.value[0] ?? 'home'
+  }
+}
+
+function goBack() {
+  if (currentStep.value === 'generating') {
+    setStep('style_and_modules')
+    return
+  }
+  if (currentStep.value === 'interactive_preview') {
+    setStep('style_and_modules')
+    return
+  }
+  const index = currentIndex.value
+  if (index <= 0) return
+  setStep(builderSteps[index - 1].id)
+}
+
+function chooseEntry(mode: EntryMode) {
+  entryMode.value = mode
+  analysisResult.value = null
+  analysisAccepted.value = false
+  analysisError.value = ''
+  urlError.value = ''
+}
+
+function submitEntry() {
+  if (!entryMode.value) return
+  setStep('diagnosis_or_brief')
+}
+
+function validateBrief() {
+  const missing: string[] = []
+  if (!brandName.value.trim()) missing.push('品牌名稱')
+  if (!businessBrief.value.trim()) missing.push('一句話介紹')
+  if (!audience.value.trim()) missing.push('服務對象')
+  if (!desiredAction.value.trim()) missing.push('希望訪客完成的動作')
+  if (missing.length) {
+    demoNotice.value = `請先完成：${missing.join('、')}。`
+    return false
+  }
+  return true
+}
+
+async function runDiagnosis() {
+  const normalized = normalizePublicUrl(existingUrl.value)
+  analysisError.value = ''
+  urlError.value = ''
+  analysisResult.value = null
+  analysisAccepted.value = false
+  if (!normalized) {
+    urlError.value = '請輸入完整的公開 http:// 或 https:// 網址。'
+    return
+  }
+
+  clearTimers()
+  analysisStage.value = 0
+  currentStep.value = 'diagnosis_or_brief'
+  const stages = [0, 1, 2, 3]
+  stages.forEach((stage, index) => addTimer(() => { analysisStage.value = stage }, index * 560))
+  try {
+    const result = await publicApiFetch<SiteAnalysis>('/api/site-analysis', { body: { url: normalized } })
+    analysisStage.value = 3
+    analysisResult.value = result
+  } catch {
+    analysisError.value = '我們無法安全讀取這個公開首頁。請確認網址可以公開開啟後再試一次。'
+  }
+}
+
+function acceptDiagnosis() {
+  if (!analysisResult.value) return
+  analysisAccepted.value = true
+  if (!businessBrief.value.trim()) businessBrief.value = '根據公開首頁診斷，整理一個更清楚、更容易被理解的品牌網站。'
+  setStep('site_architecture')
+}
+
+function submitBrief() {
+  if (!validateBrief()) return
+  setStep('site_architecture')
+}
+
+function submitArchitecture() {
+  if (!siteType.value) {
+    demoNotice.value = '請先選擇一種網站方向。'
+    return
+  }
+  setStep('style_and_modules')
+}
 
 function toggleModule(id: string) {
   selectedModules.value = selectedModules.value.includes(id)
@@ -79,366 +238,255 @@ function toggleModule(id: string) {
     : [...selectedModules.value, id]
 }
 
-function runDiagnosis() {
-  diagnosisRevealed.value = true
+function toggleStyle(id: string) {
+  selectedStyles.value = selectedStyles.value.includes(id)
+    ? selectedStyles.value.filter((item) => item !== id)
+    : [...selectedStyles.value, id]
 }
 
-const siteTypeContract: Record<SiteType, 'one_page' | 'brand_blog' | 'simple_commerce'> = { 'one-page': 'one_page', 'brand-blog': 'brand_blog', commerce: 'simple_commerce' }
-const moduleContract: Record<string, string> = { admin: 'managed_content_admin', ai: 'bounded_ai_assistant', booking: 'google_booking_assisted_integration', line: 'line_assisted_integration', payment: 'payment', invoice: 'invoice', member: 'membership', app: 'pwa_reference_only' }
-const apiOrigin = ((import.meta as any).env?.PUBLIC_MANAGED_SITE_API_ORIGIN || '').replace(/\/$/, '')
-
-function contractModules() {
-  const modules = selectedModules.value.map((item) => moduleContract[item]).filter(Boolean)
-  if (siteType.value === 'commerce') modules.push('shopify_commerce')
-  return [...new Set(modules)]
+function validateStyleReference() {
+  const result = normalizeReferenceUrl(styleReferenceUrl.value)
+  styleReferenceError.value = result === false ? '請輸入完整的公開 HTTPS 網址；概念版不會擷取它。' : ''
+  return result !== false
 }
 
-function businessGoals() {
-  const goals = ['improve_search_ai_understanding', 'increase_inquiries']
-  if (siteType.value === 'commerce') goals.push('sell_online')
-  if (selectedModules.value.includes('booking')) goals.push('increase_bookings')
-  if (entryMode.value === 'existing') goals.push('build_brand')
-  return [...new Set(goals)]
-}
-
-async function apiRequest(path: string, body?: Record<string, unknown>) {
-  const response = await fetch(`${apiOrigin}${path}`, { method: body ? 'POST' : 'GET', headers: body ? { 'content-type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data?.message || data?.statusMessage || '目前無法完成這個步驟。')
-  return data
-}
-
-async function generatePreview() {
-  if (isGenerating.value) return
-  if (entryMode.value === 'existing') {
-    apiError.value = '既有網站重建需要 owner 登入、已完成的 Website Diagnosis 與 server-resolved evidence；公開概念頁不會接受自行貼上的診斷結果。'
+function submitStyle() {
+  if (!theme.value) {
+    demoNotice.value = '請先選擇一種品牌氛圍。'
     return
   }
-  isGenerating.value = true
-  generationStep.value = 0
-  apiError.value = ''
-  apiMessage.value = ''
-  const sequence = [1, 2, 3, 4]
-  sequence.forEach((step, index) => window.setTimeout(() => { generationStep.value = step }, 420 * (index + 1)))
-  try {
-    const result = await apiRequest('/api/managed-sites/previews', {
-      draftIdentity: `public-preview-${Date.now()}`,
-      brandName: brandName.value,
-      audience: '重視專業、信任與清楚答案的潛在客戶',
-      brief: businessBrief.value,
-      businessGoals: businessGoals(),
-      siteType: siteTypeContract[siteType.value],
-      selectedModules: contractModules(),
-      existingSiteUrl: null,
-    })
-    previewResult.value = result
-    previewToken.value = result.previewAccessToken || previewToken.value
-    apiMessage.value = '預覽已建立；目前仍是 preview，不會扣款、購買網域或部署。'
-  } catch (error: any) {
-    apiError.value = error?.message || '預覽建立失敗，請稍後再試。'
-  } finally {
-    window.setTimeout(() => { isGenerating.value = false }, 420)
+  if (!validateStyleReference()) return
+  startGeneration()
+}
+
+function startGeneration() {
+  clearTimers()
+  generationStage.value = 0
+  generationFinished.value = false
+  setStep('generating')
+  const duration = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 760
+  generationStages.forEach((_, index) => addTimer(() => {
+    generationStage.value = index
+    if (index === generationStages.length - 1) {
+      generationFinished.value = true
+      addTimer(() => setStep('interactive_preview'), duration ? 520 : 0)
+    }
+  }, index * duration))
+}
+
+function choosePreviewPage(page: PreviewPage) {
+  if (currentPages.value.includes(page)) previewPage.value = page
+}
+
+function openAssistant(question: string) {
+  assistantQuestion.value = question
+  assistantAnswer.value = question === '費用怎麼評估？'
+    ? '正式版會依服務範圍、內容頻率與需要的串接，由顧問一起確認；這份預覽不會產生付款。'
+    : '這是概念版的示範答案。正式版會依核准的品牌內容與知識範圍回覆。'
+}
+
+function showDemoNotice(message: string) {
+  demoNotice.value = message
+  addTimer(() => { if (demoNotice.value === message) demoNotice.value = '' }, 3200)
+}
+
+function submitPreviewDemo(event: Event) {
+  event.preventDefault()
+  showDemoNotice('這是預覽中的互動示範，不會送出預約或聯絡資料。')
+}
+
+function submitPlan() {
+  if (!plan.value) {
+    demoNotice.value = '請先選擇你想要的持續方式。'
+    return
+  }
+  setStep('domain_and_launch')
+}
+
+function chooseDomainMode(mode: DomainMode) {
+  domainMode.value = mode
+  domainInput.value = ''
+  domainSimulation.value = 'idle'
+  domainError.value = ''
+}
+
+function simulateDomain() {
+  const value = normalizeDomain(domainInput.value)
+  domainError.value = value ? '' : '請輸入想規劃的網域名稱。'
+  if (!domainError.value) domainSimulation.value = 'checked'
+}
+
+function submitDomain() {
+  const value = normalizeDomain(domainInput.value)
+  if (!domainMode.value || !value) {
+    domainError.value = '請選擇網域路徑並輸入名稱。'
+    return
+  }
+  domainInput.value = value
+  setStep('review_order')
+}
+
+function submitReview(event?: MouseEvent) {
+  if (!reviewConfirmed.value) {
+    demoNotice.value = '請先確認你理解這是預覽與預估，不是正式訂單。'
+    return
+  }
+  const trigger = event?.currentTarget
+  lastHandoffTrigger.value = reviewHandoffTrigger.value ?? (trigger instanceof HTMLElement ? trigger : document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  openHandoff(true)
+}
+
+async function openHandoff(preserveTrigger = false) {
+  if (!preserveTrigger) lastHandoffTrigger.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  showHandoff.value = true
+  await nextTick()
+  handoffCloseButton.value?.focus()
+}
+
+function closeHandoff() {
+  showHandoff.value = false
+  nextTick(() => lastHandoffTrigger.value?.focus())
+}
+
+function trapHandoff(event: KeyboardEvent) {
+  if (event.key !== 'Tab') return
+  const dialog = event.currentTarget as HTMLElement
+  const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
+  if (!focusable.length) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
   }
 }
 
-async function openHandoff() {
-  if (!previewResult.value) await generatePreview()
-  showHandoff.value = true
-  if (previewResult.value && previewToken.value) await prepareQuote()
+async function confirmHandoff() {
+  handoffSaved.value = true
+  showHandoff.value = false
+  setStep('handoff')
+  await nextTick()
+  const nextTrigger = handoffStepTrigger.value
+  nextTrigger?.focus()
 }
 
-async function prepareQuote() {
-  if (!previewResult.value?.previewId || !previewToken.value) return
-  try {
-    const result = await apiRequest(`/api/managed-sites/previews/${previewResult.value.previewId}/quote`, { previewAccessToken: previewToken.value, planKey: plan.value === 'autopilot' ? 'business' : 'basic', cadenceDays: cadence.value, domainOption: 'new', moduleKeys: contractModules(), idempotencyKey: `quote-${previewResult.value.previewId}-${plan.value}-${cadence.value}` })
-    quoteResult.value = result.quote
-    apiMessage.value = '報價已依伺服器價格目錄建立；付款仍需客戶確認，尚未扣款。'
-  } catch (error: any) { apiError.value = error?.message || '報價建立失敗。' }
-}
+watch(showHandoff, (open) => {
+  if (typeof document === 'undefined') return
+  document.body.style.overflow = open ? 'hidden' : ''
+})
 
-async function submitOrderIntent() {
-  if (!previewResult.value?.previewId || !previewToken.value || !quoteResult.value?.quoteId) { apiError.value = '請先建立預覽與報價。'; return }
-  if (!contactName.value.trim() || !contactEmail.value.trim() || !contactCompany.value.trim() || !privacyConsent.value) { apiError.value = '請填寫姓名、Email、公司與隱私同意。'; return }
-  isSubmittingOrder.value = true
-  apiError.value = ''
-  try {
-    const lead = await apiRequest(`/api/managed-sites/previews/${previewResult.value.previewId}/lead`, { previewAccessToken: previewToken.value, quoteId: quoteResult.value.quoteId, name: contactName.value, email: contactEmail.value, company: contactCompany.value, privacyConsent: true, recontactConsent: true, idempotencyKey: `lead-${previewResult.value.previewId}-${contactEmail.value.trim().toLowerCase()}` })
-    const order = await apiRequest(`/api/managed-sites/previews/${previewResult.value.previewId}/order`, { previewAccessToken: previewToken.value, quoteId: quoteResult.value.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: `order-${previewResult.value.previewId}-${quoteResult.value.quoteId}` })
-    apiMessage.value = `訂購意圖已送出（${order.order.status}）；尚未扣款，後續付款、網域與部署需另行確認。`
-  } catch (error: any) { apiError.value = error?.message || '訂購意圖送出失敗。' }
-  finally { isSubmittingOrder.value = false }
-}
+watch(siteType, () => {
+  if (!currentPages.value.includes(previewPage.value)) previewPage.value = currentPages.value[0] ?? 'home'
+})
 
-function formatMoney(value: number) {
-  return new Intl.NumberFormat('zh-TW').format(value)
-}
+onBeforeUnmount(() => {
+  clearTimers()
+  if (typeof document !== 'undefined') document.body.style.overflow = ''
+})
 </script>
 
 <template>
-  <section class="concept-builder" :style="{ '--preview-primary': currentTheme.colors[0], '--preview-paper': currentTheme.colors[1], '--preview-accent': currentTheme.colors[2] }">
-    <div class="concept-intro">
-      <div>
-        <p class="concept-kicker"><span>CONCEPT PREVIEW</span> 不會扣款、不會購買網域</p>
-        <h1>說一句話，<br><em>把生意變成會成長的網站。</em></h1>
-      </div>
-      <p>先看見自己的網站，再決定要不要買。從互動預覽、網域、部署，到 GEO 追蹤、自動內容與 AI 助手，都在同一條路徑完成。</p>
-    </div>
-
-    <section class="entry-gateway">
-      <header>
-        <span>01</span>
-        <div><p>START WHERE YOU ARE</p><h2>你現在有網站嗎？</h2><small>不論從診斷還是從零開始，最後都會得到一份可以購買的網站預覽。</small></div>
-      </header>
-      <div class="entry-tabs">
-        <button type="button" :class="{ active: entryMode === 'existing' }" @click="entryMode = 'existing'">
-          <b>我已經有網站</b><span>先看問題，再生成改善後版本</span>
-        </button>
-        <button type="button" :class="{ active: entryMode === 'new' }" @click="entryMode = 'new'">
-          <b>我還沒有網站</b><span>直接用自然語言建立新網站</span>
-        </button>
-      </div>
-
-      <div v-if="entryMode === 'existing'" class="diagnosis-entry">
-        <div class="diagnosis-form">
-          <label>輸入目前網站網址<input v-model="existingUrl" inputmode="url" placeholder="https://your-company.com"></label>
-          <button type="button" @click="runDiagnosis">模擬公開網站診斷 <span>→</span></button>
-          <small>概念版不會真的爬取網站；正式版只分析公開頁面並清楚標示資料限制。</small>
-        </div>
-        <div v-if="diagnosisRevealed" class="diagnosis-comparison">
-          <article class="before-card">
-            <p>CURRENT PUBLIC SIGNALS</p><h3>目前可觀察的缺口</h3>
-            <ul><li><b>答案埋得太深</b><span>重要問題沒有在頁面前段直接回答。</span></li><li><b>品牌實體不清楚</b><span>服務、地區與專業關係缺少一致描述。</span></li><li><b>內容無法持續</b><span>沒有可延伸的主題架構與更新節奏。</span></li></ul>
-          </article>
-          <div class="comparison-arrow">→</div>
-          <article class="after-card">
-            <p>GENERATED IMPROVEMENT</p><h3>新網站會直接改善</h3>
-            <ul><li><b>先回答，再說明</b><span>首頁與服務頁使用直接答案結構。</span></li><li><b>建立可理解的品牌</b><span>統一服務、地區、作者與證據線索。</span></li><li><b>接上 GEO 成長循環</b><span>文章月曆、成效監測與持續改善。</span></li></ul>
-          </article>
+  <main class="builder-experience" :style="themeStyle">
+    <div class="builder-atmosphere" aria-hidden="true"><span></span><span></span><span></span></div>
+    <header class="builder-masthead">
+      <div class="builder-masthead-copy">
+        <p class="builder-eyebrow"><span>DISCOVERYSTACK</span> CLIENT WEBSITE BUILDER / CONCEPT PREVIEW</p>
+        <h1>先看見你的網站，<em>再決定要不要買。</em></h1>
+        <p class="builder-lede">用一句話開始。把品牌、網站結構與 GEO 成長方式整理成一個可以親手操作的方向。</p>
+        <div class="builder-trust-row" aria-label="預覽限制">
+          <span><i>01</i> 不會扣款</span><span><i>02</i> 不會購買網域</span><span><i>03</i> 不會部署</span>
         </div>
       </div>
-      <div v-else class="new-site-entry">
-        <span>✦</span><div><b>不需要準備規格書。</b><p>只要說明你是誰、服務誰，以及希望客戶完成什麼；下一步再用按鈕補上網站類型與功能。</p></div>
+      <div class="builder-masthead-visual" aria-hidden="true">
+        <div class="builder-orbit builder-orbit-a"></div><div class="builder-orbit builder-orbit-b"></div>
+        <div class="builder-visual-card"><span>YOUR SITE / 01</span><strong>從想法到<br><em>可見的方向</em></strong><b>↗</b></div>
       </div>
-    </section>
+    </header>
 
-    <div class="builder-shell">
-      <aside class="builder-controls" aria-label="網站需求設定">
-        <div class="control-heading">
-          <span>02</span>
-          <div><strong>先告訴我們你在做什麼</strong><small>自然語言就可以，不需要先有網站。</small></div>
-        </div>
-        <label class="field-label">品牌名稱<input v-model="brandName" maxlength="40" placeholder="例如：山嶼牙醫診所"></label>
-        <label class="field-label">介紹你的生意<textarea v-model="businessBrief" rows="4" maxlength="260" placeholder="我們是誰、服務誰、最希望客戶感受到什麼？"></textarea></label>
-
-        <div class="control-heading compact">
-          <span>03</span>
-          <div><strong>網站要幫你完成什麼</strong><small>點選後，右側預覽會跟著改變。</small></div>
-        </div>
-        <div class="choice-grid site-types">
-          <button v-for="item in siteTypes" :key="item.id" type="button" :class="{ active: siteType === item.id }" @click="siteType = item.id">
-            <strong>{{ item.label }}</strong><small>{{ item.note }}</small>
+    <section class="builder-workspace" aria-label="網站預覽建立流程">
+      <aside class="builder-rail">
+        <div class="builder-rail-top"><span>BUILDING / 01</span><strong>{{ String(currentIndex + 1).padStart(2, '0') }}<small>/ {{ String(builderSteps.length).padStart(2, '0') }}</small></strong></div>
+        <div class="builder-current-label"><small>目前在做什麼</small><strong>{{ currentStepMeta.label }}</strong></div>
+        <nav class="builder-progress" aria-label="建站步驟">
+          <button v-for="(step, index) in builderSteps" :key="step.id" type="button" :disabled="index > currentIndex || step.id === currentStep" :class="{ active: step.id === currentStep, complete: index < currentIndex }" :aria-current="step.id === currentStep ? 'step' : undefined" @click="index < currentIndex && (currentStep = step.id)">
+            <span>{{ String(index + 1).padStart(2, '0') }}</span><b>{{ step.shortLabel }}</b><i></i>
           </button>
-        </div>
-
-        <div class="module-grid">
-          <button v-for="item in moduleOptions" :key="item.id" type="button" :aria-pressed="selectedModules.includes(item.id)" :class="{ active: selectedModules.includes(item.id) }" @click="toggleModule(item.id)">
-            <span>{{ selectedModules.includes(item.id) ? '✓' : '+' }}</span><strong>{{ item.label }}</strong><small>{{ item.tag }}</small>
-          </button>
-        </div>
-
-        <div class="theme-row" aria-label="選擇網站氛圍">
-          <span>網站氛圍</span>
-          <button v-for="item in themes" :key="item.id" type="button" :class="{ active: theme === item.id }" @click="theme = item.id">
-            <i v-for="color in item.colors" :key="color" :style="{ background: color }"></i><b>{{ item.label }}</b>
-          </button>
-        </div>
-
-        <button class="generate-button" type="button" :disabled="isGenerating" @click="generatePreview">
-          <span>{{ isGenerating ? `正在建立預覽 ${generationStep}/4` : '重新生成互動預覽' }}</span><b>{{ isGenerating ? '•••' : '↗' }}</b>
-        </button>
+        </nav>
+        <div class="builder-rail-note"><span>↗</span><p>這是一份互動式概念預覽。正式版確認付款後，才會執行外部操作。</p></div>
       </aside>
 
-      <div class="preview-column">
-        <div class="preview-toolbar">
-          <div class="window-dots"><i></i><i></i><i></i></div>
-          <div class="preview-url"><span>安全預覽</span>{{ domain || 'your-brand.tw' }}</div>
-          <div class="viewport-buttons">
-            <button type="button" :class="{ active: viewport === 'desktop' }" aria-label="桌面預覽" @click="viewport = 'desktop'">寬</button>
-            <button type="button" :class="{ active: viewport === 'mobile' }" aria-label="手機預覽" @click="viewport = 'mobile'">窄</button>
+      <section class="builder-panel">
+        <div class="builder-panel-head">
+          <button v-if="currentIndex > 0 && currentStep !== 'generating'" class="builder-back" type="button" @click="goBack">← 返回上一步</button>
+          <span v-else class="builder-back-placeholder">CONCEPT / NO PAYMENT</span>
+          <p aria-live="polite">{{ currentStepMeta.label }}</p>
+        </div>
+
+        <div v-if="demoNotice" class="builder-notice" role="status">{{ demoNotice }}</div>
+
+        <section v-if="currentStep === 'entry'" class="builder-step builder-entry-step" aria-labelledby="entry-title">
+          <div class="step-heading"><p class="builder-eyebrow">START WHERE YOU ARE</p><h2 id="entry-title">你現在有網站嗎？</h2><p>兩條路都會走到一份可以親手檢查的網站預覽。先選擇最接近你的現況。</p></div>
+          <div class="entry-choice-grid">
+            <button type="button" class="entry-choice" :class="{ selected: entryMode === 'existing' }" @click="chooseEntry('existing')">
+              <span class="choice-index">A</span><span class="choice-arrow">↗</span><strong>我已經有網站</strong><p>先讀取公開首頁的可觀察訊號，再把改善方向整理成新的預覽。</p><small>適合想知道「現在卡在哪裡」的品牌。</small>
+            </button>
+            <button type="button" class="entry-choice" :class="{ selected: entryMode === 'new' }" @click="chooseEntry('new')">
+              <span class="choice-index">B</span><span class="choice-arrow">↗</span><strong>我還沒有網站</strong><p>用自然語言介紹品牌，不需要先懂版型、SEO 或技術規格。</p><small>適合想從一個清楚方向開始的團隊。</small>
+            </button>
           </div>
-        </div>
+          <div class="step-footer"><p>可以隨時返回修改；這一頁不會儲存到 localStorage、cookie 或網址。</p><button class="builder-primary" type="button" :disabled="!entryMode" @click="submitEntry">從這裡開始 <span>→</span></button></div>
+        </section>
 
-        <div class="site-stage" :class="[`is-${viewport}`, { 'is-generating': isGenerating }]">
-          <div class="generated-site">
-            <header class="generated-nav">
-              <strong>{{ brandName || '你的品牌' }}</strong>
-              <nav><span>關於我們</span><span>服務項目</span><span v-if="siteType !== 'one-page'">專業內容</span></nav>
-              <button>{{ selectedModules.includes('booking') ? '立即預約' : '聯絡我們' }}</button>
-            </header>
-            <main>
-              <section class="generated-hero">
-                <p>TRUSTED LOCAL EXPERT · GEO READY</p>
-                <h2>{{ siteType === 'commerce' ? '把喜歡的日常，帶回你的生活。' : '專業不該讓人緊張，應該讓人更安心。' }}</h2>
-                <p>{{ previewDescription }}</p>
-                <div><button>{{ selectedModules.includes('booking') ? '預約第一次諮詢' : siteType === 'commerce' ? '開始選購' : '了解服務' }}</button><span>看看我們如何幫助你 →</span></div>
-              </section>
-              <section v-if="siteType === 'commerce'" class="preview-products">
-                <article v-for="item in ['人氣商品', '本月精選', '專屬組合']" :key="item"><div></div><small>NEW COLLECTION</small><strong>{{ item }}</strong><span>NT$ 1,280</span></article>
-              </section>
-              <section v-else class="trust-strip">
-                <div><b>4.9</b><small>真實顧客評價</small></div><div><b>12+</b><small>專業服務經驗</small></div><div><b>安心</b><small>透明說明流程</small></div>
-              </section>
-              <section v-if="siteType === 'brand-blog'" class="preview-editorial">
-                <div><small>ANSWER-FIRST CONTENT</small><h3>第一次來之前，你最想知道的三件事。</h3><p>把客戶真正會問的問題，整理成 Google 與 AI 都容易理解的可靠答案。</p></div>
-                <ol><li>第一次諮詢會發生什麼？</li><li>如何選擇適合自己的服務？</li><li>費用與時間應該怎麼評估？</li></ol>
-              </section>
-            </main>
-            <button v-if="selectedModules.includes('ai')" class="preview-ai"><span>✦</span><b>問問品牌 AI 助手</b><small>立即回答常見問題</small></button>
-            <div v-if="isGenerating" class="generation-mask"><span></span><p>正在整理品牌與 GEO 網站結構…</p></div>
+        <section v-else-if="currentStep === 'diagnosis_or_brief'" class="builder-step" aria-labelledby="brief-title">
+          <div class="step-heading"><p class="builder-eyebrow">{{ isExistingPath ? 'PUBLIC HOMEPAGE DIAGNOSIS' : 'A SHORT BRIEF IS ENOUGH' }}</p><h2 id="brief-title">{{ isExistingPath ? '先看見現在，再決定怎麼改善。' : '先讓我們理解你的品牌。' }}</h2><p>{{ isExistingPath ? '只分析你提供的公開首頁，不會讀取後台或要求帳號密碼。診斷失敗時不會補造結果。' : '一次只問必要的事。正式生成前，你仍然可以回來調整。' }}</p></div>
+
+          <div v-if="isExistingPath" class="diagnosis-flow">
+            <div class="field-block"><label for="builder-existing-url">公開網站網址</label><div class="field-with-action"><input id="builder-existing-url" v-model="existingUrl" type="url" inputmode="url" maxlength="256" placeholder="https://your-company.com" :aria-invalid="Boolean(urlError)" aria-describedby="builder-url-help builder-url-error" @input="urlError = ''"><button type="button" class="builder-secondary" :disabled="analysisStage > 0 && !analysisResult && !analysisError" @click="runDiagnosis">{{ analysisStage > 0 && !analysisResult && !analysisError ? '安全讀取中…' : '開始公開診斷' }} <span>↗</span></button></div><small id="builder-url-help">範圍：僅分析公開首頁；完整 URL 必須以 http:// 或 https:// 開頭。</small><p v-if="urlError" id="builder-url-error" class="field-error" role="alert">{{ urlError }}</p></div>
+            <div v-if="analysisStage > 0 && !analysisResult && !analysisError" class="scan-sequence" aria-live="polite"><span v-for="(label, index) in ['確認公開網址', '讀取頁面結構', '整理 SEO／GEO 訊號', '建立改善預覽']" :key="label" :class="{ active: analysisStage >= index }"><i>{{ String(index + 1).padStart(2, '0') }}</i>{{ label }}</span></div>
+            <div v-if="analysisError" class="builder-error-card" role="alert"><strong>這次沒有讀到可用結果。</strong><p>{{ analysisError }}</p><button type="button" class="text-action" @click="runDiagnosis">再試一次 <span>↗</span></button></div>
+            <div v-if="analysisResult" class="diagnosis-result"><div class="diagnosis-score"><span>PUBLIC HOMEPAGE SIGNAL</span><strong>{{ analysisResult.scores.overall ?? '—' }}</strong><small>整體基礎訊號，不是排名、流量或成效保證。</small></div><div class="diagnosis-copy"><span class="result-tag">{{ analysisResult.scope === 'public_homepage_only' ? 'PUBLIC HOMEPAGE ONLY' : analysisResult.scope }}</span><h3>{{ analysisResult.hostname }} 的可觀察方向</h3><p>結果時間：{{ new Date(analysisResult.analysedAt).toLocaleDateString('zh-TW') }}。接下來可以把可用訊號帶入網站結構預覽。</p><button type="button" class="builder-primary" @click="acceptDiagnosis">使用這份診斷建立改善預覽 <span>→</span></button></div></div>
           </div>
-        </div>
 
-        <div class="preview-evidence">
-          <span>{{ diagnosisRevealed && entryMode === 'existing' ? '依診斷生成的改善預覽' : '這份預覽已示範' }}</span>
-          <ul><li>清楚的直接答案</li><li>可延伸的內容架構</li><li>Schema 與網站速度規劃</li><li>{{ selectedModules.length }} 個選用模組</li></ul>
-        </div>
-      </div>
-    </div>
-
-    <section class="launch-config">
-      <p v-if="apiMessage" class="builder-notice builder-notice--success" role="status">{{ apiMessage }}</p>
-      <p v-if="apiError" class="builder-notice builder-notice--error" role="alert">{{ apiError }}</p>
-      <header><p>04 · FROM PREVIEW TO PRODUCTION</p><h2>喜歡這個方向，就把它變成真的。</h2><span>目前先產生預覽與伺服器報價；付款、網域與部署都要另外確認。</span></header>
-      <div class="launch-grid">
-        <div class="plan-panel">
-          <h3>選擇持續服務</h3>
-          <button v-for="item in plans" :key="item.id" type="button" :class="{ active: plan === item.id }" @click="plan = item.id">
-            <span><b>{{ item.label }}</b><small>{{ item.description }}</small></span><strong>{{ item.price ? `NT$${formatMoney(item.price)}／月起` : '不訂閱' }}</strong>
-          </button>
-          <div v-if="plan !== 'launch'" class="cadence-control">
-            <span>優質 GEO 內容頻率</span>
-            <div><button v-for="days in [3, 7, 15, 30]" :key="days" type="button" :class="{ active: cadence === days }" @click="cadence = days">每 {{ days }} 天</button></div>
+          <div v-else class="brief-flow">
+            <div class="brief-grid"><div class="field-block"><label for="builder-brand">品牌名稱</label><input id="builder-brand" v-model="brandName" maxlength="40" placeholder="例如：山嶼牙醫診所"></div><div class="field-block"><label for="builder-audience">你服務誰？</label><input id="builder-audience" v-model="audience" maxlength="120" placeholder="例如：第一次看牙的家庭"></div><div class="field-block field-wide"><label for="builder-brief">用一句話介紹你的業務</label><textarea id="builder-brief" v-model="businessBrief" maxlength="260" rows="3" placeholder="我們是誰、提供什麼、希望客戶感受到什麼？"></textarea></div><div class="field-block field-wide"><label for="builder-action">希望訪客完成什麼動作？</label><input id="builder-action" v-model="desiredAction" maxlength="120" placeholder="例如：預約第一次諮詢或加入 LINE"></div></div>
+            <div class="prompt-examples"><span>可以這樣開始</span><button type="button" @click="businessBrief = businessBrief || '我們替忙碌的家庭提供安心、透明的日常照護。'">安心、透明的日常照護</button><button type="button" @click="businessBrief = businessBrief || '我們用設計與內容，讓在地品牌更容易被找到。'">讓在地品牌更容易被找到</button><small>示例不會覆蓋你已經輸入的內容。</small></div>
+            <div class="step-footer"><p>不收集密碼、身分證、付款資料或 API key。</p><button class="builder-primary" type="button" @click="submitBrief">整理成網站方向 <span>→</span></button></div>
           </div>
-        </div>
+        </section>
 
-        <div class="domain-panel">
-          <h3>網域與上線</h3>
-          <label>想要的網址<div><input v-model="domain" placeholder="your-brand.tw"><button type="button">模擬查詢</button></div></label>
-          <p class="domain-result"><span>●</span> {{ domain || 'your-brand.tw' }} 在這份展示中標示為可選</p>
-          <ul><li>建立獨立私有網站專案</li><li>設定 DNS 與 HTTPS</li><li>部署正式 Astro／Nuxt 網站</li><li v-if="selectedModules.includes('admin')">包含專屬內容後台</li></ul>
-        </div>
+        <section v-else-if="currentStep === 'site_architecture'" class="builder-step" aria-labelledby="architecture-title">
+          <div class="step-heading"><p class="builder-eyebrow">SITE ARCHITECTURE</p><h2 id="architecture-title">網站要先幫你完成什麼？</h2><p>選一個最接近現在目標的方向。這只決定預覽結構，不會限制未來的正式規劃。</p></div>
+          <div class="architecture-grid"><button v-for="item in siteTypes" :key="item.id" type="button" class="architecture-choice" :class="{ selected: siteType === item.id }" :aria-pressed="siteType === item.id" @click="siteType = item.id"><span>{{ item.eyebrow }}</span><strong>{{ item.label }}</strong><p>{{ item.description }}</p><small>{{ item.bestFor }}</small><i>{{ siteType === item.id ? '已選擇' : '選擇方向' }} <b>→</b></i></button></div>
+          <div class="architecture-map" aria-label="預覽頁面結構"><span>預覽會包含</span><i v-for="page in currentSiteType.pages" :key="page">{{ page }}</i></div>
+          <div class="step-footer"><p>之後仍可以返回修改網站類型。</p><button class="builder-primary" type="button" :disabled="!siteType" @click="submitArchitecture">選擇功能與風格 <span>→</span></button></div>
+        </section>
 
-        <aside class="order-card">
-          <p>YOUR PROJECT</p>
-          <h3>{{ brandName || '你的品牌網站' }}</h3>
-          <div><span>{{ siteTypes.find((item) => item.id === siteType)?.label }}</span><b>NT$ {{ formatMoney(siteBasePrice) }}</b></div>
-          <div><span>{{ selectedModules.length }} 個加購模組</span><b>NT$ {{ formatMoney(moduleTotal) }}</b></div>
-          <ul><li v-for="label in selectedLabels.slice(0, 5)" :key="label">{{ label }}</li></ul>
-          <div class="order-total"><span>網站建置預估</span><strong>NT$ {{ formatMoney(launchPrice) }}</strong></div>
-          <div v-if="cadencePrice" class="order-monthly"><span>12 個月 GEO 方案</span><strong>NT$ {{ formatMoney(cadencePrice) }}／月</strong></div>
-          <button type="button" @click="openHandoff">保留這份設計並進入訂購意圖 <b>→</b></button>
-          <small>這個按鈕只建立 preview handoff 與訂購意圖，不會直接扣款、購買網域或部署。</small>
-        </aside>
-      </div>
+        <section v-else-if="currentStep === 'style_and_modules'" class="builder-step" aria-labelledby="style-title">
+          <div class="step-heading"><p class="builder-eyebrow">STYLE / MODULES</p><h2 id="style-title">你希望它給人的第一印象是什麼？</h2><p>這些選擇只會影響本地預覽的 design tokens、排版與互動示範；需要人工授權的模組會清楚標示。</p></div>
+          <div class="theme-grid"><button v-for="item in themes" :key="item.id" type="button" class="theme-choice" :class="[`theme-${item.id}`, { selected: theme === item.id }]" :aria-pressed="theme === item.id" @click="theme = item.id"><span class="theme-swatch"><i v-for="color in item.colors" :key="color" :style="{ background: color }"></i></span><strong>{{ item.label }}</strong><small>{{ item.descriptor }}</small><b>{{ theme === item.id ? '✓' : '＋' }}</b></button></div>
+          <div class="preference-block"><div class="section-label"><span>LAYOUT PREFERENCES</span><small>可複選</small></div><div class="preference-row"><button v-for="item in stylePreferences" :key="item.id" type="button" :class="{ selected: selectedStyles.includes(item.id) }" :aria-pressed="selectedStyles.includes(item.id)" @click="toggleStyle(item.id)"><strong>{{ item.label }}</strong><small>{{ item.hint }}</small></button></div></div>
+          <div class="reference-block"><div class="section-label"><span>OPTIONAL REFERENCE</span><small>不會發出 network request</small></div><label for="builder-reference">貼上喜歡的風格參考網址</label><input id="builder-reference" v-model="styleReferenceUrl" type="url" maxlength="256" placeholder="https://example.com" :aria-invalid="Boolean(styleReferenceError)" @blur="validateStyleReference"><small>只作為方向參考；不會複製對方品牌、Logo、文字、圖片或原始碼。</small><p v-if="styleReferenceError" class="field-error" role="alert">{{ styleReferenceError }}</p></div>
+          <div class="module-selection"><div class="section-label"><span>FEATURE MODULES</span><small>{{ selectedModules.length }} 個已選</small></div><div class="module-grid"><button v-for="item in moduleOptions" :key="item.id" type="button" :class="{ selected: selectedModules.includes(item.id) }" :aria-pressed="selectedModules.includes(item.id)" @click="toggleModule(item.id)"><span class="module-check">{{ selectedModules.includes(item.id) ? '✓' : '+' }}</span><strong>{{ item.label }}</strong><small>{{ item.outcome }}</small><em>{{ item.note }}</em></button></div></div>
+          <div class="step-footer"><p>簡易電商未建立商店；未來可受控串接 Shopify。</p><button class="builder-primary" type="button" :disabled="!canProceedFromStyle" @click="submitStyle">開始生成預覽 <span>✦</span></button></div>
+        </section>
+
+        <section v-else-if="currentStep === 'generating'" class="builder-step generation-step" aria-labelledby="generation-title"><div class="generation-core"><div class="generation-ring"><span></span><b>{{ String(generationStage + 1).padStart(2, '0') }}</b></div><p class="builder-eyebrow">CONCEPT GENERATION / NO AI REQUEST</p><h2 id="generation-title">正在把方向整理成一個可以互動的預覽。</h2><p>這是一段本地概念生成示範，不代表此刻真的呼叫 AI 或建立正式網站。</p></div><div class="generation-stages" aria-live="polite"><div v-for="(stage, index) in generationStages" :key="stage" :class="{ active: generationStage >= index, current: generationStage === index }"><i>{{ String(index + 1).padStart(2, '0') }}</i><span>{{ stage }}</span><b>{{ generationStage > index ? '完成' : generationStage === index ? '整理中' : '等待中' }}</b></div></div><button type="button" class="builder-secondary" @click="setStep('style_and_modules')">返回調整方向</button></section>
+
+        <section v-else-if="currentStep === 'interactive_preview'" class="builder-step preview-step" aria-labelledby="preview-title"><div class="step-heading preview-heading"><div><p class="builder-eyebrow">INTERACTIVE CONCEPT / VERSION 01</p><h2 id="preview-title">這個方向，像你的品牌嗎？</h2><p>切換裝置、頁面與模組，看看網站如何被訪客理解。所有表單都是 disabled demo。</p></div><span class="preview-status">PREVIEW ONLY / NO DEPLOY</span></div><div class="preview-toolbar"><div class="viewport-switch" role="group" aria-label="預覽裝置"><button v-for="item in viewportOptions" :key="item[0]" type="button" :class="{ active: viewport === item[0] }" @click="viewport = item[0]">{{ item[1] }}</button></div><div class="preview-address"><span>SAFE PREVIEW</span>{{ currentDomain }}</div><span class="preview-live-dot">概念版本</span></div><div class="preview-browser-wrap" :class="`viewport-${viewport}`"><div class="preview-browser"><div class="preview-browser-top"><span></span><span></span><span></span><small>{{ currentDomain }}</small></div><div class="generated-preview"><header class="generated-header"><strong>{{ brandName || '你的品牌' }}</strong><nav><button v-for="page in currentPages" :key="page" type="button" :class="{ active: previewPage === page }" @click="choosePreviewPage(page)">{{ pageLabels[page] }}</button></nav><button type="button" class="preview-header-cta" @click="showDemoNotice('這個聯絡入口目前是預覽示範。')">{{ selectedModules.includes('booking') ? '立即預約' : '聯絡我們' }}</button></header><main class="generated-main" :class="`page-${previewPage}`"><div class="preview-watermark">PREVIEW / CONCEPT ONLY</div><section v-if="previewPage === 'home'" class="generated-hero"><div class="hero-grid-mark" aria-hidden="true"><span></span><span></span><span></span></div><p class="generated-kicker">{{ currentTheme.label.toUpperCase() }} · GEO STRUCTURE READY</p><h3>{{ previewTitle }}</h3><p>{{ previewDescription }}</p><div class="generated-actions"><button type="button" @click="showDemoNotice('這是預覽中的 CTA，不會送出資料。')">{{ selectedModules.includes('booking') ? '預約第一次諮詢' : siteType === 'commerce' ? '開始選購' : '了解服務' }} <span>→</span></button><button type="button" class="ghost-action" @click="choosePreviewPage(siteType === 'commerce' ? 'products' : 'services')">看看內容結構 <span>↗</span></button></div></section><section v-else-if="previewPage === 'services'" class="generated-content-view"><p class="generated-kicker">ANSWER-FIRST SERVICE PAGE</p><h3>先回答問題，再讓人放心採取下一步。</h3><div class="answer-columns"><article><span>01</span><strong>你會得到什麼？</strong><p>以清楚段落整理服務範圍、流程與適合對象。</p></article><article><span>02</span><strong>為什麼相信你？</strong><p>把專業、地區與真實證據放在容易理解的位置。</p></article></div></section><section v-else-if="previewPage === 'about'" class="generated-content-view about-view"><p class="generated-kicker">ABOUT THE BRAND</p><h3>{{ brandName || '你的品牌' }}，把專業變成讓人安心的選擇。</h3><p>{{ audience || '你的理想客戶' }}可以在這裡快速理解你怎麼工作、為什麼在乎，以及下一步如何開始。</p><div class="signature-line"><span>品牌故事</span><b>↗</b></div></section><section v-else-if="previewPage === 'content'" class="generated-content-view content-view"><p class="generated-kicker">ANSWER-FIRST CONTENT</p><h3>把客戶真的會問的事，整理成可靠答案。</h3><ol><li>第一次接觸前，最需要知道什麼？</li><li>如何選擇適合自己的服務？</li><li>做決定時，哪些資訊最重要？</li></ol></section><section v-else class="generated-content-view products-view"><p class="generated-kicker">SHOPIFY READY / NOT CONNECTED</p><h3>商品先被看見，正式結帳日後再接上。</h3><div class="product-row"><article v-for="item in ['日常組合', '本月精選', '入門體驗']" :key="item"><div class="product-art"></div><small>CONCEPT ITEM</small><strong>{{ item }}</strong><span>示意價格</span></article></div><p class="integration-note">這份預覽不會建立 Shopify 商店、不會處理付款，也不會保存任何金流資料。</p></section></main><button v-if="selectedModules.includes('ai')" type="button" class="preview-assistant" @click="assistantQuestion = assistantQuestion ? '' : '你最常被問到什麼？'"><span>✦</span><b>品牌 AI 助手</b><small>互動示範</small></button></div></div></div><div v-if="selectedModules.includes('ai') && assistantQuestion" class="assistant-demo"><div class="assistant-demo-head"><span>CONCEPT ASSISTANT</span><button type="button" aria-label="關閉 AI 助手示範" @click="assistantQuestion = ''">×</button></div><p class="assistant-question">{{ assistantQuestion }}</p><div class="assistant-prompts"><button type="button" @click="openAssistant('第一次來之前要知道什麼？')">第一次來之前要知道什麼？</button><button type="button" @click="openAssistant('費用怎麼評估？')">費用怎麼評估？</button></div><p v-if="assistantAnswer" class="assistant-answer">{{ assistantAnswer }}</p></div><div v-if="selectedModules.includes('booking') || selectedModules.includes('line')" class="demo-module-row"><button v-if="selectedModules.includes('booking')" type="button" @click="showDemoNotice('預約入口只在這份預覽中示範，不會真的送出。')">◎ 示範預約入口</button><button v-if="selectedModules.includes('line')" type="button" @click="showDemoNotice('LINE 入口只在正式授權後啟用。')">↗ 示範 LINE 聯絡</button></div><div class="preview-evidence"><span>這份概念已示範</span><ul><li>直接答案結構</li><li>可延伸內容架構</li><li>GEO 結構規劃</li><li>{{ selectedModules.length }} 個選用模組</li></ul></div><div class="step-footer preview-footer"><button type="button" class="builder-secondary" @click="setStep('style_and_modules')">這個方向不對</button><button type="button" class="builder-primary" @click="setStep('plan_and_cadence')">我喜歡這個方向 <span>→</span></button></div></section>
+
+        <section v-else-if="currentStep === 'plan_and_cadence'" class="builder-step" aria-labelledby="plan-title"><div class="step-heading"><p class="builder-eyebrow">PLAN / CADENCE</p><h2 id="plan-title">你希望網站完成後，誰持續照顧它？</h2><p>價格是示意／預估，正式確認前不會扣款。每個方案寫的是你會得到什麼，而不是保證結果。</p></div><div class="plan-grid"><button v-for="item in plans" :key="item.id" type="button" class="plan-choice" :class="{ selected: plan === item.id }" :aria-pressed="plan === item.id" @click="plan = item.id"><span class="plan-accent">{{ item.accent }}</span><strong>{{ item.label }}</strong><p>{{ item.description }}</p><small>{{ item.outcome }}</small><b>{{ item.price ? `NT$ ${formatMoney(item.price)}／月起` : '一次完成基礎' }}</b></button></div><div v-if="plan && plan !== 'launch'" class="cadence-panel"><div><span>CONTENT CADENCE</span><strong>內容更新頻率</strong><p>頻率越高代表預留更多內容營運節奏，不代表保證排名或流量。</p></div><div class="cadence-options" role="group" aria-label="文章頻率"><button v-for="days in cadences" :key="days" type="button" :class="{ active: cadence === days }" @click="cadence = days">每 {{ days }} 天</button></div></div><div class="price-disclosure"><span>價格說明</span><p>一次性網站建置費與每月 GEO 訂閱費分開計算；網域、API 與第三方服務費用尚未正式查詢，正式付款前會重新確認。</p></div><div class="step-footer"><p>不保證排名、流量、ROI 或被任何 AI 引用。</p><button class="builder-primary" type="button" :disabled="!plan" @click="submitPlan">規劃網域與上線 <span>→</span></button></div></section>
+
+        <section v-else-if="currentStep === 'domain_and_launch'" class="builder-step" aria-labelledby="domain-title"><div class="step-heading"><p class="builder-eyebrow">DOMAIN / LAUNCH PLAN</p><h2 id="domain-title">網站要住在哪裡？</h2><p>現在只做規劃與模擬，不會查詢可用性、不會購買、不會要求帳號密碼。</p></div><div class="domain-choice-grid"><button type="button" class="domain-choice" :class="{ selected: domainMode === 'new' }" @click="chooseDomainMode('new')"><span>01</span><strong>我想購買新網域</strong><p>輸入想要的名稱，按下模擬查詢。正式付款前會重新確認價格與可用性。</p></button><button type="button" class="domain-choice" :class="{ selected: domainMode === 'existing' }" @click="chooseDomainMode('existing')"><span>02</span><strong>我已經有網域</strong><p>付款後會透過 DNS 或授權驗證所有權，現在不需要交出帳號或 API key。</p></button></div><div v-if="domainMode" class="domain-form"><label for="builder-domain">{{ domainMode === 'new' ? '想規劃的網域' : '現有網域' }}</label><div class="field-with-action"><input id="builder-domain" v-model="domainInput" maxlength="120" placeholder="your-brand.tw" :aria-invalid="Boolean(domainError)" @input="domainError = ''; domainSimulation = 'idle'"><button type="button" class="builder-secondary" @click="simulateDomain">模擬查詢</button></div><small>示意：{{ currentDomain }} 將登記給客戶，DiscoveryStack 負責技術代管與營運。</small><p v-if="domainError" class="field-error" role="alert">{{ domainError }}</p><p v-else-if="domainSimulation === 'checked'" class="simulation-status" role="status"><span>◌</span> 目前只完成模擬，尚未確認可購買。</p></div><div class="launch-timeline"><div v-for="(item, index) in timeline" :key="item.label" class="timeline-item"><span>{{ String(index + 1).padStart(2, '0') }}</span><i></i><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></div></div><div class="step-footer"><p>所有節點目前都是「付款後執行」。</p><button class="builder-primary" type="button" :disabled="!canProceedFromDomain" @click="submitDomain">查看完整摘要 <span>→</span></button></div></section>
+
+        <section v-else-if="currentStep === 'review_order'" class="builder-step review-step" aria-labelledby="review-title"><div class="step-heading"><p class="builder-eyebrow">REVIEW BEFORE HANDOFF</p><h2 id="review-title">這是你要保存的方向嗎？</h2><p>最後看一次規格、預估費用與尚未執行的外部操作。這不是正式訂單。</p></div><div class="review-layout"><div class="review-list"><article><span>品牌</span><strong>{{ brandName || '尚未命名' }}</strong><button type="button" @click="setStep('diagnosis_or_brief')">修改</button></article><article><span>網站架構</span><strong>{{ currentSiteType.label }} · {{ currentSiteType.pages.join('／') }}</strong><button type="button" @click="setStep('site_architecture')">修改</button></article><article><span>風格與功能</span><strong>{{ currentTheme.label }} · {{ selectedModuleLabels.join('、') || '尚未選擇模組' }}</strong><button type="button" @click="setStep('style_and_modules')">修改</button></article><article><span>GEO 方案</span><strong>{{ currentPlan.label }}{{ plan !== 'launch' ? ` · 每 ${cadence} 天` : '' }}</strong><button type="button" @click="setStep('plan_and_cadence')">修改</button></article><article><span>網域方向</span><strong>{{ domainMode === 'new' ? '新網域規劃' : '使用現有網域' }} · {{ currentDomain }}</strong><button type="button" @click="setStep('domain_and_launch')">修改</button></article></div><aside class="review-price"><p>ESTIMATED PROJECT SUMMARY</p><h3>{{ brandName || '你的品牌' }}</h3><div><span>一次性網站建置預估</span><strong>NT$ {{ formatMoney(oneTimeEstimate) }}</strong></div><div v-if="monthlyEstimate"><span>每月 GEO 訂閱預估</span><strong>NT$ {{ formatMoney(monthlyEstimate) }}</strong></div><small>網域費用、API／第三方服務可能另計；以上均為示意或預估。</small><label><input v-model="reviewConfirmed" type="checkbox"> 我理解這是互動式預覽，不是已付款、已購買網域或已部署的正式成品。</label></aside></div><div class="ownership-note"><span>CLIENT OWNED DOMAIN</span><p>網域原則上歸客戶所有；DiscoveryStack 代管程式碼、部署與長期維護。V1 不提供完整原始碼下載。</p></div><div class="step-footer"><p>不會建立真實訂單，也不會呼叫付款、網域或部署服務。</p><button ref="reviewHandoffTrigger" class="builder-primary" type="button" :disabled="!reviewConfirmed" @click="submitReview">保存這份預覽，聯絡我們確認 <span>→</span></button></div></section>
+
+        <section v-else class="builder-step handoff-step" aria-labelledby="handoff-step-title"><div class="handoff-success-mark" aria-hidden="true">✓</div><div class="step-heading"><p class="builder-eyebrow">PREVIEW HANDOFF</p><h2 id="handoff-step-title">方向已經整理好了。</h2><p>下一步是由你與 DiscoveryStack 確認規格、付款、網域與人工授權；這一頁沒有假裝任何外部操作已經完成。</p></div><div class="handoff-next-grid"><article v-for="(item, index) in ['確認規格與付款', '重新確認網域與服務費', '完成授權後設定 DNS／SSL', '部署並啟動 GEO 營運']" :key="item"><span>0{{ index + 1 }}</span><strong>{{ item }}</strong></article></div><div class="handoff-honesty"><span>NOT A PRODUCTION ORDER</span><p>本概念頁沒有送出真實訂單、沒有保存聯絡資料，也沒有呼叫私人 API。正式版會由確認後的受控流程接手。</p></div><div class="step-footer"><button type="button" class="builder-secondary" @click="setStep('review_order')">返回摘要</button><button ref="handoffStepTrigger" type="button" class="builder-primary" @click="openHandoff">開啟交接說明 <span>↗</span></button></div></section>
+      </section>
     </section>
 
-    <div v-if="showHandoff" class="handoff-backdrop" role="presentation" @click.self="showHandoff = false">
-      <section class="handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
-        <button class="close-dialog" type="button" aria-label="關閉" @click="showHandoff = false">×</button>
-        <p>PREVIEW HANDOFF</p>
-        <h2 id="handoff-title">這裡，就是預覽轉成正式專案的交接點。</h2>
-        <div class="handoff-path"><span>留下聯絡資料</span><i>→</i><span>確認規格與付款</span><i>→</i><span>購買網域</span><i>→</i><span>自動部署</span></div>
-        <p>系統會保存這一版的網站規格、功能、內容與伺服器報價。需要 Shopify、Google、LINE、金流或發票 API 的部分，付款後再由客戶授權或由專人協助。</p>
-        <div v-if="quoteResult" class="handoff-quote"><span>SERVER QUOTE · {{ quoteResult.planKey }}</span><strong>{{ quoteResult.currency }} {{ quoteResult.totalMinor }}</strong><small>報價有效至 {{ new Date(quoteResult.expiresAt).toLocaleDateString('zh-TW') }}；稅額未計算。</small></div>
-        <div class="handoff-form">
-          <label>姓名<input v-model="contactName" autocomplete="name" placeholder="你的姓名"></label>
-          <label>Email<input v-model="contactEmail" autocomplete="email" inputmode="email" placeholder="you@example.com"></label>
-          <label>公司／品牌<input v-model="contactCompany" autocomplete="organization" placeholder="公司或品牌名稱"></label>
-          <label class="consent"><input v-model="privacyConsent" type="checkbox"> 我同意 DiscoveryStack 依隱私政策聯絡我並處理此訂購意圖。</label>
-        </div>
-        <div class="handoff-actions">
-          <button type="button" class="handoff-submit" :disabled="isSubmittingOrder" @click="submitOrderIntent">{{ isSubmittingOrder ? '送出中…' : '送出訂購意圖（不扣款）' }}</button>
-          <button type="button" @click="showHandoff = false">返回繼續調整</button>
-        </div>
-      </section>
-    </div>
-  </section>
+    <div v-if="showHandoff" class="handoff-layer" role="presentation" @click.self="closeHandoff"><section ref="handoffDialog" class="handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-dialog-title" tabindex="-1" @keydown.esc="closeHandoff" @keydown="trapHandoff"><button ref="handoffCloseButton" class="dialog-close" type="button" aria-label="關閉交接說明" @click="closeHandoff">×</button><p class="builder-eyebrow">HANDOFF / NO EXTERNAL WRITE</p><h2 id="handoff-dialog-title">把這份方向交給下一步，但現在不會假裝完成。</h2><div class="handoff-dialog-path"><span>保存預覽方向</span><i>→</i><span>人工確認規格</span><i>→</i><span>付款與授權</span><i>→</i><span>部署上線</span></div><p>正式版會保留這份預覽的品牌、頁面、模組、風格、GEO 方案與網域意圖，再由你確認後進行外部操作。現在只是一個可操作的產品體驗。</p><div v-if="handoffSaved" class="handoff-saved" role="status">已在本次瀏覽中記住你的確認意圖；沒有送出訂單或保存任何個人資料。</div><div class="handoff-dialog-actions"><button type="button" class="builder-secondary" @click="closeHandoff">返回繼續調整</button><button type="button" class="builder-primary" @click="confirmHandoff">{{ handoffSaved ? '確認完成' : '我了解，保存這份預覽' }} <span>→</span></button></div></section></div>
+  </main>
 </template>
-
-<style scoped>
-.concept-builder { --navy:#131c2d; --blue:#315bd6; --cream:#f5f1e8; --ink:#19202b; color:var(--ink); background:#f2eee5; min-height:100vh; padding:clamp(2.5rem,6vw,6rem) clamp(1rem,4vw,4rem) 6rem; font-family:'Noto Sans TC',sans-serif; }
-.concept-intro { max-width:88rem; margin:0 auto clamp(2rem,5vw,4.5rem); display:grid; grid-template-columns:1.35fr .65fr; gap:3rem; align-items:end; }
-.concept-kicker { display:flex; gap:.8rem; align-items:center; color:#625f59; font:500 .68rem/1.4 'DM Mono',monospace; letter-spacing:.11em; }
-.concept-kicker span { color:#fff; background:#315bd6; border-radius:999px; padding:.35rem .75rem; }
-.concept-intro h1 { margin:1.4rem 0 0; font:700 clamp(2.8rem,6vw,6.3rem)/.98 'Noto Serif TC',serif; letter-spacing:-.05em; }
-.concept-intro h1 em { color:#315bd6; font-style:normal; }
-.concept-intro > p { max-width:32rem; font-size:1.04rem; line-height:1.85; color:#55534d; }
-.entry-gateway { max-width:88rem; margin:0 auto 1rem; padding:clamp(1.3rem,3vw,2.2rem); background:#17233b; color:#fff; border-radius:1.2rem; box-shadow:0 1.5rem 4rem rgba(23,35,59,.16); }
-.entry-gateway>header { display:flex; gap:1rem; align-items:flex-start; margin-bottom:1.3rem; }.entry-gateway>header>span{display:grid;place-items:center;flex:0 0 2.2rem;height:2.2rem;border-radius:50%;background:#ff7a59;font:600 .7rem 'DM Mono',monospace}.entry-gateway>header div{display:grid;gap:.25rem}.entry-gateway>header p{color:#8fa7ef;font:600 .6rem 'DM Mono',monospace;letter-spacing:.12em}.entry-gateway>header h2{font:700 clamp(1.5rem,3vw,2.4rem) 'Noto Serif TC',serif}.entry-gateway>header small{color:#aeb6c6;font-size:.72rem}
-.entry-tabs{display:grid;grid-template-columns:1fr 1fr;gap:.65rem}.entry-tabs button{display:grid;gap:.3rem;text-align:left;border:1px solid rgba(255,255,255,.18);border-radius:.8rem;padding:1rem;background:rgba(255,255,255,.05);color:#fff;cursor:pointer}.entry-tabs button b{font-size:.85rem}.entry-tabs button span{color:#aeb6c6;font-size:.68rem}.entry-tabs button.active{border-color:#8fa7ef;background:rgba(143,167,239,.16);box-shadow:inset 0 0 0 1px #8fa7ef}
-.diagnosis-entry,.new-site-entry{margin-top:1rem;border-top:1px solid rgba(255,255,255,.12);padding-top:1rem}.diagnosis-form{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.6rem}.diagnosis-form label{display:grid;gap:.35rem;color:#aeb6c6;font-size:.65rem}.diagnosis-form input{width:100%;border:1px solid rgba(255,255,255,.2);border-radius:.6rem;background:rgba(255,255,255,.08);color:#fff;padding:.75rem;font:500 .75rem 'DM Mono',monospace}.diagnosis-form>button{align-self:end;border:0;border-radius:.6rem;background:#ff7a59;color:#fff;padding:.78rem 1rem;font-weight:800;cursor:pointer}.diagnosis-form>button span{margin-left:.5rem}.diagnosis-form>small{grid-column:1/-1;color:#8f98a9;font-size:.58rem}
-.diagnosis-comparison{display:grid;grid-template-columns:1fr auto 1fr;gap:.8rem;align-items:center;margin-top:1rem}.diagnosis-comparison article{height:100%;border-radius:.8rem;padding:1rem}.diagnosis-comparison article>p{font:600 .55rem 'DM Mono',monospace;letter-spacing:.09em}.diagnosis-comparison h3{margin:.35rem 0 .6rem;font:700 1rem 'Noto Serif TC',serif}.diagnosis-comparison ul{list-style:none;padding:0;margin:0;display:grid;gap:.5rem}.diagnosis-comparison li{display:grid;grid-template-columns:auto 1fr;gap:.25rem .7rem}.diagnosis-comparison li::before{content:'•';grid-row:span 2;color:#ff7a59}.diagnosis-comparison li b{font-size:.68rem}.diagnosis-comparison li span{grid-column:2;color:#aeb6c6;font-size:.6rem;line-height:1.5}.before-card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12)}.before-card>p{color:#e8a68f}.after-card{background:#f3f5ff;color:#17233b}.after-card>p{color:#315bd6}.after-card li span{color:#626b7c}.comparison-arrow{color:#8fa7ef;font-size:1.3rem}.new-site-entry{display:flex;gap:.8rem;align-items:center;color:#dbe1ec}.new-site-entry>span{display:grid;place-items:center;width:2.2rem;height:2.2rem;border-radius:.65rem;background:rgba(143,167,239,.16);color:#8fa7ef}.new-site-entry div{display:grid;gap:.2rem}.new-site-entry b{font-size:.75rem}.new-site-entry p{color:#aeb6c6;font-size:.65rem}
-.builder-shell { max-width:88rem; margin:auto; display:grid; grid-template-columns:minmax(20rem,.72fr) minmax(34rem,1.28fr); background:#fff; border:1px solid rgba(25,32,43,.14); box-shadow:0 2rem 6rem rgba(37,32,23,.1); border-radius:1.25rem; overflow:hidden; }
-.builder-controls { padding:clamp(1.4rem,3vw,2.6rem); border-right:1px solid #e5e2da; background:#fbfaf7; }
-.control-heading { display:flex; gap:1rem; align-items:flex-start; margin-bottom:1.2rem; }
-.control-heading.compact { margin-top:2rem; }
-.control-heading > span { display:grid; place-items:center; width:2rem; height:2rem; border-radius:50%; background:#17233b; color:#fff; font:500 .7rem 'DM Mono',monospace; }
-.control-heading div { display:grid; gap:.25rem; }
-.control-heading strong { font-size:1rem; }
-.control-heading small,.field-label { color:#77736b; font-size:.76rem; }
-.field-label { display:grid; gap:.45rem; margin-top:.8rem; font-weight:700; }
-.field-label input,.field-label textarea { width:100%; border:1px solid #d9d5cc; background:#fff; border-radius:.7rem; padding:.85rem 1rem; color:#20252d; font:500 .9rem/1.65 inherit; resize:vertical; outline:none; transition:.2s ease; }
-.field-label input:focus,.field-label textarea:focus { border-color:#315bd6; box-shadow:0 0 0 3px rgba(49,91,214,.1); }
-.choice-grid { display:grid; gap:.55rem; }
-.site-types { grid-template-columns:repeat(3,1fr); }
-.choice-grid button { text-align:left; border:1px solid #dfdcd4; border-radius:.7rem; background:#fff; padding:.75rem; color:#252932; cursor:pointer; }
-.choice-grid button strong,.choice-grid button small { display:block; }
-.choice-grid button strong { font-size:.76rem; }
-.choice-grid button small { margin-top:.3rem; color:#7a766f; line-height:1.4; font-size:.65rem; }
-.choice-grid button.active { border-color:#315bd6; background:#eef2ff; box-shadow:inset 0 0 0 1px #315bd6; }
-.module-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:.5rem; margin-top:1.2rem; }
-.module-grid button { display:grid; grid-template-columns:1.4rem 1fr auto; align-items:center; gap:.45rem; border:1px solid #dfdcd4; border-radius:.65rem; padding:.65rem .7rem; background:#fff; cursor:pointer; color:#333842; text-align:left; }
-.module-grid button > span { display:grid; place-items:center; width:1.25rem; height:1.25rem; border:1px solid #c6c2ba; border-radius:.35rem; font-size:.7rem; }
-.module-grid button strong { font-size:.74rem; }
-.module-grid button small { color:#77736b; font-size:.58rem; font-family:'DM Mono',monospace; }
-.module-grid button.active { border-color:#315bd6; background:#f2f5ff; }
-.module-grid button.active > span { color:#fff; background:#315bd6; border-color:#315bd6; }
-.theme-row { margin-top:1.2rem; display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; }
-.theme-row > span { width:100%; color:#77736b; font-size:.7rem; font-weight:700; }
-.theme-row button { display:flex; align-items:center; gap:0; background:#fff; border:1px solid #dfdcd4; border-radius:999px; padding:.35rem .55rem; cursor:pointer; }
-.theme-row button i { width:.72rem; height:.72rem; border-radius:50%; margin-left:-.12rem; border:1px solid rgba(255,255,255,.6); }
-.theme-row button b { margin-left:.4rem; font-size:.64rem; }
-.theme-row button.active { border-color:#315bd6; box-shadow:0 0 0 1px #315bd6; }
-.generate-button { width:100%; margin-top:1.5rem; min-height:3.2rem; border:0; border-radius:.7rem; padding:.8rem 1rem; background:#315bd6; color:#fff; display:flex; justify-content:space-between; align-items:center; cursor:pointer; font:700 .84rem inherit; box-shadow:0 .6rem 1.5rem rgba(49,91,214,.22); }
-.generate-button:disabled { cursor:wait; opacity:.78; }
-.preview-column { min-width:0; background:#e9e7e1; padding:1rem; }
-.preview-toolbar { height:2.7rem; display:grid; grid-template-columns:1fr minmax(12rem,1.7fr) 1fr; align-items:center; background:#f8f8f6; border:1px solid #d6d3cc; border-radius:.8rem .8rem 0 0; padding:0 .8rem; }
-.window-dots { display:flex; gap:.35rem; }.window-dots i { width:.55rem; height:.55rem; border-radius:50%; background:#c6c4bd; }.window-dots i:first-child{background:#ff7a59}.window-dots i:nth-child(2){background:#e9bb5d}.window-dots i:last-child{background:#5ab985}
-.preview-url { justify-self:center; width:100%; padding:.35rem .7rem; background:#eae9e5; border-radius:.35rem; color:#69665f; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; font:500 .64rem 'DM Mono',monospace; }
-.preview-url span { margin-right:.5rem; color:#258052; }
-.viewport-buttons { justify-self:end; display:flex; gap:.25rem; }.viewport-buttons button{border:0;background:transparent;color:#8b8881;font-size:.65rem;cursor:pointer}.viewport-buttons button.active{color:#315bd6;font-weight:800}
-.site-stage { min-height:36rem; display:flex; justify-content:center; background:#dcd9d2; border-inline:1px solid #d6d3cc; overflow:hidden; transition:.35s ease; }
-.generated-site { width:100%; min-height:36rem; position:relative; overflow:hidden; background:var(--preview-paper); color:var(--preview-primary); transition:width .4s ease; }
-.site-stage.is-mobile .generated-site { width:22rem; box-shadow:0 0 0 1px rgba(0,0,0,.1),0 1rem 3rem rgba(0,0,0,.16); }
-.generated-nav { min-height:4.5rem; padding:0 clamp(1rem,4vw,3rem); display:flex; align-items:center; justify-content:space-between; gap:1rem; border-bottom:1px solid color-mix(in srgb,var(--preview-primary) 15%,transparent); }
-.generated-nav strong { font-family:'Noto Serif TC',serif; font-size:1rem; }.generated-nav nav{display:flex;gap:1.1rem;font-size:.66rem}.generated-nav button,.generated-hero button{border:0;background:var(--preview-primary);color:var(--preview-paper);border-radius:999px;padding:.6rem 1rem;font-weight:700;font-size:.67rem}
-.generated-hero { min-height:20rem; padding:clamp(2rem,6vw,5rem) clamp(1.5rem,7vw,5rem); position:relative; }
-.generated-hero::after { content:""; position:absolute; right:7%; top:17%; width:clamp(5rem,14vw,10rem); aspect-ratio:1; border:1.5rem solid var(--preview-accent); border-radius:50% 45% 60% 38%; opacity:.68; transform:rotate(12deg); }
-.generated-hero > * { position:relative; z-index:1; max-width:70%; }.generated-hero > p:first-child{font:600 .57rem 'DM Mono',monospace;letter-spacing:.12em}.generated-hero h2{margin:.9rem 0 1rem;font:700 clamp(1.7rem,4vw,3.7rem)/1.12 'Noto Serif TC',serif;letter-spacing:-.04em}.generated-hero > p{font-size:.75rem;line-height:1.8;max-width:31rem}.generated-hero > div{display:flex;align-items:center;gap:1rem;margin-top:1.5rem}.generated-hero > div span{font-size:.66rem;font-weight:700}
-.trust-strip { display:grid; grid-template-columns:repeat(3,1fr); background:var(--preview-primary); color:var(--preview-paper); padding:1.2rem 4rem; }.trust-strip div{display:grid;text-align:center;border-right:1px solid color-mix(in srgb,var(--preview-paper) 25%,transparent)}.trust-strip div:last-child{border:0}.trust-strip b{font:700 1.4rem 'Noto Serif TC',serif}.trust-strip small{opacity:.72;font-size:.58rem}
-.preview-editorial { display:grid; grid-template-columns:1.1fr .9fr; gap:2rem; padding:2rem 3rem; background:#fff; }.preview-editorial small{font:.55rem 'DM Mono',monospace;color:var(--preview-accent)}.preview-editorial h3{font:700 1.25rem/1.3 'Noto Serif TC',serif;margin:.5rem 0}.preview-editorial p,.preview-editorial li{font-size:.65rem;line-height:1.6}.preview-editorial ol{margin:0;padding-left:1.2rem}.preview-editorial li{padding:.35rem 0;border-bottom:1px solid #e8e4dc}
-.preview-products { display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;padding:1.5rem 2rem 2rem;background:#fff}.preview-products article{display:grid;gap:.25rem}.preview-products article div{height:7rem;background:linear-gradient(135deg,var(--preview-paper),color-mix(in srgb,var(--preview-accent) 35%,white));border-radius:.4rem}.preview-products small{font:.5rem 'DM Mono',monospace;color:#777}.preview-products strong{font:700 .75rem 'Noto Serif TC',serif}.preview-products span{font-size:.62rem}
-.preview-ai { position:absolute;right:1.2rem;bottom:1.2rem;display:grid;grid-template-columns:1.5rem 1fr;column-gap:.4rem;align-items:center;border:0;border-radius:1rem;background:var(--preview-primary);color:var(--preview-paper);padding:.65rem .85rem;box-shadow:0 .6rem 2rem rgba(0,0,0,.2);text-align:left}.preview-ai span{grid-row:span 2;font-size:1rem}.preview-ai b{font-size:.64rem}.preview-ai small{font-size:.52rem;opacity:.68}
-.generation-mask { position:absolute;inset:0;z-index:3;display:grid;place-content:center;justify-items:center;gap:1rem;background:color-mix(in srgb,var(--preview-paper) 88%,transparent);backdrop-filter:blur(5px)}.generation-mask span{width:2.2rem;height:2.2rem;border:3px solid rgba(49,91,214,.15);border-top-color:#315bd6;border-radius:50%;animation:spin .75s linear infinite}.generation-mask p{font-size:.72rem;font-weight:700}.is-generating .generated-site{transform:scale(.99)}@keyframes spin{to{transform:rotate(360deg)}}
-.site-stage.is-mobile .generated-nav nav,.site-stage.is-mobile .generated-hero::after{display:none}.site-stage.is-mobile .generated-hero>*{max-width:100%}.site-stage.is-mobile .trust-strip{padding:1rem}.site-stage.is-mobile .preview-editorial{grid-template-columns:1fr;padding:1.4rem}.site-stage.is-mobile .preview-products{grid-template-columns:1fr}.site-stage.is-mobile .preview-products article:nth-child(n+2){display:none}
-.preview-evidence { padding:1rem 1.2rem; border:1px solid #d6d3cc; border-radius:0 0 .8rem .8rem; background:#f8f8f6; display:flex; align-items:center; gap:1rem; }.preview-evidence>span{font-size:.66rem;font-weight:800}.preview-evidence ul{display:flex;flex-wrap:wrap;gap:.35rem;margin:0;padding:0;list-style:none}.preview-evidence li{background:#e8ebf5;color:#34436e;padding:.3rem .55rem;border-radius:999px;font-size:.58rem}
-.launch-config { max-width:88rem; margin:clamp(3rem,7vw,7rem) auto 0; }
-.launch-config>header { display:grid;grid-template-columns:1fr 1fr;gap:1rem 3rem;align-items:end;margin-bottom:2rem}.launch-config>header p{grid-column:1/-1;color:#315bd6;font:600 .68rem 'DM Mono',monospace;letter-spacing:.12em}.launch-config>header h2{font:700 clamp(2rem,4vw,4rem)/1.05 'Noto Serif TC',serif}.launch-config>header span{color:#69665f;font-size:.85rem}
-.launch-grid { display:grid;grid-template-columns:1fr .9fr .8fr;gap:1rem;align-items:start}.plan-panel,.domain-panel,.order-card{background:#fff;border:1px solid #ded9cf;border-radius:1rem;padding:1.4rem}.plan-panel h3,.domain-panel h3{margin:0 0 1rem;font:700 1.15rem 'Noto Serif TC',serif}.plan-panel>button{width:100%;display:flex;justify-content:space-between;gap:1rem;text-align:left;background:#fff;border:1px solid #e2ded5;border-radius:.7rem;padding:.8rem;margin-top:.55rem;cursor:pointer}.plan-panel>button span{display:grid;gap:.25rem}.plan-panel>button b{font-size:.8rem}.plan-panel>button small{color:#77736b;font-size:.65rem;line-height:1.5}.plan-panel>button>strong{font-size:.67rem;white-space:nowrap}.plan-panel>button.active{border-color:#315bd6;background:#f0f3ff;box-shadow:inset 0 0 0 1px #315bd6}
-.cadence-control{margin-top:1.2rem}.cadence-control>span{font-size:.7rem;font-weight:800}.cadence-control>div{display:flex;gap:.35rem;margin-top:.55rem}.cadence-control button{flex:1;border:1px solid #ddd8ce;background:#fff;border-radius:.5rem;padding:.5rem .2rem;font-size:.62rem;cursor:pointer}.cadence-control button.active{background:#17233b;color:#fff;border-color:#17233b}
-.domain-panel label{font-size:.7rem;font-weight:800}.domain-panel label div{display:flex;margin-top:.5rem}.domain-panel input{min-width:0;flex:1;border:1px solid #ddd8ce;border-radius:.55rem 0 0 .55rem;padding:.72rem;font:500 .75rem 'DM Mono',monospace}.domain-panel label button{border:0;background:#17233b;color:#fff;padding:0 .8rem;border-radius:0 .55rem .55rem 0;font-size:.65rem}.domain-result{margin-top:.7rem;color:#24744e;font-size:.68rem}.domain-result span{font-size:.55rem}.domain-panel ul{padding:1rem 0 0 1rem;margin:1rem 0 0;border-top:1px solid #ebe7df}.domain-panel li{padding:.3rem 0;font-size:.7rem}
-.order-card{background:#17233b;color:#fff;box-shadow:0 1rem 3rem rgba(23,35,59,.18)}.order-card>p{color:#8fa7ef;font:600 .6rem 'DM Mono',monospace;letter-spacing:.1em}.order-card h3{font:700 1.4rem 'Noto Serif TC',serif;margin:.7rem 0 1.2rem}.order-card>div:not(.order-total):not(.order-monthly){display:flex;justify-content:space-between;padding:.5rem 0;color:#d4d8e0;font-size:.7rem}.order-card ul{display:flex;flex-wrap:wrap;gap:.3rem;padding:0;margin:.8rem 0;list-style:none}.order-card li{background:rgba(255,255,255,.1);border-radius:999px;padding:.25rem .5rem;font-size:.58rem}.order-total,.order-monthly{border-top:1px solid rgba(255,255,255,.18);display:grid!important;gap:.25rem;padding-top:1rem!important;margin-top:.8rem}.order-total span,.order-monthly span{font-size:.6rem;color:#9da6b7}.order-total strong{font-size:1.25rem}.order-monthly strong{color:#a9bbf2;font-size:.9rem}.order-card>button{width:100%;display:flex;justify-content:space-between;margin-top:1.2rem;border:0;border-radius:.65rem;padding:.85rem;background:#ff7a59;color:#fff;font-weight:800;cursor:pointer}.order-card>small{display:block;margin-top:.7rem;color:#9da6b7;line-height:1.5;font-size:.57rem}
-.builder-notice{max-width:88rem;margin:0 auto 1rem;padding:.8rem 1rem;border-radius:.65rem;font-size:.72rem;line-height:1.5}.builder-notice--success{background:#e6f4ec;color:#176b42}.builder-notice--error{background:#fff0ed;color:#8b3024}.handoff-backdrop{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:1rem;background:rgba(15,20,30,.72);backdrop-filter:blur(8px)}.handoff-dialog{position:relative;width:min(42rem,100%);background:#f8f4eb;border-radius:1.2rem;padding:clamp(1.5rem,5vw,3.5rem);box-shadow:0 2rem 7rem rgba(0,0,0,.35)}.close-dialog{position:absolute;right:1rem;top:1rem;border:0;background:transparent;font-size:1.5rem;cursor:pointer}.handoff-dialog>p:first-of-type{color:#315bd6;font:600 .65rem 'DM Mono',monospace;letter-spacing:.1em}.handoff-dialog h2{font:700 clamp(1.8rem,4vw,3rem)/1.15 'Noto Serif TC',serif;margin:.8rem 0 1.2rem}.handoff-dialog>p:last-of-type{color:#666159;line-height:1.8;font-size:.85rem}.handoff-quote{display:grid;gap:.3rem;margin:1rem 0;padding:1rem;background:#ebe6db;border-radius:.7rem}.handoff-quote span{color:#315bd6;font:600 .6rem 'DM Mono',monospace;letter-spacing:.1em}.handoff-quote strong{font:700 1.35rem 'Noto Serif TC',serif}.handoff-quote small{color:#77736b;font-size:.65rem}.handoff-form{display:grid;grid-template-columns:1fr 1fr;gap:.7rem}.handoff-form label{display:grid;gap:.35rem;color:#666159;font-size:.7rem;font-weight:800}.handoff-form input:not([type='checkbox']){border:1px solid #d8d2c7;border-radius:.5rem;padding:.7rem;background:#fff;color:#20252d}.handoff-form .consent{grid-column:1/-1;display:flex;align-items:flex-start;gap:.5rem;font-weight:500;line-height:1.5}.handoff-form .consent input{margin-top:.2rem}.handoff-actions{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1.2rem}.handoff-actions button{border:0;border-radius:.6rem;background:#17233b;color:#fff;padding:.8rem 1rem;font-weight:800;cursor:pointer}.handoff-actions .handoff-submit{background:#ff7a59}.handoff-actions button:disabled{opacity:.6;cursor:wait}.handoff-path{display:flex;align-items:center;gap:.5rem;margin:1.2rem 0;padding:1rem;background:#ebe6db;border-radius:.7rem;overflow:auto}.handoff-path span{white-space:nowrap;font-size:.7rem;font-weight:800}.handoff-path i{font-style:normal;color:#315bd6}.handoff-dialog>button:last-child{margin-top:1.5rem;border:0;border-radius:.6rem;background:#17233b;color:#fff;padding:.8rem 1rem;font-weight:800;cursor:pointer}
-@media(max-width:72rem){.builder-shell{grid-template-columns:1fr}.builder-controls{border-right:0;border-bottom:1px solid #e5e2da}.launch-grid{grid-template-columns:1fr 1fr}.order-card{grid-column:1/-1}.concept-intro{grid-template-columns:1fr}.concept-intro>p{max-width:46rem}}
-@media(max-width:44rem){.concept-builder{padding-inline:.75rem}.handoff-form{grid-template-columns:1fr}.handoff-form .consent{grid-column:auto}.concept-intro h1{font-size:2.55rem}.entry-tabs,.diagnosis-form,.diagnosis-comparison{grid-template-columns:1fr}.comparison-arrow{transform:rotate(90deg);justify-self:center}.site-types{grid-template-columns:1fr}.module-grid{grid-template-columns:1fr}.preview-column{padding:.45rem}.preview-toolbar{grid-template-columns:1fr 2fr}.window-dots{display:none}.site-stage{min-height:32rem}.generated-nav nav{display:none}.generated-hero>*{max-width:100%}.generated-hero::after{opacity:.22}.trust-strip{padding:1rem}.preview-editorial{grid-template-columns:1fr;padding:1.2rem}.preview-evidence{align-items:flex-start;flex-direction:column}.launch-config>header,.launch-grid{grid-template-columns:1fr}.order-card{grid-column:auto}.handoff-path{align-items:flex-start;flex-direction:column}.handoff-path i{transform:rotate(90deg)}}
-</style>
