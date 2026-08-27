@@ -1990,3 +1990,260 @@ export const managedSiteShopifyWebhooks = mysqlTable('managedSiteShopifyWebhooks
 
 export type ManagedSiteShopifyAuthorization = typeof managedSiteShopifyAuthorizations.$inferSelect
 export type ManagedSiteShopifyWebhook = typeof managedSiteShopifyWebhooks.$inferSelect
+
+/** GEO outcome observation runs: metadata only; raw provider responses and credentials are never stored. */
+export const geoOutcomeObservationRuns = mysqlTable('geoOutcomeObservationRuns', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId'),
+  clientId: varchar('clientId', { length: 128 }),
+  runIdentity: varchar('runIdentity', { length: 160 }).notNull(),
+  engine: varchar('engine', { length: 96 }).notNull(),
+  model: varchar('model', { length: 160 }).notNull(),
+  modelVersion: varchar('modelVersion', { length: 160 }),
+  interface: varchar('interface', { length: 96 }).notNull(),
+  locale: varchar('locale', { length: 32 }).notNull(),
+  region: varchar('region', { length: 64 }),
+  observationWindowStart: timestamp('observationWindowStart').notNull(),
+  observationWindowEnd: timestamp('observationWindowEnd').notNull(),
+  runTimestamp: timestamp('runTimestamp').notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['received', 'verified', 'stale', 'revoked']).default('received').notNull(),
+  runFingerprint: varchar('runFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_runs_owner_identity_unique').on(table.ownerUserId, table.runIdentity),
+  uniqueIndex('geo_outcome_runs_fingerprint_unique').on(table.ownerUserId, table.runFingerprint),
+  index('geo_outcome_runs_owner_time_idx').on(table.ownerUserId, table.runTimestamp),
+])
+
+/** GEO outcome candidates: de-identified hashes and normalized contract fields only. */
+export const geoOutcomeObservationCandidates = mysqlTable('geoOutcomeObservationCandidates', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  observationRunId: int('observationRunId').notNull().references(() => geoOutcomeObservationRuns.id),
+  websiteIdentityHash: varchar('websiteIdentityHash', { length: 128 }).notNull(),
+  queryIdentityHash: varchar('queryIdentityHash', { length: 128 }).notNull(),
+  normalizedQueryHash: varchar('normalizedQueryHash', { length: 128 }).notNull(),
+  candidatePageIdentityHash: varchar('candidatePageIdentityHash', { length: 128 }).notNull(),
+  canonicalPageHash: varchar('canonicalPageHash', { length: 128 }).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  publicationReceiptFingerprint: varchar('publicationReceiptFingerprint', { length: 128 }),
+  observableStatus: varchar('observableStatus', { length: 48 }).notNull(),
+  retrievalStatus: varchar('retrievalStatus', { length: 48 }).notNull(),
+  citationStatus: varchar('citationStatus', { length: 48 }).notNull(),
+  citationPosition: int('citationPosition'),
+  mentionStatus: varchar('mentionStatus', { length: 48 }).notNull(),
+  recommendationStatus: varchar('recommendationStatus', { length: 48 }).notNull(),
+  labelBasis: varchar('labelBasis', { length: 96 }).notNull(),
+  verificationStatus: varchar('verificationStatus', { length: 48 }).notNull(),
+  consentStatus: mysqlEnum('consentStatus', ['approved', 'revoked', 'unknown']).default('unknown').notNull(),
+  piiStatus: mysqlEnum('piiStatus', ['clean', 'contains_pii', 'unknown']).default('unknown').notNull(),
+  verificationAuthority: varchar('verificationAuthority', { length: 96 }).default('none').notNull(),
+  intakeFingerprint: varchar('intakeFingerprint', { length: 128 }).notNull(),
+  reviewFingerprint: varchar('reviewFingerprint', { length: 128 }),
+  observationPayload: json('observationPayload').notNull(),
+  evidenceLocatorHashes: json('evidenceLocatorHashes').notNull(),
+  appliedRuleHashes: json('appliedRuleHashes').notNull(),
+  contentFeatureVector: json('contentFeatureVector').notNull(),
+  observationFingerprint: varchar('observationFingerprint', { length: 128 }).notNull(),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_candidates_owner_identity_unique').on(table.ownerUserId, table.observationRunId, table.candidatePageIdentityHash),
+  uniqueIndex('geo_outcome_candidates_fingerprint_unique').on(table.ownerUserId, table.observationFingerprint),
+  index('geo_outcome_candidates_owner_query_idx').on(table.ownerUserId, table.normalizedQueryHash, table.observationRunId),
+])
+
+export const geoOutcomeDatasetManifests = mysqlTable('geoOutcomeDatasetManifests', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  manifestId: varchar('manifestId', { length: 160 }).notNull(),
+  schemaVersion: varchar('schemaVersion', { length: 96 }).notNull(),
+  taskType: mysqlEnum('taskType', ['citation_selection', 'structural_readiness_auxiliary']).notNull(),
+  featureCatalogVersion: varchar('featureCatalogVersion', { length: 128 }).notNull(),
+  labelContractVersion: varchar('labelContractVersion', { length: 128 }).notNull(),
+  hardNegativePolicyVersion: varchar('hardNegativePolicyVersion', { length: 128 }).notNull(),
+  sourceObservationFingerprints: json('sourceObservationFingerprints').notNull(),
+  sourceBasisCounts: json('sourceBasisCounts').notNull(),
+  engineCounts: json('engineCounts').notNull(),
+  localeCounts: json('localeCounts').notNull(),
+  websiteCount: int('websiteCount').notNull(),
+  queryGroupCount: int('queryGroupCount').notNull(),
+  positiveCount: int('positiveCount').notNull(),
+  hardNegativeCount: int('hardNegativeCount').notNull(),
+  observationStart: timestamp('observationStart'),
+  observationEnd: timestamp('observationEnd'),
+  splitPolicyVersion: varchar('splitPolicyVersion', { length: 128 }).notNull(),
+  splitFingerprints: json('splitFingerprints').notNull(),
+  manifestFingerprint: varchar('manifestFingerprint', { length: 128 }).notNull(),
+  limitations: json('limitations').notNull(),
+  readiness: json('readiness').notNull(),
+  status: mysqlEnum('status', ['draft', 'gate_blocked', 'ready_for_review', 'approved', 'revoked', 'archived']).default('draft').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_datasets_owner_manifest_unique').on(table.ownerUserId, table.manifestId),
+  uniqueIndex('geo_outcome_datasets_fingerprint_unique').on(table.ownerUserId, table.manifestFingerprint),
+  index('geo_outcome_datasets_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+])
+
+export const geoOutcomeDatasetMembers = mysqlTable('geoOutcomeDatasetMembers', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  datasetManifestId: int('datasetManifestId').notNull().references(() => geoOutcomeDatasetManifests.id),
+  observationFingerprint: varchar('observationFingerprint', { length: 128 }).notNull(),
+  websiteIdentityHash: varchar('websiteIdentityHash', { length: 128 }).notNull(),
+  normalizedQueryHash: varchar('normalizedQueryHash', { length: 128 }).notNull(),
+  runIdentity: varchar('runIdentity', { length: 160 }).notNull(),
+  queryGroupKey: varchar('queryGroupKey', { length: 128 }).notNull(),
+  label: mysqlEnum('label', ['positive', 'hard_negative']).notNull(),
+  splitAssignment: mysqlEnum('splitAssignment', ['train', 'validation', 'test', 'site_holdout', 'query_holdout', 'temporal_holdout']).notNull(),
+  consentStatus: mysqlEnum('consentStatus', ['approved', 'revoked', 'unknown']).default('unknown').notNull(),
+  piiStatus: mysqlEnum('piiStatus', ['clean', 'contains_pii', 'unknown']).default('unknown').notNull(),
+  reviewFingerprint: varchar('reviewFingerprint', { length: 128 }),
+  featureVector: json('featureVector').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_members_manifest_observation_unique').on(table.datasetManifestId, table.observationFingerprint),
+  index('geo_outcome_members_owner_query_idx').on(table.ownerUserId, table.normalizedQueryHash),
+])
+
+export const geoOutcomeTrainingRuns = mysqlTable('geoOutcomeTrainingRuns', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  trainingRunId: varchar('trainingRunId', { length: 160 }).notNull(),
+  datasetManifestId: int('datasetManifestId').notNull().references(() => geoOutcomeDatasetManifests.id),
+  modelFamily: mysqlEnum('modelFamily', ['regularized_logistic_baseline_v1', 'pairwise_logistic_ranker_v1']).notNull(),
+  status: mysqlEnum('status', ['queued', 'running', 'completed', 'blocked', 'failed']).default('queued').notNull(),
+  startedAt: timestamp('startedAt'),
+  completedAt: timestamp('completedAt'),
+  leaseOwner: varchar('leaseOwner', { length: 128 }),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
+  version: int('version').default(0).notNull(),
+  configuration: json('configuration').notNull(),
+  artifactId: varchar('artifactId', { length: 160 }),
+  artifactHash: varchar('artifactHash', { length: 128 }),
+  metrics: json('metrics'),
+  reason: varchar('reason', { length: 500 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_training_owner_id_unique').on(table.ownerUserId, table.trainingRunId),
+  index('geo_outcome_training_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+])
+
+export const geoOutcomeModelArtifacts = mysqlTable('geoOutcomeModelArtifacts', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  artifactId: varchar('artifactId', { length: 160 }).notNull(),
+  artifactSchemaVersion: varchar('artifactSchemaVersion', { length: 128 }).notNull(),
+  taskType: mysqlEnum('taskType', ['citation_selection', 'structural_readiness_auxiliary']).notNull(),
+  modelFamily: mysqlEnum('modelFamily', ['regularized_logistic_baseline_v1', 'pairwise_logistic_ranker_v1']).notNull(),
+  modelVersion: varchar('modelVersion', { length: 128 }).notNull(),
+  featureCatalogVersion: varchar('featureCatalogVersion', { length: 128 }).notNull(),
+  labelContractVersion: varchar('labelContractVersion', { length: 128 }).notNull(),
+  datasetManifestFingerprint: varchar('datasetManifestFingerprint', { length: 128 }).notNull(),
+  splitManifestFingerprint: varchar('splitManifestFingerprint', { length: 128 }).notNull(),
+  coefficients: json('coefficients').notNull(),
+  intercept: decimal('intercept', { precision: 24, scale: 12 }).notNull(),
+  normalizationStatistics: json('normalizationStatistics').notNull(),
+  trainingConfiguration: json('trainingConfiguration').notNull(),
+  trainingRowCount: int('trainingRowCount').notNull(),
+  evaluationMetrics: json('evaluationMetrics').notNull(),
+  limitations: json('limitations').notNull(),
+  artifactFingerprint: varchar('artifactFingerprint', { length: 128 }).notNull(),
+  artifactHash: varchar('artifactHash', { length: 128 }).notNull(),
+  rollbackArtifactHash: varchar('rollbackArtifactHash', { length: 128 }),
+  status: mysqlEnum('status', ['development', 'evaluation_failed', 'ready_for_owner_review', 'approved_for_shadow', 'shadow_failed', 'revoked', 'archived']).default('development').notNull(),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_artifacts_owner_id_unique').on(table.ownerUserId, table.artifactId),
+  uniqueIndex('geo_outcome_artifacts_hash_unique').on(table.ownerUserId, table.artifactHash),
+  index('geo_outcome_artifacts_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+])
+
+/** Append-only owner decision ledger; application code intentionally exposes no update/delete operation. */
+export const geoOutcomeModelDecisions = mysqlTable('geoOutcomeModelDecisions', {
+  id: int('id').autoincrement().primaryKey(),
+  decisionId: varchar('decisionId', { length: 160 }).notNull().unique(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  modelArtifactId: int('modelArtifactId').notNull().references(() => geoOutcomeModelArtifacts.id),
+  previousStatus: varchar('previousStatus', { length: 96 }).notNull(),
+  newStatus: varchar('newStatus', { length: 96 }).notNull(),
+  reviewerUserId: int('reviewerUserId').references(() => users.id),
+  reason: varchar('reason', { length: 500 }).notNull(),
+  artifactHash: varchar('artifactHash', { length: 128 }).notNull(),
+  datasetManifestHash: varchar('datasetManifestHash', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  index('geo_outcome_decisions_owner_artifact_idx').on(table.ownerUserId, table.modelArtifactId, table.createdAt),
+])
+
+export type GeoOutcomeObservationRun = typeof geoOutcomeObservationRuns.$inferSelect
+export type GeoOutcomeObservationCandidate = typeof geoOutcomeObservationCandidates.$inferSelect
+export type GeoOutcomeDatasetManifest = typeof geoOutcomeDatasetManifests.$inferSelect
+export type GeoOutcomeDatasetMember = typeof geoOutcomeDatasetMembers.$inferSelect
+export type GeoOutcomeTrainingRun = typeof geoOutcomeTrainingRuns.$inferSelect
+export type GeoOutcomeModelArtifact = typeof geoOutcomeModelArtifacts.$inferSelect
+export type GeoOutcomeModelDecision = typeof geoOutcomeModelDecisions.$inferSelect
+
+/** Durable mutation authority; unique owner/route/key claims prevent concurrent duplicate execution. */
+export const geoOutcomeIdempotencyClaims = mysqlTable('geoOutcomeIdempotencyClaims', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  routeIdentity: varchar('routeIdentity', { length: 160 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  state: mysqlEnum('state', ['claimed', 'completed', 'failed']).default('claimed').notNull(),
+  responseProjection: json('responseProjection'),
+  responseFingerprint: varchar('responseFingerprint', { length: 128 }),
+  leaseOwner: varchar('leaseOwner', { length: 128 }),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
+  version: int('version').default(0).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  completedAt: timestamp('completedAt'),
+}, table => [
+  uniqueIndex('geo_outcome_idempotency_owner_route_key_unique').on(table.ownerUserId, table.routeIdentity, table.idempotencyKey),
+  index('geo_outcome_idempotency_lease_idx').on(table.state, table.leaseExpiresAt),
+])
+
+/** Append-only verification authority ledger; intake cannot self-assert verified primary truth. */
+export const geoOutcomeObservationVerifications = mysqlTable('geoOutcomeObservationVerifications', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  observationFingerprint: varchar('observationFingerprint', { length: 128 }).notNull(),
+  reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
+  previousVerificationStatus: varchar('previousVerificationStatus', { length: 48 }).notNull(),
+  newVerificationStatus: varchar('newVerificationStatus', { length: 48 }).notNull(),
+  evidenceLocatorHash: varchar('evidenceLocatorHash', { length: 128 }),
+  factType: mysqlEnum('factType', ['evidence_verification', 'consent_review', 'pii_review', 'revocation']).notNull(),
+  factStatus: mysqlEnum('factStatus', ['approved', 'rejected', 'revoked']).notNull(),
+  reason: varchar('reason', { length: 500 }).notNull(),
+  decisionFingerprint: varchar('decisionFingerprint', { length: 128 }).notNull(),
+  consentStatus: mysqlEnum('consentStatus', ['approved', 'revoked', 'unknown']).notNull(),
+  piiStatus: mysqlEnum('piiStatus', ['clean', 'contains_pii', 'unknown']).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_verification_decision_unique').on(table.ownerUserId, table.decisionFingerprint),
+  index('geo_outcome_verification_observation_idx').on(table.ownerUserId, table.observationFingerprint, table.createdAt),
+])
+
+/** Server-resolved evidence references. Raw content, URLs, tokens and provider payloads are deliberately excluded. */
+export const geoOutcomeEvidenceLocators = mysqlTable('geoOutcomeEvidenceLocators', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  observationFingerprint: varchar('observationFingerprint', { length: 128 }).notNull(),
+  evidenceLocatorHash: varchar('evidenceLocatorHash', { length: 128 }).notNull(),
+  purpose: mysqlEnum('purpose', ['geo_outcome_verification']).notNull(),
+  artifactHash: varchar('artifactHash', { length: 128 }).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_evidence_locator_unique').on(table.ownerUserId, table.evidenceLocatorHash),
+  index('geo_outcome_evidence_observation_idx').on(table.ownerUserId, table.observationFingerprint),
+])
+
+export type GeoOutcomeIdempotencyClaim = typeof geoOutcomeIdempotencyClaims.$inferSelect
+export type GeoOutcomeObservationVerification = typeof geoOutcomeObservationVerifications.$inferSelect
+export type GeoOutcomeEvidenceLocator = typeof geoOutcomeEvidenceLocators.$inferSelect

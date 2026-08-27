@@ -2,7 +2,7 @@
 const config = useRuntimeConfig()
 const publicSiteOrigin = String(config.public.discoveryStackPublicSiteOrigin || 'https://www.example.com').replace(/\/$/, '')
 const route = useRoute()
-const activeSection = computed(() => route.path === '/audit-lab/geo' ? 'geo' : route.path === '/audit-lab/seo-geo' ? 'core' : route.path === '/audit-lab/llm-visibility' ? 'visibility' : route.path === '/audit-lab/content-operations' ? 'content-operations' : route.path === '/audit-lab/measurement-operations' ? 'measurement' : route.path === '/audit-lab/managed-sites' ? 'managed-sites' : 'audit')
+const activeSection = computed(() => route.path === '/audit-lab/geo' ? 'geo' : route.path === '/audit-lab/geo-outcome-model' ? 'geo-outcome-model' : route.path === '/audit-lab/seo-geo' ? 'core' : route.path === '/audit-lab/llm-visibility' ? 'visibility' : route.path === '/audit-lab/content-operations' ? 'content-operations' : route.path === '/audit-lab/measurement-operations' ? 'measurement' : route.path === '/audit-lab/managed-sites' ? 'managed-sites' : 'audit')
 useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
 </script>
 
@@ -13,6 +13,7 @@ useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
       <nav class="owner-layout__nav" aria-label="私有工作台導覽">
         <NuxtLink to="/audit-lab" :aria-current="activeSection === 'audit' ? 'page' : undefined">Audit Lab</NuxtLink>
         <NuxtLink to="/audit-lab/geo" :aria-current="activeSection === 'geo' ? 'page' : undefined">GEO Workbench</NuxtLink>
+        <NuxtLink to="/audit-lab/geo-outcome-model" :aria-current="activeSection === 'geo-outcome-model' ? 'page' : undefined">GEO 模型</NuxtLink>
         <NuxtLink to="/audit-lab/seo-geo" :aria-current="activeSection === 'core' ? 'page' : undefined">SEO / GEO Core</NuxtLink>
         <NuxtLink to="/audit-lab/llm-visibility" :aria-current="activeSection === 'visibility' ? 'page' : undefined">LLM Visibility</NuxtLink>
         <NuxtLink to="/audit-lab/content-operations" :aria-current="activeSection === 'content-operations' ? 'page' : undefined">內容營運</NuxtLink>
