@@ -112,3 +112,19 @@ temp/
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json
 .project-config.json
+
+# DiscoveryStack ML private data and runtime artifacts
+private_training/
+**/discoverystack-manifest-*.jsonl
+**/source-cards-*.jsonl
+**/manifest-*.jsonl
+**/*.html
+**/*.htm
+**/*.zip
+**/*.pt
+**/*.pth
+**/*.safetensors
+**/*.pem
+**/*.key
+**/browser_profile/
+**/colab_capture/
