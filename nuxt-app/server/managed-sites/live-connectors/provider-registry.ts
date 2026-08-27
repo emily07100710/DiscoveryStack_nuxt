@@ -12,11 +12,17 @@ import {
   type ManagedSiteProviderReadiness,
   type ManagedSiteProviderReadinessItem,
 } from './types'
+import { MANAGED_SITE_PROVIDER_VERIFIERS, resolveManagedSiteProviderVerifier, type ManagedSiteProviderVerifierRegistry } from './provider-verifiers'
 
 const MAX_REGISTRY_BYTES = 64 * 1024
 const MAX_CREDENTIAL_BYTES = 8 * 1024
 const SENSITIVE_KEY = /(secret|token|password|authorization|api.?key|credential.?value)/iu
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u
+const CREDENTIAL_REFERENCE = /^(?:vault|secret-ref|kms|envref):[A-Za-z0-9][A-Za-z0-9._:/-]{2,154}$/u
+const TRANSPORT_CONFIGURATION_FIELDS = new Set(['endpointOrigin', 'model'])
+
+function isManagedSiteCredentialReference(value: unknown): value is string { return typeof value === 'string' && CREDENTIAL_REFERENCE.test(value) && !/(?:sk-[A-Za-z0-9]|bearer\s|-----BEGIN)/iu.test(value) }
+function isManagedSiteProviderKey(value: unknown): value is string { return typeof value === 'string' && value.length >= 1 && value.length <= 96 && /^[a-z0-9][a-z0-9._-]*$/u.test(value) && !value.includes('..') }
 
 function invalid(message: string): never { throw createError({ statusCode: 422, statusMessage: message }) }
 function conflict(message: string): never { throw createError({ statusCode: 409, statusMessage: message }) }
@@ -32,7 +38,7 @@ function safeTransportConfiguration(value: unknown): Record<string, string | num
   const entries = Object.entries(value as Record<string, unknown>)
   if (entries.length > 24) invalid('Transport configuration has too many fields.')
   for (const [key, item] of entries) {
-    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(key) || SENSITIVE_KEY.test(key)) invalid('Transport configuration contains a forbidden field.')
+    if (!TRANSPORT_CONFIGURATION_FIELDS.has(key) || !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(key) || SENSITIVE_KEY.test(key)) invalid('Transport configuration contains a forbidden or unsupported field.')
     if (item !== null && typeof item !== 'string' && typeof item !== 'number' && typeof item !== 'boolean') invalid('Transport configuration values must be bounded primitives.')
     if (typeof item === 'string' && (item.length > 2048 || CONTROL.test(item) || /(?:bearer\s+|-----BEGIN|sk-[A-Za-z0-9])/iu.test(item))) invalid('Transport configuration must not contain credential material.')
     if (typeof item === 'number' && !Number.isSafeInteger(item)) invalid('Transport configuration contains an invalid number.')
@@ -50,7 +56,7 @@ function parseCredentialRegistry(raw: string | undefined): CredentialRegistry | 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || ![Object.prototype, null].includes(Object.getPrototypeOf(parsed))) return null
   const registry: CredentialRegistry = Object.create(null)
   for (const [reference, value] of Object.entries(parsed as Record<string, unknown>)) {
-    if (!isOpaqueReference(reference, 160) || typeof value !== 'string' || value.length < 1 || Buffer.byteLength(value, 'utf8') > MAX_CREDENTIAL_BYTES || CONTROL.test(value)) return null
+    if (!isManagedSiteCredentialReference(reference) || typeof value !== 'string' || value.length < 1 || Buffer.byteLength(value, 'utf8') > MAX_CREDENTIAL_BYTES || CONTROL.test(value)) return null
     registry[reference] = value
   }
   return registry
@@ -58,7 +64,7 @@ function parseCredentialRegistry(raw: string | undefined): CredentialRegistry | 
 
 /** Resolves an opaque reference from an injected server-only registry. Values never enter projections or logs. */
 export function resolveManagedSiteCredential(credentialReference: string): ManagedSiteCredentialResolution {
-  if (!isOpaqueReference(credentialReference, 160)) return { ok: false, reason: 'invalid_reference' }
+  if (!isManagedSiteCredentialReference(credentialReference)) return { ok: false, reason: 'invalid_reference' }
   const registry = parseCredentialRegistry(process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON)
   if (!registry) return { ok: false, reason: 'registry_unavailable' }
   const value = registry[credentialReference]
@@ -78,14 +84,16 @@ export async function configureManagedSiteProvider(
 ) {
   if (!Number.isSafeInteger(ownerUserId) || ownerUserId < 1) invalid('Owner identity is invalid.')
   if (!isCapability(input.capability)) invalid('Provider capability is invalid.')
-  if (!isOpaqueReference(input.providerKey, 96)) invalid('Provider key is invalid.')
+  if (!isManagedSiteProviderKey(input.providerKey)) invalid('Provider key is invalid.')
   if (!['disabled', 'mock', 'configured'].includes(input.readinessStatus)) invalid('Provider readiness status cannot be caller-promoted to verified or blocked.')
   if (!isOpaqueReference(input.idempotencyKey, 128)) invalid('Provider configuration idempotency key is invalid.')
   const credentialReference = input.credentialReference == null || input.credentialReference === '' ? null : input.credentialReference
-  if (credentialReference !== null && !isOpaqueReference(credentialReference, 160)) invalid('Credential reference is invalid.')
+  if (credentialReference !== null && !isManagedSiteCredentialReference(credentialReference)) invalid('Credential reference must be an opaque server registry reference, not credential material.')
   if (input.readinessStatus === 'configured' && credentialReference === null) invalid('Configured providers require an opaque credential reference.')
   if (input.readinessStatus === 'mock' && process.env.NODE_ENV !== 'test') invalid('Mock provider configuration is restricted to the test runtime.')
   const transportConfiguration = safeTransportConfiguration(input.transportConfiguration)
+  const allowedTransportFields = input.providerKey === 'bailian-qwen' && input.capability === 'website_generator' ? new Set(['endpointOrigin', 'model']) : input.providerKey === 'internal-deployment-bearer-v1' && input.capability === 'deployment' ? new Set(['endpointOrigin']) : new Set<string>()
+  if (Object.keys(transportConfiguration).some(key => !allowedTransportFields.has(key))) invalid('Transport configuration is not allowlisted for this exact provider and capability.')
   const configurationFingerprint = stableFingerprint({ capability: input.capability, providerKey: input.providerKey, readinessStatus: input.readinessStatus, credentialReference, transportConfiguration })
   const existing = await repository.findProviderConfiguration(ownerUserId, input.capability)
   const sameFingerprint = await repository.findProviderConfigurationByFingerprint(ownerUserId, configurationFingerprint)
@@ -93,7 +101,7 @@ export async function configureManagedSiteProvider(
   const now = clock()
   if (existing) {
     if (existing.configurationFingerprint === configurationFingerprint) return { configuration: existing, replayed: true }
-    const configuration = await repository.updateProviderConfiguration(existing.id, {
+    const configuration = await repository.updateProviderConfiguration(ownerUserId, existing.id, {
       providerKey: input.providerKey,
       readinessStatus: input.readinessStatus,
       credentialReference,
@@ -115,6 +123,8 @@ export type ManagedSiteProviderVerificationReceipt = {
   providerKey: string
   configurationFingerprint: string
   providerAccountId: string
+  providerEventId: string
+  payloadHash: string
   exactResponseIdentity: string
   observedAt: string
 }
@@ -122,29 +132,29 @@ export type ManagedSiteProviderVerificationReceipt = {
 export async function verifyManagedSiteProviderConfiguration(
   ownerUserId: number,
   capability: ManagedSiteConnectorCapability,
-  verifier: (input: { configuration: { providerKey: string; transportConfiguration: unknown }; credentialReference: string; resolveCredential: ManagedSiteCredentialResolver }) => Promise<ManagedSiteProviderVerificationReceipt>,
   repository: ManagedSiteLiveConnectorRepository = getManagedSiteLiveConnectorRepository(),
   credentialResolver: ManagedSiteCredentialResolver = resolveManagedSiteCredential,
   clock: () => Date = () => new Date(),
+  verifierRegistry: ManagedSiteProviderVerifierRegistry = MANAGED_SITE_PROVIDER_VERIFIERS,
+  fetchImpl?: typeof fetch,
 ) {
   const configuration = await repository.findProviderConfiguration(ownerUserId, capability)
   if (!configuration || configuration.readinessStatus !== 'configured' || !configuration.credentialReference) conflict('Provider must be configured before server verification.')
   const credential = await credentialResolver(configuration.credentialReference)
-  if (!credential.ok) {
-    await repository.updateProviderConfiguration(configuration.id, { readinessStatus: 'blocked', blockedReasonCode: 'CREDENTIAL_REFERENCE_UNRESOLVED', verificationReceiptFingerprint: null, verifiedAt: null })
-    conflict('Provider credential reference could not be resolved.')
-  }
+  if (!credential.ok) conflict('Provider credential reference could not be resolved; configuration remains configured.')
+  const verifier = resolveManagedSiteProviderVerifier(configuration.providerKey, capability, verifierRegistry)
   let receipt: ManagedSiteProviderVerificationReceipt
   try {
-    receipt = await verifier({ configuration: { providerKey: configuration.providerKey, transportConfiguration: configuration.transportConfiguration }, credentialReference: configuration.credentialReference, resolveCredential: credentialResolver })
-  } catch {
-    await repository.updateProviderConfiguration(configuration.id, { readinessStatus: 'blocked', blockedReasonCode: 'PROVIDER_VERIFICATION_FAILED', verificationReceiptFingerprint: null, verifiedAt: null })
-    conflict('Provider verification failed without exposing provider details.')
+    receipt = await verifier({ capability, providerKey: configuration.providerKey, configurationFingerprint: configuration.configurationFingerprint, transportConfiguration: configuration.transportConfiguration as Record<string, unknown>, credentialReference: configuration.credentialReference, resolveCredential: credentialResolver, fetchImpl, clock })
+  } catch (error) {
+    if (error && typeof error === 'object' && 'statusCode' in error) throw error
+    conflict('Provider verification failed without changing provider readiness.')
   }
   const observedAt = new Date(receipt.observedAt)
-  if (receipt.capability !== capability || receipt.providerKey !== configuration.providerKey || receipt.configurationFingerprint !== configuration.configurationFingerprint || !isOpaqueReference(receipt.providerAccountId, 160) || !isOpaqueReference(receipt.exactResponseIdentity, 256) || !Number.isFinite(observedAt.getTime())) conflict('Provider verification receipt identity is incomplete or mismatched.')
+  const verifiedAt = clock()
+  if (receipt.capability !== capability || receipt.providerKey !== configuration.providerKey || receipt.configurationFingerprint !== configuration.configurationFingerprint || !isOpaqueReference(receipt.providerAccountId, 160) || !isOpaqueReference(receipt.providerEventId, 160) || !/^[a-f0-9]{64}$/u.test(receipt.payloadHash) || !isOpaqueReference(receipt.exactResponseIdentity, 256) || !Number.isFinite(observedAt.getTime()) || Math.abs(verifiedAt.getTime() - observedAt.getTime()) > 10 * 60_000) conflict('Provider verification receipt identity or timestamp is incomplete or mismatched.')
   const receiptFingerprint = stableFingerprint(receipt)
-  const verified = await repository.updateProviderConfiguration(configuration.id, { readinessStatus: 'verified', blockedReasonCode: null, verificationReceiptFingerprint: receiptFingerprint, verifiedAt: clock() })
+  const verified = await repository.verifyProviderConfigurationCas(ownerUserId, configuration.id, configuration.configurationFingerprint, { readinessStatus: 'verified', blockedReasonCode: null, verificationReceiptFingerprint: receiptFingerprint, verifiedAt })
   if (!verified) conflict('Provider configuration changed before verification completed.')
   return { configuration: verified, receiptFingerprint }
 }

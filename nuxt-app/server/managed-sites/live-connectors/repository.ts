@@ -4,8 +4,11 @@ import { getDatabase } from '../../database'
 import {
   managedSiteConnectorAttempts,
   managedSiteConnectorReceipts,
+  managedSiteDomainClaims,
+  managedSiteGateResults,
   managedSiteGenerationCandidates,
   managedSiteProviderConfigurations,
+  managedSitePrePurchaseBindings,
   managedSiteReleaseProjections,
 } from '../../database/schema'
 import type { ManagedSiteLiveConnectorRepository } from './types'
@@ -56,10 +59,37 @@ export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSi
         throw createError({ statusCode: 409, statusMessage: 'Managed-site provider configuration collides with an existing owner-scoped record.' })
       }
     },
-    async updateProviderConfiguration(id, patch) {
-      await database.update(managedSiteProviderConfigurations).set(patch as any).where(eq(managedSiteProviderConfigurations.id, id))
-      const [row] = await database.select().from(managedSiteProviderConfigurations).where(eq(managedSiteProviderConfigurations.id, id)).limit(1)
+    async updateProviderConfiguration(ownerUserId, id, patch) {
+      await database.update(managedSiteProviderConfigurations).set(patch as any).where(and(eq(managedSiteProviderConfigurations.ownerUserId, ownerUserId), eq(managedSiteProviderConfigurations.id, id)))
+      const [row] = await database.select().from(managedSiteProviderConfigurations).where(and(eq(managedSiteProviderConfigurations.ownerUserId, ownerUserId), eq(managedSiteProviderConfigurations.id, id))).limit(1)
       return row || null
+    },
+    async verifyProviderConfigurationCas(ownerUserId, id, expectedFingerprint, patch) {
+      const result = await database.update(managedSiteProviderConfigurations).set(patch as any).where(and(eq(managedSiteProviderConfigurations.ownerUserId, ownerUserId), eq(managedSiteProviderConfigurations.id, id), eq(managedSiteProviderConfigurations.configurationFingerprint, expectedFingerprint), eq(managedSiteProviderConfigurations.readinessStatus, 'configured')))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      const rows = await repository.listProviderConfigurations(ownerUserId)
+      return rows.find(item => item.id === id) || null
+    },
+    async findPrePurchaseBinding(ownerUserId, projectId) {
+      const [row] = await database.select().from(managedSitePrePurchaseBindings).where(and(eq(managedSitePrePurchaseBindings.ownerUserId, ownerUserId), eq(managedSitePrePurchaseBindings.projectId, projectId))).limit(1)
+      return row || null
+    },
+    async findPrePurchaseBindingByIdempotency(ownerUserId, idempotencyKey) {
+      const [row] = await database.select().from(managedSitePrePurchaseBindings).where(and(eq(managedSitePrePurchaseBindings.ownerUserId, ownerUserId), eq(managedSitePrePurchaseBindings.idempotencyKey, idempotencyKey))).limit(1)
+      return row || null
+    },
+    async insertPrePurchaseBinding(input) {
+      try {
+        const id = rowId(await database.insert(managedSitePrePurchaseBindings).values(input as any))
+        const [row] = await database.select().from(managedSitePrePurchaseBindings).where(eq(managedSitePrePurchaseBindings.id, id)).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed-site pre-purchase binding could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!duplicate(error)) throw error
+        const replay = await repository.findPrePurchaseBindingByIdempotency(input.ownerUserId, input.idempotencyKey)
+        if (replay?.requestFingerprint === input.requestFingerprint) return replay
+        throw createError({ statusCode: 409, statusMessage: 'Pre-purchase project or order is already bound to different commercial authority.' })
+      }
     },
     async findGenerationCandidate(ownerUserId, candidateId) {
       const [row] = await database.select().from(managedSiteGenerationCandidates).where(and(eq(managedSiteGenerationCandidates.ownerUserId, ownerUserId), eq(managedSiteGenerationCandidates.id, candidateId))).limit(1)
@@ -110,12 +140,57 @@ export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSi
         throw createError({ statusCode: 409, statusMessage: 'Managed-site release identity collides with another project or version.' })
       }
     },
-    async updateRelease(ownerUserId, releaseId, patch) {
-      await database.update(managedSiteReleaseProjections).set(patch as any).where(and(eq(managedSiteReleaseProjections.ownerUserId, ownerUserId), eq(managedSiteReleaseProjections.id, releaseId)))
+    async transitionRelease(ownerUserId, releaseId, expectedStatus, expectedProjectionFingerprint, patch) {
+      const result = await database.update(managedSiteReleaseProjections).set(patch as any).where(and(eq(managedSiteReleaseProjections.ownerUserId, ownerUserId), eq(managedSiteReleaseProjections.id, releaseId), eq(managedSiteReleaseProjections.status, expectedStatus), eq(managedSiteReleaseProjections.projectionFingerprint, expectedProjectionFingerprint)))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
       return repository.findRelease(ownerUserId, releaseId)
     },
     async listReleases(ownerUserId, projectId) {
       return database.select().from(managedSiteReleaseProjections).where(and(eq(managedSiteReleaseProjections.ownerUserId, ownerUserId), eq(managedSiteReleaseProjections.projectId, projectId))).orderBy(desc(managedSiteReleaseProjections.createdAt)).limit(100)
+    },
+    async insertGateResult(input) {
+      try {
+        const id = rowId(await database.insert(managedSiteGateResults).values(input as any))
+        const [row] = await database.select().from(managedSiteGateResults).where(and(eq(managedSiteGateResults.ownerUserId, input.ownerUserId), eq(managedSiteGateResults.id, id))).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed-site gate result could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!duplicate(error)) throw error
+        const rows = await repository.listGateResults(input.ownerUserId, input.releaseId)
+        const replay = rows.find(row => row.gateType === input.gateType && row.inputFingerprint === input.inputFingerprint)
+        if (replay?.receiptFingerprint === input.receiptFingerprint) return replay
+        throw createError({ statusCode: 409, statusMessage: 'Managed-site gate result collided with another immutable observation.' })
+      }
+    },
+    async listGateResults(ownerUserId, releaseId) {
+      return database.select().from(managedSiteGateResults).where(and(eq(managedSiteGateResults.ownerUserId, ownerUserId), eq(managedSiteGateResults.releaseId, releaseId))).orderBy(asc(managedSiteGateResults.gateType), desc(managedSiteGateResults.observedAt)).limit(100)
+    },
+    async findDomainClaim(canonicalDomain) {
+      const [row] = await database.select().from(managedSiteDomainClaims).where(eq(managedSiteDomainClaims.canonicalDomain, canonicalDomain)).limit(1)
+      return row || null
+    },
+    async findDomainClaimByIdempotency(ownerUserId, idempotencyKey) {
+      const [row] = await database.select().from(managedSiteDomainClaims).where(and(eq(managedSiteDomainClaims.ownerUserId, ownerUserId), eq(managedSiteDomainClaims.idempotencyKey, idempotencyKey))).limit(1)
+      return row || null
+    },
+    async insertDomainClaim(input) {
+      try {
+        const id = rowId(await database.insert(managedSiteDomainClaims).values(input as any))
+        const [row] = await database.select().from(managedSiteDomainClaims).where(eq(managedSiteDomainClaims.id, id)).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed-site domain claim could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!duplicate(error)) throw error
+        const replay = await repository.findDomainClaimByIdempotency(input.ownerUserId, input.idempotencyKey)
+        if (replay?.requestFingerprint === input.requestFingerprint) return replay
+        throw createError({ statusCode: 409, statusMessage: 'Canonical domain is already claimed by another owner, project, or release.' })
+      }
+    },
+    async transitionDomainClaim(ownerUserId, claimId, expectedStatus, expectedProjectionFingerprint, patch) {
+      const result = await database.update(managedSiteDomainClaims).set(patch as any).where(and(eq(managedSiteDomainClaims.ownerUserId, ownerUserId), eq(managedSiteDomainClaims.id, claimId), eq(managedSiteDomainClaims.status, expectedStatus), eq(managedSiteDomainClaims.projectionFingerprint, expectedProjectionFingerprint)))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      const [row] = await database.select().from(managedSiteDomainClaims).where(and(eq(managedSiteDomainClaims.ownerUserId, ownerUserId), eq(managedSiteDomainClaims.id, claimId))).limit(1)
+      return row || null
     },
     async findAttempt(ownerUserId, attemptId) {
       const [row] = await database.select().from(managedSiteConnectorAttempts).where(and(eq(managedSiteConnectorAttempts.ownerUserId, ownerUserId), eq(managedSiteConnectorAttempts.id, attemptId))).limit(1)

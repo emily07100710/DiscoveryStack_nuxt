@@ -1,19 +1,19 @@
 import { createError } from 'h3'
-import { assertPublicHttpsUrl } from '../../content-operations/normalization'
 import { isOpaqueReference } from '../../first-party-publishing/normalization'
 import type { ManagedSiteCredentialResolver, ManagedSiteDeploymentAdapter, ManagedSiteDeploymentReceipt } from './types'
+import { assertAllowedManagedSiteProviderOrigin } from './provider-verifiers'
 
-const RECEIPT_KEYS = new Set(['providerKey', 'providerEventId', 'providerDeploymentId', 'projectId', 'versionId', 'contentHash', 'canonicalDomain', 'deploymentUrl', 'status', 'exactResponseIdentity'])
+const RECEIPT_KEYS = new Set(['providerKey', 'providerEventId', 'providerDeploymentId', 'projectId', 'versionId', 'contentHash', 'canonicalDomain', 'deploymentUrl', 'status', 'observedAt', 'payloadHash', 'exactResponseIdentity'])
 
 function boundedReceipt(value: unknown): ManagedSiteDeploymentReceipt {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== RECEIPT_KEYS.size || Object.keys(value).some(key => !RECEIPT_KEYS.has(key))) throw createError({ statusCode: 502, statusMessage: 'Deployment provider returned a malformed receipt.' })
   return value as ManagedSiteDeploymentReceipt
 }
 
-/** Explicit production transport boundary. It sends only vault references and immutable identities, never source bytes or credentials in payloads. */
-export function createSignedManagedSiteDeploymentAdapter(options: { endpointOrigin: string; providerKey: string; credentialReference: string; resolveCredential: ManagedSiteCredentialResolver; fetchImpl?: typeof fetch }): ManagedSiteDeploymentAdapter {
-  const origin = assertPublicHttpsUrl(options.endpointOrigin, 'Managed deployment endpoint').replace(/\/$/u, '')
-  if (!isOpaqueReference(options.providerKey, 96) || !isOpaqueReference(options.credentialReference, 160)) throw createError({ statusCode: 503, statusMessage: 'Managed deployment transport configuration is invalid.' })
+/** Authenticated bearer production boundary. This is intentionally not described as signed; response authority is strict identity/hash validation. */
+export function createAuthenticatedBearerManagedSiteDeploymentAdapter(options: { endpointOrigin: string; providerKey: string; credentialReference: string; resolveCredential: ManagedSiteCredentialResolver; fetchImpl?: typeof fetch; allowedOrigins?: string }): ManagedSiteDeploymentAdapter {
+  const origin = assertAllowedManagedSiteProviderOrigin(options.endpointOrigin, options.allowedOrigins)
+  if (options.providerKey !== 'internal-deployment-bearer-v1' || !isOpaqueReference(options.credentialReference, 160)) throw createError({ statusCode: 503, statusMessage: 'Managed deployment transport configuration is invalid.' })
   const fetchImpl = options.fetchImpl || fetch
   const execute = async (operation: 'preview' | 'production' | 'rollback', payload: Record<string, unknown>, timeoutMs: number): Promise<ManagedSiteDeploymentReceipt> => {
     const credential = await options.resolveCredential(options.credentialReference)
@@ -31,7 +31,9 @@ export function createSignedManagedSiteDeploymentAdapter(options: { endpointOrig
     if (Buffer.byteLength(text, 'utf8') > 64_000) throw createError({ statusCode: 502, statusMessage: 'Deployment provider receipt exceeded the fixed response limit.' })
     let parsed: unknown
     try { parsed = JSON.parse(text) } catch { throw createError({ statusCode: 502, statusMessage: 'Deployment provider returned invalid JSON.' }) }
-    return boundedReceipt(parsed)
+    const receipt = boundedReceipt(parsed)
+    if (!Number.isFinite(Date.parse(receipt.observedAt)) || Math.abs(Date.now() - Date.parse(receipt.observedAt)) > 10 * 60_000 || !/^[a-f0-9]{64}$/u.test(receipt.payloadHash)) throw createError({ statusCode: 502, statusMessage: 'Deployment provider receipt timestamp or payload hash is invalid.' })
+    return receipt
   }
   return {
     async buildPreview(input) { return execute('preview', input as unknown as Record<string, unknown>, input.timeoutMs) },

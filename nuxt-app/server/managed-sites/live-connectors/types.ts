@@ -1,8 +1,11 @@
 import type {
   ManagedSiteConnectorAttempt,
   ManagedSiteConnectorReceipt,
+  ManagedSiteDomainClaim,
+  ManagedSiteGateResult,
   ManagedSiteGenerationCandidate,
   ManagedSiteProviderConfiguration,
+  ManagedSitePrePurchaseBinding,
   ManagedSiteReleaseProjection,
 } from '../../database/schema'
 
@@ -76,6 +79,41 @@ export type ManagedSiteGeneratedFile = {
   sha256: string
 }
 
+export type ManagedSiteBlueprintSectionV1 = {
+  sectionId: string
+  kind: 'hero' | 'summary' | 'services' | 'about' | 'contact' | 'blog_index' | 'shop_index' | 'faq' | 'module_slot'
+  heading: string
+  body: string
+  ctaLabel: string | null
+  ctaHref: string | null
+  moduleKey: string | null
+}
+
+export type ManagedSiteBlueprintV1 = {
+  schemaVersion: 'managed-site-blueprint-v1'
+  brandName: string
+  locale: 'en' | 'zh-hant'
+  siteType: 'one_page' | 'brand_blog' | 'simple_commerce'
+  navigation: Array<{ label: string; route: string }>
+  pages: Array<{ pageKey: 'home' | 'about' | 'services' | 'faq' | 'contact' | 'blog' | 'shop'; route: string; title: string; description: string; sections: ManagedSiteBlueprintSectionV1[] }>
+  faq: Array<{ question: string; answer: string }>
+  selectedModulePlacements: Array<{ moduleKey: string; pageKey: string; sectionId: string; mode: 'safe_placeholder' | 'first_party' }>
+  seoGeo: { summaryAnswer: string; canonicalPlaceholder: string; organizationName: string; evidenceLimitations: string[]; structuredDataKinds: Array<'Organization' | 'Service' | 'Product' | 'FAQPage'> }
+  provenance: { evidenceSnapshotHash: string; authoritySourceIds: string[]; providerContentHash: string }
+}
+
+export type ManagedSiteBlueprintProviderOutput = {
+  schemaVersion: 'managed-site-blueprint-provider-response-v1'
+  providerKey: string
+  providerModel: string
+  providerRequestId: string
+  requestFingerprint: string
+  blueprint: ManagedSiteBlueprintV1
+  blueprintHash: string
+}
+
+// The deterministic compiler output is intentionally separate from the model
+// blueprint envelope. Only first-party code may construct this artifact shape.
 export type ManagedSiteGenerationProviderOutput = {
   schemaVersion: 'managed-site-generation-provider-response-v1'
   providerKey: string
@@ -102,7 +140,7 @@ export type ManagedSiteGenerationAdapter = {
     resolveCredential: ManagedSiteCredentialResolver
     timeoutMs: number
     attemptNumber: number
-  }): Promise<ManagedSiteGenerationProviderOutput>
+  }): Promise<ManagedSiteBlueprintProviderOutput>
 }
 
 export type ManagedSitePaymentEventType = 'checkout_succeeded' | 'checkout_failed' | 'checkout_cancelled' | 'payment_refunded'
@@ -192,6 +230,8 @@ export type ManagedSiteDeploymentReceipt = {
   canonicalDomain: string
   deploymentUrl: string
   status: 'preview_ready' | 'production_verified' | 'rollback_verified'
+  observedAt: string
+  payloadHash: string
   exactResponseIdentity: string
 }
 
@@ -223,7 +263,11 @@ export type ManagedSiteLiveConnectorRepository = {
   listProviderConfigurations(ownerUserId: number): Promise<ManagedSiteProviderConfiguration[]>
   findProviderConfigurationByFingerprint(ownerUserId: number, fingerprint: string): Promise<ManagedSiteProviderConfiguration | null>
   insertProviderConfiguration(input: Omit<ManagedSiteProviderConfiguration, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteProviderConfiguration>
-  updateProviderConfiguration(id: number, patch: Partial<Omit<ManagedSiteProviderConfiguration, 'id' | 'ownerUserId' | 'capability' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteProviderConfiguration | null>
+  updateProviderConfiguration(ownerUserId: number, id: number, patch: Partial<Omit<ManagedSiteProviderConfiguration, 'id' | 'ownerUserId' | 'capability' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteProviderConfiguration | null>
+  verifyProviderConfigurationCas(ownerUserId: number, id: number, expectedFingerprint: string, patch: Partial<Omit<ManagedSiteProviderConfiguration, 'id' | 'ownerUserId' | 'capability' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteProviderConfiguration | null>
+  findPrePurchaseBinding(ownerUserId: number, projectId: number): Promise<ManagedSitePrePurchaseBinding | null>
+  findPrePurchaseBindingByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSitePrePurchaseBinding | null>
+  insertPrePurchaseBinding(input: Omit<ManagedSitePrePurchaseBinding, 'id' | 'createdAt'>): Promise<ManagedSitePrePurchaseBinding>
   findGenerationCandidate(ownerUserId: number, candidateId: number): Promise<ManagedSiteGenerationCandidate | null>
   findGenerationCandidateByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSiteGenerationCandidate | null>
   findGenerationCandidateByRequest(ownerUserId: number, requestFingerprint: string): Promise<ManagedSiteGenerationCandidate | null>
@@ -232,8 +276,14 @@ export type ManagedSiteLiveConnectorRepository = {
   findRelease(ownerUserId: number, releaseId: number): Promise<ManagedSiteReleaseProjection | null>
   findReleaseByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSiteReleaseProjection | null>
   insertRelease(input: Omit<ManagedSiteReleaseProjection, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteReleaseProjection>
-  updateRelease(ownerUserId: number, releaseId: number, patch: Partial<Omit<ManagedSiteReleaseProjection, 'id' | 'ownerUserId' | 'projectId' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteReleaseProjection | null>
+  transitionRelease(ownerUserId: number, releaseId: number, expectedStatus: ManagedSiteReleaseProjection['status'], expectedProjectionFingerprint: string, patch: Partial<Omit<ManagedSiteReleaseProjection, 'id' | 'ownerUserId' | 'projectId' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteReleaseProjection | null>
   listReleases(ownerUserId: number, projectId: number): Promise<ManagedSiteReleaseProjection[]>
+  insertGateResult(input: Omit<ManagedSiteGateResult, 'id'>): Promise<ManagedSiteGateResult>
+  listGateResults(ownerUserId: number, releaseId: number): Promise<ManagedSiteGateResult[]>
+  findDomainClaim(canonicalDomain: string): Promise<ManagedSiteDomainClaim | null>
+  findDomainClaimByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSiteDomainClaim | null>
+  insertDomainClaim(input: Omit<ManagedSiteDomainClaim, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteDomainClaim>
+  transitionDomainClaim(ownerUserId: number, claimId: number, expectedStatus: ManagedSiteDomainClaim['status'], expectedProjectionFingerprint: string, patch: Partial<Omit<ManagedSiteDomainClaim, 'id' | 'ownerUserId' | 'canonicalDomain' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteDomainClaim | null>
   findAttempt(ownerUserId: number, attemptId: number): Promise<ManagedSiteConnectorAttempt | null>
   findAttemptByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ManagedSiteConnectorAttempt | null>
   insertAttempt(input: Omit<ManagedSiteConnectorAttempt, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteConnectorAttempt>

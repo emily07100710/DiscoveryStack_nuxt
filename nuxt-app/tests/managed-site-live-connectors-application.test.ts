@@ -1,83 +1,72 @@
 import { createHmac, randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { createManagedSitePreview, createManagedSiteQuote, createManagedSiteDraftOrder, createManagedSiteLeadIntent } from '../server/managed-sites/ordering-service'
-import { configureManagedSiteProvider } from '../server/managed-sites/live-connectors/provider-registry'
-import { createLiveConnectorMemoryRepository } from './fixtures/managed-site/live-connectors-repository'
-import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
-import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
-import { createHmacRawBodyPaymentWebhookAdapter, createMemoryManagedSiteArtifactVault, createMockManagedSiteGenerationAdapter } from '../server/managed-sites/live-connectors/adapters'
+import { createMockRawBodyPaymentWebhookAdapter } from '../server/managed-sites/live-connectors/adapters'
 import { processManagedSiteRawPaymentWebhook } from '../server/managed-sites/live-connectors/payment-webhook'
-import { generateManagedSiteCandidate } from '../server/managed-sites/live-connectors/generation-service'
-import { approveManagedSitePreview, bindManagedSiteReleasePayment, buildManagedSitePreview, createGeneratedManagedSiteRelease, createMockManagedSiteDeploymentAdapter, deployManagedSiteProduction, activateManagedSiteGeoOperations } from '../server/managed-sites/live-connectors/deployment-orchestrator'
+import { activateManagedSiteGeoOperations, approveManagedSitePreview, bindManagedSiteReleasePayment, deployManagedSiteProduction } from '../server/managed-sites/live-connectors/deployment-orchestrator'
 import { createMockManagedSiteDnsTlsAdapter, createMockManagedSiteDomainAdapter, createManagedSiteDomainPurchaseIntent, executeManagedSiteDnsTls, managedSiteDomainConfirmationFingerprint, quoteManagedSiteDomain } from '../server/managed-sites/live-connectors/domain-connectors'
+import { createAuthoritativeManagedSiteReleaseFixture, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
 
-const ownerUserId = 1
-const fixedNow = new Date('2026-08-27T00:00:00.000Z')
+describe('managed-site authoritative mocked application path', () => {
+  it('generates and gates preview before checkout/payment, then requires exact domain/deploy receipts before GEO activation', async () => {
+    const line = await createAuthoritativeManagedSiteReleaseFixture()
+    expect(line.prePurchase.project.status).toBe('payment_pending')
+    expect(line.prePurchase.version.lifecycleStatus).toBe('draft')
+    expect(line.managed.state.subscriptions).toHaveLength(0)
+    const generationReceipt = line.live.state.receipts.find(receipt => receipt.receiptType === 'generation_candidate_admitted')!
+    const previewReceipt = line.live.state.receipts.find(receipt => receipt.receiptType === 'preview_build_verified')!
+    const checkoutReceipt = line.live.state.receipts.find(receipt => receipt.receiptType === 'checkout_session_created')!
+    expect(generationReceipt.id).toBeLessThan(previewReceipt.id)
+    expect(previewReceipt.id).toBeLessThan(checkoutReceipt.id)
+    expect(line.live.state.gates.filter(gate => gate.result === 'passed')).toHaveLength(6)
+    expect(line.live.state.receipts.some(receipt => receipt.receiptType === 'checkout_succeeded')).toBe(false)
 
-async function configureMocks(repository: ReturnType<typeof createLiveConnectorMemoryRepository>['repository']) {
-  const keys = { website_generator: 'mock-generator', payment: 'mock-payment', domain_registration: 'mock-domain', dns_tls: 'mock-dns-tls', deployment: 'mock-deployment' } as const
-  for (const [capability, providerKey] of Object.entries(keys)) await configureManagedSiteProvider(ownerUserId, { capability: capability as keyof typeof keys, providerKey, readinessStatus: 'mock', credentialReference: null, transportConfiguration: {}, idempotencyKey: `configure-${capability}` }, repository)
-}
-
-async function createCheckoutLineage(ordering: ReturnType<typeof createOrderingMemoryRepository>, website = 'https://new-live.acme.taipei') {
-  const preview = await createManagedSitePreview(ownerUserId, { draftIdentity: 'live-connectors-new-site', brandName: 'Live Connector Client', audience: 'Taiwan service buyers', brief: 'A governed evidence-safe managed website.', businessGoals: ['increase_inquiries', 'improve_search_ai_understanding'], siteType: 'brand_blog', selectedModules: ['managed_content_admin', 'geo_content_subscription', 'geo_measurement_dashboard'], styleReferences: [] }, ordering.repository, () => fixedNow)
-  const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 7, domainOption: 'new', idempotencyKey: 'live-quote-001' }, ordering.repository, () => fixedNow)
-  const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Managed Owner', email: 'owner@live-connectors.invalid', company: 'Live Connector Client', website, privacyConsent: true, recontactConsent: false, idempotencyKey: 'live-lead-001' }, ordering.repository, () => fixedNow)
-  const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'live-order-001' }, ordering.repository, () => fixedNow)
-  return { preview, quote, lead, order }
-}
-
-describe('managed-site live connectors mocked application path', () => {
-  it('runs generation candidate to preview approval, verified checkout, domain/DNS/TLS/deployment receipts, live, then canonical GEO activation', async () => {
-    const live = createLiveConnectorMemoryRepository()
-    const managed = createManagedSiteMemoryRepository()
-    const ordering = createOrderingMemoryRepository()
-    await configureMocks(live.repository)
-    const checkout = await createCheckoutLineage(ordering)
     const webhookCredential = randomBytes(32).toString('hex')
-    const webhookPayload = { providerKey: 'mock-payment', providerEventId: 'payment-success-001', providerReference: 'payment-ref-001', eventType: 'checkout_succeeded', draftOrderId: checkout.order.order.id, amountMinor: checkout.quote.quote.totalMinor, currency: checkout.quote.quote.currency, occurredAt: fixedNow.toISOString(), exactResponseIdentity: 'payment-response:success-001' }
-    const rawBody = Buffer.from(JSON.stringify(webhookPayload))
-    const signatureHeader = createHmac('sha256', webhookCredential).update(rawBody).digest('hex')
-    const payment = await processManagedSiteRawPaymentWebhook({ rawBody, signatureHeader, credentialReference: 'vault:payment-webhook-test', executionMode: 'mocked' }, createHmacRawBodyPaymentWebhookAdapter('mock-payment'), { connectorRepository: live.repository, orderingRepository: ordering.repository, managedRepository: managed.repository, credentialResolver: async reference => reference === 'vault:payment-webhook-test' ? { ok: true, value: webhookCredential } : { ok: false, reason: 'missing_reference' }, clock: () => fixedNow })
+    const event = { providerKey: 'mock-payment', providerEventId: 'payment-success-authoritative-001', providerReference: 'payment-ref-authoritative-001', eventType: 'checkout_succeeded', draftOrderId: line.order.order.id, amountMinor: line.quote.quote.totalMinor, currency: line.quote.quote.currency, occurredAt: managedSiteFixedNow.toISOString(), exactResponseIdentity: 'payment-response:authoritative-001' }
+    const rawBody = Buffer.from(JSON.stringify(event)); const signatureHeader = createHmac('sha256', webhookCredential).update(rawBody).digest('hex')
+    const payment = await processManagedSiteRawPaymentWebhook({ rawBody, signatureHeader, credentialReference: 'vault:payment-webhook-test', executionMode: 'mocked' }, createMockRawBodyPaymentWebhookAdapter('mock-payment'), { connectorRepository: line.live.repository, orderingRepository: line.ordering.repository, managedRepository: line.managed.repository, credentialResolver: async reference => reference === 'vault:payment-webhook-test' ? { ok: true, value: webhookCredential } : { ok: false, reason: 'missing_reference' }, clock: () => managedSiteFixedNow })
     expect(payment.effective).toBe(true)
-    expect(payment.projectId).toBeTypeOf('number')
-    const convertedOrder = await ordering.repository.findDraftOrderById(checkout.order.order.id)
-    const project = await managed.repository.findProject(ownerUserId, payment.projectId!)
-    expect(convertedOrder?.status).toBe('payment_verified')
-    expect(project?.activeVersionId).toBeTypeOf('number')
+    expect(line.managed.state.subscriptions).toHaveLength(1)
+    const paymentReceipt = payment.event
+    const bound = await bindManagedSiteReleasePayment(line.ownerUserId, { releaseId: line.release.release.id, paymentReceiptFingerprint: paymentReceipt.receiptFingerprint, idempotencyKey: 'fixture-payment-bind-001' }, line.live.repository, () => managedSiteFixedNow, line.ordering.repository)
+    expect(bound.release.status).toBe('payment_verified')
+    expect((await bindManagedSiteReleasePayment(line.ownerUserId, { releaseId: line.release.release.id, paymentReceiptFingerprint: paymentReceipt.receiptFingerprint, idempotencyKey: 'fixture-payment-bind-001' }, line.live.repository, () => managedSiteFixedNow, line.ordering.repository)).replayed).toBe(true)
 
-    const vault = createMemoryManagedSiteArtifactVault()
-    const generation = await generateManagedSiteCandidate(ownerUserId, { projectId: project!.id, sourceVersionId: project!.activeVersionId!, templateIntent: 'astro', executionMode: 'mocked', idempotencyKey: 'generation-candidate-001' }, { adapter: createMockManagedSiteGenerationAdapter(), vault, credentialResolver: async () => ({ ok: false, reason: 'registry_unavailable' }), repository: live.repository, managedRepository: managed.repository, clock: () => fixedNow })
-    expect(generation.candidate?.contentHash).toMatch(/^[a-f0-9]{64}$/u)
-    expect(vault.records.size).toBe(1)
-    const candidate = generation.candidate!
+    const domainAdapter = createMockManagedSiteDomainAdapter({ now: () => managedSiteFixedNow })
+    const domainQuote = await quoteManagedSiteDomain(line.ownerUserId, { projectId: line.prePurchase.project.id, releaseId: line.release.release.id, requestedDomain: line.release.release.canonicalDomain, executionMode: 'mocked', idempotencyKey: 'fixture-domain-quote-001' }, domainAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => managedSiteFixedNow })
+    const wrongConfirmation = managedSiteDomainConfirmationFingerprint({ ownerUserId: line.ownerUserId, projectId: line.prePurchase.project.id, releaseId: line.release.release.id, commerceSnapshotFingerprint: line.prePurchase.commerceSnapshotFingerprint, quoteReceiptFingerprint: domainQuote.receiptFingerprint!, draftOrderId: line.order.order.id, paymentReceiptFingerprint: paymentReceipt.receiptFingerprint })
+    await expect(createManagedSiteDomainPurchaseIntent(line.ownerUserId, { projectId: line.prePurchase.project.id, releaseId: line.release.release.id, draftOrderId: line.order.order.id, quoteReceiptFingerprint: domainQuote.receiptFingerprint!, paymentReceiptFingerprint: paymentReceipt.receiptFingerprint, ownerConfirmationFingerprint: wrongConfirmation, executionMode: 'mocked', idempotencyKey: 'fixture-domain-wrong-payment' }, domainAdapter, { repository: line.live.repository, clock: () => managedSiteFixedNow })).rejects.toMatchObject({ statusCode: 409 })
+    const confirmation = managedSiteDomainConfirmationFingerprint({ ownerUserId: line.ownerUserId, projectId: line.prePurchase.project.id, releaseId: line.release.release.id, commerceSnapshotFingerprint: line.prePurchase.commerceSnapshotFingerprint, quoteReceiptFingerprint: domainQuote.receiptFingerprint!, draftOrderId: line.order.order.id, paymentReceiptFingerprint: bound.receipt.receiptFingerprint })
+    const domain = await createManagedSiteDomainPurchaseIntent(line.ownerUserId, { projectId: line.prePurchase.project.id, releaseId: line.release.release.id, draftOrderId: line.order.order.id, quoteReceiptFingerprint: domainQuote.receiptFingerprint!, paymentReceiptFingerprint: bound.receipt.receiptFingerprint, ownerConfirmationFingerprint: confirmation, executionMode: 'mocked', idempotencyKey: 'fixture-domain-purchase-001' }, domainAdapter, { repository: line.live.repository, clock: () => managedSiteFixedNow })
+    expect(domain.claim.status).toBe('verified')
+    expect((await createManagedSiteDomainPurchaseIntent(line.ownerUserId, { projectId: line.prePurchase.project.id, releaseId: line.release.release.id, draftOrderId: line.order.order.id, quoteReceiptFingerprint: domainQuote.receiptFingerprint!, paymentReceiptFingerprint: bound.receipt.receiptFingerprint, ownerConfirmationFingerprint: confirmation, executionMode: 'mocked', idempotencyKey: 'fixture-domain-purchase-001' }, domainAdapter, { repository: line.live.repository, clock: () => managedSiteFixedNow })).replayed).toBe(true)
+    const dns = await executeManagedSiteDnsTls(line.ownerUserId, { projectId: line.prePurchase.project.id, releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'fixture-dns-001' }, createMockManagedSiteDnsTlsAdapter(), { repository: line.live.repository, clock: () => managedSiteFixedNow })
+    expect(dns.ready).toBe(true)
+    expect((await executeManagedSiteDnsTls(line.ownerUserId, { projectId: line.prePurchase.project.id, releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'fixture-dns-001' }, createMockManagedSiteDnsTlsAdapter(), { repository: line.live.repository, clock: () => managedSiteFixedNow })).replayed).toBe(true)
+    let deploymentCalls = 0
+    const concurrentAdapter = { ...line.deploymentAdapter, deployProduction: async (...args: Parameters<typeof line.deploymentAdapter.deployProduction>) => { deploymentCalls++; return line.deploymentAdapter.deployProduction(...args) } }
+    const concurrent = await Promise.allSettled([
+      deployManagedSiteProduction(line.ownerUserId, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'fixture-deploy-001' }, concurrentAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => managedSiteFixedNow }),
+      deployManagedSiteProduction(line.ownerUserId, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'fixture-deploy-duplicate' }, concurrentAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => managedSiteFixedNow }),
+    ])
+    expect(concurrent.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(concurrent.filter(result => result.status === 'rejected')).toHaveLength(1)
+    expect(deploymentCalls).toBe(1)
+    expect(line.live.state.releases.find(item => item.id === line.release.release.id)?.status).toBe('live_verified')
+    let activationCalls = 0
+    const activationDependencies = { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => managedSiteFixedNow, activate: (async (owner: number, projectId: number, _input: unknown, repository: any) => { activationCalls++; return { project: await repository.updateProject(owner, projectId, { contentOperationClientId: 501 }), client: { id: 501 }, linked: true, reused: true, notDuplicated: true } }) as any }
+    const activated = await activateManagedSiteGeoOperations(line.ownerUserId, { releaseId: line.release.release.id, timeZone: 'Asia/Taipei', cadenceDays: 7, monthlyBudgetUnits: 12, idempotencyKey: 'fixture-geo-001' }, activationDependencies)
+    expect(activated.release.status).toBe('geo_active')
+    expect((await activateManagedSiteGeoOperations(line.ownerUserId, { releaseId: line.release.release.id, timeZone: 'Asia/Taipei', cadenceDays: 7, monthlyBudgetUnits: 12, idempotencyKey: 'fixture-geo-001' }, activationDependencies)).replayed).toBe(true)
+    expect(activationCalls).toBe(1)
+  })
 
-    const releaseResult = await createGeneratedManagedSiteRelease(ownerUserId, { projectId: project!.id, generationCandidateId: candidate.id, canonicalDomain: 'new-live.acme.taipei', targetKey: 'production-primary', idempotencyKey: 'release-001' }, { repository: live.repository, managedRepository: managed.repository })
-    const deploymentAdapter = createMockManagedSiteDeploymentAdapter()
-    const preview = await buildManagedSitePreview(ownerUserId, { releaseId: releaseResult.release.id, executionMode: 'mocked', idempotencyKey: 'preview-build-001' }, deploymentAdapter, { repository: live.repository, clock: () => fixedNow })
-    expect(preview.release?.status).toBe('preview_ready')
-    const approval = await approveManagedSitePreview(ownerUserId, { releaseId: releaseResult.release.id, idempotencyKey: 'preview-approval-001' }, live.repository, () => fixedNow)
-    expect(approval.release?.status).toBe('approved')
-    const paymentReceipt = live.state.receipts.find(receipt => receipt.receiptType === 'checkout_succeeded')!
-    const bound = await bindManagedSiteReleasePayment(ownerUserId, { releaseId: releaseResult.release.id, paymentReceiptFingerprint: paymentReceipt.receiptFingerprint, idempotencyKey: 'release-payment-001' }, live.repository, () => fixedNow)
-    expect(bound.release?.status).toBe('payment_verified')
-
-    const quote = await quoteManagedSiteDomain(ownerUserId, { projectId: project!.id, requestedDomain: 'new-live.acme.taipei', executionMode: 'mocked', idempotencyKey: 'domain-quote-001' }, createMockManagedSiteDomainAdapter({ now: () => fixedNow }), { repository: live.repository, managedRepository: managed.repository, clock: () => fixedNow })
-    const ownerConfirmationFingerprint = managedSiteDomainConfirmationFingerprint({ ownerUserId, projectId: project!.id, quoteReceiptFingerprint: quote.receiptFingerprint!, draftOrderId: checkout.order.order.id, paymentReceiptFingerprint: paymentReceipt.receiptFingerprint })
-    const domain = await createManagedSiteDomainPurchaseIntent(ownerUserId, { projectId: project!.id, draftOrderId: checkout.order.order.id, quoteReceiptFingerprint: quote.receiptFingerprint!, paymentReceiptFingerprint: paymentReceipt.receiptFingerprint, ownerConfirmationFingerprint, executionMode: 'mocked', idempotencyKey: 'domain-purchase-001' }, createMockManagedSiteDomainAdapter({ now: () => fixedNow }), { repository: live.repository, clock: () => fixedNow })
-    expect(domain.result.status).toBe('registered')
-    const dnsTls = await executeManagedSiteDnsTls(ownerUserId, { projectId: project!.id, releaseId: releaseResult.release.id, executionMode: 'mocked', idempotencyKey: 'dns-tls-001' }, createMockManagedSiteDnsTlsAdapter(), { repository: live.repository, clock: () => fixedNow })
-    expect(dnsTls.ready).toBe(true)
-
-    const deployed = await deployManagedSiteProduction(ownerUserId, { releaseId: releaseResult.release.id, executionMode: 'mocked', idempotencyKey: 'deployment-001' }, deploymentAdapter, { repository: live.repository, managedRepository: managed.repository, clock: () => fixedNow })
-    expect(deployed.release?.status).toBe('live_verified')
-    expect(deployed.receipt.contentHash).toBe(candidate.contentHash)
-    expect(deployed.receipt.canonicalDomain).toBe('new-live.acme.taipei')
-
-    const activated = await activateManagedSiteGeoOperations(ownerUserId, { releaseId: releaseResult.release.id, timeZone: 'Asia/Taipei', cadenceDays: 7, monthlyBudgetUnits: 12, idempotencyKey: 'geo-activation-001' }, { repository: live.repository, managedRepository: managed.repository, clock: () => fixedNow, activate: (async (owner: number, projectId: number, _input: unknown, managedRepository: any) => { const updated = await managedRepository.updateProject(owner, projectId, { contentOperationClientId: 501 } as any); return { project: updated, client: { id: 501 }, linked: true, reused: true, notDuplicated: true } }) as any })
-    expect(activated.release?.status).toBe('geo_active')
-    expect(activated.receipt.metadata).toMatchObject({ reusedCanonicalContentOperations: true, measurementStartsAfterVerifiedLiveSite: true })
-    expect(live.state.receipts.some(receipt => receipt.receiptType === 'production_deployment_verified')).toBe(true)
-    expect(live.state.receipts.some(receipt => receipt.receiptType === 'geo_subscription_activated')).toBe(true)
+  it('replays the exact owner preview approval without appending duplicate authority', async () => {
+    const line = await createAuthoritativeManagedSiteReleaseFixture({ createCheckout: false })
+    const receiptsBefore = line.live.state.receipts.length
+    const gatesBefore = line.live.state.gates.length
+    const replay = await approveManagedSitePreview(line.ownerUserId, { releaseId: line.release.release.id, idempotencyKey: 'fixture-approval-001' }, line.live.repository, () => managedSiteFixedNow)
+    expect(replay.replayed).toBe(true)
+    expect(line.live.state.receipts).toHaveLength(receiptsBefore)
+    expect(line.live.state.gates).toHaveLength(gatesBefore)
   })
 })

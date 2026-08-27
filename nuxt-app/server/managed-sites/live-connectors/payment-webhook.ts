@@ -5,6 +5,7 @@ import { processManagedSitePaymentAndConversion, type ConversionRepositories } f
 import { getPreviewRepository } from '../ordering-repository'
 import { getManagedSiteRepository } from '../repository'
 import type { ManagedSiteRepository } from '../types'
+import { managedSiteCommerceSnapshotFingerprint } from '../prepurchase-service'
 import type { PreviewRepository } from '../ordering-types'
 import { getManagedSiteLiveConnectorRepository } from './repository'
 import { requireVerifiedManagedSiteProvider, resolveManagedSiteCredential } from './provider-registry'
@@ -33,6 +34,13 @@ function validateVerifiedEvent(event: ManagedSiteVerifiedPaymentWebhook, clock: 
 
 function receiptIdentity(event: ManagedSiteVerifiedPaymentWebhook, ownerUserId: number, projectId: number | null) {
   return stableFingerprint({ ownerUserId, projectId, providerKey: event.providerKey, providerEventId: event.providerEventId, providerReference: event.providerReference, eventType: event.eventType, draftOrderId: event.draftOrderId, amountMinor: event.amountMinor, currency: event.currency, occurredAt: event.occurredAt, exactResponseIdentity: event.exactResponseIdentity, canonicalPayloadHash: event.canonicalPayloadHash })
+}
+
+async function reconcileRefundedRelease(ownerUserId: number, releaseId: number, repository: ManagedSiteLiveConnectorRepository): Promise<void> {
+  const current = await repository.findRelease(ownerUserId, releaseId)
+  if (!current || current.status === 'blocked' && current.blockedReasonCode === 'PAYMENT_REFUNDED') return
+  const updated = await repository.transitionRelease(ownerUserId, current.id, current.status, current.projectionFingerprint, { status: 'blocked', blockedReasonCode: 'PAYMENT_REFUNDED', nextSafeAction: 'review_refund_and_live_site_suspension', projectionFingerprint: stableFingerprint({ previous: current.projectionFingerprint, authority: 'verified_payment_refund' }) })
+  if (!updated) conflict('Release changed concurrently while applying verified refund authority.')
 }
 
 export async function processManagedSiteRawPaymentWebhook(
@@ -77,10 +85,18 @@ export async function processManagedSiteRawPaymentWebhook(
   }
   const quote = await orderingRepository.findQuoteById(order.quoteId)
   if (!quote || quote.ownerUserId !== order.ownerUserId || quote.totalMinor !== event.amountMinor || quote.currency !== event.currency) conflict('Payment webhook amount, currency, quote, or owner lineage does not match the server-derived order snapshot.')
+  const lines = await orderingRepository.listQuoteLines(quote.id)
+  const commerceSnapshotFingerprint = managedSiteCommerceSnapshotFingerprint({ previewId: order.previewId, quoteId: quote.id, draftOrderId: order.id, quoteVersion: quote.quoteVersion, totalMinor: quote.totalMinor, currency: quote.currency, planKey: quote.planKey, cadenceDays: quote.cadenceDays, domainOption: quote.domainOption, taxStatus: quote.taxStatus, lines: lines.map(line => ({ lineKey: line.lineKey, quantity: line.quantity, unitAmountMinor: line.unitAmountMinor, lineAmountMinor: line.lineAmountMinor, lineFingerprint: line.lineFingerprint })) })
+  const commercialReceipts = await connectorRepository.listReceiptsByDraftOrder(order.ownerUserId, order.id)
+  const checkout = commercialReceipts.find(receipt => receipt.receiptType === 'checkout_session_created' && receipt.receiptStatus === 'verified' && receipt.releaseId && (receipt.metadata as any)?.snapshotFingerprint === commerceSnapshotFingerprint)
+  const release = checkout?.releaseId ? await connectorRepository.findRelease(order.ownerUserId, checkout.releaseId) : null
+  const refundedProjection = release?.status === 'blocked' && release.blockedReasonCode === 'PAYMENT_REFUNDED'
+  if (!order.projectId || !checkout || !release || !(['checkout_pending', 'payment_verified'].includes(release.status) || refundedProjection) || release.projectId !== order.projectId || release.previewId !== order.previewId || release.quoteId !== quote.id || release.draftOrderId !== order.id || release.commerceSnapshotFingerprint !== commerceSnapshotFingerprint) conflict('Payment webhook is not bound to an exact approved release checkout snapshot.')
   const provisionalFingerprint = receiptIdentity(event, order.ownerUserId, order.projectId)
   const existing = await connectorRepository.findReceiptByProviderEvent(event.providerKey, event.providerEventId)
   if (existing) {
     if (existing.receiptFingerprint !== provisionalFingerprint && (existing.metadata as any)?.eventIdentityFingerprint !== provisionalFingerprint) conflict('Payment provider event was replayed with a different payload or order identity.')
+    if (existing.receiptType === 'payment_refunded' && existing.receiptStatus === 'verified' && (existing.metadata as any)?.effective === true && existing.releaseId) await reconcileRefundedRelease(order.ownerUserId, existing.releaseId, connectorRepository)
     return { event: existing, replayed: true, effective: existing.receiptStatus === 'verified' }
   }
 
@@ -88,9 +104,14 @@ export async function processManagedSiteRawPaymentWebhook(
   let effective = true
   let receiptStatus: 'verified' | 'ignored_out_of_order' = 'verified'
   if (event.eventType === 'checkout_succeeded') {
-    const conversionRepositories: ConversionRepositories = { ordering: orderingRepository, managed: managedRepository }
-    const result = await processManagedSitePaymentAndConversion({ providerKey: event.providerKey, eventId: event.providerEventId, providerReference: event.providerReference, eventType: 'payment_succeeded', draftOrderId: event.draftOrderId, amountMinor: event.amountMinor, currency: event.currency, canonicalPayloadHash: event.canonicalPayloadHash, idempotencyKey: stableFingerprint({ event: event.providerEventId, order: event.draftOrderId }) }, { verify: async request => request.providerKey === event.providerKey && request.eventId === event.providerEventId && request.providerReference === event.providerReference && request.draftOrderId === event.draftOrderId && request.amountMinor === event.amountMinor && request.currency === event.currency && request.canonicalPayloadHash === event.canonicalPayloadHash }, conversionRepositories)
-    projectId = result.project.id
+    const previousSucceeded = commercialReceipts.some(receipt => receipt.receiptType === 'checkout_succeeded' && receipt.receiptStatus === 'verified') || order.status === 'payment_verified' || release.status === 'payment_verified'
+    const previouslyCancelled = commercialReceipts.some(receipt => receipt.receiptType === 'checkout_cancelled' && receipt.receiptStatus === 'verified') || order.status === 'cancelled'
+    if (previousSucceeded || previouslyCancelled) { receiptStatus = 'ignored_out_of_order'; effective = false }
+    else {
+      const conversionRepositories: ConversionRepositories = { ordering: orderingRepository, managed: managedRepository }
+      const result = await processManagedSitePaymentAndConversion({ providerKey: event.providerKey, eventId: event.providerEventId, providerReference: event.providerReference, eventType: 'payment_succeeded', draftOrderId: event.draftOrderId, amountMinor: event.amountMinor, currency: event.currency, canonicalPayloadHash: event.canonicalPayloadHash, idempotencyKey: stableFingerprint({ event: event.providerEventId, order: event.draftOrderId }) }, { verify: async request => request.providerKey === event.providerKey && request.eventId === event.providerEventId && request.providerReference === event.providerReference && request.draftOrderId === event.draftOrderId && request.amountMinor === event.amountMinor && request.currency === event.currency && request.canonicalPayloadHash === event.canonicalPayloadHash }, conversionRepositories)
+      projectId = result.project.id
+    }
   } else {
     const previous = await connectorRepository.listReceiptsByDraftOrder(order.ownerUserId, order.id)
     const succeeded = previous.some(receipt => receipt.receiptType === 'checkout_succeeded' && receipt.receiptStatus === 'verified') || order.status === 'payment_verified'
@@ -108,6 +129,7 @@ export async function processManagedSiteRawPaymentWebhook(
   const finalFingerprint = receiptIdentity(event, order.ownerUserId, projectId)
   const attemptFingerprint = stableFingerprint({ operation: 'payment_webhook_transition', finalFingerprint })
   const attempt = await connectorRepository.insertAttempt({ ownerUserId: order.ownerUserId, projectId, draftOrderId: order.id, releaseId: null, capability: 'payment', operation: 'payment_webhook_transition', executionMode: input.executionMode, status: 'succeeded', attemptNumber: 1, maxAttempts: 1, timeoutMs: 10_000, requestFingerprint: attemptFingerprint, idempotencyKey: stableFingerprint({ providerKey: event.providerKey, providerEventId: event.providerEventId }), leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, exactResponseIdentity: event.exactResponseIdentity, errorCode: null, errorSummary: null } as any)
-  const receipt = await connectorRepository.insertReceipt({ ownerUserId: order.ownerUserId, projectId, draftOrderId: order.id, releaseId: null, attemptId: attempt.id, capability: 'payment', providerKey: event.providerKey, providerEventId: event.providerEventId, receiptType: event.eventType, receiptStatus, externalReference: event.providerReference, exactResponseIdentity: event.exactResponseIdentity, requestFingerprint: attemptFingerprint, contentHash: null, canonicalDomain: null, metadata: { occurredAt: event.occurredAt, amountMinor: event.amountMinor, currency: event.currency, canonicalPayloadHash: event.canonicalPayloadHash, eventIdentityFingerprint: finalFingerprint, effective }, receiptFingerprint: finalFingerprint, verifiedAt: clock() } as any)
+  const receipt = await connectorRepository.insertReceipt({ ownerUserId: order.ownerUserId, projectId, draftOrderId: order.id, releaseId: release.id, attemptId: attempt.id, capability: 'payment', providerKey: event.providerKey, providerEventId: event.providerEventId, receiptType: event.eventType, receiptStatus, externalReference: event.providerReference, exactResponseIdentity: event.exactResponseIdentity, requestFingerprint: attemptFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { occurredAt: event.occurredAt, previewId: order.previewId, quoteId: quote.id, draftOrderId: order.id, commerceSnapshotFingerprint, checkoutReceiptFingerprint: checkout.receiptFingerprint, amountMinor: event.amountMinor, currency: event.currency, planKey: quote.planKey, cadenceDays: quote.cadenceDays, domainOption: quote.domainOption, lineSnapshotFingerprint: (checkout.metadata as any)?.lineSnapshotFingerprint, canonicalPayloadHash: event.canonicalPayloadHash, eventIdentityFingerprint: finalFingerprint, effective }, receiptFingerprint: finalFingerprint, verifiedAt: clock() } as any)
+  if (event.eventType === 'payment_refunded' && receiptStatus === 'verified' && effective) await reconcileRefundedRelease(order.ownerUserId, release.id, connectorRepository)
   return { event: receipt, replayed: false, effective, projectId }
 }
