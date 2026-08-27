@@ -9,6 +9,7 @@ import {
   type ManagedSiteCredentialResolver,
   type ManagedSiteLiveConnectorRepository,
   type ManagedSiteProviderConfigurationInput,
+  type ManagedSiteProviderAuthoritySnapshot,
   type ManagedSiteProviderReadiness,
   type ManagedSiteProviderReadinessItem,
 } from './types'
@@ -169,6 +170,59 @@ export async function verifyManagedSiteProviderConfiguration(
 
 function configuredStatus(status: string): boolean { return status === 'configured' || status === 'verified' }
 
+const FINGERPRINT = /^[a-f0-9]{64}$/u
+
+function completeConfigurationIdentity(configuration: Awaited<ReturnType<ManagedSiteLiveConnectorRepository['findProviderConfiguration']>>): configuration is NonNullable<typeof configuration> & { verificationReceiptFingerprint: string; capabilityIdentity: string } {
+  return Boolean(configuration && FINGERPRINT.test(configuration.configurationFingerprint) && configuration.verificationReceiptFingerprint && FINGERPRINT.test(configuration.verificationReceiptFingerprint) && configuration.capabilityIdentity && isOpaqueReference(configuration.capabilityIdentity, 160))
+}
+
+/** Builds the only non-sensitive provider authority accepted by connector mutations. */
+export async function resolveManagedSiteProviderAuthority(
+  ownerUserId: number,
+  capability: ManagedSiteConnectorCapability,
+  executionMode: 'mocked' | 'live',
+  repository: ManagedSiteLiveConnectorRepository = getManagedSiteLiveConnectorRepository(),
+  credentialResolver: ManagedSiteCredentialResolver = resolveManagedSiteCredential,
+): Promise<ManagedSiteProviderAuthoritySnapshot> {
+  const configuration = await repository.findProviderConfiguration(ownerUserId, capability)
+  if (!completeConfigurationIdentity(configuration)) throw createError({ statusCode: 503, statusMessage: `Managed-site ${capability} provider authority is incomplete.` })
+  if (executionMode === 'mocked') {
+    if (process.env.NODE_ENV !== 'test' || configuration.readinessStatus !== 'mock' || configuration.verifiedAt !== null) throw createError({ statusCode: 503, statusMessage: `Managed-site ${capability} mock authority is not explicitly configured.` })
+  } else {
+    if (configuration.readinessStatus !== 'verified' || !configuration.credentialReference || !configuration.verifiedAt || !Number.isFinite(configuration.verifiedAt.getTime())) throw createError({ statusCode: 503, statusMessage: `Managed-site ${capability} provider is not server-verified.` })
+    const resolution = await credentialResolver(configuration.credentialReference)
+    if (!resolution.ok) throw createError({ statusCode: 503, statusMessage: `Managed-site ${capability} credential reference is unavailable.` })
+  }
+  const projection = {
+    schemaVersion: 'managed-site-provider-authority-v1' as const,
+    capability,
+    providerKey: configuration.providerKey,
+    configurationFingerprint: configuration.configurationFingerprint,
+    verificationReceiptFingerprint: configuration.verificationReceiptFingerprint,
+    capabilityIdentity: configuration.capabilityIdentity,
+    readinessStatus: configuration.readinessStatus as 'mock' | 'verified',
+    executionMode,
+    verifiedAt: configuration.verifiedAt?.toISOString() || null,
+  }
+  return { ...projection, authorityFingerprint: stableFingerprint(projection) }
+}
+
+export function managedSiteProviderAuthorityMetadata(authority: ManagedSiteProviderAuthoritySnapshot) {
+  return {
+    providerAuthorityFingerprint: authority.authorityFingerprint,
+    configurationFingerprint: authority.configurationFingerprint,
+    verificationReceiptFingerprint: authority.verificationReceiptFingerprint,
+    capabilityIdentity: authority.capabilityIdentity,
+    providerReadinessStatus: authority.readinessStatus,
+    providerExecutionMode: authority.executionMode,
+    providerVerifiedAt: authority.verifiedAt,
+  }
+}
+
+export function assertManagedSiteProviderAuthorityFingerprint(actual: unknown, authority: ManagedSiteProviderAuthoritySnapshot): void {
+  if (actual !== authority.authorityFingerprint) conflict('Provider response does not match the exact provider configuration authority.')
+}
+
 export async function getManagedSiteProviderReadiness(
   ownerUserId: number,
   repository: ManagedSiteLiveConnectorRepository = getManagedSiteLiveConnectorRepository(),
@@ -185,12 +239,16 @@ export async function getManagedSiteProviderReadiness(
     }
     const resolution = configuration.credentialReference ? await credentialResolver(configuration.credentialReference) : { ok: false as const, reason: 'missing_reference' as const }
     const isMock = configuration.readinessStatus === 'mock'
-    const verified = configuration.readinessStatus === 'verified' && Boolean(configuration.verificationReceiptFingerprint) && Boolean(configuration.verifiedAt) && resolution.ok
+    const verified = configuration.readinessStatus === 'verified' && completeConfigurationIdentity(configuration) && Boolean(configuration.verifiedAt && Number.isFinite(configuration.verifiedAt.getTime())) && resolution.ok
     const status = configuration.readinessStatus === 'configured' && !resolution.ok ? 'blocked' : configuration.readinessStatus as ManagedSiteProviderReadinessItem['status']
     const missing: string[] = []
     if (!configuredStatus(configuration.readinessStatus) && !isMock) missing.push('provider_configuration')
     if (!configuration.credentialReference && !isMock) missing.push('credential_reference')
     if (configuration.credentialReference && !resolution.ok) missing.push('credential_resolution')
+    if (!FINGERPRINT.test(configuration.configurationFingerprint)) missing.push('configuration_fingerprint')
+    if (!configuration.verificationReceiptFingerprint || !FINGERPRINT.test(configuration.verificationReceiptFingerprint)) missing.push('verification_receipt_fingerprint')
+    if (!configuration.capabilityIdentity || !isOpaqueReference(configuration.capabilityIdentity, 160)) missing.push('capability_identity')
+    if (configuration.readinessStatus === 'verified' && (!configuration.verifiedAt || !Number.isFinite(configuration.verifiedAt.getTime()))) missing.push('verified_at')
     if (!verified && !isMock) missing.push('verification_receipt')
     capabilities.push({ capability, providerKey: configuration.providerKey, status, configured: configuredStatus(configuration.readinessStatus), verified, credentialReferenceConfigured: Boolean(configuration.credentialReference), credentialResolvable: resolution.ok, liveMutationAllowed: verified, missing, blockedReasonCode: status === 'blocked' ? configuration.blockedReasonCode || 'CREDENTIAL_REFERENCE_UNRESOLVED' : configuration.blockedReasonCode, verifiedAt: verified ? configuration.verifiedAt!.toISOString() : null })
   }

@@ -15,6 +15,23 @@ export type ManagedSiteConnectorCapability = typeof MANAGED_SITE_CONNECTOR_CAPAB
 export type ManagedSiteProviderReadinessStatus = 'disabled' | 'mock' | 'configured' | 'verified' | 'blocked'
 export type ManagedSiteConnectorExecutionMode = 'dry_run' | 'mocked' | 'live'
 
+/**
+ * Canonical, non-sensitive authority carried by every provider mutation.
+ * Credential references and values are deliberately excluded.
+ */
+export type ManagedSiteProviderAuthoritySnapshot = {
+  schemaVersion: 'managed-site-provider-authority-v1'
+  capability: ManagedSiteConnectorCapability
+  providerKey: string
+  configurationFingerprint: string
+  verificationReceiptFingerprint: string
+  capabilityIdentity: string
+  readinessStatus: 'mock' | 'verified'
+  executionMode: 'mocked' | 'live'
+  verifiedAt: string | null
+  authorityFingerprint: string
+}
+
 export type ManagedSiteProviderConfigurationInput = {
   capability: ManagedSiteConnectorCapability
   providerKey: string
@@ -196,6 +213,7 @@ export type ManagedSiteDomainQuote = {
   amountMinor: number
   currency: string
   expiresAt: string
+  providerAuthorityFingerprint: string
   exactResponseIdentity: string
 }
 
@@ -205,6 +223,7 @@ export type ManagedSiteDomainReceipt = {
   providerReference: string
   canonicalDomain: string
   status: 'available' | 'unavailable' | 'purchase_intent_created' | 'registered'
+  providerAuthorityFingerprint: string
   exactResponseIdentity: string
 }
 
@@ -215,16 +234,17 @@ export type ManagedSiteDnsTlsReceipt = {
   canonicalDomain: string
   dnsStatus: 'propagation_pending' | 'verified' | 'partial_failure'
   tlsStatus: 'pending' | 'verified' | 'failed'
+  providerAuthorityFingerprint: string
   exactResponseIdentity: string
 }
 
 export type ManagedSiteDomainAdapter = {
-  quote(input: { ownerUserId: number; projectId: number; releaseId: number; canonicalDomain: string; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteDomainQuote>
-  createPurchaseIntent(input: { ownerUserId: number; projectId: number; releaseId: number; draftOrderId: number; commerceSnapshotFingerprint: string; quote: ManagedSiteDomainQuote; ownerConfirmationFingerprint: string; paymentReceiptFingerprint: string; idempotencyKey: string; timeoutMs: number }): Promise<ManagedSiteDomainReceipt>
+  quote(input: { ownerUserId: number; projectId: number; releaseId: number; canonicalDomain: string; providerAuthority: ManagedSiteProviderAuthoritySnapshot; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteDomainQuote>
+  createPurchaseIntent(input: { ownerUserId: number; projectId: number; releaseId: number; draftOrderId: number; commerceSnapshotFingerprint: string; quote: ManagedSiteDomainQuote; providerAuthority: ManagedSiteProviderAuthoritySnapshot; ownerConfirmationFingerprint: string; paymentReceiptFingerprint: string; idempotencyKey: string; timeoutMs: number }): Promise<ManagedSiteDomainReceipt>
 }
 
 export type ManagedSiteDnsTlsAdapter = {
-  configureAndVerify(input: { ownerUserId: number; canonicalDomain: string; projectId: number; releaseId: number; contentHash: string; requestFingerprint: string; idempotencyKey: string; timeoutMs: number }): Promise<ManagedSiteDnsTlsReceipt>
+  configureAndVerify(input: { ownerUserId: number; canonicalDomain: string; projectId: number; releaseId: number; contentHash: string; providerAuthority: ManagedSiteProviderAuthoritySnapshot; requestFingerprint: string; idempotencyKey: string; timeoutMs: number }): Promise<ManagedSiteDnsTlsReceipt>
 }
 
 export type ManagedSiteDeploymentReceipt = {
@@ -239,13 +259,14 @@ export type ManagedSiteDeploymentReceipt = {
   status: 'preview_ready' | 'production_verified' | 'rollback_verified'
   observedAt: string
   payloadHash: string
+  providerAuthorityFingerprint: string
   exactResponseIdentity: string
 }
 
 export type ManagedSiteDeploymentAdapter = {
-  buildPreview(input: { projectId: number; versionId: number; releaseId: number; vaultReference: string; contentHash: string; canonicalDomain: string; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteDeploymentReceipt>
-  deployProduction(input: { projectId: number; versionId: number; releaseId: number; vaultReference: string; contentHash: string; canonicalDomain: string; previewReceiptFingerprint: string; approvalFingerprint: string; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteDeploymentReceipt>
-  rollback(input: { projectId: number; fromReleaseId: number; toReleaseId: number; versionId: number; contentHash: string; canonicalDomain: string; priorDeploymentReceiptFingerprint: string; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteDeploymentReceipt>
+  buildPreview(input: { projectId: number; versionId: number; releaseId: number; vaultReference: string; contentHash: string; canonicalDomain: string; providerAuthority: ManagedSiteProviderAuthoritySnapshot; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteDeploymentReceipt>
+  deployProduction(input: { projectId: number; versionId: number; releaseId: number; vaultReference: string; contentHash: string; canonicalDomain: string; previewReceiptFingerprint: string; approvalFingerprint: string; providerAuthority: ManagedSiteProviderAuthoritySnapshot; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteDeploymentReceipt>
+  rollback(input: { projectId: number; fromReleaseId: number; toReleaseId: number; versionId: number; contentHash: string; canonicalDomain: string; priorDeploymentReceiptFingerprint: string; providerAuthority: ManagedSiteProviderAuthoritySnapshot; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteDeploymentReceipt>
 }
 
 export type ManagedSiteExistingSiteOwnershipReceipt = {
@@ -257,12 +278,13 @@ export type ManagedSiteExistingSiteOwnershipReceipt = {
   verificationMethod: 'dns_txt' | 'well_known_file' | 'provider_account'
   evidenceHash: string
   status: 'verified' | 'pending' | 'failed'
+  providerAuthorityFingerprint: string
   exactResponseIdentity: string
 }
 
 export type ManagedSiteExistingSiteOwnershipAdapter = {
-  createChallenge(input: { ownerUserId: number; projectId: number; releaseId: number; canonicalDomain: string; verificationMethod: 'dns_txt' | 'well_known_file' | 'provider_account'; requestFingerprint: string; idempotencyKey: string; timeoutMs: number }): Promise<{ providerKey: string; providerEventId: string; challengeReference: string; canonicalDomain: string; projectId: number; verificationMethod: 'dns_txt' | 'well_known_file' | 'provider_account'; exactResponseIdentity: string }>
-  verify(input: { projectId: number; canonicalDomain: string; challengeReference: string; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteExistingSiteOwnershipReceipt>
+  createChallenge(input: { ownerUserId: number; projectId: number; releaseId: number; canonicalDomain: string; verificationMethod: 'dns_txt' | 'well_known_file' | 'provider_account'; providerAuthority: ManagedSiteProviderAuthoritySnapshot; requestFingerprint: string; idempotencyKey: string; timeoutMs: number }): Promise<{ providerKey: string; providerEventId: string; challengeReference: string; canonicalDomain: string; projectId: number; verificationMethod: 'dns_txt' | 'well_known_file' | 'provider_account'; providerAuthorityFingerprint: string; exactResponseIdentity: string }>
+  verify(input: { projectId: number; canonicalDomain: string; challengeReference: string; providerAuthority: ManagedSiteProviderAuthoritySnapshot; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteExistingSiteOwnershipReceipt>
 }
 
 export type ManagedSiteLiveConnectorRepository = {

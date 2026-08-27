@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { stableFingerprint } from '../server/seo-geo-core/repository'
-import { createInternalHmacV1CheckoutAdapter } from '../server/managed-sites/live-connectors/broker-adapters'
+import { createInternalDomainBrokerHmacV1Adapter, createInternalHmacV1CheckoutAdapter } from '../server/managed-sites/live-connectors/broker-adapters'
 import { managedSiteBrokerSignature } from '../server/managed-sites/live-connectors/hmac-broker-transport'
 import { configureManagedSiteProvider, verifyManagedSiteProviderConfiguration } from '../server/managed-sites/live-connectors/provider-registry'
 import { createLiveConnectorMemoryRepository } from './fixtures/managed-site/live-connectors-repository'
@@ -14,6 +14,23 @@ afterEach(() => {
 })
 
 describe('managed-site reachable server-only provider transports', () => {
+  it('binds the domain broker transport to one exact non-sensitive provider authority', async () => {
+    process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS = 'https://domains.acme-provider.com'
+    const credential = 'runtime-only-domain-broker-key'; const now = new Date('2026-08-27T00:00:00.000Z'); const authorityFingerprint = 'a'.repeat(64)
+    const providerAuthority = { schemaVersion: 'managed-site-provider-authority-v1' as const, capability: 'domain_registration' as const, providerKey: 'internal-domain-broker-hmac-v1', configurationFingerprint: 'b'.repeat(64), verificationReceiptFingerprint: 'c'.repeat(64), capabilityIdentity: 'domain-account:merchant-001', readinessStatus: 'verified' as const, executionMode: 'live' as const, verifiedAt: now.toISOString(), authorityFingerprint }
+    const input = { ownerUserId: 1, projectId: 2, releaseId: 3, canonicalDomain: 'authority.acme.taipei', providerAuthority, requestFingerprint: 'd'.repeat(64), timeoutMs: 5000 }
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const requestNonce = new Headers(init.headers).get('x-discoverystack-nonce')!; const providerRequestId = 'domain-authority-event-001'
+      const body = JSON.stringify({ schemaVersion: 'managed-site-domain-quote-response-v1', providerKey: 'internal-domain-broker-hmac-v1', providerEventId: providerRequestId, quoteId: 'domain-quote-001', ownerUserId: 1, projectId: 2, releaseId: 3, canonicalDomain: input.canonicalDomain, amountMinor: 1200, currency: 'USD', expiresAt: new Date(now.getTime() + 60_000).toISOString(), requestFingerprint: input.requestFingerprint, providerAuthorityFingerprint: authorityFingerprint })
+      const bodyHash = createHash('sha256').update(body).digest('hex'); const timestamp = now.toISOString(); const nonce = 'domain-authority-response-nonce'
+      const signature = managedSiteBrokerSignature({ method: 'POST', path: '/v1/managed-sites/domain/quote', timestamp, nonce, requestNonce, bodyHash }, credential)
+      return new Response(body, { status: 200, headers: { 'x-discoverystack-timestamp': timestamp, 'x-discoverystack-nonce': nonce, 'x-provider-request-id': providerRequestId, 'x-discoverystack-signature': signature } })
+    })
+    const adapter = createInternalDomainBrokerHmacV1Adapter({ endpointOrigin: 'https://domains.acme-provider.com', providerKey: 'internal-domain-broker-hmac-v1', credentialReference: 'vault:domains', resolveCredential: async () => ({ ok: true, value: credential }), providerAuthorityFingerprint: authorityFingerprint, fetchImpl: fetchImpl as typeof fetch, clock: () => now })
+    await expect(adapter.quote(input)).resolves.toMatchObject({ providerAuthorityFingerprint: authorityFingerprint, canonicalDomain: input.canonicalDomain }); expect(fetchImpl).toHaveBeenCalledOnce()
+    await expect(adapter.quote({ ...input, providerAuthority: { ...providerAuthority, authorityFingerprint: 'f'.repeat(64) } })).rejects.toMatchObject({ statusCode: 409 }); expect(fetchImpl).toHaveBeenCalledOnce()
+  })
+
   it('performs an owner-triggered bounded Bailian model capability probe without retaining generated text', async () => {
     const live = createLiveConnectorMemoryRepository(); const clock = () => new Date('2026-08-27T00:00:00.000Z')
     await configureManagedSiteProvider(1, { capability: 'website_generator', providerKey: 'bailian-qwen', readinessStatus: 'configured', credentialReference: 'vault:qwen-probe', transportConfiguration: { endpointOrigin: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus' }, idempotencyKey: 'qwen-probe-config' }, live.repository)

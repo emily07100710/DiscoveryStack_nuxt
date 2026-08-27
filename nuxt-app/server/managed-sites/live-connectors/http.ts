@@ -3,6 +3,7 @@ import { getOwnerDatabaseUserId } from '../../audit/repository'
 import { parsePathId } from '../normalization'
 import { requireOwner } from '../../utils/auth'
 import { getManagedSiteLiveConnectorRepository } from './repository'
+import { getPreviewRepository } from '../ordering-repository'
 import type { PreviewRepository } from '../ordering-types'
 import type { ManagedSiteRepository } from '../types'
 import type { ManagedSiteArtifactVault } from './generation-service'
@@ -35,6 +36,7 @@ export type ManagedSiteRouteDependencies = {
 
 let testDependencyFactory: ((event: H3Event) => Promise<ManagedSiteRouteDependencies> | ManagedSiteRouteDependencies) | null = null
 let testPaymentWebhookDependencies: ManagedSiteRouteDependencies | null = null
+let testPublicOrderingRepository: PreviewRepository | null = null
 
 /** Production-equivalent fixed-route seam. It is test-only and cannot replace server authority in production. */
 export function setManagedSiteRouteDependencyFactoryForTests(factory: ((event: H3Event) => Promise<ManagedSiteRouteDependencies> | ManagedSiteRouteDependencies) | null): void {
@@ -45,6 +47,16 @@ export function setManagedSiteRouteDependencyFactoryForTests(factory: ((event: H
 export function setManagedSitePaymentWebhookDependenciesForTests(dependencies: ManagedSiteRouteDependencies | null): void {
   if (process.env.NODE_ENV !== 'test') throw createError({ statusCode: 403, statusMessage: 'Managed-site webhook dependency injection is test-only.' })
   testPaymentWebhookDependencies = dependencies
+}
+
+/** Public preview routes have no owner session, so their repository seam is separate and test-only. */
+export function setManagedSitePublicOrderingRepositoryForTests(repository: PreviewRepository | null): void {
+  if (process.env.NODE_ENV !== 'test') throw createError({ statusCode: 403, statusMessage: 'Managed-site public ordering dependency injection is test-only.' })
+  testPublicOrderingRepository = repository
+}
+
+export function managedSitePublicOrderingRepository(): PreviewRepository {
+  return process.env.NODE_ENV === 'test' && testPublicOrderingRepository ? testPublicOrderingRepository : getPreviewRepository()
 }
 
 export function privateManagedSiteHeaders(event: H3Event): void {

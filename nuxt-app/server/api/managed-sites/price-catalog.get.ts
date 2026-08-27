@@ -1,6 +1,7 @@
 import { getManagedSitePriceCatalog } from '../../managed-sites/ordering-service'
+import { privateManagedSiteHeaders } from '../../managed-sites/live-connectors/http'
 
 export default defineEventHandler(async (event) => {
-  setHeader(event, 'Cache-Control', 'public, max-age=300')
+  privateManagedSiteHeaders(event)
   return getManagedSitePriceCatalog()
 })

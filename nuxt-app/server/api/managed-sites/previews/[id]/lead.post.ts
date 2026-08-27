@@ -1,10 +1,11 @@
-import { getRouterParam, readBody } from 'h3'
+import { getRouterParam } from 'h3'
 import { createManagedSiteLeadIntent } from '../../../../managed-sites/ordering-service'
 import { parsePathId } from '../../../../managed-sites/normalization'
+import { managedSitePublicOrderingRepository, privateManagedSiteHeaders, strictManagedSiteBody } from '../../../../managed-sites/live-connectors/http'
 
 export default defineEventHandler(async (event) => {
-  setHeader(event, 'Cache-Control', 'private, no-store, max-age=0')
+  privateManagedSiteHeaders(event)
   const previewId = parsePathId(getRouterParam(event, 'id'), 'Managed site preview id')
-  const body = await readBody(event)
-  return createManagedSiteLeadIntent({ ...(body || {}), previewId })
+  const body = await strictManagedSiteBody(event, ['previewAccessToken', 'quoteId', 'name', 'email', 'company', 'website', 'message', 'privacyConsent', 'recontactConsent', 'idempotencyKey'])
+  return createManagedSiteLeadIntent({ ...(body || {}), previewId }, managedSitePublicOrderingRepository())
 })

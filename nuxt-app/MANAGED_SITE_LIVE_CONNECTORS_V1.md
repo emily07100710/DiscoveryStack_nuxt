@@ -26,6 +26,8 @@ The server registry has exactly five capabilities:
 
 Each capability is `disabled`, `mock`, `configured`, `verified`, or `blocked`. `configured` means only that non-sensitive transport metadata and an opaque credential reference are present. Live mutation remains fail closed until a server verifier records an exact verification fingerprint and the runtime can resolve the credential reference.
 
+Every external mutation resolves one canonical, non-sensitive `ProviderAuthoritySnapshot`: capability, provider key, configuration fingerprint, verification receipt fingerprint, capability identity, readiness/mode projection, verified timestamp, and an aggregate authority fingerprint. Domain quote/purchase, DNS/TLS, preview/production deployment, ownership challenge/verification, rollback, attempts, retries, and receipts bind this exact snapshot. Credential references and values are excluded. Configuration drift invalidates the lineage before an adapter call; a new governed quote or preview/approval is required.
+
 The owner page is `/audit-lab/managed-sites`. It displays missing configuration, blocked reason, bounded attempts, retry eligibility, exact receipt identities, and the next safe action. It never returns credential values. Mock status is rejected outside the test runtime.
 
 ## Runtime configuration required from the owner
@@ -50,6 +52,8 @@ The credential registry parser is bounded and fail closed. Configuration JSON ca
 ## Pre-purchase conversion, blueprint generation, and vault
 
 The only pre-purchase conversion service accepts an exact preview, quote, lead intent, and draft order already claimed by the owner session. It creates a draft project/version and durable commerce binding without creating a subscription or claiming payment.
+
+The route-level acceptance journey begins at the fixed price-catalog and public preview handlers, then creates the quote, lead intent, draft order, owner checkout claim, and pre-purchase conversion through their actual H3 handlers. Test-only repository seams are unavailable outside `NODE_ENV=test`; production defaults remain the database repositories and owner-session authority.
 
 Bailian/Qwen may return only strict `ManagedSiteBlueprintV1` JSON. It cannot return source code. The blueprint binds brand, locale, navigation, pages, sections, safe CTA targets, FAQ, selected module slots, GEO structure, evidence limitations, and provenance. A first-party deterministic compiler produces allowlisted Astro files for `one_page`, `brand_blog`, and `simple_commerce`. Shopify, LINE, Booking, payment, and assistant placements remain inert safe slots with no secret, script, or external form submission.
 

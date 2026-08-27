@@ -3,20 +3,18 @@ import { createServer } from 'node:http'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createApp, createError, createRouter, defineEventHandler, getHeader, send, setResponseStatus, toNodeListener } from 'h3'
 import { createMockManagedSiteCheckoutSessionAdapter } from '../server/managed-sites/live-connectors/checkout-session'
-import { setManagedSitePaymentWebhookDependenciesForTests, setManagedSiteRouteDependencyFactoryForTests } from '../server/managed-sites/live-connectors/http'
+import { setManagedSitePaymentWebhookDependenciesForTests, setManagedSitePublicOrderingRepositoryForTests, setManagedSiteRouteDependencyFactoryForTests } from '../server/managed-sites/live-connectors/http'
 import { createBailianQwenManagedSiteGenerationAdapter, createDeterministicManagedSiteBlueprint, createMemoryManagedSiteArtifactVault, createMockRawBodyPaymentWebhookAdapter } from '../server/managed-sites/live-connectors/adapters'
 import { buildManagedSiteGenerationRequest } from '../server/managed-sites/live-connectors/generation-service'
 import { createMockManagedSiteDeploymentAdapter, createMockExistingSiteOwnershipAdapter } from '../server/managed-sites/live-connectors/deployment-orchestrator'
 import { createMockManagedSiteDnsTlsAdapter, createMockManagedSiteDomainAdapter } from '../server/managed-sites/live-connectors/domain-connectors'
-import { claimManagedSiteCheckout } from '../server/managed-sites/checkout-claim-service'
-import { createManagedSiteDraftOrder, createManagedSiteLeadIntent, createManagedSitePreview, createManagedSiteQuote } from '../server/managed-sites/ordering-service'
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
 import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
 import { createLiveConnectorMemoryRepository } from './fixtures/managed-site/live-connectors-repository'
 import { createAuthoritativeManagedSiteReleaseFixture } from './fixtures/managed-site/live-connectors-application'
 
 beforeAll(() => { (globalThis as any).defineEventHandler = defineEventHandler; (globalThis as any).createError = createError })
-afterEach(() => { setManagedSiteRouteDependencyFactoryForTests(null); setManagedSitePaymentWebhookDependenciesForTests(null) })
+afterEach(() => { setManagedSiteRouteDependencyFactoryForTests(null); setManagedSitePaymentWebhookDependenciesForTests(null); setManagedSitePublicOrderingRepositoryForTests(null) })
 
 async function serve(handler: any, path: string) {
   const app = createApp(); const router = createRouter(); router.post(path, handler); app.use(router)
@@ -32,25 +30,20 @@ async function serveRoutes(routes: { method: 'get' | 'post'; path: string; handl
   const address = server.address(); return { origin: `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`, close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
 }
 
-async function createClaimedOrderingLine(canonicalDomain: string) {
+async function createRouteState() {
   const managed = createManagedSiteMemoryRepository(); const ordering = createOrderingMemoryRepository(); const live = createLiveConnectorMemoryRepository(); const now = new Date('2026-08-27T00:00:00.000Z')
-  const preview = await createManagedSitePreview(null, { draftIdentity: `route-${canonicalDomain}`, brandName: 'Route Managed Site', audience: 'Reviewed buyers', brief: 'A governed route-level managed website with evidence limitations.', businessGoals: ['increase_inquiries', 'improve_search_ai_understanding'], siteType: 'brand_blog', selectedModules: ['managed_content_admin', 'geo_content_subscription', 'geo_measurement_dashboard'], styleReferences: [] }, ordering.repository, () => now)
-  const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 7, domainOption: 'new', idempotencyKey: `route-quote-${canonicalDomain}` }, ordering.repository, () => now)
-  const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Route Owner', email: 'not-authority@example.invalid', company: 'Route Managed Site', website: `https://${canonicalDomain}`, privacyConsent: true, recontactConsent: false, idempotencyKey: `route-lead-${canonicalDomain}` }, ordering.repository, () => now)
-  const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: `route-order-${canonicalDomain}` }, ordering.repository, () => now)
-  await claimManagedSiteCheckout(1, { previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, draftOrderId: order.order.id }, ordering.repository, () => now)
   let queue = Promise.resolve()
   const jointTransaction = async <T>(work: (repositories: { connector: typeof live.repository; ordering: typeof ordering.repository; managed: typeof managed.repository }) => Promise<T>) => {
     const prior = queue; let release!: () => void; queue = new Promise(resolve => { release = resolve }); await prior
     const snapshots = { live: structuredClone(live.state), ordering: structuredClone(ordering.state), managed: structuredClone(managed.state) }
     try { return await work({ connector: live.repository, ordering: ordering.repository, managed: managed.repository }) } catch (error) { Object.assign(live.state, snapshots.live); Object.assign(ordering.state, snapshots.ordering); Object.assign(managed.state, snapshots.managed); throw error } finally { release() }
   }
-  return { managed, ordering, live, preview, quote, lead, order, now, jointTransaction }
+  return { managed, ordering, live, now, jointTransaction }
 }
 
 describe('managed-site actual fixed H3 route acceptance', () => {
   it('executes the complete generated-site and existing-site journeys through fixed H3 handlers only', async () => {
-    const line = await createClaimedOrderingLine('route-generated.acme.taipei'); const vault = createMemoryManagedSiteArtifactVault(); const paymentCredential = 'runtime-only-route-payment-key'; let qwenBlueprint: any = null; let probeCalls = 0; let generationCalls = 0
+    const line = await createRouteState(); const vault = createMemoryManagedSiteArtifactVault(); const paymentCredential = 'runtime-only-route-payment-key'; let qwenBlueprint: any = null; let probeCalls = 0; let generationCalls = 0
     const qwenFetch = (async (_url: string, init: RequestInit) => {
       const request = JSON.parse(String(init.body)); expect(init.redirect).toBe('error')
       if (request.max_tokens === 4) { probeCalls++; return new Response(JSON.stringify({ id: 'route-probe-request-001', object: 'chat.completion', created: 1787788800, model: 'qwen-plus', choices: [{ index: 0, message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 1, total_tokens: 13 } }), { status: 200, headers: { 'x-request-id': 'route-probe-request-001' } }) }
@@ -58,8 +51,10 @@ describe('managed-site actual fixed H3 route acceptance', () => {
       return new Response(JSON.stringify({ id, model: 'qwen-plus', choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(qwenBlueprint) }, finish_reason: 'stop' }], usage: { prompt_tokens: 40, completion_tokens: 80, total_tokens: 120 } }), { status: 200, headers: { 'x-request-id': id } })
     }) as typeof fetch
     const generationAdapter = createBailianQwenManagedSiteGenerationAdapter({ endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus', fetchImpl: qwenFetch })
-    const dependencies = { ownerUserId: 1, repository: line.live.repository, orderingRepository: line.ordering.repository, managedRepository: line.managed.repository, artifactVault: vault, generationAdapter, checkoutAdapter: createMockManagedSiteCheckoutSessionAdapter(), domainAdapter: createMockManagedSiteDomainAdapter({ now: () => new Date() }), dnsTlsAdapter: createMockManagedSiteDnsTlsAdapter(), deploymentAdapter: createMockManagedSiteDeploymentAdapter(), ownershipAdapter: createMockExistingSiteOwnershipAdapter(), credentialResolver: async (reference: string) => reference === 'vault:qwen-route-full' ? { ok: true as const, value: 'runtime-only-qwen-route-key' } : reference === 'vault:route-payment-webhook' ? { ok: true as const, value: paymentCredential } : { ok: false as const, reason: 'missing_reference' as const }, fetchImpl: qwenFetch, paymentWebhookAdapter: createMockRawBodyPaymentWebhookAdapter('mock-payment'), paymentWebhookCredentialReference: 'vault:route-payment-webhook', paymentWebhookExecutionMode: 'mocked' as const, paymentWebhookJointTransaction: line.jointTransaction, geoActivator: async (ownerUserId: number, projectId: number, _input: unknown, repository: any) => ({ project: await repository.updateProject(ownerUserId, projectId, { contentOperationClientId: 901 }), client: { id: 901 }, linked: true }) }
+    let domainPurchaseCalls = 0; const domainBase = createMockManagedSiteDomainAdapter({ now: () => new Date() }); const domainAdapter = { ...domainBase, createPurchaseIntent: async (input: any) => { domainPurchaseCalls++; return domainBase.createPurchaseIntent(input) } }
+    const dependencies = { ownerUserId: 1, repository: line.live.repository, orderingRepository: line.ordering.repository, managedRepository: line.managed.repository, artifactVault: vault, generationAdapter, checkoutAdapter: createMockManagedSiteCheckoutSessionAdapter(), domainAdapter, dnsTlsAdapter: createMockManagedSiteDnsTlsAdapter(), deploymentAdapter: createMockManagedSiteDeploymentAdapter(), ownershipAdapter: createMockExistingSiteOwnershipAdapter(), credentialResolver: async (reference: string) => reference === 'vault:qwen-route-full' ? { ok: true as const, value: 'runtime-only-qwen-route-key' } : reference === 'vault:route-payment-webhook' ? { ok: true as const, value: paymentCredential } : { ok: false as const, reason: 'missing_reference' as const }, fetchImpl: qwenFetch, paymentWebhookAdapter: createMockRawBodyPaymentWebhookAdapter('mock-payment'), paymentWebhookCredentialReference: 'vault:route-payment-webhook', paymentWebhookExecutionMode: 'mocked' as const, paymentWebhookJointTransaction: line.jointTransaction, geoActivator: async (ownerUserId: number, projectId: number, _input: unknown, repository: any) => ({ project: await repository.updateProject(ownerUserId, projectId, { contentOperationClientId: 901 }), client: { id: 901 }, linked: true }) }
     setManagedSitePaymentWebhookDependenciesForTests(dependencies)
+    setManagedSitePublicOrderingRepositoryForTests(line.ordering.repository)
     setManagedSiteRouteDependencyFactoryForTests(event => {
       const session = getHeader(event, 'x-test-owner-session'); if (!session) throw createError({ statusCode: 401, statusMessage: 'Owner session is required.' })
       if (session === 'owner-2') return { ...dependencies, ownerUserId: 2 }
@@ -67,6 +62,14 @@ describe('managed-site actual fixed H3 route acceptance', () => {
       return dependencies
     })
     const routeSpecs = [
+      ['get', '/api/managed-sites/price-catalog', '../server/api/managed-sites/price-catalog.get'],
+      ['post', '/api/managed-sites/previews', '../server/api/managed-sites/previews.post'],
+      ['get', '/api/managed-sites/previews/:id', '../server/api/managed-sites/previews/[id].get'],
+      ['post', '/api/managed-sites/previews/:id', '../server/api/managed-sites/previews/[id].post'],
+      ['post', '/api/managed-sites/previews/:id/quote', '../server/api/managed-sites/previews/[id]/quote.post'],
+      ['post', '/api/managed-sites/previews/:id/lead', '../server/api/managed-sites/previews/[id]/lead.post'],
+      ['post', '/api/managed-sites/previews/:id/order', '../server/api/managed-sites/previews/[id]/order.post'],
+      ['post', '/api/managed-sites/checkout-claim', '../server/api/managed-sites/checkout-claim.post'],
       ['post', '/api/managed-sites/projects/prepurchase', '../server/api/managed-sites/projects/prepurchase.post'],
       ['post', '/api/managed-sites/live-connectors/provider-configurations', '../server/api/managed-sites/live-connectors/provider-configurations.post'],
       ['post', '/api/managed-sites/live-connectors/providers/:capability/verify', '../server/api/managed-sites/live-connectors/providers/[capability]/verify.post'],
@@ -93,8 +96,34 @@ describe('managed-site actual fixed H3 route acceptance', () => {
       expect(response.headers.get('cache-control')).toContain('no-store'); expect(response.headers.get('x-robots-tag')).toContain('noindex'); expect(text).not.toContain('runtime-only-'); expect(text).not.toMatch(/x-discoverystack-provider-signature|authorization|rawBody|"stack"/iu)
       return { response, body: text ? JSON.parse(text) : null, text }
     }
+    const getRequest = async (path: string, headers: Record<string, string> = {}) => {
+      const response = await fetch(`${server.origin}${path}`, { headers }); const text = await response.text()
+      expect(response.headers.get('cache-control')).toContain('no-store'); expect(response.headers.get('x-robots-tag')).toContain('noindex'); expect(text).not.toMatch(/credential|signature|secret|rawBody|"stack"/iu)
+      return { response, body: text ? JSON.parse(text) : null, text }
+    }
+    const createOrderingJourney = async (canonicalDomain: string, prefix: string) => {
+      const visitorHeaders = { 'content-type': 'application/json' }
+      const preview = await request('/api/managed-sites/previews', { draftIdentity: `${prefix}-draft`, brandName: 'Route Managed Site', audience: 'Reviewed buyers', brief: 'A governed route-level managed website with evidence limitations.', businessGoals: ['increase_inquiries', 'improve_search_ai_understanding'], siteType: 'brand_blog', selectedModules: ['managed_content_admin', 'geo_content_subscription', 'geo_measurement_dashboard'], styleReferences: [] }, visitorHeaders)
+      expect(preview.response.status, preview.text).toBe(200)
+      const previewId = Number(preview.body.previewId); const previewAccessToken = String(preview.body.previewAccessToken)
+      expect((await getRequest(`/api/managed-sites/previews/${previewId}`)).response.status).toBe(405)
+      expect((await request(`/api/managed-sites/previews/${previewId}`, { accessToken: previewAccessToken }, visitorHeaders)).response.status).toBe(200)
+      expect((await request(`/api/managed-sites/previews/${previewId}/quote`, { previewAccessToken, planKey: 'basic', cadenceDays: 7, domainOption: 'new', idempotencyKey: `${prefix}-quote`, apiKey: 'forbidden-browser-secret' }, visitorHeaders)).response.status).toBe(422)
+      const quote = await request(`/api/managed-sites/previews/${previewId}/quote`, { previewAccessToken, planKey: 'basic', cadenceDays: 7, domainOption: 'new', idempotencyKey: `${prefix}-quote` }, visitorHeaders); expect(quote.response.status, quote.text).toBe(200)
+      const quoteId = Number(quote.body.quote.quoteId)
+      const lead = await request(`/api/managed-sites/previews/${previewId}/lead`, { previewAccessToken, quoteId, name: 'Route Owner', email: 'not-authority@example.invalid', company: 'Route Managed Site', website: `https://${canonicalDomain}`, privacyConsent: true, recontactConsent: false, idempotencyKey: `${prefix}-lead` }, visitorHeaders); expect(lead.response.status, lead.text).toBe(200)
+      const leadIntentId = Number(lead.body.leadIntent.id)
+      const order = await request(`/api/managed-sites/previews/${previewId}/order`, { previewAccessToken, quoteId, leadIntentId, idempotencyKey: `${prefix}-order` }, visitorHeaders); expect(order.response.status, order.text).toBe(200)
+      const draftOrderId = Number(order.body.order.id)
+      const claimBody = { previewId, previewAccessToken, quoteId, leadIntentId, draftOrderId }
+      expect((await request('/api/managed-sites/checkout-claim', claimBody, visitorHeaders)).response.status).toBe(401)
+      const claim = await request('/api/managed-sites/checkout-claim', claimBody); expect(claim.response.status, claim.text).toBe(200); expect(claim.body).toMatchObject({ previewId, quoteId, leadIntentId, draftOrderId, externalCalls: false })
+      return { previewId, previewAccessToken, quoteId, leadIntentId, draftOrderId, quote: quote.body.quote }
+    }
     try {
-      const prepurchaseBody = { previewId: line.preview.preview.id, quoteId: line.quote.quote.quoteId, leadIntentId: line.lead.leadIntent.id, draftOrderId: line.order.order.id, idempotencyKey: 'route-full-prepurchase' }
+      const catalog = await getRequest('/api/managed-sites/price-catalog'); expect(catalog.response.status).toBe(200); expect(catalog.body.version).toBe('managed-site-pricing-v1')
+      const orderingLine = await createOrderingJourney('route-generated.acme.taipei', 'route-full')
+      const prepurchaseBody = { previewId: orderingLine.previewId, quoteId: orderingLine.quoteId, leadIntentId: orderingLine.leadIntentId, draftOrderId: orderingLine.draftOrderId, idempotencyKey: 'route-full-prepurchase' }
       expect((await request('/api/managed-sites/projects/prepurchase', prepurchaseBody, { 'content-type': 'application/json' })).response.status).toBe(401)
       const prepurchase = await request('/api/managed-sites/projects/prepurchase', prepurchaseBody); expect(prepurchase.response.status).toBe(200); expect(prepurchase.body).toMatchObject({ subscriptionActivated: false, paymentVerified: false, projectStatus: 'payment_pending', versionStatus: 'draft' })
       const projectId = Number(prepurchase.body.projectId); const sourceVersionId = Number(prepurchase.body.sourceVersionId)
@@ -116,20 +145,33 @@ describe('managed-site actual fixed H3 route acceptance', () => {
       expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/approve`, { idempotencyKey: 'route-full-approve' })).response.status).toBe(200)
       expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/checkout`, { executionMode: 'mocked', idempotencyKey: 'route-full-checkout' }, { 'content-type': 'application/json', 'x-test-owner-session': 'owner-2' })).response.status).toBe(404)
       const checkout = await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/checkout`, { executionMode: 'mocked', idempotencyKey: 'route-full-checkout' }); expect(checkout.response.status).toBe(200)
+      expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/domain-quote`, { requestedDomain: 'route-generated.acme.taipei', executionMode: 'mocked', idempotencyKey: 'route-domain-before-payment' })).response.status).toBe(404)
+      expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/deploy`, { executionMode: 'mocked', idempotencyKey: 'route-wrong-content', contentHash: 'f'.repeat(64) })).response.status).toBe(422)
       const paymentConfiguration = await line.live.repository.findProviderConfiguration(1, 'payment'); const checkoutReceipt = line.live.state.receipts.find(row => row.receiptType === 'checkout_session_created' && row.releaseId === releaseId)!
-      const paymentPayload = { providerKey: 'mock-payment', providerEventId: 'route-payment-success-001', providerReference: 'route-payment-ref-001', eventType: 'checkout_succeeded', draftOrderId: line.order.order.id, amountMinor: line.quote.quote.totalMinor, currency: line.quote.quote.currency, configurationFingerprint: paymentConfiguration!.configurationFingerprint, verificationReceiptFingerprint: paymentConfiguration!.verificationReceiptFingerprint, checkoutReceiptFingerprint: checkoutReceipt.receiptFingerprint, occurredAt: line.now.toISOString(), exactResponseIdentity: 'route-payment-response-001' }
+      const paymentPayload = { providerKey: 'mock-payment', providerEventId: 'route-payment-success-001', providerReference: 'route-payment-ref-001', eventType: 'checkout_succeeded', draftOrderId: orderingLine.draftOrderId, amountMinor: orderingLine.quote.totalMinor, currency: orderingLine.quote.currency, configurationFingerprint: paymentConfiguration!.configurationFingerprint, verificationReceiptFingerprint: paymentConfiguration!.verificationReceiptFingerprint, checkoutReceiptFingerprint: checkoutReceipt.receiptFingerprint, occurredAt: line.now.toISOString(), exactResponseIdentity: 'route-payment-response-001' }
+      const wrongPayment = JSON.stringify({ ...paymentPayload, checkoutReceiptFingerprint: 'f'.repeat(64), providerEventId: 'route-payment-wrong-receipt' }); const wrongPaymentSignature = createHmac('sha256', paymentCredential).update(wrongPayment).digest('hex')
+      const rejectedPayment = await fetch(`${server.origin}/api/managed-sites/live-connectors/payment-webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-discoverystack-provider-signature': wrongPaymentSignature }, body: wrongPayment }); expect(rejectedPayment.status).toBe(409); expect(line.live.state.receipts.some(row => row.providerEventId === 'route-payment-wrong-receipt')).toBe(false)
       const rawPayment = JSON.stringify(paymentPayload); const paymentSignature = createHmac('sha256', paymentCredential).update(rawPayment).digest('hex')
       const webhook = await fetch(`${server.origin}/api/managed-sites/live-connectors/payment-webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-discoverystack-provider-signature': paymentSignature }, body: rawPayment }); expect(webhook.status).toBe(200); expect(webhook.headers.get('cache-control')).toContain('no-store'); expect(await webhook.json()).toMatchObject({ accepted: true, effective: true })
+      const duplicateWebhook = await fetch(`${server.origin}/api/managed-sites/live-connectors/payment-webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-discoverystack-provider-signature': paymentSignature }, body: rawPayment }); expect(duplicateWebhook.status).toBe(200); expect(await duplicateWebhook.json()).toMatchObject({ accepted: true, replayed: true })
+      const collisionRaw = JSON.stringify({ ...paymentPayload, providerReference: 'route-payment-collision-ref' }); const collisionSignature = createHmac('sha256', paymentCredential).update(collisionRaw).digest('hex')
+      const collisionWebhook = await fetch(`${server.origin}/api/managed-sites/live-connectors/payment-webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-discoverystack-provider-signature': collisionSignature }, body: collisionRaw }); expect(collisionWebhook.status).toBe(409)
       const domainQuote = await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/domain-quote`, { requestedDomain: 'route-generated.acme.taipei', executionMode: 'mocked', idempotencyKey: 'route-full-domain-quote' }); expect(domainQuote.response.status, domainQuote.text).toBe(200)
-      expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/domain-purchase`, { explicitConfirmation: true, executionMode: 'mocked', idempotencyKey: 'route-full-domain-purchase' })).response.status).toBe(200)
+      expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/domain-purchase`, { explicitConfirmation: true, executionMode: 'mocked', idempotencyKey: 'route-wrong-receipt', quoteReceiptFingerprint: 'f'.repeat(64) })).response.status).toBe(422)
+      await request('/api/managed-sites/live-connectors/provider-configurations', { capability: 'domain_registration', providerKey: 'mock-domain', readinessStatus: 'mock', credentialReference: 'vault:route-rotated-domain-account', transportConfiguration: {}, idempotencyKey: 'route-domain-rotate' })
+      expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/domain-purchase`, { explicitConfirmation: true, executionMode: 'mocked', idempotencyKey: 'route-stale-domain-purchase' })).response.status).toBe(409); expect(domainPurchaseCalls).toBe(0)
+      await request('/api/managed-sites/live-connectors/provider-configurations', { capability: 'domain_registration', providerKey: 'mock-domain', readinessStatus: 'mock', credentialReference: null, transportConfiguration: {}, idempotencyKey: 'route-domain-restore' })
+      expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/domain-purchase`, { explicitConfirmation: true, executionMode: 'mocked', idempotencyKey: 'route-full-domain-purchase' })).response.status).toBe(200); expect(domainPurchaseCalls).toBe(1)
       expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/dns-tls`, { executionMode: 'mocked', idempotencyKey: 'route-full-dns' })).response.status).toBe(200)
       const deployed = await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/deploy`, { executionMode: 'mocked', idempotencyKey: 'route-full-deploy' }); expect(deployed.response.status, deployed.text).toBe(200)
       const geo = await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/geo-activate`, { timeZone: 'Asia/Taipei', cadenceDays: 7, monthlyBudgetUnits: 12, idempotencyKey: 'route-full-geo' }); expect(geo.response.status).toBe(200); expect(geo.body.release.status).toBe('geo_active')
       const ordered = line.live.state.receipts.map(row => row.receiptType); for (const [before, after] of [['generation_candidate_admitted', 'preview_build_verified'], ['preview_build_verified', 'owner_preview_approved'], ['owner_preview_approved', 'checkout_session_created'], ['checkout_session_created', 'checkout_succeeded'], ['checkout_succeeded', 'domain_registered'], ['domain_registered', 'dns_tls_verified'], ['dns_tls_verified', 'production_deployment_verified'], ['production_deployment_verified', 'geo_subscription_activated']] as const) expect(ordered.indexOf(before), `${before} -> ${after}: ${ordered.join(',')}`).toBeLessThan(ordered.indexOf(after))
 
-      const existingLine = await createClaimedOrderingLine('route-existing.acme.taipei')
+      const existingLine = await createRouteState()
       Object.assign(dependencies, { repository: existingLine.live.repository, orderingRepository: existingLine.ordering.repository, managedRepository: existingLine.managed.repository, paymentWebhookJointTransaction: existingLine.jointTransaction, geoActivator: async (ownerUserId: number, existingProjectId: number, _input: unknown, repository: any) => ({ project: await repository.updateProject(ownerUserId, existingProjectId, { contentOperationClientId: 902 }), client: { id: 902 } }) })
-      await request('/api/managed-sites/projects/prepurchase', { previewId: existingLine.preview.preview.id, quoteId: existingLine.quote.quote.quoteId, leadIntentId: existingLine.lead.leadIntent.id, draftOrderId: existingLine.order.order.id, idempotencyKey: 'route-existing-prepurchase' })
+      setManagedSitePublicOrderingRepositoryForTests(existingLine.ordering.repository)
+      const existingOrdering = await createOrderingJourney('route-existing.acme.taipei', 'route-existing')
+      await request('/api/managed-sites/projects/prepurchase', { previewId: existingOrdering.previewId, quoteId: existingOrdering.quoteId, leadIntentId: existingOrdering.leadIntentId, draftOrderId: existingOrdering.draftOrderId, idempotencyKey: 'route-existing-prepurchase' })
       await request('/api/managed-sites/live-connectors/provider-configurations', { capability: 'dns_tls', providerKey: 'mock-dns-tls', readinessStatus: 'mock', credentialReference: null, transportConfiguration: {}, idempotencyKey: 'route-existing-dns-config' })
       const existingProjectId = existingLine.managed.state.projects[0]!.id
       const existingRelease = await request(`/api/managed-sites/projects/${existingProjectId}/releases/existing`, { canonicalDomain: 'route-existing.acme.taipei', targetKey: 'existing-primary', idempotencyKey: 'route-existing-release' }); expect(existingRelease.response.status, existingRelease.text).toBe(200); const existingReleaseId = existingRelease.body.release.id

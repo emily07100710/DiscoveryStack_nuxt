@@ -3,7 +3,7 @@ import { isOpaqueReference } from '../../first-party-publishing/normalization'
 import type { ManagedSiteCredentialResolver, ManagedSiteDeploymentAdapter, ManagedSiteDeploymentReceipt } from './types'
 import { assertAllowedManagedSiteProviderOrigin } from './provider-verifiers'
 
-const RECEIPT_KEYS = new Set(['providerKey', 'providerEventId', 'providerDeploymentId', 'projectId', 'versionId', 'contentHash', 'canonicalDomain', 'deploymentUrl', 'status', 'observedAt', 'payloadHash', 'exactResponseIdentity'])
+const RECEIPT_KEYS = new Set(['providerKey', 'providerEventId', 'providerDeploymentId', 'projectId', 'versionId', 'contentHash', 'canonicalDomain', 'deploymentUrl', 'status', 'observedAt', 'payloadHash', 'providerAuthorityFingerprint', 'exactResponseIdentity'])
 
 function boundedReceipt(value: unknown): ManagedSiteDeploymentReceipt {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== RECEIPT_KEYS.size || Object.keys(value).some(key => !RECEIPT_KEYS.has(key))) throw createError({ statusCode: 502, statusMessage: 'Deployment provider returned a malformed receipt.' })
@@ -11,11 +11,13 @@ function boundedReceipt(value: unknown): ManagedSiteDeploymentReceipt {
 }
 
 /** Authenticated bearer production boundary. This is intentionally not described as signed; response authority is strict identity/hash validation. */
-export function createAuthenticatedBearerManagedSiteDeploymentAdapter(options: { endpointOrigin: string; providerKey: string; credentialReference: string; resolveCredential: ManagedSiteCredentialResolver; fetchImpl?: typeof fetch; allowedOrigins?: string }): ManagedSiteDeploymentAdapter {
+export function createAuthenticatedBearerManagedSiteDeploymentAdapter(options: { endpointOrigin: string; providerKey: string; credentialReference: string; resolveCredential: ManagedSiteCredentialResolver; providerAuthorityFingerprint?: string; fetchImpl?: typeof fetch; allowedOrigins?: string }): ManagedSiteDeploymentAdapter {
   const origin = assertAllowedManagedSiteProviderOrigin(options.endpointOrigin, options.allowedOrigins)
   if (options.providerKey !== 'internal-deployment-bearer-v1' || !isOpaqueReference(options.credentialReference, 160)) throw createError({ statusCode: 503, statusMessage: 'Managed deployment transport configuration is invalid.' })
   const fetchImpl = options.fetchImpl || fetch
   const execute = async (operation: 'preview' | 'production' | 'rollback', payload: Record<string, unknown>, timeoutMs: number): Promise<ManagedSiteDeploymentReceipt> => {
+    const authority = payload.providerAuthority as { authorityFingerprint?: unknown } | undefined
+    if (options.providerAuthorityFingerprint && authority?.authorityFingerprint !== options.providerAuthorityFingerprint) throw createError({ statusCode: 409, statusMessage: 'Deployment provider configuration authority changed before transport execution.' })
     const credential = await options.resolveCredential(options.credentialReference)
     if (!credential.ok) throw createError({ statusCode: 503, statusMessage: 'Managed deployment credential reference could not be resolved.' })
     const controller = new AbortController()
