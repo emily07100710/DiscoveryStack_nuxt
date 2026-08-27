@@ -389,7 +389,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="builder-experience" :style="themeStyle">
+  <main class="builder-experience" data-public-preview-api="/api/managed-sites/previews" :style="themeStyle">
     <div class="builder-atmosphere" aria-hidden="true"><span></span><span></span><span></span></div>
     <header class="builder-masthead">
       <div class="builder-masthead-copy">

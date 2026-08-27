@@ -11,7 +11,8 @@ const publicApiPaths = [...component.matchAll(/publicApiFetch(?:<[^>]+>)?\('([^'
 describe('website builder safety and presentation contracts', () => {
   it('uses only the existing public site-analysis API and never introduces private credentials or persistence', () => {
     expect(publicApiPaths).toEqual(['/api/site-analysis'])
-    expect(component).not.toMatch(/\/api\/(?!site-analysis|leads)[A-Za-z0-9/_-]+/)
+    expect(component).toContain('data-public-preview-api="/api/managed-sites/previews"')
+    expect(component).not.toMatch(/\/api\/(?!site-analysis|leads|managed-sites\/previews)[A-Za-z0-9/_-]+/)
     expect(component).not.toMatch(/(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)|document\.cookie\s*=|v-model[^\n]*(?:password|api[_-]?key|access[_-]?token)/i)
     expect(component).toContain('不收集密碼、身分證、付款資料或 API key')
     expect(component).toContain('沒有保存聯絡資料')
