@@ -57,6 +57,36 @@ describe('content-operations:geo-modelops-tick', () => {
     expect(result.processed).toEqual([{ ownerUserId: 42, status: 'blocked', reason: 'multiple_active_cycles' }])
   })
 
+  it('uses the sole enabled policy when a newer policy draft remains paused', async () => {
+    const modelOps = createMemoryModelOpsRepository()
+    const outcome = createMemoryGeoOutcomeRepository()
+    const enabled = await createModelOpsPolicy(42, { ...POLICY, cooldownHours: 0 }, 'enabled-policy-version', modelOps)
+    await modelOps.updatePolicy(42, enabled.policyId, { status: 'enabled', authorizedByOwnerUserId: 42, authorizedAt: new Date('2026-08-28T00:00:00.000Z').toISOString() })
+    await new Promise(resolve => setTimeout(resolve, 2))
+    const pausedDraft = await createModelOpsPolicy(42, { ...POLICY, cooldownHours: 1 }, 'paused-policy-version', modelOps)
+    expect(pausedDraft.status).toBe('paused')
+
+    const result = await runGeoModelOpsTick({ outcomeRepository: outcome, modelOpsRepository: modelOps }, new Date('2026-08-28T00:00:00.000Z'), 'scheduler-policy-selection-worker')
+
+    expect(result.processed).toHaveLength(1)
+    expect(result.processed[0]).toMatchObject({ ownerUserId: 42, status: 'insufficient_data' })
+    expect((await modelOps.listCycles(42))[0]?.policyId).toBe(enabled.policyId)
+  })
+
+  it('fails closed when more than one policy is enabled for the same owner', async () => {
+    const modelOps = createMemoryModelOpsRepository()
+    const outcome = createMemoryGeoOutcomeRepository()
+    const first = await createModelOpsPolicy(42, { ...POLICY, cooldownHours: 0 }, 'ambiguous-policy-one', modelOps)
+    const second = await createModelOpsPolicy(42, { ...POLICY, cooldownHours: 1 }, 'ambiguous-policy-two', modelOps)
+    await modelOps.updatePolicy(42, first.policyId, { status: 'enabled', authorizedByOwnerUserId: 42, authorizedAt: new Date('2026-08-28T00:00:00.000Z').toISOString() })
+    await modelOps.updatePolicy(42, second.policyId, { status: 'enabled', authorizedByOwnerUserId: 42, authorizedAt: new Date('2026-08-28T00:00:01.000Z').toISOString() })
+
+    const result = await runGeoModelOpsTick({ outcomeRepository: outcome, modelOpsRepository: modelOps }, new Date('2026-08-28T00:00:02.000Z'), 'scheduler-ambiguous-policy-worker')
+
+    expect(result.processed).toEqual([{ ownerUserId: 42, status: 'blocked', reason: 'multiple_enabled_policies' }])
+    expect(await modelOps.listCycles(42)).toHaveLength(0)
+  })
+
   it('caps training executions at five and leaves the sixth owner deferred', async () => {
     const ownerIds = [42, 43, 44, 45, 46, 47]
     const outcome = createMemoryGeoOutcomeRepository(combinedState(sourceState, ownerIds))

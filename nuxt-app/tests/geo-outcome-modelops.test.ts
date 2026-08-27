@@ -35,6 +35,15 @@ function trustedObservation(index: number, citationStatus: 'cited' | 'not_cited'
 function pair(index: number, ownerUserId = OWNER, overrides: Record<string, unknown> = {}): OutcomeObservation[] {
   return [trustedObservation(index, 'cited', ownerUserId, overrides), trustedObservation(index, 'not_cited', ownerUserId, { ...overrides, page: `${String(overrides.group || `group-${index}`)}-negative-${index}` })]
 }
+function invertedPair(index: number, ownerUserId = OWNER): OutcomeObservation[] {
+  const group = `inverted-group-${index}`
+  const positive = rawObservation(index, 'cited', { group, website: `inverted-site-${index}` })
+  const negative = rawObservation(index, 'not_cited', { group, website: `inverted-site-${index}`, page: `${group}-negative` })
+  const positiveFeatures = structuredClone(positive.contentFeatureVector)
+  positive.contentFeatureVector = structuredClone(negative.contentFeatureVector)
+  negative.contentFeatureVector = positiveFeatures
+  return [normalizeTrustedObservation(positive, ownerUserId), normalizeTrustedObservation(negative, ownerUserId)]
+}
 async function seedObservations(repo: MemoryGeoOutcomeRepository, rows: OutcomeObservation[]) { for (const row of rows) await repo.saveObservationTransactional(row.ownerUserId, row) }
 function policyInput(overrides: Record<string, unknown> = {}) { return { cadence: 'weekly', minimumNewVerifiedCandidates: 200, minimumNewQueryGroups: 30, minimumNewWebsites: 5, minimumObservationSpanDays: 14, allowedModelFamilies: ['regularized_logistic_baseline_v1'], maximumTrainingRunsPerCycle: 1, cooldownHours: 168, shadowEvaluationEnabled: true, expiresAt: null, ...overrides } }
 
@@ -200,6 +209,72 @@ describe('shadow safety and owner rollback', () => {
     expect(await repo.listRollbackDecisions(OWNER)).toHaveLength(0)
   })
 
+  it('recovers a severe shadow evaluation when the artifact status write fails once', async () => {
+    class FailOnceShadowStatusRepository extends InMemoryGeoOutcomeRepository {
+      private failed = false
+      override async markArtifactShadowFailed(ownerUserId: number, artifactId: string) {
+        if (!this.failed) { this.failed = true; throw new Error('injected shadow status persistence failure') }
+        return super.markArtifactShadowFailed(ownerUserId, artifactId)
+      }
+    }
+    const outcome = new FailOnceShadowStatusRepository(trainedState)
+    const repo = createMemoryModelOpsRepository()
+    const source = await outcome.getArtifact(OWNER, trainedArtifactId)
+    const zeroArtifact = createModelArtifact({ ownerUserId: OWNER, taskType: source!.taskType, modelFamily: source!.modelFamily, datasetManifestFingerprint: source!.datasetManifestFingerprint, splitManifestFingerprint: source!.splitManifestFingerprint, parameters: { coefficients: source!.coefficients.map(() => 0), intercept: 0, normalizationStatistics: source!.normalizationStatistics, trainingRowCount: source!.trainingRowCount, featureKeys: source!.coefficients.map((_, index) => `feature_${index}`), trainingConfiguration: source!.trainingConfiguration }, evaluationMetrics: source!.evaluationMetrics })
+    await outcome.saveArtifactTransactional(OWNER, zeroArtifact)
+    await reviewModel(OWNER, zeroArtifact.artifactId, 'approve_for_shadow', OWNER, 'Owner approved retryable shadow status test.', outcome)
+    await seedObservations(outcome, Array.from({ length: 20 }, (_, index) => pair(1_100 + index)).flat())
+    const at = new Date('2030-01-01T00:00:00.000Z')
+
+    await expect(evaluateModelOpsShadow(OWNER, zeroArtifact.artifactId, outcome, repo, at)).rejects.toThrow(/injected shadow status/i)
+    expect(await repo.listShadowEvaluations(OWNER, zeroArtifact.artifactId)).toHaveLength(1)
+    expect((await outcome.getArtifact(OWNER, zeroArtifact.artifactId))?.status).toBe('approved_for_shadow')
+
+    const recovered = await evaluateModelOpsShadow(OWNER, zeroArtifact.artifactId, outcome, repo, at)
+    expect(recovered.status).toBe('needs_owner_attention')
+    expect(await repo.listShadowEvaluations(OWNER, zeroArtifact.artifactId)).toHaveLength(1)
+    expect((await outcome.getArtifact(OWNER, zeroArtifact.artifactId))?.status).toBe('shadow_failed')
+  })
+
+  it('reads the prior nested test F1 and blocks a severe shadow regression', async () => {
+    const outcome = createMemoryGeoOutcomeRepository(trainedState)
+    const repo = createMemoryModelOpsRepository()
+    const reviewed = await reviewModel(OWNER, trainedArtifactId, 'approve_for_shadow', OWNER, 'Owner approved regression detection shadow test.', outcome)
+    const priorFingerprint = hash('prior-shadow-evaluation')
+    await repo.saveShadowEvaluation(OWNER, {
+      evaluationId: `geo-modelops-shadow-${priorFingerprint.slice(0, 24)}`,
+      ownerUserId: OWNER,
+      artifactId: trainedArtifactId,
+      artifactHash: reviewed.artifact.artifactHash,
+      evaluationWindowStart: '2027-01-01T00:00:00.000Z',
+      evaluationWindowEnd: '2027-02-01T00:00:00.000Z',
+      observationFingerprints: [],
+      candidateCount: 500,
+      positiveCount: 250,
+      negativeCount: 250,
+      queryGroupCount: 250,
+      websiteCount: 250,
+      engineCounts: { 'chatgpt:consumer_surface': 500 },
+      binaryMetrics: { test: { f1: 1 } },
+      rankingMetrics: {},
+      calibrationDiagnostics: {},
+      driftDiagnostics: {},
+      status: 'completed',
+      reasonCodes: [],
+      evaluationFingerprint: priorFingerprint,
+      createdAt: '2027-02-01T00:00:00.000Z',
+    })
+    await seedObservations(outcome, Array.from({ length: 250 }, (_, index) => invertedPair(1_500 + index)).flat())
+
+    const evaluation = await evaluateModelOpsShadow(OWNER, trainedArtifactId, outcome, repo, new Date('2031-01-01T00:00:00.000Z'))
+
+    expect(evaluation.reasonCodes).toContain('metrics_regression_or_drift')
+    expect(evaluation.reasonCodes).not.toContain('zero_prediction_class')
+    expect(evaluation.status).toBe('needs_owner_attention')
+    expect((evaluation.driftDiagnostics as { previousTestF1: number }).previousTestF1).toBe(1)
+    expect((await outcome.getArtifact(OWNER, trainedArtifactId))?.status).toBe('shadow_failed')
+  })
+
   it('requires a compatible owner rollback decision and keeps decision append-only', async () => {
     const outcome = createMemoryGeoOutcomeRepository(trainedState)
     const repo = createMemoryModelOpsRepository()
@@ -213,5 +288,28 @@ describe('shadow safety and owner rollback', () => {
     expect(valid.decision.decisionStatus).toBe('approved')
     expect((await outcome.getArtifact(OWNER, trainedArtifactId))?.status).toBe('revoked')
     expect((await repo.listRollbackDecisions(OWNER))).toHaveLength(1)
+  })
+
+  it('recovers rollback after the model revoke write fails without duplicating its decision ledger', async () => {
+    class FailOnceRollbackRepository extends InMemoryGeoOutcomeRepository {
+      private failed = false
+      override async transitionArtifactWithDecision(ownerUserId: number, artifactId: string, nextStatus: ModelArtifact['status'], reviewerUserId: number, reason: string, datasetManifestHash: string, rollbackArtifactHash: string | null = null) {
+        if (nextStatus === 'revoked' && !this.failed) { this.failed = true; throw new Error('injected rollback persistence failure') }
+        return super.transitionArtifactWithDecision(ownerUserId, artifactId, nextStatus, reviewerUserId, reason, datasetManifestHash, rollbackArtifactHash)
+      }
+    }
+    const outcome = new FailOnceRollbackRepository(trainedState)
+    const repo = createMemoryModelOpsRepository()
+    await reviewModel(OWNER, trainedArtifactId, 'approve_for_shadow', OWNER, 'Owner approved retryable rollback source artifact.', outcome)
+    const rollbackTarget = (await outcome.listArtifacts(OWNER)).find(item => item.status === 'approved_for_shadow' && item.artifactId !== trainedArtifactId)!
+    const reason = 'Owner explicitly confirmed retryable rollback after shadow review.'
+
+    await expect(rollbackModelOpsArtifact(OWNER, trainedArtifactId, rollbackTarget.artifactHash, reason, outcome, repo)).rejects.toThrow(/injected rollback persistence/i)
+    expect(await repo.listRollbackDecisions(OWNER)).toHaveLength(1)
+    expect((await outcome.getArtifact(OWNER, trainedArtifactId))?.status).toBe('approved_for_shadow')
+
+    const recovered = await rollbackModelOpsArtifact(OWNER, trainedArtifactId, rollbackTarget.artifactHash, reason, outcome, repo)
+    expect(recovered.revokedArtifact.status).toBe('revoked')
+    expect(await repo.listRollbackDecisions(OWNER)).toHaveLength(1)
   })
 })

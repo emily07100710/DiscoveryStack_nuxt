@@ -18,8 +18,9 @@ function isRetryable(error: unknown): boolean {
   return /(timeout|deadlock|connection|temporarily unavailable|retryable)/u.test(message)
 }
 
-function latestEnabledPolicy(policies: ModelOpsPolicy[], at: Date): ModelOpsPolicy | null {
-  return policies.filter(policy => policy.status === 'enabled' && (!policy.expiresAt || new Date(policy.expiresAt).getTime() > at.getTime())).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).at(-1) || null
+function enabledPolicy(policies: ModelOpsPolicy[], at: Date): { policy: ModelOpsPolicy | null, ambiguous: boolean } {
+  const enabled = policies.filter(policy => policy.status === 'enabled' && (!policy.expiresAt || new Date(policy.expiresAt).getTime() > at.getTime())).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+  return { policy: enabled.length === 1 ? enabled[0]! : null, ambiguous: enabled.length > 1 }
 }
 
 async function hasTrainingWork(ownerUserId: number, policy: ModelOpsPolicy, outcomeRepository: ModelOpsDependencies['outcomeRepository']): Promise<boolean> {
@@ -40,7 +41,9 @@ function cooldownActive(cycle: { createdAt: string } | undefined, policy: ModelO
 async function processOwner(ownerUserId: number, dependencies: ModelOpsDependencies, at: Date, leaseOwner: string, trainingExecutions: number): Promise<{ records: TickRecord[], trainingExecutionsDelta: number }> {
   const { outcomeRepository, modelOpsRepository } = dependencies
   const policies = await modelOpsRepository.listPolicies(ownerUserId)
-  const policy = latestEnabledPolicy(policies, at)
+  const selection = enabledPolicy(policies, at)
+  if (selection.ambiguous) return { records: [{ ownerUserId, status: 'blocked', reason: 'multiple_enabled_policies' }], trainingExecutionsDelta: 0 }
+  const policy = selection.policy
   if (!policy) return { records: [{ ownerUserId, status: 'blocked', reason: 'policy_expired_or_missing' }], trainingExecutionsDelta: 0 }
   const cycles = (await modelOpsRepository.listCycles(ownerUserId)).filter(cycle => ACTIVE_CYCLE_STATUSES.includes(cycle.status)).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   if (cycles.length > 1) return { records: [{ ownerUserId, status: 'blocked', reason: 'multiple_active_cycles' }], trainingExecutionsDelta: 0 }
