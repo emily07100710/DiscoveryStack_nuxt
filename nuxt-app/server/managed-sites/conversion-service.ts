@@ -65,8 +65,22 @@ async function convertPaidOrderWithinRepositories(ownerUserId: number, input: Or
     const existingVersions = existingProject ? await repositories.managed.listVersions(ownerUserId, existingProject.id) : []
     const existingSubscription = existingProject ? await repositories.managed.findSubscription(ownerUserId, existingProject.id) : null
     const activeVersion = existingProject && existingProject.activeVersionId ? existingVersions.find(version => version.id === existingProject.activeVersionId) : null
-    if (!existingProject || !activeVersion || !existingSubscription) fail('Paid order conversion is partially linked and requires a safe retry.')
-    return { order, project: existingProject, version: activeVersion, subscription: existingSubscription, replayed: true, saga: 'payment_verified_then_conversion' }
+    if (!existingProject) fail('Paid order conversion is partially linked and requires a safe retry.')
+    if (activeVersion && existingSubscription) return { order, project: existingProject, version: activeVersion, subscription: existingSubscription, replayed: true, saga: 'payment_verified_then_conversion' }
+    if (order.status !== 'payment_verified' || quote.status !== 'locked' || subscriptionIntent.status !== 'entitled' || !order.paymentIntentReference || existingSubscription) fail('Pre-purchase project cannot be entitled without the exact verified payment transition.')
+    const sourceVersions = existingVersions.filter(version => version.createdByAuthority === 'owner_session' && version.lifecycleStatus === 'draft')
+    const sourceVersion = sourceVersions.length === 1 ? sourceVersions[0] : null
+    if (!sourceVersion) fail('Pre-purchase source version is missing, ambiguous, or no longer immutable draft authority.')
+    const activatedVersion = await repositories.managed.updateVersion(ownerUserId, sourceVersion.id, { lifecycleStatus: 'active' })
+    if (!activatedVersion) fail('Pre-purchase source version could not be activated after verified payment.')
+    const nowDate = clock()
+    const termEndsAt = new Date(nowDate)
+    termEndsAt.setUTCMonth(termEndsAt.getUTCMonth() + 12)
+    const subscription = await repositories.managed.insertSubscription({ ownerUserId, projectId: existingProject.id, planKey: quote.planKey, status: 'active', subscriptionReference: `verified-payment:${order.id}`, gracePeriodEndsAt: null, termEndsAt, idempotencyKey: `subscription-conversion:${order.id}`, stateFingerprint: stableFingerprint({ projectId: existingProject.id, quoteId: quote.id, orderId: order.id, status: 'active' }) } as any)
+    const project = await repositories.managed.updateProject(ownerUserId, existingProject.id, { status: 'payment_verified', activeVersionId: activatedVersion.id } as any)
+    await repositories.ordering.updatePreview(preview.id, { status: 'converted', updatedAt: nowDate } as any)
+    if (!project) fail('Pre-purchase project could not accept verified commercial authority.')
+    return { order, project, version: activatedVersion, subscription, replayed: false, saga: 'payment_verified_then_conversion' }
   }
   if (quote.status !== 'locked' || subscriptionIntent.status !== 'entitled' || !order.paymentIntentReference) fail('Paid order has not completed the server-owned entitlement transition.')
   const spec: SiteSpec = parseSiteSpecSnapshot(preview.siteSpecSnapshot)

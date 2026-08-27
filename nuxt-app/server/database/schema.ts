@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import { boolean, decimal, index, int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/mysql-core'
 
 /** OAuth identities are private and are used only for owner-gated administration. */
@@ -1676,6 +1677,248 @@ export type ManagedSiteDomainIntent = typeof managedSiteDomainIntents.$inferSele
 export type ManagedSiteProvisioningPlan = typeof managedSiteProvisioningPlans.$inferSelect
 export type ManagedSiteProvisioningStep = typeof managedSiteProvisioningSteps.$inferSelect
 export type ManagedSiteProvisioningEvent = typeof managedSiteProvisioningEvents.$inferSelect
+
+
+/** Server-only registry for managed-site connector capabilities. Only opaque credential references are stored. */
+export const managedSiteProviderConfigurations = mysqlTable('managedSiteProviderConfigurations', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  capability: mysqlEnum('capability', ['website_generator', 'payment', 'domain_registration', 'dns_tls', 'deployment']).notNull(),
+  providerKey: varchar('providerKey', { length: 96 }).notNull(),
+  readinessStatus: mysqlEnum('readinessStatus', ['disabled', 'mock', 'configured', 'verified', 'blocked']).default('disabled').notNull(),
+  credentialReference: varchar('credentialReference', { length: 160 }),
+  transportConfiguration: json('transportConfiguration').notNull(),
+  configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
+  verificationReceiptFingerprint: varchar('verificationReceiptFingerprint', { length: 128 }),
+  capabilityIdentity: varchar('capabilityIdentity', { length: 160 }),
+  blockedReasonCode: varchar('blockedReasonCode', { length: 120 }),
+  verifiedAt: timestamp('verifiedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_provider_config_owner_capability_unique').on(table.ownerUserId, table.capability),
+  uniqueIndex('managed_site_provider_config_owner_fingerprint_unique').on(table.ownerUserId, table.configurationFingerprint),
+  index('managed_site_provider_config_owner_status_idx').on(table.ownerUserId, table.readinessStatus),
+])
+
+/** Exact owner-claimed commercial lineage established before any provider generation or checkout session. */
+export const managedSitePrePurchaseBindings = mysqlTable('managedSitePrePurchaseBindings', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  sourceVersionId: int('sourceVersionId').notNull().references(() => managedSiteVersions.id),
+  previewId: int('previewId').notNull().references(() => managedSitePreviews.id),
+  quoteId: int('quoteId').notNull().references(() => managedSiteQuotes.id),
+  draftOrderId: int('draftOrderId').notNull().references(() => managedSiteDraftOrders.id),
+  commerceSnapshotFingerprint: varchar('commerceSnapshotFingerprint', { length: 128 }).notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_prepurchase_project_unique').on(table.projectId),
+  uniqueIndex('managed_site_prepurchase_order_unique').on(table.draftOrderId),
+  uniqueIndex('managed_site_prepurchase_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('managed_site_prepurchase_owner_request_unique').on(table.ownerUserId, table.requestFingerprint),
+  index('managed_site_prepurchase_owner_lineage_idx').on(table.ownerUserId, table.previewId, table.quoteId, table.draftOrderId),
+])
+
+/** Immutable admitted generator output. Source bytes remain in the owner vault behind an opaque reference. */
+export const managedSiteGenerationCandidates = mysqlTable('managedSiteGenerationCandidates', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  sourceVersionId: int('sourceVersionId').notNull().references(() => managedSiteVersions.id),
+  requestSchemaVersion: varchar('requestSchemaVersion', { length: 96 }).notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  providerKey: varchar('providerKey', { length: 96 }).notNull(),
+  providerModel: varchar('providerModel', { length: 128 }).notNull(),
+  providerRequestId: varchar('providerRequestId', { length: 160 }).notNull(),
+  manifest: json('manifest').notNull(),
+  manifestHash: varchar('manifestHash', { length: 128 }).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  vaultReference: varchar('vaultReference', { length: 512 }).notNull(),
+  gateSummary: json('gateSummary').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_generation_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('managed_site_generation_owner_request_unique').on(table.ownerUserId, table.requestFingerprint),
+  uniqueIndex('managed_site_generation_provider_request_unique').on(table.providerKey, table.providerRequestId),
+  index('managed_site_generation_owner_project_idx').on(table.ownerUserId, table.projectId, table.createdAt),
+])
+
+/** Mutable projection for one immutable candidate moving through preview approval, release, and rollback. */
+export const managedSiteReleaseProjections = mysqlTable('managedSiteReleaseProjections', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  generationCandidateId: int('generationCandidateId').references(() => managedSiteGenerationCandidates.id),
+  versionId: int('versionId').notNull().references(() => managedSiteVersions.id),
+  previewId: int('previewId').references(() => managedSitePreviews.id),
+  quoteId: int('quoteId').references(() => managedSiteQuotes.id),
+  draftOrderId: int('draftOrderId').references(() => managedSiteDraftOrders.id),
+  commerceSnapshotFingerprint: varchar('commerceSnapshotFingerprint', { length: 128 }),
+  releaseKind: mysqlEnum('releaseKind', ['generated_site', 'existing_site']).notNull(),
+  targetKey: varchar('targetKey', { length: 120 }).notNull(),
+  canonicalDomain: varchar('canonicalDomain', { length: 253 }).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['candidate', 'preview_pending', 'preview_ready', 'approved', 'checkout_pending', 'payment_verified', 'provisioning', 'deployment_pending', 'rollback_pending', 'live_verified', 'geo_active', 'retry_wait', 'blocked', 'failed', 'rolled_back']).default('candidate').notNull(),
+  previewUrl: varchar('previewUrl', { length: 2048 }),
+  providerPreviewId: varchar('providerPreviewId', { length: 160 }),
+  approvalFingerprint: varchar('approvalFingerprint', { length: 128 }),
+  approvedAt: timestamp('approvedAt'),
+  activeDeploymentReceiptFingerprint: varchar('activeDeploymentReceiptFingerprint', { length: 128 }),
+  rollbackFromReleaseId: int('rollbackFromReleaseId'),
+  blockedReasonCode: varchar('blockedReasonCode', { length: 120 }),
+  nextSafeAction: varchar('nextSafeAction', { length: 120 }).notNull(),
+  projectionFingerprint: varchar('projectionFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_release_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('managed_site_release_project_target_content_unique').on(table.projectId, table.targetKey, table.contentHash),
+  index('managed_site_release_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status),
+  index('managed_site_release_commerce_lineage_idx').on(table.ownerUserId, table.previewId, table.quoteId, table.draftOrderId),
+])
+
+/** Signature-verified webhook inbox. Raw bodies and authorization material are never stored. */
+export const managedSitePaymentWebhookInbox = mysqlTable('managedSitePaymentWebhookInbox', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').references(() => users.id),
+  projectId: int('projectId').references(() => managedSiteProjects.id),
+  releaseId: int('releaseId').references(() => managedSiteReleaseProjections.id),
+  draftOrderId: int('draftOrderId').notNull().references(() => managedSiteDraftOrders.id),
+  providerKey: varchar('providerKey', { length: 96 }).notNull(),
+  providerEventId: varchar('providerEventId', { length: 160 }).notNull(),
+  eventType: varchar('eventType', { length: 96 }).notNull(),
+  canonicalPayloadHash: varchar('canonicalPayloadHash', { length: 128 }).notNull(),
+  exactResponseIdentity: varchar('exactResponseIdentity', { length: 256 }).notNull(),
+  eventFingerprint: varchar('eventFingerprint', { length: 128 }).notNull(),
+  processingStatus: mysqlEnum('processingStatus', ['processing', 'succeeded', 'ignored', 'blocked']).default('processing').notNull(),
+  processingFingerprint: varchar('processingFingerprint', { length: 128 }).notNull(),
+  receivedAt: timestamp('receivedAt').defaultNow().notNull(),
+  completedAt: timestamp('completedAt'),
+}, table => [
+  uniqueIndex('managed_site_payment_inbox_provider_event_unique').on(table.providerKey, table.providerEventId),
+  uniqueIndex('managed_site_payment_inbox_event_fingerprint_unique').on(table.eventFingerprint),
+  index('managed_site_payment_inbox_order_status_idx').on(table.draftOrderId, table.processingStatus),
+])
+
+export type ManagedSitePaymentWebhookInbox = typeof managedSitePaymentWebhookInbox.$inferSelect
+
+/** Append-only, content-bound gate observations. A preview transport receipt is never a substitute for these results. */
+export const managedSiteGateResults = mysqlTable('managedSiteGateResults', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  versionId: int('versionId').notNull().references(() => managedSiteVersions.id),
+  generationCandidateId: int('generationCandidateId').notNull().references(() => managedSiteGenerationCandidates.id),
+  releaseId: int('releaseId').notNull().references(() => managedSiteReleaseProjections.id),
+  gateType: mysqlEnum('gateType', ['artifact_admission', 'deterministic_compiler', 'preview_build', 'security_static_active_content', 'geo_content_structure', 'human_review']).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  result: mysqlEnum('result', ['passed', 'failed', 'required']).notNull(),
+  reasonCodes: json('reasonCodes').notNull(),
+  limitations: json('limitations').notNull(),
+  receiptFingerprint: varchar('receiptFingerprint', { length: 128 }).notNull(),
+  observedAt: timestamp('observedAt').notNull(),
+}, table => [
+  uniqueIndex('managed_site_gate_release_type_input_unique').on(table.releaseId, table.gateType, table.inputFingerprint),
+  uniqueIndex('managed_site_gate_owner_receipt_unique').on(table.ownerUserId, table.receiptFingerprint),
+  index('managed_site_gate_owner_release_result_idx').on(table.ownerUserId, table.releaseId, table.result),
+])
+
+/** Global atomic authority claim for a canonical domain. Release is explicit; no workflow silently frees a claim. */
+export const managedSiteDomainClaims = mysqlTable('managedSiteDomainClaims', {
+  id: int('id').autoincrement().primaryKey(),
+  canonicalDomain: varchar('canonicalDomain', { length: 253 }).notNull(),
+  activeCanonicalDomainKey: varchar('activeCanonicalDomainKey', { length: 253 }).generatedAlwaysAs(sql`CASE WHEN \`status\` = 'released' THEN NULL ELSE \`canonicalDomain\` END`, { mode: 'stored' }),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  releaseId: int('releaseId').notNull().references(() => managedSiteReleaseProjections.id),
+  claimKind: mysqlEnum('claimKind', ['generated', 'existing']).notNull(),
+  status: mysqlEnum('status', ['pending', 'verified', 'released', 'blocked']).default('pending').notNull(),
+  authorityReceiptFingerprint: varchar('authorityReceiptFingerprint', { length: 128 }),
+  requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  projectionFingerprint: varchar('projectionFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_domain_claim_active_canonical_unique').on(table.activeCanonicalDomainKey),
+  uniqueIndex('managed_site_domain_claim_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('managed_site_domain_claim_release_unique').on(table.releaseId),
+  index('managed_site_domain_claim_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status),
+])
+
+/** Leased, bounded connector attempts. Error fields are redacted summaries only. */
+export const managedSiteConnectorAttempts = mysqlTable('managedSiteConnectorAttempts', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').references(() => managedSiteProjects.id),
+  draftOrderId: int('draftOrderId').references(() => managedSiteDraftOrders.id),
+  releaseId: int('releaseId').references(() => managedSiteReleaseProjections.id),
+  capability: mysqlEnum('capability', ['website_generator', 'payment', 'domain_registration', 'dns_tls', 'deployment']).notNull(),
+  operation: varchar('operation', { length: 120 }).notNull(),
+  executionMode: mysqlEnum('executionMode', ['dry_run', 'mocked', 'live']).notNull(),
+  status: mysqlEnum('status', ['queued', 'processing', 'retry_wait', 'blocked', 'failed', 'succeeded']).default('queued').notNull(),
+  attemptNumber: int('attemptNumber').default(0).notNull(),
+  maxAttempts: int('maxAttempts').default(3).notNull(),
+  timeoutMs: int('timeoutMs').notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  leaseOwner: varchar('leaseOwner', { length: 128 }),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
+  retryEligibleAt: timestamp('retryEligibleAt'),
+  exactResponseIdentity: varchar('exactResponseIdentity', { length: 256 }),
+  errorCode: varchar('errorCode', { length: 120 }),
+  errorSummary: varchar('errorSummary', { length: 500 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_connector_attempt_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('managed_site_connector_attempt_owner_request_unique').on(table.ownerUserId, table.requestFingerprint),
+  index('managed_site_connector_attempt_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status),
+  index('managed_site_connector_attempt_owner_order_idx').on(table.ownerUserId, table.draftOrderId, table.status),
+])
+
+/** Append-only verified provider receipts. Raw payloads and credentials are never retained. */
+export const managedSiteConnectorReceipts = mysqlTable('managedSiteConnectorReceipts', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').references(() => managedSiteProjects.id),
+  draftOrderId: int('draftOrderId').references(() => managedSiteDraftOrders.id),
+  releaseId: int('releaseId').references(() => managedSiteReleaseProjections.id),
+  attemptId: int('attemptId').references(() => managedSiteConnectorAttempts.id),
+  capability: mysqlEnum('capability', ['website_generator', 'payment', 'domain_registration', 'dns_tls', 'deployment']).notNull(),
+  providerKey: varchar('providerKey', { length: 96 }).notNull(),
+  providerEventId: varchar('providerEventId', { length: 160 }).notNull(),
+  receiptType: varchar('receiptType', { length: 120 }).notNull(),
+  receiptStatus: mysqlEnum('receiptStatus', ['verified', 'ignored_out_of_order', 'replayed', 'rejected']).notNull(),
+  externalReference: varchar('externalReference', { length: 160 }),
+  exactResponseIdentity: varchar('exactResponseIdentity', { length: 256 }).notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }),
+  canonicalDomain: varchar('canonicalDomain', { length: 253 }),
+  metadata: json('metadata').notNull(),
+  receiptFingerprint: varchar('receiptFingerprint', { length: 128 }).notNull(),
+  verifiedAt: timestamp('verifiedAt').notNull(),
+}, table => [
+  uniqueIndex('managed_site_connector_receipt_provider_event_unique').on(table.providerKey, table.providerEventId),
+  uniqueIndex('managed_site_connector_receipt_owner_fingerprint_unique').on(table.ownerUserId, table.receiptFingerprint),
+  index('managed_site_connector_receipt_owner_project_idx').on(table.ownerUserId, table.projectId, table.verifiedAt),
+  index('managed_site_connector_receipt_owner_order_idx').on(table.ownerUserId, table.draftOrderId, table.verifiedAt),
+])
+
+export type ManagedSiteProviderConfiguration = typeof managedSiteProviderConfigurations.$inferSelect
+export type ManagedSitePrePurchaseBinding = typeof managedSitePrePurchaseBindings.$inferSelect
+export type ManagedSiteGenerationCandidate = typeof managedSiteGenerationCandidates.$inferSelect
+export type ManagedSiteReleaseProjection = typeof managedSiteReleaseProjections.$inferSelect
+export type ManagedSiteGateResult = typeof managedSiteGateResults.$inferSelect
+export type ManagedSiteDomainClaim = typeof managedSiteDomainClaims.$inferSelect
+export type ManagedSiteConnectorAttempt = typeof managedSiteConnectorAttempts.$inferSelect
+export type ManagedSiteConnectorReceipt = typeof managedSiteConnectorReceipts.$inferSelect
 
 
 /** Provider-neutral module integration intent. Tokens, secrets, and external writes are intentionally excluded. */
