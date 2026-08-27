@@ -64,11 +64,11 @@ function expandIpv6(value: string): string[] | null {
 function ipv6ToBigInt(value: string): bigint | null {
   const groups = expandIpv6(value)
   if (!groups) return null
-  return groups.reduce((total, group) => (total << 16n) + BigInt(`0x${group}`), 0n)
+  return groups.reduce((total, group) => (total << BigInt(16)) + BigInt(`0x${group}`), BigInt(0))
 }
 
 function ipv6InRange(value: bigint, prefix: bigint, bits: number): boolean {
-  const mask = ((1n << BigInt(bits)) - 1n) << BigInt(128 - bits)
+  const mask = ((BigInt(1) << BigInt(bits)) - BigInt(1)) << BigInt(128 - bits)
   return (value & mask) === prefix
 }
 
