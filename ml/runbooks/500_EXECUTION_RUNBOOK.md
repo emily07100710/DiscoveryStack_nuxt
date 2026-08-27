@@ -2,7 +2,7 @@
 
 **目的**：在不覆寫 `manifest-v3-250` 的前提下，建立可重建、可比較、可回滾的 500 筆 journeyStage 多任務模型。
 
-> **目前狀態（2026-08-27）**：本 runbook 的執行前檢查是 production-grade 目標門檻；實際固定的 v4-500 是 development candidate，含 `reviewed=250` 與 `needs_adjudication=250`，來源家族為 Google Search Central 250 + web.dev 250，尚未完成模型訓練。不得宣稱已取得 500 筆 metrics、checkpoint 或 artifact；production 前必須先完成新增樣本的人工 stageEvidence adjudication，並重新確認所有門檻。
+> **目前狀態（2026-08-27）**：本 runbook 的執行前檢查仍是 production-grade 目標門檻；實際固定的 v4-500 含 `reviewed=250` 與 `needs_adjudication=250`，來源家族為 Google Search Central 250 + web.dev 250。本次已完成一個 `stage_branch_weighted`、seed `20260820`、最多 2 epochs 的 fast-path、final evaluation 與 owner-only artifact upload，但不是完整 2 configs × 3 seeds ablation；test_v2 零預測 gate 失敗，狀態為 `candidate_not_ready`。production 前必須先完成新增樣本的人工 stageEvidence adjudication，並重新確認所有門檻。
 
 ## 執行前檢查
 
@@ -64,7 +64,7 @@
 
 ### Cell 9：artifact 封裝
 
-執行 `ml/packaging/package_artifact.py`，輸入本次 run 的 artifact directory，產生 `artifact-manifest.json`、`checksums/SHA256SUMS` 與 ZIP。封裝前先保存 Transformers-compatible checkpoint；v4+ 優先 `safetensors`，不要只保存無法自描述的 `state_dict`。ZIP 不得包含原始 JSONL、HTML、瀏覽器 profile、`.env`、token 或 secrets。
+執行 `ml/packaging/package_artifact.py`，輸入本次 run 的 artifact directory，產生 `artifact-manifest.json`、`checksums/SHA256SUMS` 與 ZIP。封裝前先保存 Transformers-compatible checkpoint；v4+ 優先 `safetensors`，不要只保存無法自描述的 `state_dict`。ZIP 不得包含原始 JSONL、HTML、瀏覽器 profile、`.env`、token 或 secrets。本次 fast-path 已完成此流程，ZIP 為 `discoverystack-ml-v4-500-d1868ebd13eb.zip`、500810915 bytes、SHA256 `89683d0630aff1e003cad360e44ae255f3434bbbb0e07af01d1057990e8443ad`，Drive file ID `1yBQj_VD8g0jGo1c7UbpTnpb1fzTucMI3`，且 readiness 為 `candidate_not_ready`。
 
 ## 500 版建議 run ID
 

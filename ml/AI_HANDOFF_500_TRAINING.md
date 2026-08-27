@@ -2,7 +2,7 @@
 
 **文件用途：** 本文件提供下一個 AI 或工程執行者在不接觸 Git 私有資料、不恢復 1,087 筆收集方向的前提下，接手既有 500 筆 SEO/GEO 多任務訓練工作的完整說明。
 
-> **截至 2026-08-27 的真實狀態：** 500 筆資料集、私有 Drive snapshot 與原始 optimized Colab Notebook 已保存並通過資料驗證；500 筆模型訓練尚未完成。沒有可信的 500 筆 checkpoint、epoch metrics、final test evaluation、artifact ZIP 或 Drive artifact upload。本文件刻意不填寫虛構的模型分數。
+> **截至 2026-08-27 的真實狀態：** 固定的 500 筆資料、私有 Drive snapshot 與 recovery Notebook 已通過驗證；本次已在 Tesla T4 完成一個可驗證的 fast-path bounded run、final evaluation 與 owner-only artifact upload。但這不是原定完整 `2 configs × 3 seeds × 最多 8 epochs` ablation，而且 `test_v2` 有三個 journeyStage 類別 predicted support 為零，因此 readiness 是 `candidate_not_ready`，不是 production-ready。本文件只記錄客觀分數與限制，不把 fast-path 冒充完整訓練。
 
 ## 1. 目標與範圍
 
@@ -133,7 +133,7 @@
 
 允許封裝的 artifact 內容應包括 self-describing checkpoint 或 Transformers-compatible model／safetensors、tokenizer、`training_config.json`、`label_maps.json`、`feature_stats.json`、metrics、兩個 test split 的 JSONL predictions、artifact manifest、checksums 與 ZIP。`ml/packaging/package_artifact.py` 是 allow-list packager。
 
-Artifact 絕不能包含 raw JSONL、HTML、瀏覽器 profile、Colab HTML capture、`.env`、OAuth material、token、secret 或任何未清理的 source cache。封裝後必須 assert `containsRawDataset=False`、`containsHtml=False`，驗證 ZIP bytes 與 SHA256，再上傳 owner-only Drive；本次目前沒有 artifact 可供查詢。
+Artifact 絕不能包含 raw JSONL、HTML、瀏覽器 profile、Colab HTML capture、`.env`、OAuth material、token、secret 或任何未清理的 source cache。這次 allow-list packaging 已 assert raw dataset 未被納入；ZIP bytes 為 `500810915`，SHA256 為 `89683d0630aff1e003cad360e44ae255f3434bbbb0e07af01d1057990e8443ad`，並已上傳至 owner-only Drive，file ID 為 `1yBQj_VD8g0jGo1c7UbpTnpb1fzTucMI3`。artifact readiness 仍是 `candidate_not_ready`，不可視為 production release。
 
 ## 9. Colab 阻塞的實際證據與接手方法
 
@@ -143,7 +143,7 @@ Colab 曾成功取得 Tesla T4，Drive OAuth 讀取成功，500-row manifest dow
 
 因此，若未來重新訓練，應使用本地產生的 recovery Notebook，而不是在原 Notebook 上繼續點擊。新鮮 T4 runtime 的執行順序應是：先執行自包含 setup cell；確認 `imports_ready=True`；載入 owner-only Drive snapshot；確認 500 rows、兩個 digest 與 split counts；建立 tokenizer、feature stats、dataset；執行 model definition 與 one-batch forward/backward smoke test；確認 `model_definition_ready=True` 與 `smoke_train_batch_ready=True`；先執行一個可觀察的 bounded run，再決定是否執行完整 2 configs × 3 seeds ablation。正式 run 必須在每個 run 開始及每個 epoch flush log，並保留完整 traceback。
 
-本次使用者已要求停止訓練，因此這些是日後接手指引，不是本次已完成的結果。不要執行原 Notebook 的 final evaluation 或 packaging cell，因為當前沒有 checkpoint、`selected_path`、`run_records` 或可信 metrics。
+本次 recovery retry 已通過 imports、資料驗證、model smoke gate，並以 `stage_branch_weighted`、seed `20260820`、最多 2 epochs 完成 fast-path。已取得 epoch logs、`run_records`、selected checkpoint、final evaluation 與 owner-only artifact。這仍不是完整 ablation；若要達成正式完成條件，下一個 AI 必須以本次 fast-path 作為 baseline，重新執行 `text_only_baseline` 與 `stage_branch_weighted` 的三 seed、最多 8 epochs 比較，不可使用 test_v2 調參。
 
 ## 10. 私有保存與專案檔案
 
@@ -165,9 +165,9 @@ Colab 曾成功取得 Tesla T4，Drive OAuth 讀取成功，500-row manifest dow
 
 ## 11. 最終交接結論
 
-本次成功保存的是 **500 筆 v4 資料版本、私有 Drive snapshot、私有原始 optimized Notebook、safe inventory、狀態紀錄、schema、runbook 與本交接文件**。本次沒有成功保存 500 筆 trained model artifact，因為訓練從未客觀進入可確認的 epoch 完成狀態，且在 `Path` NameError 後沒有 checkpoint。
+本次成功保存的是 **500 筆 v4 資料版本、私有 Drive snapshot、recovery Notebook、safe inventory、狀態紀錄、schema、runbook、交接文件，以及一個 fast-path trained model artifact**。該 artifact 的 test gate 結果是 `candidate_not_ready`：`test_v2` macro-F1 `0.1879598662`、micro-F1 `0.3953488372`，且 conversion、progression、understanding 的 predicted support 為零；`test_legacy_v1` macro-F1 `0.0422222222`。因此不可宣稱模型已達 production 或完整 500 訓練完成。
 
-下一個 AI 應從固定的 v4-500 manifest digest 開始，先讀本文件、`dataset-v4-500.schema.json`、`features-v1.json`、`500_EXECUTION_RUNBOOK.md` 與 `phase4_500_state.md`，再於新鮮 T4 runtime 使用 recovery Notebook。任何聲稱已完成 500 訓練的報告，都必須附有客觀的 epoch、checkpoint、metrics、ZIP SHA256 與 owner-only Drive metadata；在這些證據出現前，狀態必須保持為 **training incomplete / candidate not available**。
+下一個 AI 應從固定的 v4-500 manifest digest 開始，先讀本文件、`dataset-v4-500.schema.json`、`features-v1.json`、`500_EXECUTION_RUNBOOK.md`、`results_500.md` 與 `phase4_500_state.md`。本次已有客觀的 epoch、checkpoint、metrics、ZIP SHA256 與 owner-only Drive metadata，但狀態必須保持為 **fast-path evaluated / candidate_not_ready**；若要宣稱正式完成，仍需完成完整兩 config、三 seed ablation、checkpoint reload smoke、legacy regression 與 zero-prediction gate。
 
 ## References
 
