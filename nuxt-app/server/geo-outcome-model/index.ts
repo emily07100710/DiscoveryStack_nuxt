@@ -1,5 +1,6 @@
 export * from './constants'
 export * from './canonical'
+export * from './candidate-authority'
 export * from './types'
 export * from './normalization'
 export * from './observation-contract'

@@ -1,5 +1,4 @@
-import { and, eq } from 'drizzle-orm'
-import { llmVisibilityObservations, llmVisibilityProjects, llmVisibilityQueries, llmVisibilityRuns } from '../database/schema'
+import { resolveCandidateAuthority } from './candidate-authority'
 import { fingerprint, isSha256 } from './canonical'
 import type { GeoOutcomeDrizzleDatabase } from './repository-drizzle'
 import type { AuthoritativeEvidenceSource, EvidenceBinding, OutcomeObservation } from './types'
@@ -34,16 +33,12 @@ export async function resolveAuthoritativeLlmVisibilityEvidence(
   sourceRecordId: number,
 ): Promise<EvidenceBinding> {
   if (!Number.isSafeInteger(sourceRecordId) || sourceRecordId <= 0) throw new Error('Authoritative sourceRecordId must be a positive integer.')
-  const [source] = await database.select().from(llmVisibilityObservations).where(and(eq(llmVisibilityObservations.id, sourceRecordId), eq(llmVisibilityObservations.ownerUserId, ownerUserId))).limit(1)
-  if (!source) throw new Error('Authoritative LLM visibility evidence was not found for this owner.')
-  const [[project], [query], [run]] = await Promise.all([
-    database.select().from(llmVisibilityProjects).where(and(eq(llmVisibilityProjects.id, source.projectId), eq(llmVisibilityProjects.ownerUserId, ownerUserId))).limit(1),
-    database.select().from(llmVisibilityQueries).where(and(eq(llmVisibilityQueries.id, source.queryId), eq(llmVisibilityQueries.ownerUserId, ownerUserId))).limit(1),
-    database.select().from(llmVisibilityRuns).where(and(eq(llmVisibilityRuns.id, source.runId), eq(llmVisibilityRuns.ownerUserId, ownerUserId))).limit(1),
-  ])
-  if (!project || !query || !run) throw new Error('Authoritative evidence has dangling owner/project/query/run provenance.')
-  if (source.projectId !== project.id || source.projectId !== query.projectId || source.projectId !== run.projectId || source.queryId !== query.id || source.runId !== run.id) throw new Error('Authoritative evidence project/query/run provenance mismatch.')
+  const { authority, source: resolved } = await resolveCandidateAuthority(database, ownerUserId, sourceRecordId, observation.candidatePageIdentityHash)
+  const { source, project, query, run, citations, sourceCitationSetFingerprint } = resolved
   if (project.locale !== query.locale) throw new Error('Authoritative evidence project/query locale provenance mismatch.')
+  const citationIndex = citations.findIndex(item => item.canonicalCandidateUrlHash === authority.canonicalCandidateUrlHash)
+  const serverDerivedCitationStatus = citationIndex >= 0 ? 'cited' : 'not_cited'
+  const serverDerivedCitationPosition = citationIndex >= 0 ? citationIndex + 1 : null
   return projectAuthoritativeEvidenceBinding(ownerUserId, observation, {
     sourceRecordId: source.id,
     ownerUserId: source.ownerUserId,
@@ -54,22 +49,34 @@ export async function resolveAuthoritativeLlmVisibilityEvidence(
     queryActive: query.active,
     observationMode: run.observationMode,
     runStatus: run.status,
-    verifiedByOwner: source.verifiedByOwner,
+    verifiedByOwner: true,
     provider: run.provider,
     modelLabel: run.modelLabel,
     locale: query.locale,
     requestFingerprint: run.requestFingerprint,
     promptHash: query.promptHash,
     responseHash: source.responseHash,
+    sourceCitationSetFingerprint,
     evidenceLocator: source.evidenceLocator,
     observedAt: canonicalTimestamp(run.observedAt),
+    canonicalCandidateUrlHash: authority.canonicalCandidateUrlHash,
+    canonicalPageHash: authority.canonicalPageHash,
+    candidatePageIdentityHash: authority.candidatePageIdentityHash,
+    websiteIdentityHash: authority.websiteIdentityHash,
+    contentHash: authority.contentHash,
+    publicationReceiptFingerprint: authority.publicationReceiptFingerprint,
+    candidateAuthorityId: authority.id,
+    candidateAuthorityFingerprint: authority.decisionFingerprint,
+    candidateSetFingerprint: authority.candidateSetFingerprint,
+    serverDerivedCitationStatus,
+    serverDerivedCitationPosition,
   })
 }
 
 export function projectAuthoritativeEvidenceBinding(ownerUserId: number, observation: OutcomeObservation, source: AuthoritativeEvidenceSource): EvidenceBinding {
   if (source.ownerUserId !== ownerUserId) throw new Error('Authoritative LLM visibility evidence was not found for this owner.')
   if (source.projectStatus !== 'active' || !source.queryActive) throw new Error('Authoritative evidence project or query is stale.')
-  if (source.observationMode !== 'manual_verified' || source.runStatus !== 'completed' || source.verifiedByOwner !== true) throw new Error('Only completed owner-verified manual consumer-surface evidence may bind primary outcomes.')
+  if (source.observationMode !== 'manual_verified' || source.runStatus !== 'completed' || source.verifiedByOwner !== true) throw new Error('Only completed, durably reviewed manual consumer-surface evidence may bind primary outcomes.')
   if (!isSha256(source.responseHash) || !isSha256(source.requestFingerprint) || !isSha256(source.promptHash) || typeof source.evidenceLocator !== 'string' || source.evidenceLocator.length < 1 || source.evidenceLocator.length > 1000) throw new Error('Authoritative evidence hash or locator is incomplete.')
   const observedAt = canonicalTimestamp(source.observedAt)
   const locatorHash = authoritativeLocatorFingerprint({ sourceRecordId: source.sourceRecordId, sourceProjectId: source.projectId, sourceQueryId: source.queryId, sourceRunId: source.runId, sourceResponseHash: source.responseHash, evidenceLocator: source.evidenceLocator, sourceObservedAt: observedAt })
@@ -86,21 +93,38 @@ export function projectAuthoritativeEvidenceBinding(ownerUserId: number, observa
     && observation.locale === source.locale
     && observation.interface === 'consumer_surface'
     && (observation.labelBasis === 'manual_verified_primary' || observation.labelBasis === 'consumer_surface_observed')
+    && source.candidatePageIdentityHash === observation.candidatePageIdentityHash
+    && source.canonicalPageHash === observation.canonicalPageHash
+    && source.websiteIdentityHash === observation.websiteIdentityHash
+    && source.contentHash === observation.contentHash
+    && (source.publicationReceiptFingerprint || null) === observation.publicationReceiptFingerprint
+    && source.serverDerivedCitationStatus === observation.citationStatus
+    && source.serverDerivedCitationPosition === observation.citationPosition
+    && observation.observableStatus === 'observable'
+    && observation.retrievalStatus === 'retrieved'
   if (!exactIdentity) throw new Error('Authoritative evidence does not match the GEO observation owner/project/query/run/hash/locator identity.')
   const observedTime = Date.parse(observedAt)
   if (observedTime < Date.parse(observation.observationWindow.start) || observedTime > Date.parse(observation.observationWindow.end)) throw new Error('Authoritative evidence observedAt is outside the GEO observation window.')
-  return {
+  const binding = {
     ownerUserId,
     observationFingerprint: observation.observationFingerprint,
     evidenceLocatorHash: locatorHash,
-    purpose: 'geo_outcome_verification',
-    sourceKind: 'llm_visibility_observation',
+    purpose: 'geo_outcome_verification' as const,
+    sourceKind: 'llm_visibility_observation' as const,
     sourceRecordId: source.sourceRecordId,
     sourceProjectId: source.projectId,
     sourceQueryId: source.queryId,
     sourceRunId: source.runId,
     sourceResponseHash: source.responseHash,
+    sourceCitationSetFingerprint: source.sourceCitationSetFingerprint!,
+    candidateAuthorityId: source.candidateAuthorityId!,
+    candidateAuthorityFingerprint: source.candidateAuthorityFingerprint!,
+    candidateSetFingerprint: source.candidateSetFingerprint!,
+    canonicalCandidateUrlHash: source.canonicalCandidateUrlHash!,
+    serverDerivedCitationStatus: source.serverDerivedCitationStatus!,
+    serverDerivedCitationPosition: source.serverDerivedCitationPosition ?? null,
     sourceObservedAt: observedAt,
     createdAt: new Date().toISOString(),
   }
+  return { ...binding, evidenceBindingFingerprint: fingerprint({ ...binding, createdAt: undefined }) }
 }

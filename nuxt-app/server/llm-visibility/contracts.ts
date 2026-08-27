@@ -60,13 +60,16 @@ export const observationInputSchema = z.object({
   verifiedByOwner: z.literal(true),
 }).strict().superRefine(validateObservationConsistency)
 
-/** The only runtime import contract in V1: an owner-verified manual snapshot that is already complete. */
+/** Owner import is an untrusted pending snapshot. Authority is added only by the review ledger. */
 export const ownerManualObservationImportSchema = z.object({
   ...observationInputShape,
-  observationMode: z.literal('manual_verified'),
-  status: z.literal('completed'),
-  verifiedByOwner: z.literal(true),
 }).strict().superRefine(validateObservationConsistency)
+
+export const ownerManualObservationReviewSchema = z.object({
+  idempotencyKey: boundedLabel(128),
+  decision: z.enum(['approve', 'revoke']),
+  reason: boundedLabel(500),
+}).strict()
 
 /** Provider API observations are bounded secondary evidence and never owner-verified consumer-surface truth. */
 export const providerObservationRunInputSchema = z.object({
@@ -115,6 +118,7 @@ export type ProjectInput = z.infer<typeof projectInputSchema>
 export type QueryInput = z.infer<typeof queryInputSchema>
 export type ObservationInput = z.infer<typeof observationInputSchema>
 export type OwnerManualObservationImport = z.infer<typeof ownerManualObservationImportSchema>
+export type OwnerManualObservationReview = z.infer<typeof ownerManualObservationReviewSchema>
 export type ProviderObservationRunInput = z.infer<typeof providerObservationRunInputSchema>
 export type ProviderObservationCandidate = z.infer<typeof providerObservationCandidateSchema>
 export type PersistableObservationInput = Omit<ObservationInput, 'verifiedByOwner'> & { verifiedByOwner: boolean }
@@ -129,9 +133,9 @@ export class VisibilityContractError extends Error {
 }
 
 export const VISIBILITY_LIMITATIONS = [
-  'V1 primary metrics 只接受 owner 人工核對的 manual_verified snapshot；provider_api_observation 雖可保存為 secondary-only evidence，仍不等同 consumer ChatGPT、Gemini、Perplexity 或 Google AI Overviews 介面的真實曝光。',
+  'V1 primary metrics 只接受 durable owner review ledger 核准且未撤銷的 manual snapshot；provider_api_observation 雖可保存為 secondary-only evidence，仍不等同 consumer ChatGPT、Gemini、Perplexity 或 Google AI Overviews 介面的真實曝光。',
   '此模組不量測搜尋排名，也不提供流量、轉換、營收或 ROI 保證。',
   'provider_api_observation 可保存為明確標記的 secondary-only observation，但永遠不是 owner-verified evidence、consumer UI truth 或 primary manual_verified 指標。',
-  '主要指標只使用符合期間的 manual_verified observation rows；observedQueries 是其中不重複的 active query 數，比例則以 observation rows 為分母。',
+  '主要指標只使用符合期間且 review ledger 為 approved 的 manual observation rows；observedQueries 是其中不重複的 active query 數，比例則以 observation rows 為分母。',
   'V1 沒有 consumer UI scraping、自動登入或隱藏 bypass；provider observation runtime 只透過明確注入的 provider adapter 執行，沒有 adapter／credential 時 fail-closed。',
 ] as const

@@ -4,7 +4,7 @@ import { createTrackingQuery, importObservationSnapshot, type ProjectRecord, typ
 
 const project: ProjectRecord = { id: 10, ownerUserId: 7, name: 'Acme monitor', canonicalWebsiteUrl: 'https://example.com/', canonicalDomain: 'example.com', locale: 'en', brandName: 'Acme', brandAliases: ['ACME Inc'], competitorBrands: ['Rival'], status: 'active' }
 const query: QueryRecord = { id: 20, ownerUserId: 7, projectId: 10, promptText: 'Which product fits?', promptHash: 'a'.repeat(64), intent: 'discovery', locale: 'en', active: true }
-const validInput = () => ownerManualObservationImportSchema.parse({ projectId: 10, queryId: 20, provider: 'chatgpt', modelLabel: 'manual browser check', observationMode: 'manual_verified', status: 'completed', observedAt: '2026-08-24T01:00:00.000Z', requestFingerprint: 'b'.repeat(64), limitationCode: 'manual_snapshot_not_consumer_ui', brandMentioned: true, exactMentionCount: 1, firstMentionPosition: 1, citedDomain: 'example.com', citationUrls: ['https://example.com/proof'], competitorMentions: { Rival: 0 }, boundedExcerpt: 'Acme appears here.', responseHash: 'c'.repeat(64), evidenceLocator: 'owner-screenshot-42', reviewerNote: 'Owner checked this snapshot.', verifiedByOwner: true })
+const validInput = () => ownerManualObservationImportSchema.parse({ projectId: 10, queryId: 20, provider: 'chatgpt', modelLabel: 'manual browser check', observedAt: '2026-08-24T01:00:00.000Z', requestFingerprint: 'b'.repeat(64), limitationCode: 'manual_snapshot_pending_owner_review', brandMentioned: true, exactMentionCount: 1, firstMentionPosition: 1, citedDomain: 'example.com', citationUrls: ['https://example.com/proof'], competitorMentions: { Rival: 0 }, boundedExcerpt: 'Acme appears here.', responseHash: 'c'.repeat(64), evidenceLocator: 'owner-screenshot-42', reviewerNote: 'Pending snapshot context.' })
 
 function workflow(overrides: Partial<VisibilityWorkflowRepository> = {}): VisibilityWorkflowRepository {
   return {
@@ -27,7 +27,7 @@ describe('LLM visibility mocked repository workflow', () => {
 
   it('fails closed on provider API mode before repository access or commit', async () => {
     const repository = workflow()
-    const providerApiInput = observationInputSchema.parse({ ...validInput(), observationMode: 'provider_api_observation' })
+    const providerApiInput = observationInputSchema.parse({ ...validInput(), observationMode: 'provider_api_observation', status: 'completed', verifiedByOwner: true })
     await expect(importObservationSnapshot(repository, 7, providerApiInput, new Date('2026-08-24T02:00:00Z'))).rejects.toMatchObject({ statusCode: 422 })
     expect(repository.getProject).not.toHaveBeenCalled()
     expect(repository.getQuery).not.toHaveBeenCalled()
@@ -67,18 +67,20 @@ describe('LLM visibility mocked repository workflow', () => {
 })
 
 describe('LLM visibility fail-closed import schema', () => {
-  it('accepts only manual_verified in the dedicated owner runtime schema', () => {
+  it('accepts pending snapshot fields and rejects caller-supplied authority fields', () => {
     expect(ownerManualObservationImportSchema.safeParse(validInput()).success).toBe(true)
     expect(ownerManualObservationImportSchema.safeParse({ ...validInput(), observationMode: 'provider_api_observation' }).success).toBe(false)
+    expect(ownerManualObservationImportSchema.safeParse({ ...validInput(), observationMode: 'manual_verified', status: 'completed', verifiedByOwner: true }).success).toBe(false)
   })
 
   it('rejects unknown provider/status, invalid time, missing evidence/hash and raw response persistence', () => {
     const base = validInput()
-    expect(observationInputSchema.safeParse({ ...base, provider: 'consumer_scraper' }).success).toBe(false)
-    expect(observationInputSchema.safeParse({ ...base, status: 'processing' }).success).toBe(false)
-    expect(observationInputSchema.safeParse({ ...base, observedAt: 'yesterday' }).success).toBe(false)
-    expect(observationInputSchema.safeParse({ ...base, evidenceLocator: '' }).success).toBe(false)
-    expect(observationInputSchema.safeParse({ ...base, responseHash: '' }).success).toBe(false)
-    expect(observationInputSchema.safeParse({ ...base, rawResponse: 'must never persist' }).success).toBe(false)
+    const broad = { ...base, observationMode: 'manual_verified', status: 'completed', verifiedByOwner: true }
+    expect(observationInputSchema.safeParse({ ...broad, provider: 'consumer_scraper' }).success).toBe(false)
+    expect(observationInputSchema.safeParse({ ...broad, status: 'processing' }).success).toBe(false)
+    expect(observationInputSchema.safeParse({ ...broad, observedAt: 'yesterday' }).success).toBe(false)
+    expect(observationInputSchema.safeParse({ ...broad, evidenceLocator: '' }).success).toBe(false)
+    expect(observationInputSchema.safeParse({ ...broad, responseHash: '' }).success).toBe(false)
+    expect(observationInputSchema.safeParse({ ...broad, rawResponse: 'must never persist' }).success).toBe(false)
   })
 })

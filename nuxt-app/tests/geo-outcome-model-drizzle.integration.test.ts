@@ -1,18 +1,22 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { withMutationIdempotency } from '../server/api/geo-outcome-model/_helpers'
 import { executeObservationGovernanceMutation } from '../server/api/geo-outcome-model/observation-governance-mutation'
+import { executeCandidateSetReviewMutation } from '../server/api/geo-outcome-model/candidate-set-review-mutation'
 import { buildCitationSelectionDataset } from '../server/geo-outcome-model/dataset-builder'
 import { DrizzleGeoOutcomeRepository } from '../server/geo-outcome-model/repository-drizzle'
 import { bindAndVerifyObservationEvidence, createTrainingRun, executeTrainingRun, getWorkspace, reviewDataset } from '../server/geo-outcome-model/service'
 import { normalizeManualObservation } from '../server/geo-outcome-model/normalization'
 import { fingerprint, sha256Hex } from '../server/geo-outcome-model/canonical'
 import { authoritativeLocatorFingerprint } from '../server/geo-outcome-model/evidence-resolver'
+import { canonicalCandidateIdentity, reviewCandidateSet } from '../server/geo-outcome-model/candidate-authority'
+import { reviewVisibilityObservation } from '../server/llm-visibility/repository'
 import { llmVisibilityObservations, llmVisibilityProjects, llmVisibilityQueries, llmVisibilityRuns } from '../server/database/schema'
 import type { DatasetManifest, OutcomeObservation } from '../server/geo-outcome-model/types'
 import { StrictGeoDrizzleHarness } from './support/strict-geo-drizzle-harness'
 
 const ownerUserId = 42
 const hash = (value: string) => sha256Hex(value)
+const candidateUrl = (sourceRecordId: number, status: 'cited' | 'not_cited') => `https://site${sourceRecordId}.acme.com/geo/${status}`
 function rawObservation(group: string, citationStatus: 'cited' | 'not_cited', overrides: Record<string, unknown> = {}) {
   const day = Number(overrides.day || Number(group.replace(/\D/gu, '')) || 1)
   const date = new Date(Date.UTC(2026, 0, day)).toISOString()
@@ -23,18 +27,19 @@ function rawObservation(group: string, citationStatus: 'cited' | 'not_cited', ov
   const responseHash = hash(String(overrides.evidence || `evidence-${group}`))
   const evidenceLocator = `evidence://llm-visibility/${sourceRecordId}`
   const locatorHash = authoritativeLocatorFingerprint({ sourceRecordId, sourceProjectId: 1, sourceQueryId: sourceRecordId, sourceRunId: sourceRecordId, sourceResponseHash: responseHash, evidenceLocator, sourceObservedAt: date })
+  const identity = canonicalCandidateIdentity(candidateUrl(sourceRecordId, citationStatus))
   return {
     schemaVersion: 'geo-outcome-observation-v1',
     projectId: 1,
     clientId: null,
-    websiteIdentityHash: hash(String(overrides.website || `site-${group}`)),
+    websiteIdentityHash: overrides.website ? hash(String(overrides.website)) : identity.websiteIdentityHash,
     queryIdentityHash: queryHash,
     normalizedQueryHash: queryHash,
-    candidatePageIdentityHash: hash(String(overrides.page || `page-${group}-${positive ? 'positive' : 'negative'}`)),
-    canonicalPageHash: hash(String(overrides.canonical || `canonical-${group}-${positive ? 'positive' : 'negative'}`)),
-    contentHash: hash(String(overrides.content || `content-${group}-${positive ? 'positive' : 'negative'}`)),
+    candidatePageIdentityHash: overrides.page ? hash(String(overrides.page)) : identity.candidatePageIdentityHash,
+    canonicalPageHash: overrides.canonical ? hash(String(overrides.canonical)) : identity.canonicalPageHash,
+    contentHash: hash(String(overrides.content || `content-${sourceRecordId}-${citationStatus}`)),
     evidenceSnapshotHash: responseHash,
-    publicationReceiptFingerprint: hash(`receipt-${group}`),
+    publicationReceiptFingerprint: null,
     engine: overrides.engine || 'chatgpt',
     model: 'test-model',
     modelVersion: 'v1',
@@ -62,10 +67,17 @@ function rawObservation(group: string, citationStatus: 'cited' | 'not_cited', ov
 async function seedAuthority(harness: StrictGeoDrizzleHarness, observation: OutcomeObservation, sourceRecordId: number, overrides: { mode?: 'manual_verified' | 'provider_api_observation', verified?: boolean, ownerUserId?: number, active?: boolean } = {}) {
   const database = harness.asDatabase()
   const sourceOwner = overrides.ownerUserId || ownerUserId
-  if (harness.count('llmVisibilityProjects') === 0) await database.insert(llmVisibilityProjects).values({ ownerUserId: sourceOwner, name: 'Evidence project', canonicalWebsiteUrl: 'https://example.test', canonicalDomain: 'example.test', locale: 'en', brandName: 'Example', brandAliases: [], competitorBrands: [], status: overrides.active === false ? 'archived' : 'active' })
+  if (harness.count('llmVisibilityProjects') === 0) await database.insert(llmVisibilityProjects).values({ ownerUserId: sourceOwner, name: 'Evidence project', canonicalWebsiteUrl: 'https://www.acme.com', canonicalDomain: 'acme.com', locale: 'en', brandName: 'Acme', brandAliases: [], competitorBrands: [], status: overrides.active === false ? 'archived' : 'active' })
   await database.insert(llmVisibilityQueries).values({ ownerUserId: sourceOwner, projectId: 1, promptText: `Prompt ${sourceRecordId}`, promptHash: observation.normalizedQueryHash, intent: 'evidence', locale: 'en', active: overrides.active !== false })
   await database.insert(llmVisibilityRuns).values({ ownerUserId: sourceOwner, projectId: 1, provider: observation.engine as 'chatgpt' | 'gemini', modelLabel: observation.model, observationMode: overrides.mode || 'manual_verified', status: 'completed', observedAt: new Date(observation.runTimestamp), requestFingerprint: observation.runIdentity, limitationCode: 'owner_manual_snapshot' })
-  await database.insert(llmVisibilityObservations).values({ ownerUserId: sourceOwner, projectId: 1, runId: sourceRecordId, queryId: sourceRecordId, brandMentioned: true, exactMentionCount: 1, firstMentionPosition: 1, citedDomain: 'example.test', citationUrls: ['https://example.test/page'], competitorMentions: {}, boundedExcerpt: 'Bounded owner-reviewed evidence.', responseHash: observation.evidenceSnapshotHash, evidenceLocator: `evidence://llm-visibility/${sourceRecordId}`, reviewerNote: 'Owner reviewed.', verifiedByOwner: overrides.verified !== false })
+  await database.insert(llmVisibilityObservations).values({ ownerUserId: sourceOwner, projectId: 1, runId: sourceRecordId, queryId: sourceRecordId, brandMentioned: true, exactMentionCount: 1, firstMentionPosition: 1, citedDomain: `site${sourceRecordId}.acme.com`, citationUrls: [candidateUrl(sourceRecordId, 'cited')], competitorMentions: {}, boundedExcerpt: 'Bounded owner-reviewed evidence.', responseHash: observation.evidenceSnapshotHash, evidenceLocator: `evidence://llm-visibility/${sourceRecordId}`, reviewerNote: 'Pending snapshot.', verifiedByOwner: overrides.verified !== false })
+  if ((overrides.mode || 'manual_verified') === 'manual_verified' && overrides.verified !== false && sourceOwner === ownerUserId && overrides.active !== false) {
+    await reviewVisibilityObservation(ownerUserId, ownerUserId, sourceRecordId, { idempotencyKey: `llm-review-${sourceRecordId}`, decision: 'approve', reason: 'Independent owner review.' }, database)
+    await reviewCandidateSet(database, ownerUserId, ownerUserId, { idempotencyKey: `candidate-review-${sourceRecordId}`, sourceRecordId, decision: 'approve', reason: 'Owner attested the complete observable candidate set.', candidates: [
+      { candidateUrl: candidateUrl(sourceRecordId, 'cited'), contentHash: hash(`content-${sourceRecordId}-cited`) },
+      { candidateUrl: candidateUrl(sourceRecordId, 'not_cited'), contentHash: hash(`content-${sourceRecordId}-not_cited`) },
+    ] })
+  }
 }
 async function govern(repository: DrizzleGeoOutcomeRepository, observation: OutcomeObservation, sourceRecordId: number) {
   await bindAndVerifyObservationEvidence(ownerUserId, observation.observationFingerprint, ownerUserId, sourceRecordId, 'Evidence lineage reviewed.', repository)
@@ -106,6 +118,96 @@ function variantManifest(manifest: DatasetManifest, suffix: string): DatasetMani
 }
 
 describe('Drizzle GEO outcome durable boundary', () => {
+  it('binds cited and uncited labels only to exact members of the same approved candidate set', async () => {
+    const harness = new StrictGeoDrizzleHarness(); const repository = new DrizzleGeoOutcomeRepository(harness.asDatabase())
+    const cited = await repository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation('exact1', 'cited'), ownerUserId))
+    const uncited = await repository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation('exact1', 'not_cited'), ownerUserId))
+    await seedAuthority(harness, cited, 1)
+    await expect(repository.bindAuthoritativeEvidenceTransactional(ownerUserId, cited.observationFingerprint, 1)).resolves.toMatchObject({ serverDerivedCitationStatus: 'cited', serverDerivedCitationPosition: 1 })
+    await expect(repository.bindAuthoritativeEvidenceTransactional(ownerUserId, uncited.observationFingerprint, 1)).resolves.toMatchObject({ serverDerivedCitationStatus: 'not_cited', serverDerivedCitationPosition: null })
+
+    const arbitraryHarness = new StrictGeoDrizzleHarness(); const arbitraryRepository = new DrizzleGeoOutcomeRepository(arbitraryHarness.asDatabase())
+    const arbitrary = await arbitraryRepository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation('arbitrary1', 'not_cited', { page: 'not-in-candidate-set', canonical: 'not-in-candidate-set', content: 'not-in-candidate-set' }), ownerUserId))
+    await seedAuthority(arbitraryHarness, arbitrary, 1)
+    await expect(arbitraryRepository.bindAuthoritativeEvidenceTransactional(ownerUserId, arbitrary.observationFingerprint, 1)).rejects.toThrow(/absent|candidate/i)
+  })
+
+  it('rejects caller label flips and candidate page, content, owner and source-lineage mismatches', async () => {
+    const identity = canonicalCandidateIdentity(candidateUrl(1, 'cited'))
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['label-flip', { citationStatus: 'not_cited', citationPosition: null, candidatePageIdentityHash: identity.candidatePageIdentityHash, canonicalPageHash: identity.canonicalPageHash, websiteIdentityHash: identity.websiteIdentityHash, contentHash: hash('content-1-cited') }],
+      ['page-hash', { canonicalPageHash: hash('wrong-page-hash') }],
+      ['content-hash', { contentHash: hash('wrong-content-hash') }],
+      ['website-hash', { websiteIdentityHash: hash('wrong-website-hash') }],
+    ]
+    for (const [name, overrides] of cases) {
+      const harness = new StrictGeoDrizzleHarness(); const repository = new DrizzleGeoOutcomeRepository(harness.asDatabase())
+      const raw = { ...rawObservation(`${name}1`, 'cited'), ...overrides }
+      const observation = await repository.saveObservationTransactional(ownerUserId, normalizeManualObservation(raw, ownerUserId))
+      await seedAuthority(harness, observation, 1)
+      await expect(repository.bindAuthoritativeEvidenceTransactional(ownerUserId, observation.observationFingerprint, 1)).rejects.toThrow(/match|absent|candidate/i)
+    }
+  })
+
+  it('uses one deterministic exact URL policy for host, query, percent, fragment, port and Unicode forms', () => {
+    const exact = canonicalCandidateIdentity('https://www.acme.com/a?x=1&y=2')
+    expect(canonicalCandidateIdentity('https://www.acme.com:443/a?x=1&y=2#ignored').canonicalCandidateUrlHash).toBe(exact.canonicalCandidateUrlHash)
+    expect(canonicalCandidateIdentity('https://www.acme.com/a?y=2&x=1').canonicalCandidateUrlHash).not.toBe(exact.canonicalCandidateUrlHash)
+    expect(canonicalCandidateIdentity('https://www.acme.com/a/extra?x=1&y=2').canonicalCandidateUrlHash).not.toBe(exact.canonicalCandidateUrlHash)
+    expect(canonicalCandidateIdentity('https://sub.www.acme.com/a?x=1&y=2').canonicalCandidateUrlHash).not.toBe(exact.canonicalCandidateUrlHash)
+    expect(canonicalCandidateIdentity('https://www.acme.com/%7Eowner').canonicalCandidateUrlHash).toBe(canonicalCandidateIdentity('https://www.acme.com/%7Eowner#fragment').canonicalCandidateUrlHash)
+    expect(canonicalCandidateIdentity('https://bücher.de/path').canonicalCandidateUrlHash).toBe(canonicalCandidateIdentity('https://xn--bcher-kva.de/path').canonicalCandidateUrlHash)
+  })
+
+  it('requires a durable manual review ledger and keeps provider or legacy booleans secondary-only', async () => {
+    const legacy = new StrictGeoDrizzleHarness(); const legacyRepository = new DrizzleGeoOutcomeRepository(legacy.asDatabase())
+    const observation = await legacyRepository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation('legacy1', 'cited'), ownerUserId))
+    await seedAuthority(legacy, observation, 1, { verified: false })
+    legacy.corrupt('llmVisibilityObservations', row => row.id === 1, { verifiedByOwner: true })
+    await expect(legacyRepository.bindAuthoritativeEvidenceTransactional(ownerUserId, observation.observationFingerprint, 1)).rejects.toThrow(/durable owner approval/i)
+
+    const provider = new StrictGeoDrizzleHarness(); const providerRepository = new DrizzleGeoOutcomeRepository(provider.asDatabase())
+    const providerObservation = await providerRepository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation('provider1', 'cited'), ownerUserId))
+    await seedAuthority(provider, providerObservation, 1, { mode: 'provider_api_observation', verified: false })
+    await expect(providerRepository.bindAuthoritativeEvidenceTransactional(ownerUserId, providerObservation.observationFingerprint, 1)).rejects.toThrow(/provider|secondary/i)
+  })
+
+  it('makes manual review replay canonical, collision-safe, concurrent, durable and terminally revocable', async () => {
+    const harness = new StrictGeoDrizzleHarness(); const repository = new DrizzleGeoOutcomeRepository(harness.asDatabase())
+    const observation = await repository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation('review1', 'cited'), ownerUserId))
+    await seedAuthority(harness, observation, 1, { verified: false })
+    const database = harness.asDatabase()
+    const input = { idempotencyKey: 'manual-review-key-1', decision: 'approve' as const, reason: 'Independent owner review.' }
+    const [first, replay] = await Promise.all([reviewVisibilityObservation(ownerUserId, ownerUserId, 1, input, database), reviewVisibilityObservation(ownerUserId, ownerUserId, 1, input, database)])
+    expect(replay).toEqual(first)
+    expect(harness.count('llmVisibilityObservationReviews')).toBe(1)
+    await expect(executeCandidateSetReviewMutation({ ownerUserId, reviewerUserId: ownerUserId, database, body: { idempotencyKey: 'candidate-route-forged', sourceRecordId: 1, decision: 'approve', reason: 'Forged route body.', verifiedByOwner: true, candidates: [{ candidateUrl: candidateUrl(1, 'cited'), contentHash: hash('content-1-cited'), candidatePageIdentityHash: hash('caller-forged') }] } })).rejects.toThrow(/invalid/i)
+    await expect(executeCandidateSetReviewMutation({ ownerUserId, reviewerUserId: ownerUserId, database, body: { idempotencyKey: 'candidate-route-fake-receipt', sourceRecordId: 1, decision: 'approve', reason: 'Receipt must resolve from publication ledger.', candidates: [{ candidateUrl: candidateUrl(1, 'cited'), contentHash: hash('content-1-cited'), publicationReceiptFingerprint: hash('missing-receipt') }] } })).rejects.toThrow(/publication receipt/i)
+    const candidateReview = await executeCandidateSetReviewMutation({ ownerUserId, reviewerUserId: ownerUserId, database, body: { idempotencyKey: 'candidate-route-valid', sourceRecordId: 1, decision: 'approve', reason: 'Owner reviewed observable candidates.', candidates: [{ candidateUrl: candidateUrl(1, 'cited'), contentHash: hash('content-1-cited') }, { candidateUrl: candidateUrl(1, 'not_cited'), contentHash: hash('content-1-not_cited') }] } })
+    expect(candidateReview.memberCount).toBe(2)
+    await expect(reviewVisibilityObservation(ownerUserId, ownerUserId, 1, { ...input, reason: 'Collision.' }, database)).rejects.toThrow(/collision/i)
+    const competing = await Promise.allSettled([
+      reviewVisibilityObservation(ownerUserId, ownerUserId, 1, { idempotencyKey: 'manual-review-key-2', decision: 'approve', reason: 'Duplicate decision.' }, database),
+      reviewVisibilityObservation(ownerUserId, ownerUserId, 1, { idempotencyKey: 'manual-review-key-3', decision: 'approve', reason: 'Duplicate decision.' }, database),
+    ])
+    expect(competing.every(item => item.status === 'rejected')).toBe(true)
+    const revoked = await reviewVisibilityObservation(ownerUserId, ownerUserId, 1, { idempotencyKey: 'manual-review-revoke-1', decision: 'revoke', reason: 'Terminal source revoke.' }, database)
+    expect(revoked.newStatus).toBe('revoked')
+    const restarted = new StrictGeoDrizzleHarness(harness.exportState())
+    await expect(reviewVisibilityObservation(ownerUserId, ownerUserId, 1, { idempotencyKey: 'manual-review-after-restart', decision: 'approve', reason: 'Cannot restore.' }, restarted.asDatabase())).rejects.toThrow(/terminal/i)
+  })
+
+  it('revalidates candidate-set revocation and blocks an already governed dataset source', async () => {
+    const harness = new StrictGeoDrizzleHarness(); const repository = new DrizzleGeoOutcomeRepository(harness.asDatabase())
+    const cited = await repository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation('revoke1', 'cited'), ownerUserId))
+    const uncited = await repository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation('revoke1', 'not_cited'), ownerUserId))
+    await seedAuthority(harness, cited, 1); await govern(repository, cited, 1); await govern(repository, uncited, 1)
+    expect(buildCitationSelectionDataset(await repository.listObservations(ownerUserId), ownerUserId).members).toHaveLength(2)
+    const setRow = harness.exportState().tables.geoOutcomeCandidateSetDecisions?.find(row => row.decisionType === 'approve')
+    await reviewCandidateSet(harness.asDatabase(), ownerUserId, ownerUserId, { idempotencyKey: 'candidate-revoke-1', sourceRecordId: 1, decision: 'revoke', reason: 'Candidate observability authority revoked.', candidateSetFingerprint: String(setRow?.candidateSetFingerprint) })
+    await expect(repository.listObservations(ownerUserId)).rejects.toThrow(/revoked|stale/i)
+  })
+
   it('preserves business IDs through observation, dataset, training, artifact, decision, workspace and restart', async () => {
     const { harness, repository } = readyRepository()
     const savedManifest = (await repository.getDataset(ownerUserId, readyManifestId))!
@@ -232,6 +334,9 @@ describe('Drizzle GEO outcome durable boundary', () => {
     const observation = await repository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation('revalidate1', 'cited'), ownerUserId))
     await seedAuthority(harness, observation, 1); await govern(repository, observation, 1)
     expect((await repository.listObservations(ownerUserId))[0]?.verificationStatus).toBe('verified')
+    harness.corrupt('llmVisibilityObservations', row => row.id === 1, { citationUrls: [candidateUrl(1, 'cited'), 'https://other.acme.com/drift'] })
+    await expect(repository.listObservations(ownerUserId)).rejects.toThrow(/stale|lineage/i)
+    harness.corrupt('llmVisibilityObservations', row => row.id === 1, { citationUrls: [candidateUrl(1, 'cited')] })
     harness.corrupt('llmVisibilityProjects', row => row.id === 1, { status: 'archived' })
     await expect(repository.listObservations(ownerUserId)).rejects.toThrow(/stale/i)
   })

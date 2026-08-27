@@ -1114,6 +1114,28 @@ export const llmVisibilityObservations = mysqlTable('llmVisibilityObservations',
   index('llm_visibility_observations_query_idx').on(table.queryId),
 ])
 
+/** Append-only owner decisions for imported manual snapshots. Legacy booleans are never authority. */
+export const llmVisibilityObservationReviews = mysqlTable('llmVisibilityObservationReviews', {
+  id: int('id').autoincrement().primaryKey(),
+  decisionId: varchar('decisionId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  observationId: int('observationId').notNull().references(() => llmVisibilityObservations.id),
+  reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  previousStatus: mysqlEnum('previousStatus', ['pending', 'approved', 'revoked']).notNull(),
+  newStatus: mysqlEnum('newStatus', ['approved', 'revoked']).notNull(),
+  reason: varchar('reason', { length: 500 }).notNull(),
+  sourceResponseHash: varchar('sourceResponseHash', { length: 64 }).notNull(),
+  decisionFingerprint: varchar('decisionFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('llm_visibility_reviews_decision_unique').on(table.decisionId),
+  uniqueIndex('llm_visibility_reviews_owner_key_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('llm_visibility_reviews_observation_status_unique').on(table.observationId, table.newStatus),
+  index('llm_visibility_reviews_owner_observation_idx').on(table.ownerUserId, table.observationId, table.createdAt),
+])
+
 /** Owner-scoped measurement source connection. Only opaque credential references are persisted. */
 export const contentOperationMeasurementConnections = mysqlTable('contentOperationMeasurementConnections', {
   id: int('id').autoincrement().primaryKey(),
@@ -2246,6 +2268,63 @@ export const geoOutcomeObservationVerifications = mysqlTable('geoOutcomeObservat
   index('geo_outcome_verification_observation_idx').on(table.ownerUserId, table.observationFingerprint, table.createdAt),
 ])
 
+/** Append-only owner review of one complete observable candidate set for one LLM source. */
+export const geoOutcomeCandidateSetDecisions = mysqlTable('geoOutcomeCandidateSetDecisions', {
+  id: int('id').autoincrement().primaryKey(),
+  decisionId: varchar('decisionId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  sourceObservationId: int('sourceObservationId').notNull().references(() => llmVisibilityObservations.id),
+  sourceProjectId: int('sourceProjectId').notNull().references(() => llmVisibilityProjects.id),
+  sourceQueryId: int('sourceQueryId').notNull().references(() => llmVisibilityQueries.id),
+  sourceRunId: int('sourceRunId').notNull().references(() => llmVisibilityRuns.id),
+  sourceCitationSetFingerprint: varchar('sourceCitationSetFingerprint', { length: 128 }).notNull(),
+  reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  decisionType: mysqlEnum('decisionType', ['approve', 'revoke']).notNull(),
+  candidateSetFingerprint: varchar('candidateSetFingerprint', { length: 128 }).notNull(),
+  targetCandidateSetFingerprint: varchar('targetCandidateSetFingerprint', { length: 128 }),
+  reviewReason: varchar('reviewReason', { length: 500 }).notNull(),
+  decisionFingerprint: varchar('decisionFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_candidate_sets_decision_unique').on(table.decisionId),
+  uniqueIndex('geo_outcome_candidate_sets_owner_key_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('geo_outcome_candidate_sets_owner_source_set_decision_unique').on(table.ownerUserId, table.sourceObservationId, table.candidateSetFingerprint, table.decisionType),
+  index('geo_outcome_candidate_sets_source_idx').on(table.ownerUserId, table.sourceObservationId, table.createdAt),
+])
+
+/** Immutable candidate members derived by the server from public HTTPS URLs. */
+export const geoOutcomeCandidateAuthorities = mysqlTable('geoOutcomeCandidateAuthorities', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  candidateSetDecisionId: int('candidateSetDecisionId').notNull().references(() => geoOutcomeCandidateSetDecisions.id),
+  sourceObservationId: int('sourceObservationId').notNull().references(() => llmVisibilityObservations.id),
+  projectId: int('projectId').notNull().references(() => llmVisibilityProjects.id),
+  queryId: int('queryId').notNull().references(() => llmVisibilityQueries.id),
+  runId: int('runId').notNull().references(() => llmVisibilityRuns.id),
+  canonicalCandidateUrlHash: varchar('canonicalCandidateUrlHash', { length: 128 }).notNull(),
+  canonicalPageHash: varchar('canonicalPageHash', { length: 128 }).notNull(),
+  candidatePageIdentityHash: varchar('candidatePageIdentityHash', { length: 128 }).notNull(),
+  websiteIdentityHash: varchar('websiteIdentityHash', { length: 128 }).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  publicationReceiptFingerprint: varchar('publicationReceiptFingerprint', { length: 128 }),
+  publicationEvidenceSnapshotHash: varchar('publicationEvidenceSnapshotHash', { length: 128 }),
+  authorityBasis: mysqlEnum('authorityBasis', ['manual_owner_attested_v1', 'discovery_stack_publication_receipt_v1']).notNull(),
+  observabilityReviewStatus: mysqlEnum('observabilityReviewStatus', ['approved_observable']).notNull(),
+  retrievalReviewStatus: mysqlEnum('retrievalReviewStatus', ['approved_retrieved']).notNull(),
+  reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
+  reviewReason: varchar('reviewReason', { length: 500 }).notNull(),
+  reviewedAt: timestamp('reviewedAt').notNull(),
+  decisionFingerprint: varchar('decisionFingerprint', { length: 128 }).notNull(),
+  candidateSetFingerprint: varchar('candidateSetFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_candidate_authority_set_url_unique').on(table.candidateSetDecisionId, table.canonicalCandidateUrlHash),
+  uniqueIndex('geo_outcome_candidate_authority_set_identity_unique').on(table.candidateSetDecisionId, table.candidatePageIdentityHash),
+  index('geo_outcome_candidate_authority_source_idx').on(table.ownerUserId, table.sourceObservationId, table.candidateSetFingerprint),
+])
+
 /** Server-resolved evidence references. Raw content, URLs, tokens and provider payloads are deliberately excluded. */
 export const geoOutcomeEvidenceLocators = mysqlTable('geoOutcomeEvidenceLocators', {
   id: int('id').autoincrement().primaryKey(),
@@ -2259,6 +2338,14 @@ export const geoOutcomeEvidenceLocators = mysqlTable('geoOutcomeEvidenceLocators
   sourceQueryId: int('sourceQueryId').notNull().references(() => llmVisibilityQueries.id),
   sourceRunId: int('sourceRunId').notNull().references(() => llmVisibilityRuns.id),
   sourceResponseHash: varchar('sourceResponseHash', { length: 64 }).notNull(),
+  sourceCitationSetFingerprint: varchar('sourceCitationSetFingerprint', { length: 128 }).notNull(),
+  candidateAuthorityId: int('candidateAuthorityId').notNull().references(() => geoOutcomeCandidateAuthorities.id),
+  candidateAuthorityFingerprint: varchar('candidateAuthorityFingerprint', { length: 128 }).notNull(),
+  candidateSetFingerprint: varchar('candidateSetFingerprint', { length: 128 }).notNull(),
+  canonicalCandidateUrlHash: varchar('canonicalCandidateUrlHash', { length: 128 }).notNull(),
+  serverDerivedCitationStatus: mysqlEnum('serverDerivedCitationStatus', ['cited', 'not_cited']).notNull(),
+  serverDerivedCitationPosition: int('serverDerivedCitationPosition'),
+  evidenceBindingFingerprint: varchar('evidenceBindingFingerprint', { length: 128 }).notNull(),
   sourceObservedAt: timestamp('sourceObservedAt').notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [

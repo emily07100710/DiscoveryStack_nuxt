@@ -18,10 +18,14 @@ const UNIQUE_KEYS: Record<string, string[][]> = {
   geoOutcomeIdempotencyClaims: [['ownerUserId', 'routeIdentity', 'idempotencyKey']],
   geoOutcomeObservationVerifications: [['ownerUserId', 'decisionFingerprint']],
   geoOutcomeEvidenceLocators: [['ownerUserId', 'observationFingerprint']],
+  geoOutcomeCandidateSetDecisions: [['decisionId'], ['ownerUserId', 'idempotencyKey'], ['ownerUserId', 'sourceObservationId', 'candidateSetFingerprint', 'decisionType']],
+  geoOutcomeCandidateAuthorities: [['candidateSetDecisionId', 'canonicalCandidateUrlHash'], ['candidateSetDecisionId', 'candidatePageIdentityHash']],
   llmVisibilityProjects: [],
   llmVisibilityQueries: [['projectId', 'promptHash']],
   llmVisibilityRuns: [['ownerUserId', 'requestFingerprint']],
   llmVisibilityObservations: [['runId', 'queryId']],
+  llmVisibilityObservationReviews: [['decisionId'], ['ownerUserId', 'idempotencyKey'], ['observationId', 'newStatus']],
+  contentOperationPublicationAttempts: [['ownerUserId', 'idempotencyKey']],
 }
 
 function copy<T>(value: T): T { return structuredClone(value) }
@@ -109,9 +113,13 @@ export class StrictGeoDrizzleHarness {
     if (tableName === 'geoOutcomeModelDecisions' && !has('geoOutcomeModelArtifacts', row.modelArtifactId)) throw new Error('Strict harness foreign key violation: model artifact.')
     if ((tableName === 'geoOutcomeObservationVerifications' || tableName === 'geoOutcomeEvidenceLocators') && !(this.state.tables.geoOutcomeObservationCandidates || []).some(item => item.ownerUserId === row.ownerUserId && item.observationFingerprint === row.observationFingerprint)) throw new Error('Strict harness foreign key violation: observation fingerprint.')
     if (tableName === 'geoOutcomeEvidenceLocators' && !has('llmVisibilityObservations', row.sourceRecordId)) throw new Error('Strict harness foreign key violation: authoritative evidence source.')
+    if (tableName === 'geoOutcomeEvidenceLocators' && !has('geoOutcomeCandidateAuthorities', row.candidateAuthorityId)) throw new Error('Strict harness foreign key violation: candidate authority.')
+    if (tableName === 'geoOutcomeCandidateSetDecisions' && (!has('llmVisibilityObservations', row.sourceObservationId) || !has('llmVisibilityProjects', row.sourceProjectId) || !has('llmVisibilityQueries', row.sourceQueryId) || !has('llmVisibilityRuns', row.sourceRunId))) throw new Error('Strict harness foreign key violation: candidate set source provenance.')
+    if (tableName === 'geoOutcomeCandidateAuthorities' && (!has('geoOutcomeCandidateSetDecisions', row.candidateSetDecisionId) || !has('llmVisibilityObservations', row.sourceObservationId) || !has('llmVisibilityProjects', row.projectId) || !has('llmVisibilityQueries', row.queryId) || !has('llmVisibilityRuns', row.runId))) throw new Error('Strict harness foreign key violation: candidate authority provenance.')
     if (tableName === 'llmVisibilityQueries' && !has('llmVisibilityProjects', row.projectId)) throw new Error('Strict harness foreign key violation: LLM visibility query project.')
     if (tableName === 'llmVisibilityRuns' && !has('llmVisibilityProjects', row.projectId)) throw new Error('Strict harness foreign key violation: LLM visibility run project.')
     if (tableName === 'llmVisibilityObservations' && (!has('llmVisibilityProjects', row.projectId) || !has('llmVisibilityQueries', row.queryId) || !has('llmVisibilityRuns', row.runId))) throw new Error('Strict harness foreign key violation: LLM visibility observation provenance.')
+    if (tableName === 'llmVisibilityObservationReviews' && !has('llmVisibilityObservations', row.observationId)) throw new Error('Strict harness foreign key violation: LLM visibility review observation.')
   }
   private async insertRow(tableName: string, value: Row) {
     const rows = this.state.tables[tableName] || (this.state.tables[tableName] = [])

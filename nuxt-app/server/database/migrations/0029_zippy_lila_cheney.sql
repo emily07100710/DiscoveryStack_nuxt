@@ -1,3 +1,56 @@
+CREATE TABLE `geoOutcomeCandidateAuthorities` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`ownerUserId` int NOT NULL,
+	`candidateSetDecisionId` int NOT NULL,
+	`sourceObservationId` int NOT NULL,
+	`projectId` int NOT NULL,
+	`queryId` int NOT NULL,
+	`runId` int NOT NULL,
+	`canonicalCandidateUrlHash` varchar(128) NOT NULL,
+	`canonicalPageHash` varchar(128) NOT NULL,
+	`candidatePageIdentityHash` varchar(128) NOT NULL,
+	`websiteIdentityHash` varchar(128) NOT NULL,
+	`contentHash` varchar(128) NOT NULL,
+	`publicationReceiptFingerprint` varchar(128),
+	`publicationEvidenceSnapshotHash` varchar(128),
+	`authorityBasis` enum('manual_owner_attested_v1','discovery_stack_publication_receipt_v1') NOT NULL,
+	`observabilityReviewStatus` enum('approved_observable') NOT NULL,
+	`retrievalReviewStatus` enum('approved_retrieved') NOT NULL,
+	`reviewerUserId` int NOT NULL,
+	`reviewReason` varchar(500) NOT NULL,
+	`reviewedAt` timestamp NOT NULL,
+	`decisionFingerprint` varchar(128) NOT NULL,
+	`candidateSetFingerprint` varchar(128) NOT NULL,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	CONSTRAINT `geoOutcomeCandidateAuthorities_id` PRIMARY KEY(`id`),
+	CONSTRAINT `geo_outcome_candidate_authority_set_url_unique` UNIQUE(`candidateSetDecisionId`,`canonicalCandidateUrlHash`),
+	CONSTRAINT `geo_outcome_candidate_authority_set_identity_unique` UNIQUE(`candidateSetDecisionId`,`candidatePageIdentityHash`)
+);
+--> statement-breakpoint
+CREATE TABLE `geoOutcomeCandidateSetDecisions` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`decisionId` varchar(160) NOT NULL,
+	`ownerUserId` int NOT NULL,
+	`sourceObservationId` int NOT NULL,
+	`sourceProjectId` int NOT NULL,
+	`sourceQueryId` int NOT NULL,
+	`sourceRunId` int NOT NULL,
+	`sourceCitationSetFingerprint` varchar(128) NOT NULL,
+	`reviewerUserId` int NOT NULL,
+	`idempotencyKey` varchar(128) NOT NULL,
+	`inputFingerprint` varchar(128) NOT NULL,
+	`decisionType` enum('approve','revoke') NOT NULL,
+	`candidateSetFingerprint` varchar(128) NOT NULL,
+	`targetCandidateSetFingerprint` varchar(128),
+	`reviewReason` varchar(500) NOT NULL,
+	`decisionFingerprint` varchar(128) NOT NULL,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	CONSTRAINT `geoOutcomeCandidateSetDecisions_id` PRIMARY KEY(`id`),
+	CONSTRAINT `geo_outcome_candidate_sets_decision_unique` UNIQUE(`decisionId`),
+	CONSTRAINT `geo_outcome_candidate_sets_owner_key_unique` UNIQUE(`ownerUserId`,`idempotencyKey`),
+	CONSTRAINT `geo_outcome_candidate_sets_owner_source_set_decision_unique` UNIQUE(`ownerUserId`,`sourceObservationId`,`candidateSetFingerprint`,`decisionType`)
+);
+--> statement-breakpoint
 CREATE TABLE `geoOutcomeDatasetDecisions` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`decisionId` varchar(160) NOT NULL,
@@ -76,6 +129,14 @@ CREATE TABLE `geoOutcomeEvidenceLocators` (
 	`sourceQueryId` int NOT NULL,
 	`sourceRunId` int NOT NULL,
 	`sourceResponseHash` varchar(64) NOT NULL,
+	`sourceCitationSetFingerprint` varchar(128) NOT NULL,
+	`candidateAuthorityId` int NOT NULL,
+	`candidateAuthorityFingerprint` varchar(128) NOT NULL,
+	`candidateSetFingerprint` varchar(128) NOT NULL,
+	`canonicalCandidateUrlHash` varchar(128) NOT NULL,
+	`serverDerivedCitationStatus` enum('cited','not_cited') NOT NULL,
+	`serverDerivedCitationPosition` int,
+	`evidenceBindingFingerprint` varchar(128) NOT NULL,
 	`sourceObservedAt` timestamp NOT NULL,
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	CONSTRAINT `geoOutcomeEvidenceLocators_id` PRIMARY KEY(`id`),
@@ -248,6 +309,39 @@ CREATE TABLE `geoOutcomeTrainingRuns` (
 	CONSTRAINT `geo_outcome_training_owner_id_unique` UNIQUE(`ownerUserId`,`trainingRunId`)
 );
 --> statement-breakpoint
+CREATE TABLE `llmVisibilityObservationReviews` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`decisionId` varchar(160) NOT NULL,
+	`ownerUserId` int NOT NULL,
+	`observationId` int NOT NULL,
+	`reviewerUserId` int NOT NULL,
+	`idempotencyKey` varchar(128) NOT NULL,
+	`inputFingerprint` varchar(128) NOT NULL,
+	`previousStatus` enum('pending','approved','revoked') NOT NULL,
+	`newStatus` enum('approved','revoked') NOT NULL,
+	`reason` varchar(500) NOT NULL,
+	`sourceResponseHash` varchar(64) NOT NULL,
+	`decisionFingerprint` varchar(128) NOT NULL,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	CONSTRAINT `llmVisibilityObservationReviews_id` PRIMARY KEY(`id`),
+	CONSTRAINT `llm_visibility_reviews_decision_unique` UNIQUE(`decisionId`),
+	CONSTRAINT `llm_visibility_reviews_owner_key_unique` UNIQUE(`ownerUserId`,`idempotencyKey`),
+	CONSTRAINT `llm_visibility_reviews_observation_status_unique` UNIQUE(`observationId`,`newStatus`)
+);
+--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateAuthorities` ADD CONSTRAINT `geoOutcomeCandidateAuthorities_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateAuthorities` ADD CONSTRAINT `geoOutcomeCandidateAuthorities_candidateSetDecisionId_geoOutcomeCandidateSetDecisions_id_fk` FOREIGN KEY (`candidateSetDecisionId`) REFERENCES `geoOutcomeCandidateSetDecisions`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateAuthorities` ADD CONSTRAINT `geoOutcomeCandidateAuthorities_sourceObservationId_llmVisibilityObservations_id_fk` FOREIGN KEY (`sourceObservationId`) REFERENCES `llmVisibilityObservations`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateAuthorities` ADD CONSTRAINT `geoOutcomeCandidateAuthorities_projectId_llmVisibilityProjects_id_fk` FOREIGN KEY (`projectId`) REFERENCES `llmVisibilityProjects`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateAuthorities` ADD CONSTRAINT `geoOutcomeCandidateAuthorities_queryId_llmVisibilityQueries_id_fk` FOREIGN KEY (`queryId`) REFERENCES `llmVisibilityQueries`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateAuthorities` ADD CONSTRAINT `geoOutcomeCandidateAuthorities_runId_llmVisibilityRuns_id_fk` FOREIGN KEY (`runId`) REFERENCES `llmVisibilityRuns`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateAuthorities` ADD CONSTRAINT `geoOutcomeCandidateAuthorities_reviewerUserId_users_id_fk` FOREIGN KEY (`reviewerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateSetDecisions` ADD CONSTRAINT `geoOutcomeCandidateSetDecisions_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateSetDecisions` ADD CONSTRAINT `geoOutcomeCandidateSetDecisions_sourceObservationId_llmVisibilityObservations_id_fk` FOREIGN KEY (`sourceObservationId`) REFERENCES `llmVisibilityObservations`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateSetDecisions` ADD CONSTRAINT `geoOutcomeCandidateSetDecisions_sourceProjectId_llmVisibilityProjects_id_fk` FOREIGN KEY (`sourceProjectId`) REFERENCES `llmVisibilityProjects`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateSetDecisions` ADD CONSTRAINT `geoOutcomeCandidateSetDecisions_sourceQueryId_llmVisibilityQueries_id_fk` FOREIGN KEY (`sourceQueryId`) REFERENCES `llmVisibilityQueries`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateSetDecisions` ADD CONSTRAINT `geoOutcomeCandidateSetDecisions_sourceRunId_llmVisibilityRuns_id_fk` FOREIGN KEY (`sourceRunId`) REFERENCES `llmVisibilityRuns`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeCandidateSetDecisions` ADD CONSTRAINT `geoOutcomeCandidateSetDecisions_reviewerUserId_users_id_fk` FOREIGN KEY (`reviewerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `geoOutcomeDatasetDecisions` ADD CONSTRAINT `geoOutcomeDatasetDecisions_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `geoOutcomeDatasetDecisions` ADD CONSTRAINT `geoOutcomeDatasetDecisions_datasetManifestId_geoOutcomeDatasetManifests_id_fk` FOREIGN KEY (`datasetManifestId`) REFERENCES `geoOutcomeDatasetManifests`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `geoOutcomeDatasetDecisions` ADD CONSTRAINT `geoOutcomeDatasetDecisions_reviewerUserId_users_id_fk` FOREIGN KEY (`reviewerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -259,6 +353,7 @@ ALTER TABLE `geoOutcomeEvidenceLocators` ADD CONSTRAINT `geoOutcomeEvidenceLocat
 ALTER TABLE `geoOutcomeEvidenceLocators` ADD CONSTRAINT `geoOutcomeEvidenceLocators_sourceProjectId_llmVisibilityProjects_id_fk` FOREIGN KEY (`sourceProjectId`) REFERENCES `llmVisibilityProjects`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `geoOutcomeEvidenceLocators` ADD CONSTRAINT `geoOutcomeEvidenceLocators_sourceQueryId_llmVisibilityQueries_id_fk` FOREIGN KEY (`sourceQueryId`) REFERENCES `llmVisibilityQueries`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `geoOutcomeEvidenceLocators` ADD CONSTRAINT `geoOutcomeEvidenceLocators_sourceRunId_llmVisibilityRuns_id_fk` FOREIGN KEY (`sourceRunId`) REFERENCES `llmVisibilityRuns`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `geoOutcomeEvidenceLocators` ADD CONSTRAINT `geoOutcomeEvidenceLocators_candidateAuthorityId_geoOutcomeCandidateAuthorities_id_fk` FOREIGN KEY (`candidateAuthorityId`) REFERENCES `geoOutcomeCandidateAuthorities`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `geoOutcomeIdempotencyClaims` ADD CONSTRAINT `geoOutcomeIdempotencyClaims_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `geoOutcomeModelArtifacts` ADD CONSTRAINT `geoOutcomeModelArtifacts_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `geoOutcomeModelDecisions` ADD CONSTRAINT `geoOutcomeModelDecisions_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -271,6 +366,11 @@ ALTER TABLE `geoOutcomeObservationVerifications` ADD CONSTRAINT `geoOutcomeObser
 ALTER TABLE `geoOutcomeObservationVerifications` ADD CONSTRAINT `geoOutcomeObservationVerifications_reviewerUserId_users_id_fk` FOREIGN KEY (`reviewerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `geoOutcomeTrainingRuns` ADD CONSTRAINT `geoOutcomeTrainingRuns_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `geoOutcomeTrainingRuns` ADD CONSTRAINT `geoOutcomeTrainingRuns_datasetManifestId_geoOutcomeDatasetManifests_id_fk` FOREIGN KEY (`datasetManifestId`) REFERENCES `geoOutcomeDatasetManifests`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `llmVisibilityObservationReviews` ADD CONSTRAINT `llmVisibilityObservationReviews_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `llmVisibilityObservationReviews` ADD CONSTRAINT `llmVisibilityObservationReviews_observationId_llmVisibilityObservations_id_fk` FOREIGN KEY (`observationId`) REFERENCES `llmVisibilityObservations`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `llmVisibilityObservationReviews` ADD CONSTRAINT `llmVisibilityObservationReviews_reviewerUserId_users_id_fk` FOREIGN KEY (`reviewerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX `geo_outcome_candidate_authority_source_idx` ON `geoOutcomeCandidateAuthorities` (`ownerUserId`,`sourceObservationId`,`candidateSetFingerprint`);--> statement-breakpoint
+CREATE INDEX `geo_outcome_candidate_sets_source_idx` ON `geoOutcomeCandidateSetDecisions` (`ownerUserId`,`sourceObservationId`,`createdAt`);--> statement-breakpoint
 CREATE INDEX `geo_outcome_dataset_decisions_owner_manifest_idx` ON `geoOutcomeDatasetDecisions` (`ownerUserId`,`datasetManifestId`,`createdAt`);--> statement-breakpoint
 CREATE INDEX `geo_outcome_datasets_owner_status_idx` ON `geoOutcomeDatasetManifests` (`ownerUserId`,`status`,`createdAt`);--> statement-breakpoint
 CREATE INDEX `geo_outcome_members_owner_query_idx` ON `geoOutcomeDatasetMembers` (`ownerUserId`,`normalizedQueryHash`);--> statement-breakpoint
@@ -281,4 +381,5 @@ CREATE INDEX `geo_outcome_decisions_owner_artifact_idx` ON `geoOutcomeModelDecis
 CREATE INDEX `geo_outcome_candidates_owner_query_idx` ON `geoOutcomeObservationCandidates` (`ownerUserId`,`normalizedQueryHash`,`observationRunId`);--> statement-breakpoint
 CREATE INDEX `geo_outcome_runs_owner_time_idx` ON `geoOutcomeObservationRuns` (`ownerUserId`,`runTimestamp`);--> statement-breakpoint
 CREATE INDEX `geo_outcome_verification_observation_idx` ON `geoOutcomeObservationVerifications` (`ownerUserId`,`observationFingerprint`,`createdAt`);--> statement-breakpoint
-CREATE INDEX `geo_outcome_training_owner_status_idx` ON `geoOutcomeTrainingRuns` (`ownerUserId`,`status`,`createdAt`);
+CREATE INDEX `geo_outcome_training_owner_status_idx` ON `geoOutcomeTrainingRuns` (`ownerUserId`,`status`,`createdAt`);--> statement-breakpoint
+CREATE INDEX `llm_visibility_reviews_owner_observation_idx` ON `llmVisibilityObservationReviews` (`ownerUserId`,`observationId`,`createdAt`);

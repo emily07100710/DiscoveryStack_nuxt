@@ -71,6 +71,8 @@ export interface OutcomeObservation {
   verificationAuthority: 'intake' | 'owner_review' | 'consumer_surface_server' | 'none'
   intakeFingerprint: string
   reviewFingerprint: string | null
+  candidateAuthorityFingerprint: string | null
+  candidateSetFingerprint: string | null
   evidenceLocatorHashes: string[]
   appliedRuleHashes: string[]
   contentFeatureVector: ContentFeatureInput
@@ -349,6 +351,14 @@ export interface EvidenceBinding {
   sourceQueryId: number
   sourceRunId: number
   sourceResponseHash: string
+  sourceCitationSetFingerprint: string
+  candidateAuthorityId: number
+  candidateAuthorityFingerprint: string
+  candidateSetFingerprint: string
+  canonicalCandidateUrlHash: string
+  serverDerivedCitationStatus: 'cited' | 'not_cited'
+  serverDerivedCitationPosition: number | null
+  evidenceBindingFingerprint: string
   sourceObservedAt: string
   createdAt: string
 }
@@ -445,6 +455,18 @@ export interface AuthoritativeEvidenceSource {
   responseHash: string
   evidenceLocator: string
   observedAt: string
+  sourceCitationSetFingerprint?: string
+  canonicalCandidateUrlHash?: string
+  canonicalPageHash?: string
+  candidatePageIdentityHash?: string
+  websiteIdentityHash?: string
+  contentHash?: string
+  publicationReceiptFingerprint?: string | null
+  candidateAuthorityId?: number
+  candidateAuthorityFingerprint?: string
+  candidateSetFingerprint?: string
+  serverDerivedCitationStatus?: 'cited' | 'not_cited'
+  serverDerivedCitationPosition?: number | null
 }
 
 export interface MemoryGeoOutcomeState {

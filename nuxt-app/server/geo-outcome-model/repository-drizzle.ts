@@ -139,6 +139,8 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
       piiStatus: revoked ? 'unknown' : pii ? 'clean' : 'unknown',
       verificationAuthority: eligible ? 'owner_review' : 'intake',
       reviewFingerprint,
+      candidateAuthorityFingerprint: null,
+      candidateSetFingerprint: null,
     }
     assertObservationIsUsable(projected)
     return projected
@@ -194,8 +196,8 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     if (bindings.length !== 1) throw new Error('Durable evidence governance must have exactly one authoritative binding.')
     const stored = bindings[0]!
     const resolved = await resolveAuthoritativeLlmVisibilityEvidence(this.db, observation.ownerUserId, observation, stored.sourceRecordId)
-    if (stored.evidenceLocatorHash !== resolved.evidenceLocatorHash || stored.sourceResponseHash !== resolved.sourceResponseHash || stored.sourceProjectId !== resolved.sourceProjectId || stored.sourceQueryId !== resolved.sourceQueryId || stored.sourceRunId !== resolved.sourceRunId || toIso(stored.sourceObservedAt) !== resolved.sourceObservedAt) throw new Error('Durable authoritative evidence binding no longer matches source lineage.')
-    return observation
+    if (stored.evidenceLocatorHash !== resolved.evidenceLocatorHash || stored.sourceResponseHash !== resolved.sourceResponseHash || stored.sourceCitationSetFingerprint !== resolved.sourceCitationSetFingerprint || stored.sourceProjectId !== resolved.sourceProjectId || stored.sourceQueryId !== resolved.sourceQueryId || stored.sourceRunId !== resolved.sourceRunId || stored.candidateAuthorityId !== resolved.candidateAuthorityId || stored.candidateAuthorityFingerprint !== resolved.candidateAuthorityFingerprint || stored.candidateSetFingerprint !== resolved.candidateSetFingerprint || stored.canonicalCandidateUrlHash !== resolved.canonicalCandidateUrlHash || stored.serverDerivedCitationStatus !== resolved.serverDerivedCitationStatus || stored.serverDerivedCitationPosition !== resolved.serverDerivedCitationPosition || stored.evidenceBindingFingerprint !== resolved.evidenceBindingFingerprint || toIso(stored.sourceObservedAt) !== resolved.sourceObservedAt) throw new Error('Durable authoritative evidence binding no longer matches source/candidate lineage.')
+    return { ...observation, candidateAuthorityFingerprint: resolved.candidateAuthorityFingerprint, candidateSetFingerprint: resolved.candidateSetFingerprint, reviewFingerprint: fingerprint({ governanceReviewFingerprint: observation.reviewFingerprint, evidenceBindingFingerprint: resolved.evidenceBindingFingerprint }) }
   }
 
   async listObservations(ownerUserId: number): Promise<OutcomeObservation[]> {
@@ -264,7 +266,7 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
         await tx.insert(geoOutcomeEvidenceLocators).values({ ...binding, sourceObservedAt: new Date(binding.sourceObservedAt), createdAt: new Date(binding.createdAt) })
       } catch {
         const [existing] = await tx.select().from(geoOutcomeEvidenceLocators).where(and(eq(geoOutcomeEvidenceLocators.ownerUserId, ownerUserId), eq(geoOutcomeEvidenceLocators.observationFingerprint, observationFingerprint), eq(geoOutcomeEvidenceLocators.sourceKind, 'llm_visibility_observation'), eq(geoOutcomeEvidenceLocators.sourceRecordId, sourceRecordId))).limit(1)
-        if (!existing || existing.evidenceLocatorHash !== binding.evidenceLocatorHash || existing.sourceResponseHash !== binding.sourceResponseHash || existing.sourceProjectId !== binding.sourceProjectId || existing.sourceQueryId !== binding.sourceQueryId || existing.sourceRunId !== binding.sourceRunId || toIso(existing.sourceObservedAt) !== binding.sourceObservedAt) throw new Error('Authoritative evidence binding collision.')
+        if (!existing || existing.evidenceLocatorHash !== binding.evidenceLocatorHash || existing.sourceResponseHash !== binding.sourceResponseHash || existing.sourceCitationSetFingerprint !== binding.sourceCitationSetFingerprint || existing.sourceProjectId !== binding.sourceProjectId || existing.sourceQueryId !== binding.sourceQueryId || existing.sourceRunId !== binding.sourceRunId || existing.candidateAuthorityId !== binding.candidateAuthorityId || existing.candidateAuthorityFingerprint !== binding.candidateAuthorityFingerprint || existing.candidateSetFingerprint !== binding.candidateSetFingerprint || existing.serverDerivedCitationStatus !== binding.serverDerivedCitationStatus || existing.serverDerivedCitationPosition !== binding.serverDerivedCitationPosition || existing.evidenceBindingFingerprint !== binding.evidenceBindingFingerprint || toIso(existing.sourceObservedAt) !== binding.sourceObservedAt) throw new Error('Authoritative evidence binding collision.')
         return { ...binding, createdAt: toIso(existing.createdAt)! }
       }
       return binding
@@ -282,7 +284,8 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
       if (existingFacts.some(item => item.factType === factType)) throw new Error('Duplicate governance fact.')
       if (action === 'verify_evidence') {
         if (!evidenceLocatorHash || !observation.evidenceLocatorHashes.includes(evidenceLocatorHash)) throw new Error('Evidence locator is not approved for this observation.')
-        const [evidence] = await tx.select().from(geoOutcomeEvidenceLocators).where(and(eq(geoOutcomeEvidenceLocators.ownerUserId, ownerUserId), eq(geoOutcomeEvidenceLocators.observationFingerprint, observationFingerprint), eq(geoOutcomeEvidenceLocators.evidenceLocatorHash, evidenceLocatorHash), eq(geoOutcomeEvidenceLocators.purpose, 'geo_outcome_verification'), eq(geoOutcomeEvidenceLocators.sourceKind, 'llm_visibility_observation'), eq(geoOutcomeEvidenceLocators.sourceResponseHash, observation.evidenceSnapshotHash))).limit(1)
+        if (observation.citationStatus === 'unknown') throw new Error('Unknown citation status cannot be verified as primary evidence.')
+        const [evidence] = await tx.select().from(geoOutcomeEvidenceLocators).where(and(eq(geoOutcomeEvidenceLocators.ownerUserId, ownerUserId), eq(geoOutcomeEvidenceLocators.observationFingerprint, observationFingerprint), eq(geoOutcomeEvidenceLocators.evidenceLocatorHash, evidenceLocatorHash), eq(geoOutcomeEvidenceLocators.purpose, 'geo_outcome_verification'), eq(geoOutcomeEvidenceLocators.sourceKind, 'llm_visibility_observation'), eq(geoOutcomeEvidenceLocators.sourceResponseHash, observation.evidenceSnapshotHash), eq(geoOutcomeEvidenceLocators.serverDerivedCitationStatus, observation.citationStatus))).limit(1)
         if (!evidence) throw new Error('Evidence locator has not been bound from authoritative owner-scoped consumer-surface evidence.')
       } else if (evidenceLocatorHash !== null) throw new Error('Only evidence verification may include an evidence locator.')
       const factStatus = action === 'revoke' ? 'revoked' : 'approved'

@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "e8edcfe4-f9fd-4581-87e4-a09ccb944c43",
+  "id": "5381faa5-fb24-4b0d-a230-9ee1e9140799",
   "prevId": "428a10b6-7b01-404d-aff8-c30b17fc1e0d",
   "tables": {
     "auditEvidenceLedger": {
@@ -4558,6 +4558,554 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "geoOutcomeCandidateAuthorities": {
+      "name": "geoOutcomeCandidateAuthorities",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "ownerUserId": {
+          "name": "ownerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidateSetDecisionId": {
+          "name": "candidateSetDecisionId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceObservationId": {
+          "name": "sourceObservationId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "projectId": {
+          "name": "projectId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "queryId": {
+          "name": "queryId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "runId": {
+          "name": "runId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "canonicalCandidateUrlHash": {
+          "name": "canonicalCandidateUrlHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "canonicalPageHash": {
+          "name": "canonicalPageHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidatePageIdentityHash": {
+          "name": "candidatePageIdentityHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "websiteIdentityHash": {
+          "name": "websiteIdentityHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "contentHash": {
+          "name": "contentHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "publicationReceiptFingerprint": {
+          "name": "publicationReceiptFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "publicationEvidenceSnapshotHash": {
+          "name": "publicationEvidenceSnapshotHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "authorityBasis": {
+          "name": "authorityBasis",
+          "type": "enum('manual_owner_attested_v1','discovery_stack_publication_receipt_v1')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "observabilityReviewStatus": {
+          "name": "observabilityReviewStatus",
+          "type": "enum('approved_observable')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "retrievalReviewStatus": {
+          "name": "retrievalReviewStatus",
+          "type": "enum('approved_retrieved')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reviewerUserId": {
+          "name": "reviewerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reviewReason": {
+          "name": "reviewReason",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reviewedAt": {
+          "name": "reviewedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decisionFingerprint": {
+          "name": "decisionFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidateSetFingerprint": {
+          "name": "candidateSetFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "geo_outcome_candidate_authority_set_url_unique": {
+          "name": "geo_outcome_candidate_authority_set_url_unique",
+          "columns": [
+            "candidateSetDecisionId",
+            "canonicalCandidateUrlHash"
+          ],
+          "isUnique": true
+        },
+        "geo_outcome_candidate_authority_set_identity_unique": {
+          "name": "geo_outcome_candidate_authority_set_identity_unique",
+          "columns": [
+            "candidateSetDecisionId",
+            "candidatePageIdentityHash"
+          ],
+          "isUnique": true
+        },
+        "geo_outcome_candidate_authority_source_idx": {
+          "name": "geo_outcome_candidate_authority_source_idx",
+          "columns": [
+            "ownerUserId",
+            "sourceObservationId",
+            "candidateSetFingerprint"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "geoOutcomeCandidateAuthorities_ownerUserId_users_id_fk": {
+          "name": "geoOutcomeCandidateAuthorities_ownerUserId_users_id_fk",
+          "tableFrom": "geoOutcomeCandidateAuthorities",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateAuthorities_candidateSetDecisionId_geoOutcomeCandidateSetDecisions_id_fk": {
+          "name": "geoOutcomeCandidateAuthorities_candidateSetDecisionId_geoOutcomeCandidateSetDecisions_id_fk",
+          "tableFrom": "geoOutcomeCandidateAuthorities",
+          "tableTo": "geoOutcomeCandidateSetDecisions",
+          "columnsFrom": [
+            "candidateSetDecisionId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateAuthorities_sourceObservationId_llmVisibilityObservations_id_fk": {
+          "name": "geoOutcomeCandidateAuthorities_sourceObservationId_llmVisibilityObservations_id_fk",
+          "tableFrom": "geoOutcomeCandidateAuthorities",
+          "tableTo": "llmVisibilityObservations",
+          "columnsFrom": [
+            "sourceObservationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateAuthorities_projectId_llmVisibilityProjects_id_fk": {
+          "name": "geoOutcomeCandidateAuthorities_projectId_llmVisibilityProjects_id_fk",
+          "tableFrom": "geoOutcomeCandidateAuthorities",
+          "tableTo": "llmVisibilityProjects",
+          "columnsFrom": [
+            "projectId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateAuthorities_queryId_llmVisibilityQueries_id_fk": {
+          "name": "geoOutcomeCandidateAuthorities_queryId_llmVisibilityQueries_id_fk",
+          "tableFrom": "geoOutcomeCandidateAuthorities",
+          "tableTo": "llmVisibilityQueries",
+          "columnsFrom": [
+            "queryId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateAuthorities_runId_llmVisibilityRuns_id_fk": {
+          "name": "geoOutcomeCandidateAuthorities_runId_llmVisibilityRuns_id_fk",
+          "tableFrom": "geoOutcomeCandidateAuthorities",
+          "tableTo": "llmVisibilityRuns",
+          "columnsFrom": [
+            "runId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateAuthorities_reviewerUserId_users_id_fk": {
+          "name": "geoOutcomeCandidateAuthorities_reviewerUserId_users_id_fk",
+          "tableFrom": "geoOutcomeCandidateAuthorities",
+          "tableTo": "users",
+          "columnsFrom": [
+            "reviewerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "geoOutcomeCandidateAuthorities_id": {
+          "name": "geoOutcomeCandidateAuthorities_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "geoOutcomeCandidateSetDecisions": {
+      "name": "geoOutcomeCandidateSetDecisions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "decisionId": {
+          "name": "decisionId",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ownerUserId": {
+          "name": "ownerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceObservationId": {
+          "name": "sourceObservationId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceProjectId": {
+          "name": "sourceProjectId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceQueryId": {
+          "name": "sourceQueryId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceRunId": {
+          "name": "sourceRunId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceCitationSetFingerprint": {
+          "name": "sourceCitationSetFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reviewerUserId": {
+          "name": "reviewerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "idempotencyKey": {
+          "name": "idempotencyKey",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "inputFingerprint": {
+          "name": "inputFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decisionType": {
+          "name": "decisionType",
+          "type": "enum('approve','revoke')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidateSetFingerprint": {
+          "name": "candidateSetFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "targetCandidateSetFingerprint": {
+          "name": "targetCandidateSetFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reviewReason": {
+          "name": "reviewReason",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decisionFingerprint": {
+          "name": "decisionFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "geo_outcome_candidate_sets_decision_unique": {
+          "name": "geo_outcome_candidate_sets_decision_unique",
+          "columns": [
+            "decisionId"
+          ],
+          "isUnique": true
+        },
+        "geo_outcome_candidate_sets_owner_key_unique": {
+          "name": "geo_outcome_candidate_sets_owner_key_unique",
+          "columns": [
+            "ownerUserId",
+            "idempotencyKey"
+          ],
+          "isUnique": true
+        },
+        "geo_outcome_candidate_sets_owner_source_set_decision_unique": {
+          "name": "geo_outcome_candidate_sets_owner_source_set_decision_unique",
+          "columns": [
+            "ownerUserId",
+            "sourceObservationId",
+            "candidateSetFingerprint",
+            "decisionType"
+          ],
+          "isUnique": true
+        },
+        "geo_outcome_candidate_sets_source_idx": {
+          "name": "geo_outcome_candidate_sets_source_idx",
+          "columns": [
+            "ownerUserId",
+            "sourceObservationId",
+            "createdAt"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "geoOutcomeCandidateSetDecisions_ownerUserId_users_id_fk": {
+          "name": "geoOutcomeCandidateSetDecisions_ownerUserId_users_id_fk",
+          "tableFrom": "geoOutcomeCandidateSetDecisions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateSetDecisions_sourceObservationId_llmVisibilityObservations_id_fk": {
+          "name": "geoOutcomeCandidateSetDecisions_sourceObservationId_llmVisibilityObservations_id_fk",
+          "tableFrom": "geoOutcomeCandidateSetDecisions",
+          "tableTo": "llmVisibilityObservations",
+          "columnsFrom": [
+            "sourceObservationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateSetDecisions_sourceProjectId_llmVisibilityProjects_id_fk": {
+          "name": "geoOutcomeCandidateSetDecisions_sourceProjectId_llmVisibilityProjects_id_fk",
+          "tableFrom": "geoOutcomeCandidateSetDecisions",
+          "tableTo": "llmVisibilityProjects",
+          "columnsFrom": [
+            "sourceProjectId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateSetDecisions_sourceQueryId_llmVisibilityQueries_id_fk": {
+          "name": "geoOutcomeCandidateSetDecisions_sourceQueryId_llmVisibilityQueries_id_fk",
+          "tableFrom": "geoOutcomeCandidateSetDecisions",
+          "tableTo": "llmVisibilityQueries",
+          "columnsFrom": [
+            "sourceQueryId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateSetDecisions_sourceRunId_llmVisibilityRuns_id_fk": {
+          "name": "geoOutcomeCandidateSetDecisions_sourceRunId_llmVisibilityRuns_id_fk",
+          "tableFrom": "geoOutcomeCandidateSetDecisions",
+          "tableTo": "llmVisibilityRuns",
+          "columnsFrom": [
+            "sourceRunId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeCandidateSetDecisions_reviewerUserId_users_id_fk": {
+          "name": "geoOutcomeCandidateSetDecisions_reviewerUserId_users_id_fk",
+          "tableFrom": "geoOutcomeCandidateSetDecisions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "reviewerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "geoOutcomeCandidateSetDecisions_id": {
+          "name": "geoOutcomeCandidateSetDecisions_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
     "geoOutcomeDatasetDecisions": {
       "name": "geoOutcomeDatasetDecisions",
       "columns": {
@@ -5186,6 +5734,62 @@
           "notNull": true,
           "autoincrement": false
         },
+        "sourceCitationSetFingerprint": {
+          "name": "sourceCitationSetFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidateAuthorityId": {
+          "name": "candidateAuthorityId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidateAuthorityFingerprint": {
+          "name": "candidateAuthorityFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidateSetFingerprint": {
+          "name": "candidateSetFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "canonicalCandidateUrlHash": {
+          "name": "canonicalCandidateUrlHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "serverDerivedCitationStatus": {
+          "name": "serverDerivedCitationStatus",
+          "type": "enum('cited','not_cited')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "serverDerivedCitationPosition": {
+          "name": "serverDerivedCitationPosition",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "evidenceBindingFingerprint": {
+          "name": "evidenceBindingFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "sourceObservedAt": {
           "name": "sourceObservedAt",
           "type": "timestamp",
@@ -5279,6 +5883,19 @@
           "tableTo": "llmVisibilityRuns",
           "columnsFrom": [
             "sourceRunId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "geoOutcomeEvidenceLocators_candidateAuthorityId_geoOutcomeCandidateAuthorities_id_fk": {
+          "name": "geoOutcomeEvidenceLocators_candidateAuthorityId_geoOutcomeCandidateAuthorities_id_fk",
+          "tableFrom": "geoOutcomeEvidenceLocators",
+          "tableTo": "geoOutcomeCandidateAuthorities",
+          "columnsFrom": [
+            "candidateAuthorityId"
           ],
           "columnsTo": [
             "id"
@@ -6795,6 +7412,188 @@
       "compositePrimaryKeys": {
         "leads_id": {
           "name": "leads_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "llmVisibilityObservationReviews": {
+      "name": "llmVisibilityObservationReviews",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "decisionId": {
+          "name": "decisionId",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ownerUserId": {
+          "name": "ownerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "observationId": {
+          "name": "observationId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reviewerUserId": {
+          "name": "reviewerUserId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "idempotencyKey": {
+          "name": "idempotencyKey",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "inputFingerprint": {
+          "name": "inputFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "previousStatus": {
+          "name": "previousStatus",
+          "type": "enum('pending','approved','revoked')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "newStatus": {
+          "name": "newStatus",
+          "type": "enum('approved','revoked')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceResponseHash": {
+          "name": "sourceResponseHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decisionFingerprint": {
+          "name": "decisionFingerprint",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "llm_visibility_reviews_decision_unique": {
+          "name": "llm_visibility_reviews_decision_unique",
+          "columns": [
+            "decisionId"
+          ],
+          "isUnique": true
+        },
+        "llm_visibility_reviews_owner_key_unique": {
+          "name": "llm_visibility_reviews_owner_key_unique",
+          "columns": [
+            "ownerUserId",
+            "idempotencyKey"
+          ],
+          "isUnique": true
+        },
+        "llm_visibility_reviews_observation_status_unique": {
+          "name": "llm_visibility_reviews_observation_status_unique",
+          "columns": [
+            "observationId",
+            "newStatus"
+          ],
+          "isUnique": true
+        },
+        "llm_visibility_reviews_owner_observation_idx": {
+          "name": "llm_visibility_reviews_owner_observation_idx",
+          "columns": [
+            "ownerUserId",
+            "observationId",
+            "createdAt"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "llmVisibilityObservationReviews_ownerUserId_users_id_fk": {
+          "name": "llmVisibilityObservationReviews_ownerUserId_users_id_fk",
+          "tableFrom": "llmVisibilityObservationReviews",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "llmVisibilityObservationReviews_observationId_llmVisibilityObservations_id_fk": {
+          "name": "llmVisibilityObservationReviews_observationId_llmVisibilityObservations_id_fk",
+          "tableFrom": "llmVisibilityObservationReviews",
+          "tableTo": "llmVisibilityObservations",
+          "columnsFrom": [
+            "observationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "llmVisibilityObservationReviews_reviewerUserId_users_id_fk": {
+          "name": "llmVisibilityObservationReviews_reviewerUserId_users_id_fk",
+          "tableFrom": "llmVisibilityObservationReviews",
+          "tableTo": "users",
+          "columnsFrom": [
+            "reviewerUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "llmVisibilityObservationReviews_id": {
+          "name": "llmVisibilityObservationReviews_id",
           "columns": [
             "id"
           ]

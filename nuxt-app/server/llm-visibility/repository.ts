@@ -1,11 +1,14 @@
 import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDatabase } from '../database'
-import { llmVisibilityObservations, llmVisibilityProjects, llmVisibilityQueries, llmVisibilityRuns } from '../database/schema'
+import { llmVisibilityObservationReviews, llmVisibilityObservations, llmVisibilityProjects, llmVisibilityQueries, llmVisibilityRuns } from '../database/schema'
 import type { ObservationInput, ProjectInput, QueryInput } from './contracts'
 import { VisibilityContractError, VISIBILITY_LIMITATIONS } from './contracts'
 import { prepareProject, createTrackingQuery, buildSummaryProjection, type QueryWorkflowRepository, type VisibilityWorkflowRepository } from './service'
 import type { ProviderObservationRunInput } from './contracts'
+import type { OwnerManualObservationReview } from './contracts'
+import { fingerprint } from '../geo-outcome-model/canonical'
+import type { GeoOutcomeDrizzleDatabase } from '../geo-outcome-model/repository-drizzle'
 import { buildVisibilityProbePlan, createConfiguredVisibilityProviderAdapters, createEphemeralVisibilityProbeIdempotencyRegistry, executeAndPersistProviderObservations } from '../llm-visibility-probes'
 
 function requireVisibilityDatabase() {
@@ -108,14 +111,68 @@ export function createDrizzleVisibilityWorkflowRepository(): VisibilityWorkflowR
   }
 }
 
+export interface VisibilityObservationReviewDecision {
+  decisionId: string
+  observationId: number
+  ownerUserId: number
+  reviewerUserId: number
+  previousStatus: 'pending' | 'approved' | 'revoked'
+  newStatus: 'approved' | 'revoked'
+  reason: string
+  decisionFingerprint: string
+  createdAt: string
+}
+
+function reviewProjection(row: typeof llmVisibilityObservationReviews.$inferSelect): VisibilityObservationReviewDecision {
+  return { decisionId: row.decisionId, observationId: row.observationId, ownerUserId: row.ownerUserId, reviewerUserId: row.reviewerUserId, previousStatus: row.previousStatus, newStatus: row.newStatus, reason: row.reason, decisionFingerprint: row.decisionFingerprint, createdAt: new Date(row.createdAt).toISOString() }
+}
+
+/** Append-only, collision-safe manual snapshot review. The legacy verifiedByOwner column is not read or written. */
+export async function reviewVisibilityObservation(ownerUserId: number, reviewerUserId: number, observationId: number, input: OwnerManualObservationReview, database: GeoOutcomeDrizzleDatabase = requireVisibilityDatabase()): Promise<VisibilityObservationReviewDecision> {
+  if (!Number.isSafeInteger(observationId) || observationId <= 0 || reviewerUserId !== ownerUserId) throw new VisibilityContractError(404, '找不到此 owner 的 manual observation。')
+  const inputFingerprint = fingerprint({ ownerUserId, reviewerUserId, observationId, decision: input.decision, reason: input.reason })
+  return database.transaction(async transaction => {
+    const [replay] = await transaction.select().from(llmVisibilityObservationReviews).where(and(eq(llmVisibilityObservationReviews.ownerUserId, ownerUserId), eq(llmVisibilityObservationReviews.idempotencyKey, input.idempotencyKey))).limit(1)
+    if (replay) {
+      if (replay.inputFingerprint !== inputFingerprint) throw new VisibilityContractError(409, 'Manual observation review idempotency collision.')
+      return reviewProjection(replay)
+    }
+    const [source] = await transaction.select().from(llmVisibilityObservations).where(and(eq(llmVisibilityObservations.id, observationId), eq(llmVisibilityObservations.ownerUserId, ownerUserId))).limit(1)
+    if (!source) throw new VisibilityContractError(404, '找不到此 owner 的 manual observation。')
+    const [run] = await transaction.select().from(llmVisibilityRuns).where(and(eq(llmVisibilityRuns.id, source.runId), eq(llmVisibilityRuns.ownerUserId, ownerUserId))).limit(1)
+    if (!run || run.projectId !== source.projectId || run.observationMode !== 'manual_verified' || run.status !== 'completed') throw new VisibilityContractError(422, 'Provider、stale 或 incomplete observation 不可升格為 primary manual truth。')
+    const existing = await transaction.select().from(llmVisibilityObservationReviews).where(and(eq(llmVisibilityObservationReviews.ownerUserId, ownerUserId), eq(llmVisibilityObservationReviews.observationId, observationId)))
+    const revoked = existing.some(row => row.newStatus === 'revoked')
+    const approved = existing.some(row => row.newStatus === 'approved')
+    if (revoked) throw new VisibilityContractError(409, 'Manual observation review is terminally revoked.')
+    if (input.decision === 'approve' && approved) throw new VisibilityContractError(409, 'Manual observation is already approved under a different mutation identity.')
+    if (input.decision === 'revoke' && !approved) throw new VisibilityContractError(409, 'Only an approved manual observation may be revoked.')
+    const previousStatus = approved ? 'approved' : 'pending'
+    const newStatus = input.decision === 'approve' ? 'approved' : 'revoked'
+    const createdAt = new Date()
+    const decisionFingerprint = fingerprint({ ownerUserId, reviewerUserId, observationId, previousStatus, newStatus, reason: input.reason, sourceResponseHash: source.responseHash })
+    const decisionId = `llm-review-${decisionFingerprint.slice(0, 20)}`
+    try {
+      await transaction.insert(llmVisibilityObservationReviews).values({ decisionId, ownerUserId, observationId, reviewerUserId, idempotencyKey: input.idempotencyKey, inputFingerprint, previousStatus, newStatus, reason: input.reason, sourceResponseHash: source.responseHash, decisionFingerprint, createdAt })
+    } catch {
+      const [concurrent] = await transaction.select().from(llmVisibilityObservationReviews).where(and(eq(llmVisibilityObservationReviews.ownerUserId, ownerUserId), eq(llmVisibilityObservationReviews.idempotencyKey, input.idempotencyKey))).limit(1)
+      if (concurrent && concurrent.inputFingerprint === inputFingerprint) return reviewProjection(concurrent)
+      throw new VisibilityContractError(409, 'Concurrent manual observation review collision.')
+    }
+    return { decisionId, observationId, ownerUserId, reviewerUserId, previousStatus, newStatus, reason: input.reason, decisionFingerprint, createdAt: createdAt.toISOString() }
+  })
+}
+
 export async function listVisibilityWorkspace(ownerUserId: number) {
   const database = requireVisibilityDatabase()
-  const [projects, queries, recent] = await Promise.all([
+  const [projects, queries, recent, reviews] = await Promise.all([
     database.select().from(llmVisibilityProjects).where(eq(llmVisibilityProjects.ownerUserId, ownerUserId)).orderBy(desc(llmVisibilityProjects.updatedAt)),
     database.select().from(llmVisibilityQueries).where(eq(llmVisibilityQueries.ownerUserId, ownerUserId)).orderBy(desc(llmVisibilityQueries.updatedAt)),
     database.select({ id: llmVisibilityObservations.id, projectId: llmVisibilityObservations.projectId, queryId: llmVisibilityObservations.queryId, runId: llmVisibilityObservations.runId, brandMentioned: llmVisibilityObservations.brandMentioned, exactMentionCount: llmVisibilityObservations.exactMentionCount, firstMentionPosition: llmVisibilityObservations.firstMentionPosition, citedDomain: llmVisibilityObservations.citedDomain, citationUrls: llmVisibilityObservations.citationUrls, competitorMentions: llmVisibilityObservations.competitorMentions, boundedExcerpt: llmVisibilityObservations.boundedExcerpt, evidenceLocator: llmVisibilityObservations.evidenceLocator, reviewerNote: llmVisibilityObservations.reviewerNote, verifiedByOwner: llmVisibilityObservations.verifiedByOwner, createdAt: llmVisibilityObservations.createdAt, provider: llmVisibilityRuns.provider, modelLabel: llmVisibilityRuns.modelLabel, observationMode: llmVisibilityRuns.observationMode, observedAt: llmVisibilityRuns.observedAt, limitationCode: llmVisibilityRuns.limitationCode }).from(llmVisibilityObservations).innerJoin(llmVisibilityRuns, and(eq(llmVisibilityObservations.runId, llmVisibilityRuns.id), eq(llmVisibilityRuns.ownerUserId, ownerUserId))).where(eq(llmVisibilityObservations.ownerUserId, ownerUserId)).orderBy(desc(llmVisibilityRuns.observedAt)).limit(50),
+    database.select().from(llmVisibilityObservationReviews).where(eq(llmVisibilityObservationReviews.ownerUserId, ownerUserId)),
   ])
-  return { projects, queries, recentObservations: recent, limitations: VISIBILITY_LIMITATIONS, projection: 'traceable_model_observations_v1' }
+  const approved = new Set(reviews.filter(row => row.newStatus === 'approved').map(row => row.observationId)); const revoked = new Set(reviews.filter(row => row.newStatus === 'revoked').map(row => row.observationId))
+  return { projects, queries, recentObservations: recent.map(row => ({ ...row, verifiedByOwner: approved.has(row.id) && !revoked.has(row.id), reviewStatus: revoked.has(row.id) ? 'revoked' : approved.has(row.id) ? 'approved' : 'pending' })), limitations: VISIBILITY_LIMITATIONS, projection: 'traceable_model_observations_v1' }
 }
 
 export async function getVisibilityProjectSummary(ownerUserId: number, projectId: number, now = new Date()) {
@@ -123,12 +180,14 @@ export async function getVisibilityProjectSummary(ownerUserId: number, projectId
   const [project] = await database.select().from(llmVisibilityProjects).where(and(eq(llmVisibilityProjects.id, projectId), eq(llmVisibilityProjects.ownerUserId, ownerUserId))).limit(1)
   if (!project) throw new VisibilityContractError(404, '找不到此 owner 的 LLM visibility project。')
   const from = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000)
-  const [queries, rows] = await Promise.all([
+  const [queries, rows, reviews] = await Promise.all([
     database.select().from(llmVisibilityQueries).where(and(eq(llmVisibilityQueries.ownerUserId, ownerUserId), eq(llmVisibilityQueries.projectId, project.id))).orderBy(desc(llmVisibilityQueries.createdAt)),
     database.select({ id: llmVisibilityObservations.id, queryId: llmVisibilityObservations.queryId, provider: llmVisibilityRuns.provider, modelLabel: llmVisibilityRuns.modelLabel, observationMode: llmVisibilityRuns.observationMode, observedAt: llmVisibilityRuns.observedAt, brandMentioned: llmVisibilityObservations.brandMentioned, exactMentionCount: llmVisibilityObservations.exactMentionCount, firstMentionPosition: llmVisibilityObservations.firstMentionPosition, citedDomain: llmVisibilityObservations.citedDomain, citationUrls: llmVisibilityObservations.citationUrls, competitorMentions: llmVisibilityObservations.competitorMentions, boundedExcerpt: llmVisibilityObservations.boundedExcerpt, evidenceLocator: llmVisibilityObservations.evidenceLocator, reviewerNote: llmVisibilityObservations.reviewerNote, limitationCode: llmVisibilityRuns.limitationCode }).from(llmVisibilityObservations).innerJoin(llmVisibilityRuns, and(eq(llmVisibilityObservations.runId, llmVisibilityRuns.id), eq(llmVisibilityRuns.ownerUserId, ownerUserId), eq(llmVisibilityRuns.projectId, project.id))).where(and(eq(llmVisibilityObservations.ownerUserId, ownerUserId), eq(llmVisibilityObservations.projectId, project.id), gte(llmVisibilityRuns.observedAt, from), lt(llmVisibilityRuns.observedAt, now))).orderBy(desc(llmVisibilityRuns.observedAt)),
+    database.select().from(llmVisibilityObservationReviews).where(eq(llmVisibilityObservationReviews.ownerUserId, ownerUserId)),
   ])
   const normalizedProject = { ...project, brandAliases: Array.isArray(project.brandAliases) ? project.brandAliases as string[] : [], competitorBrands: Array.isArray(project.competitorBrands) ? project.competitorBrands as string[] : [] }
   const metricQueries = queries.map(query => ({ id: query.id, locale: query.locale, active: query.active }))
-  const metricRows = rows.map(row => ({ ...row, citationUrls: Array.isArray(row.citationUrls) ? row.citationUrls as string[] : [], competitorMentions: row.competitorMentions && typeof row.competitorMentions === 'object' && !Array.isArray(row.competitorMentions) ? row.competitorMentions as Record<string, number> : {} }))
+  const approved = new Set(reviews.filter(row => row.newStatus === 'approved').map(row => row.observationId)); const revoked = new Set(reviews.filter(row => row.newStatus === 'revoked').map(row => row.observationId))
+  const metricRows = rows.filter(row => approved.has(row.id) && !revoked.has(row.id)).map(row => ({ ...row, citationUrls: Array.isArray(row.citationUrls) ? row.citationUrls as string[] : [], competitorMentions: row.competitorMentions && typeof row.competitorMentions === 'object' && !Array.isArray(row.competitorMentions) ? row.competitorMentions as Record<string, number> : {} }))
   return { ...buildSummaryProjection({ project: normalizedProject, queries: metricQueries, observations: metricRows, recentObservations: metricRows.slice(0, 20), now }), queries }
 }

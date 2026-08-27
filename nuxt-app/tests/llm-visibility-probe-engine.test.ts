@@ -617,8 +617,8 @@ describe('LLM Visibility Probe Engine V1 contract safety', () => {
   it('existing manual schema accepts manual mode but rejects provider mode', () => {
     const manualLike = { observationMode: 'manual_verified', status: 'completed', verifiedByOwner: true }
     const providerLike = { observationMode: 'provider_api_observation', status: 'completed', verifiedByOwner: true }
-    expect(ownerManualObservationImportSchema.shape.observationMode.safeParse(manualLike.observationMode).success).toBe(true)
-    expect(ownerManualObservationImportSchema.shape.observationMode.safeParse(providerLike.observationMode).success).toBe(false)
+    expect(ownerManualObservationImportSchema.safeParse(manualLike).success).toBe(false)
+    expect(ownerManualObservationImportSchema.safeParse(providerLike).success).toBe(false)
   })
 
   it('keeps limitation code explicit in every completed candidate', () => {

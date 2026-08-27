@@ -1,4 +1,4 @@
-import type { ObservationInput, ProjectInput, QueryInput } from './contracts'
+import type { ObservationInput, OwnerManualObservationImport, ProjectInput, QueryInput } from './contracts'
 import { VISIBILITY_LIMITATIONS, VisibilityContractError, providerObservationCandidateSchema, type PersistableObservationInput } from './contracts'
 import type { ObservationCandidate } from '../llm-visibility-probes/types'
 import { canonicalHostname, canonicalizePublicHttps, citationMatchesDomain, normalizedPromptHash, validateObservationTimestamp } from './guards'
@@ -73,8 +73,9 @@ export async function createTrackingQuery(repository: QueryWorkflowRepository, o
   }
 }
 
-export async function importObservationSnapshot(repository: VisibilityWorkflowRepository, ownerUserId: number, input: ObservationInput, now = new Date()) {
-  if (input.observationMode !== 'manual_verified') throw new VisibilityContractError(422, 'V1 runtime 只接受 owner manual_verified observation snapshot。')
+export async function importObservationSnapshot(repository: VisibilityWorkflowRepository, ownerUserId: number, input: OwnerManualObservationImport, now = new Date()) {
+  const untrusted = input as unknown as Record<string, unknown>
+  if ('observationMode' in untrusted || 'status' in untrusted || 'verifiedByOwner' in untrusted) throw new VisibilityContractError(422, 'Manual snapshot authority fields are server-derived and must not appear in import input.')
   const [project, query] = await Promise.all([repository.getProject(ownerUserId, input.projectId), repository.getQuery(ownerUserId, input.queryId)])
   if (!project || project.status !== 'active') throw new VisibilityContractError(404, '找不到此 owner 的 active LLM visibility project。')
   if (!query || query.projectId !== project.id || !query.active) throw new VisibilityContractError(404, '找不到此 owner/project 的 active tracking query。')
@@ -94,12 +95,12 @@ export async function importObservationSnapshot(repository: VisibilityWorkflowRe
     const run = await repository.getRun(ownerUserId, input.runId)
     if (!run || run.projectId !== project.id) throw new VisibilityContractError(404, '找不到此 owner/project 的 observation run。')
     const sameObservedAt = new Date(run.observedAt).getTime() === observedAtDate.getTime()
-    if (run.provider !== input.provider || run.modelLabel !== input.modelLabel || run.observationMode !== input.observationMode || run.status !== 'completed' || !sameObservedAt || run.requestFingerprint !== input.requestFingerprint || run.limitationCode !== input.limitationCode) throw new VisibilityContractError(422, '既有 run 與匯入 snapshot 的 provider、model、mode、status、time、fingerprint 或 limitation 不一致。')
+    if (run.provider !== input.provider || run.modelLabel !== input.modelLabel || run.observationMode !== 'manual_verified' || run.status !== 'completed' || !sameObservedAt || run.requestFingerprint !== input.requestFingerprint || run.limitationCode !== input.limitationCode) throw new VisibilityContractError(422, '既有 run 與 pending snapshot 的 provider、model、server mode/status、time、fingerprint 或 limitation 不一致。')
     if (await repository.hasObservation(run.id, query.id)) throw new VisibilityContractError(409, '此 run/query observation 已存在。')
   } else if (await repository.findRunByFingerprint(ownerUserId, input.requestFingerprint)) {
     throw new VisibilityContractError(409, '此 owner 的 request fingerprint 已存在；請使用既有 runId 或更正輸入。')
   }
-  return repository.commitObservation({ ...input, ownerUserId, observedAtDate, citedDomain })
+  return repository.commitObservation({ ...input, observationMode: 'manual_verified', status: 'completed', verifiedByOwner: false, ownerUserId, observedAtDate, citedDomain })
 }
 
 export async function persistProviderObservationCandidate(repository: VisibilityWorkflowRepository, ownerUserId: number, candidate: Omit<ObservationCandidate, 'projectId' | 'queryId'> & { projectId: string | number, queryId: string | number }, now = new Date()) {
@@ -154,7 +155,7 @@ export function buildSummaryProjection(input: { project: ProjectRecord, queries:
     recentObservations: input.recentObservations,
     limitations: VISIBILITY_LIMITATIONS,
     projection: 'traceable_model_observations_v1',
-    metricBasis: 'manual_verified_v1' as const,
+    metricBasis: 'manual_review_ledger_v1' as const,
     prohibitedClaims: ['search ranking', 'consumer UI exposure guarantee', 'traffic guarantee', 'conversion guarantee', 'revenue or ROI guarantee'],
   }
 }
