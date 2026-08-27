@@ -6,6 +6,7 @@ import type {
   ManagedSiteGenerationCandidate,
   ManagedSiteProviderConfiguration,
   ManagedSitePrePurchaseBinding,
+  ManagedSitePaymentWebhookInbox,
   ManagedSiteReleaseProjection,
 } from '../../../server/database/schema'
 import type { ManagedSiteLiveConnectorRepository } from '../../../server/managed-sites/live-connectors/types'
@@ -19,13 +20,14 @@ type State = {
   bindings: ManagedSitePrePurchaseBinding[]
   gates: ManagedSiteGateResult[]
   domainClaims: ManagedSiteDomainClaim[]
+  paymentWebhookInbox: ManagedSitePaymentWebhookInbox[]
   nextId: number
 }
 
 function copy<T>(value: T): T { return structuredClone(value) }
 
 export function createLiveConnectorMemoryRepository() {
-  const state: State = { configurations: [], candidates: [], releases: [], attempts: [], receipts: [], bindings: [], gates: [], domainClaims: [], nextId: 1 }
+  const state: State = { configurations: [], candidates: [], releases: [], attempts: [], receipts: [], bindings: [], gates: [], domainClaims: [], paymentWebhookInbox: [], nextId: 1 }
   let queue = Promise.resolve()
   const insert = <T extends { id: number }>(rows: T[], input: Omit<T, 'id'>): T => { const row = { ...input, id: state.nextId++ } as T; rows.push(row); return row }
   const make = (): ManagedSiteLiveConnectorRepository => ({
@@ -58,10 +60,14 @@ export function createLiveConnectorMemoryRepository() {
     async listReleases(ownerUserId, projectId) { return state.releases.filter(row => row.ownerUserId === ownerUserId && row.projectId === projectId) },
     async insertGateResult(input) { const existing = state.gates.find(row => row.releaseId === input.releaseId && row.gateType === input.gateType && row.inputFingerprint === input.inputFingerprint); if (existing) { if (existing.receiptFingerprint !== input.receiptFingerprint) throw Object.assign(new Error('gate collision'), { statusCode: 409 }); return existing } return insert(state.gates, input as Omit<ManagedSiteGateResult, 'id'>) },
     async listGateResults(ownerUserId, releaseId) { return state.gates.filter(row => row.ownerUserId === ownerUserId && row.releaseId === releaseId) },
-    async findDomainClaim(canonicalDomain) { return state.domainClaims.find(row => row.canonicalDomain === canonicalDomain) || null },
+    async findDomainClaim(canonicalDomain) { return state.domainClaims.find(row => row.activeCanonicalDomainKey === canonicalDomain) || null },
+    async findDomainClaimByRelease(ownerUserId, releaseId) { return state.domainClaims.find(row => row.ownerUserId === ownerUserId && row.releaseId === releaseId) || null },
     async findDomainClaimByIdempotency(ownerUserId, key) { return state.domainClaims.find(row => row.ownerUserId === ownerUserId && row.idempotencyKey === key) || null },
-    async insertDomainClaim(input) { const existing = state.domainClaims.find(row => row.canonicalDomain === input.canonicalDomain || row.releaseId === input.releaseId || row.ownerUserId === input.ownerUserId && row.idempotencyKey === input.idempotencyKey); if (existing) { if (existing.ownerUserId === input.ownerUserId && existing.idempotencyKey === input.idempotencyKey && existing.requestFingerprint === input.requestFingerprint) return existing; throw Object.assign(new Error('domain claim collision'), { statusCode: 409 }) } const now = new Date(); return insert(state.domainClaims, { ...input, createdAt: now, updatedAt: now } as Omit<ManagedSiteDomainClaim, 'id'>) },
+    async insertDomainClaim(input) { const existing = state.domainClaims.find(row => input.activeCanonicalDomainKey !== null && row.activeCanonicalDomainKey === input.activeCanonicalDomainKey || row.releaseId === input.releaseId || row.ownerUserId === input.ownerUserId && row.idempotencyKey === input.idempotencyKey); if (existing) { if (existing.ownerUserId === input.ownerUserId && existing.idempotencyKey === input.idempotencyKey && existing.requestFingerprint === input.requestFingerprint) return existing; throw Object.assign(new Error('domain claim collision'), { statusCode: 409 }) } const now = new Date(); return insert(state.domainClaims, { ...input, createdAt: now, updatedAt: now } as Omit<ManagedSiteDomainClaim, 'id'>) },
     async transitionDomainClaim(ownerUserId, claimId, expectedStatus, expectedFingerprint, patch) { const row = state.domainClaims.find(item => item.ownerUserId === ownerUserId && item.id === claimId && item.status === expectedStatus && item.projectionFingerprint === expectedFingerprint); if (!row) return null; Object.assign(row, patch, { updatedAt: new Date() }); return row },
+    async findPaymentWebhookInbox(providerKey, providerEventId) { return state.paymentWebhookInbox.find(row => row.providerKey === providerKey && row.providerEventId === providerEventId) || null },
+    async insertPaymentWebhookInbox(input) { const existing = state.paymentWebhookInbox.find(row => row.providerKey === input.providerKey && row.providerEventId === input.providerEventId); if (existing) { if (existing.eventFingerprint !== input.eventFingerprint) throw Object.assign(new Error('payment inbox collision'), { statusCode: 409 }); return existing } return insert(state.paymentWebhookInbox, input as Omit<ManagedSitePaymentWebhookInbox, 'id'>) },
+    async transitionPaymentWebhookInbox(inboxId, expectedStatus, expectedFingerprint, patch) { const row = state.paymentWebhookInbox.find(item => item.id === inboxId && item.processingStatus === expectedStatus && item.processingFingerprint === expectedFingerprint); if (!row) return null; Object.assign(row, patch); return row },
     async findAttempt(ownerUserId, attemptId) { return state.attempts.find(row => row.ownerUserId === ownerUserId && row.id === attemptId) || null },
     async findAttemptByIdempotency(ownerUserId, key) { return state.attempts.find(row => row.ownerUserId === ownerUserId && row.idempotencyKey === key) || null },
     async insertAttempt(input) { if (state.attempts.some(row => row.ownerUserId === input.ownerUserId && (row.idempotencyKey === input.idempotencyKey || row.requestFingerprint === input.requestFingerprint))) throw Object.assign(new Error('attempt collision'), { statusCode: 409 }); const now = new Date(); return insert(state.attempts, { ...input, createdAt: now, updatedAt: now } as Omit<ManagedSiteConnectorAttempt, 'id'>) },

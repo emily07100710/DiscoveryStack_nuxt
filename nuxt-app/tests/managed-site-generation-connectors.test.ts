@@ -38,7 +38,7 @@ describe('managed-site provider registry and generation admission', () => {
     const configured = await getManagedSiteProviderReadiness(1, live.repository, resolver)
     expect(configured.capabilities.find(item => item.capability === 'website_generator')).toMatchObject({ status: 'configured', configured: true, verified: false, liveMutationAllowed: false })
     expect(JSON.stringify(configured)).not.toContain(runtimeValue)
-    const verifier = async (input: any) => ({ capability: 'website_generator' as const, providerKey: input.providerKey, configurationFingerprint: input.configurationFingerprint, providerAccountId: 'account-prod-001', providerEventId: 'verification-event-001', payloadHash: 'b'.repeat(64), exactResponseIdentity: 'verification-response-001', observedAt: '2026-08-27T00:00:00.000Z' })
+    const verifier = async (input: any) => ({ capability: 'website_generator' as const, providerKey: input.providerKey, configurationFingerprint: input.configurationFingerprint, capabilityIdentity: 'model-access:qwen-plus', providerEventId: 'verification-event-001', payloadHash: 'b'.repeat(64), exactResponseIdentity: 'verification-response-001', observedAt: '2026-08-27T00:00:00.000Z' })
     const registry: any = new Map([['bailian-qwen', new Map([['website_generator', verifier]])]])
     await verifyManagedSiteProviderConfiguration(1, 'website_generator', live.repository, resolver, () => new Date('2026-08-27T00:01:00.000Z'), registry)
     const verified = await getManagedSiteProviderReadiness(1, live.repository, resolver)

@@ -9,6 +9,7 @@ import { getManagedSiteLiveConnectorRepository } from './repository'
 import { requireVerifiedManagedSiteProvider, resolveManagedSiteCredential } from './provider-registry'
 import { managedSiteCommerceSnapshotFingerprint } from '../prepurchase-service'
 import type { ManagedSiteCheckoutSessionAdapter, ManagedSiteCheckoutSessionReceipt, ManagedSiteCredentialResolver, ManagedSiteLiveConnectorRepository } from './types'
+import { compareCodeUnits } from './canonical'
 
 const CHECKOUT_TIMEOUT_MS = 15_000
 
@@ -29,7 +30,7 @@ export async function createManagedSiteCheckoutSession(ownerUserId: number, inpu
   const quote = await ordering.findQuoteById(order.quoteId)
   const lines = quote ? await ordering.listQuoteLines(quote.id) : []
   if (!quote || quote.ownerUserId !== ownerUserId || quote.previewId !== order.previewId || quote.status !== 'quoted' || quote.expiresAt.getTime() <= clock().getTime() || !lines.length) conflict('Checkout session quote lineage is incomplete, expired, or no longer payable.')
-  const lineSnapshot = lines.map(line => ({ lineKey: line.lineKey, quantity: line.quantity, unitAmountMinor: line.unitAmountMinor, lineAmountMinor: line.lineAmountMinor })).sort((left, right) => left.lineKey.localeCompare(right.lineKey))
+  const lineSnapshot = lines.map(line => ({ lineKey: line.lineKey, quantity: line.quantity, unitAmountMinor: line.unitAmountMinor, lineAmountMinor: line.lineAmountMinor })).sort((left, right) => compareCodeUnits(left.lineKey, right.lineKey))
   if (lineSnapshot.reduce((sum, line) => sum + line.lineAmountMinor, 0) !== quote.totalMinor || lineSnapshot.some(line => line.quantity * line.unitAmountMinor !== line.lineAmountMinor)) conflict('Server-derived checkout line snapshot does not equal the canonical quote total.')
   const release = await repository.findRelease(ownerUserId, input.releaseId)
   const binding = order.projectId ? await repository.findPrePurchaseBinding(ownerUserId, order.projectId) : null
@@ -54,17 +55,21 @@ export async function createManagedSiteCheckoutSession(ownerUserId: number, inpu
   const leased = await repository.acquireAttemptLease(ownerUserId, attempt.id, leaseOwner, clock(), 25_000)
   if (!leased) conflict('Checkout session is already leased, terminal, or waiting for retry.')
   try {
-    const result = await adapter.createSession({ ...snapshot, snapshotFingerprint, idempotencyKey: input.idempotencyKey, timeoutMs: CHECKOUT_TIMEOUT_MS })
+    const result = await adapter.createSession({ ownerUserId, projectId: release.projectId, releaseId: release.id, previewId: release.previewId!, approvalFingerprint: release.approvalFingerprint, ...snapshot, snapshotFingerprint, idempotencyKey: input.idempotencyKey, timeoutMs: CHECKOUT_TIMEOUT_MS })
     if (result.providerKey !== configuration.providerKey || result.draftOrderId !== order.id || result.amountMinor !== quote.totalMinor || result.currency !== quote.currency || result.snapshotFingerprint !== snapshotFingerprint || !isOpaqueReference(result.providerEventId, 160) || !isOpaqueReference(result.providerReference, 160) || !isOpaqueReference(result.exactResponseIdentity, 256)) conflict('Checkout provider receipt does not match the exact server-derived commercial snapshot.')
     const checkoutUrl = assertPublicHttpsUrl(result.checkoutUrl, 'Checkout session URL')
     const receiptFingerprint = stableFingerprint({ ownerUserId, requestFingerprint, result: { ...result, checkoutUrl } })
-    const receipt = await repository.insertReceipt({ ownerUserId, projectId: order.projectId, draftOrderId: order.id, releaseId: release.id, attemptId: leased.id, capability: 'payment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'checkout_session_created', receiptStatus: 'verified', externalReference: result.providerReference, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { checkoutUrl, snapshotFingerprint, previewId: release.previewId, quoteId: release.quoteId, draftOrderId: release.draftOrderId, amountMinor: quote.totalMinor, currency: quote.currency, planKey: quote.planKey, cadenceDays: quote.cadenceDays, domainOption: quote.domainOption, lineSnapshotFingerprint: stableFingerprint(lines.map(line => line.lineFingerprint).sort()), taxStatus: quote.taxStatus }, receiptFingerprint, verifiedAt: clock() } as any)
-    const transitioned = await repository.transitionRelease(ownerUserId, release.id, 'approved', release.projectionFingerprint, { status: 'checkout_pending', blockedReasonCode: null, nextSafeAction: 'wait_for_verified_payment_webhook', projectionFingerprint: stableFingerprint({ previous: release.projectionFingerprint, checkoutReceiptFingerprint: receipt.receiptFingerprint }) })
-    if (!transitioned) conflict('Release changed concurrently before checkout session authority committed.')
-    await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
+    const { receipt } = await repository.transaction(async transaction => {
+      const receipt = await transaction.insertReceipt({ ownerUserId, projectId: order.projectId, draftOrderId: order.id, releaseId: release.id, attemptId: leased.id, capability: 'payment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'checkout_session_created', receiptStatus: 'verified', externalReference: result.providerReference, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { checkoutUrl, snapshotFingerprint, previewId: release.previewId, quoteId: release.quoteId, draftOrderId: release.draftOrderId, amountMinor: quote.totalMinor, currency: quote.currency, planKey: quote.planKey, cadenceDays: quote.cadenceDays, domainOption: quote.domainOption, lineSnapshotFingerprint: stableFingerprint(lines.map(line => line.lineFingerprint).sort()), taxStatus: quote.taxStatus }, receiptFingerprint, verifiedAt: clock() } as any)
+      const transitioned = await transaction.transitionRelease(ownerUserId, release.id, 'approved', release.projectionFingerprint, { status: 'checkout_pending', blockedReasonCode: null, nextSafeAction: 'wait_for_verified_payment_webhook', projectionFingerprint: stableFingerprint({ previous: release.projectionFingerprint, checkoutReceiptFingerprint: receipt.receiptFingerprint }) })
+      if (!transitioned) conflict('Release changed concurrently before checkout session authority committed.')
+      const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
+      if (!completed) conflict('Checkout attempt lease changed before local receipt commit.')
+      return { receipt }
+    })
     return { receipt, checkout: { url: checkoutUrl, providerReference: result.providerReference, amountMinor: quote.totalMinor, currency: quote.currency, taxStatus: quote.taxStatus }, replayed: false }
   } catch (error) {
-    await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'blocked', attemptNumber: leased.attemptNumber + 1, errorCode: 'CHECKOUT_SESSION_FAILED', errorSummary: 'Checkout session failed without accepting provider state.' }).catch(() => null)
+    await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'retry_wait', attemptNumber: leased.attemptNumber + 1, retryEligibleAt: new Date(clock().getTime() + 30_000), errorCode: 'CHECKOUT_RECONCILE_REQUIRED', errorSummary: 'Provider result was not locally committed; retry will reuse the exact idempotency key.' }).catch(() => null)
     throw error
   }
 }

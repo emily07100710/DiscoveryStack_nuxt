@@ -11,7 +11,7 @@ async function webhookLineage() {
   const event = (providerEventId: string, eventType: string) => ({ providerKey: 'mock-payment', providerEventId, providerReference: 'payment-ref-001', eventType, draftOrderId: line.order.order.id, amountMinor: line.quote.quote.totalMinor, currency: line.quote.quote.currency, occurredAt: now.toISOString(), exactResponseIdentity: `payment-response:${providerEventId}` })
   const send = async (payload: Record<string, unknown>, bodyOverride?: Buffer) => {
     const rawBody = bodyOverride || Buffer.from(JSON.stringify(payload)); const signatureHeader = createHmac('sha256', runtimeCredential).update(rawBody).digest('hex')
-    return processManagedSiteRawPaymentWebhook({ rawBody, signatureHeader, credentialReference: 'vault:payment-webhook-runtime', executionMode: 'mocked' }, createMockRawBodyPaymentWebhookAdapter('mock-payment'), { connectorRepository: line.live.repository, orderingRepository: line.ordering.repository, managedRepository: line.managed.repository, credentialResolver: async reference => reference === 'vault:payment-webhook-runtime' ? { ok: true, value: runtimeCredential } : { ok: false, reason: 'missing_reference' }, clock: () => now })
+    return processManagedSiteRawPaymentWebhook({ rawBody, signatureHeader, credentialReference: 'vault:payment-webhook-runtime', executionMode: 'mocked' }, createMockRawBodyPaymentWebhookAdapter('mock-payment'), { jointTransaction: line.jointTransaction, credentialResolver: async reference => reference === 'vault:payment-webhook-runtime' ? { ok: true, value: runtimeCredential } : { ok: false, reason: 'missing_reference' }, clock: () => now })
   }
   return { ...line, runtimeCredential, event, send }
 }
@@ -27,7 +27,7 @@ describe('managed-site raw-body payment lifecycle', () => {
   it('rejects tamper, replays exact events, and ignores duplicate/out-of-order lifecycle mutations', async () => {
     const line = await webhookLineage(); const success = line.event('success-001', 'checkout_succeeded')
     const signedSuccess = Buffer.from(JSON.stringify(success)); const tampered = Buffer.from(JSON.stringify({ ...success, amountMinor: line.quote.quote.totalMinor + 1 })); const signature = createHmac('sha256', line.runtimeCredential).update(signedSuccess).digest('hex')
-    await expect(processManagedSiteRawPaymentWebhook({ rawBody: tampered, signatureHeader: signature, credentialReference: 'vault:payment-webhook-runtime', executionMode: 'mocked' }, createMockRawBodyPaymentWebhookAdapter('mock-payment'), { connectorRepository: line.live.repository, orderingRepository: line.ordering.repository, managedRepository: line.managed.repository, credentialResolver: async () => ({ ok: true, value: line.runtimeCredential }), clock: () => now })).rejects.toMatchObject({ statusCode: 403 })
+    await expect(processManagedSiteRawPaymentWebhook({ rawBody: tampered, signatureHeader: signature, credentialReference: 'vault:payment-webhook-runtime', executionMode: 'mocked' }, createMockRawBodyPaymentWebhookAdapter('mock-payment'), { jointTransaction: line.jointTransaction, credentialResolver: async () => ({ ok: true, value: line.runtimeCredential }), clock: () => now })).rejects.toMatchObject({ statusCode: 403 })
     expect(line.live.state.receipts.filter(item => item.receiptType === 'checkout_succeeded')).toHaveLength(0)
     const earlyRefund = await line.send(line.event('refund-early-001', 'payment_refunded')); expect(earlyRefund.effective).toBe(false)
     const paid = await line.send(success); expect(paid.effective).toBe(true)

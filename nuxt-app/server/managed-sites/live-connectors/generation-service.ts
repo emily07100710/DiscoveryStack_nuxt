@@ -18,6 +18,7 @@ import type {
   ManagedSiteGenerationRequest,
   ManagedSiteLiveConnectorRepository,
 } from './types'
+import { compareCodeUnits } from './canonical'
 
 const REQUEST_SCHEMA_VERSION = 'managed-site-generation-request-v1' as const
 const GENERATION_TIMEOUT_MS = 30_000
@@ -162,7 +163,7 @@ export async function generateManagedSiteCandidate(
     const structured = validateManagedSiteBlueprintProviderOutput(output, request, providerKey)
     const compiledFiles = compileManagedSiteBlueprint(structured.blueprint)
     const compilerFingerprint = blueprintCompilerFingerprint(structured.blueprint, compiledFiles)
-    const admitted = admitManagedSiteGenerationOutput({ schemaVersion: 'managed-site-generation-provider-response-v1', providerKey: structured.output.providerKey, providerModel: structured.output.providerModel, providerRequestId: structured.output.providerRequestId, requestFingerprint: request.requestFingerprint, files: compiledFiles, manifestHash: stableFingerprint(compiledFiles.map(file => ({ path: file.path, mediaType: file.mediaType, sha256: file.sha256 })).sort((left, right) => left.path.localeCompare(right.path))) }, { requestFingerprint: request.requestFingerprint, providerKey })
+    const admitted = admitManagedSiteGenerationOutput({ schemaVersion: 'managed-site-generation-provider-response-v1', providerKey: structured.output.providerKey, providerModel: structured.output.providerModel, providerRequestId: structured.output.providerRequestId, requestFingerprint: request.requestFingerprint, files: compiledFiles, manifestHash: stableFingerprint(compiledFiles.map(file => ({ path: file.path, mediaType: file.mediaType, sha256: file.sha256 })).sort((left, right) => compareCodeUnits(left.path, right.path))) }, { requestFingerprint: request.requestFingerprint, providerKey })
     const stored = await dependencies.vault.storeImmutableCandidate({ ownerUserId, projectId: project.id, requestFingerprint: request.requestFingerprint, manifest: admitted.manifest, files: admitted.files })
     if (!/^vault:[A-Za-z0-9_.:-]{1,500}$/u.test(stored.vaultReference) || stored.contentHash !== admitted.manifest.contentHash || !isOpaqueReference(stored.exactResponseIdentity, 256)) conflict('Owner vault receipt identity is incomplete or mismatched.')
     const candidate = await repository.transaction(async transaction => {

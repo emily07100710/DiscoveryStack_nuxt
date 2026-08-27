@@ -9,6 +9,7 @@ import {
   managedSiteGenerationCandidates,
   managedSiteProviderConfigurations,
   managedSitePrePurchaseBindings,
+  managedSitePaymentWebhookInbox,
   managedSiteReleaseProjections,
 } from '../../database/schema'
 import type { ManagedSiteLiveConnectorRepository } from './types'
@@ -166,7 +167,11 @@ export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSi
       return database.select().from(managedSiteGateResults).where(and(eq(managedSiteGateResults.ownerUserId, ownerUserId), eq(managedSiteGateResults.releaseId, releaseId))).orderBy(asc(managedSiteGateResults.gateType), desc(managedSiteGateResults.observedAt)).limit(100)
     },
     async findDomainClaim(canonicalDomain) {
-      const [row] = await database.select().from(managedSiteDomainClaims).where(eq(managedSiteDomainClaims.canonicalDomain, canonicalDomain)).limit(1)
+      const [row] = await database.select().from(managedSiteDomainClaims).where(eq(managedSiteDomainClaims.activeCanonicalDomainKey, canonicalDomain)).limit(1)
+      return row || null
+    },
+    async findDomainClaimByRelease(ownerUserId, releaseId) {
+      const [row] = await database.select().from(managedSiteDomainClaims).where(and(eq(managedSiteDomainClaims.ownerUserId, ownerUserId), eq(managedSiteDomainClaims.releaseId, releaseId))).limit(1)
       return row || null
     },
     async findDomainClaimByIdempotency(ownerUserId, idempotencyKey) {
@@ -190,6 +195,29 @@ export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSi
       const result = await database.update(managedSiteDomainClaims).set(patch as any).where(and(eq(managedSiteDomainClaims.ownerUserId, ownerUserId), eq(managedSiteDomainClaims.id, claimId), eq(managedSiteDomainClaims.status, expectedStatus), eq(managedSiteDomainClaims.projectionFingerprint, expectedProjectionFingerprint)))
       if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
       const [row] = await database.select().from(managedSiteDomainClaims).where(and(eq(managedSiteDomainClaims.ownerUserId, ownerUserId), eq(managedSiteDomainClaims.id, claimId))).limit(1)
+      return row || null
+    },
+    async findPaymentWebhookInbox(providerKey, providerEventId) {
+      const [row] = await database.select().from(managedSitePaymentWebhookInbox).where(and(eq(managedSitePaymentWebhookInbox.providerKey, providerKey), eq(managedSitePaymentWebhookInbox.providerEventId, providerEventId))).limit(1)
+      return row || null
+    },
+    async insertPaymentWebhookInbox(input) {
+      try {
+        const id = rowId(await database.insert(managedSitePaymentWebhookInbox).values(input as any))
+        const [row] = await database.select().from(managedSitePaymentWebhookInbox).where(eq(managedSitePaymentWebhookInbox.id, id)).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Payment webhook inbox row could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!duplicate(error)) throw error
+        const replay = await repository.findPaymentWebhookInbox(input.providerKey, input.providerEventId)
+        if (replay?.eventFingerprint === input.eventFingerprint) return replay
+        throw createError({ statusCode: 409, statusMessage: 'Payment webhook provider event collided with a different signed payload.' })
+      }
+    },
+    async transitionPaymentWebhookInbox(inboxId, expectedStatus, expectedProcessingFingerprint, patch) {
+      const result = await database.update(managedSitePaymentWebhookInbox).set(patch as any).where(and(eq(managedSitePaymentWebhookInbox.id, inboxId), eq(managedSitePaymentWebhookInbox.processingStatus, expectedStatus), eq(managedSitePaymentWebhookInbox.processingFingerprint, expectedProcessingFingerprint)))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      const [row] = await database.select().from(managedSitePaymentWebhookInbox).where(eq(managedSitePaymentWebhookInbox.id, inboxId)).limit(1)
       return row || null
     },
     async findAttempt(ownerUserId, attemptId) {

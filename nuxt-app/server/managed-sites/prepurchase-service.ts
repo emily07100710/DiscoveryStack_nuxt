@@ -11,6 +11,7 @@ import { parseSiteSpecSnapshot } from './site-spec'
 import type { ManagedSiteActor, ManagedSiteRepository } from './types'
 import { getManagedSiteLiveConnectorRepository, makeManagedSiteLiveConnectorRepository } from './live-connectors/repository'
 import type { ManagedSiteLiveConnectorRepository } from './live-connectors/types'
+import { compareCodeUnits } from './live-connectors/canonical'
 
 type Repositories = { ordering: PreviewRepository; managed: ManagedSiteRepository; live: ManagedSiteLiveConnectorRepository }
 type Input = { previewId: number; quoteId: number; leadIntentId: number; draftOrderId: number; idempotencyKey: string }
@@ -20,7 +21,7 @@ function conflict(message: string): never { throw createError({ statusCode: 409,
 function nonNested<T extends { transaction: (work: (repository: T) => Promise<unknown>) => Promise<unknown> }>(repository: T): T { return { ...repository, transaction: async work => work(repository) } as T }
 
 export function managedSiteCommerceSnapshotFingerprint(input: { previewId: number; quoteId: number; draftOrderId: number; quoteVersion: string; totalMinor: number; currency: string; planKey: string; cadenceDays: number; domainOption: string; taxStatus: string; lines: Array<{ lineKey: string; quantity: number; unitAmountMinor: number; lineAmountMinor: number; lineFingerprint: string }> }): string {
-  return stableFingerprint({ schemaVersion: 'managed-site-commerce-snapshot-v1', ...input, lines: [...input.lines].sort((left, right) => left.lineKey.localeCompare(right.lineKey)) })
+  return stableFingerprint({ schemaVersion: 'managed-site-commerce-snapshot-v1', ...input, lines: [...input.lines].sort((left, right) => compareCodeUnits(left.lineKey, right.lineKey)) })
 }
 
 async function convertWithin(ownerUserId: number, input: Input, repositories: Repositories, clock: () => Date) {

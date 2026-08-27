@@ -1,9 +1,9 @@
 import { managedSiteOwnerContext, managedSitePathId, requireManagedSiteReleaseScope, strictManagedSiteBody } from '../../../../../../managed-sites/live-connectors/http'
 import { createManagedSiteDomainPurchaseIntent, createMockManagedSiteDomainAdapter, managedSiteDomainConfirmationFingerprint } from '../../../../../../managed-sites/live-connectors/domain-connectors'
-import { unsupportedManagedSiteVendorAdapter } from '../../../../../../managed-sites/live-connectors/runtime-adapters'
+import { managedSiteLiveDomainAdapter } from '../../../../../../managed-sites/live-connectors/runtime-adapters'
 
 export default defineEventHandler(async event => {
-  const { ownerUserId, repository } = await managedSiteOwnerContext(event)
+  const { ownerUserId, repository, domainAdapter } = await managedSiteOwnerContext(event)
   const projectId = managedSitePathId(event, 'id', 'Managed-site project id'); const releaseId = managedSitePathId(event, 'releaseId', 'Managed-site release id')
   const release = await requireManagedSiteReleaseScope(ownerUserId, projectId, releaseId, repository)
   const body = await strictManagedSiteBody(event, ['explicitConfirmation', 'executionMode', 'idempotencyKey'])
@@ -15,6 +15,6 @@ export default defineEventHandler(async event => {
   const draftOrderId = release.draftOrderId
   if (!quoteReceiptFingerprint || !paymentReceiptFingerprint) throw createError({ statusCode: 409, statusMessage: 'Exact release domain quote and payment receipts are required.' })
   const confirmation = managedSiteDomainConfirmationFingerprint({ ownerUserId, projectId, releaseId, commerceSnapshotFingerprint: release.commerceSnapshotFingerprint, quoteReceiptFingerprint, draftOrderId, paymentReceiptFingerprint })
-  const adapter = executionMode === 'mocked' ? createMockManagedSiteDomainAdapter() : unsupportedManagedSiteVendorAdapter('domain_registration')
+  const adapter = domainAdapter || (executionMode === 'mocked' ? createMockManagedSiteDomainAdapter() : await managedSiteLiveDomainAdapter(ownerUserId, repository))
   return createManagedSiteDomainPurchaseIntent(ownerUserId, { projectId, releaseId, draftOrderId, quoteReceiptFingerprint, paymentReceiptFingerprint, ownerConfirmationFingerprint: confirmation, executionMode, idempotencyKey: String(body.idempotencyKey || '') }, adapter, { repository })
 })

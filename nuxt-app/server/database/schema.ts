@@ -1780,6 +1780,31 @@ export const managedSiteReleaseProjections = mysqlTable('managedSiteReleaseProje
   index('managed_site_release_commerce_lineage_idx').on(table.ownerUserId, table.previewId, table.quoteId, table.draftOrderId),
 ])
 
+/** Signature-verified webhook inbox. Raw bodies and authorization material are never stored. */
+export const managedSitePaymentWebhookInbox = mysqlTable('managedSitePaymentWebhookInbox', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').references(() => users.id),
+  projectId: int('projectId').references(() => managedSiteProjects.id),
+  releaseId: int('releaseId').references(() => managedSiteReleaseProjections.id),
+  draftOrderId: int('draftOrderId').notNull().references(() => managedSiteDraftOrders.id),
+  providerKey: varchar('providerKey', { length: 96 }).notNull(),
+  providerEventId: varchar('providerEventId', { length: 160 }).notNull(),
+  eventType: varchar('eventType', { length: 96 }).notNull(),
+  canonicalPayloadHash: varchar('canonicalPayloadHash', { length: 128 }).notNull(),
+  exactResponseIdentity: varchar('exactResponseIdentity', { length: 256 }).notNull(),
+  eventFingerprint: varchar('eventFingerprint', { length: 128 }).notNull(),
+  processingStatus: mysqlEnum('processingStatus', ['processing', 'succeeded', 'ignored', 'blocked']).default('processing').notNull(),
+  processingFingerprint: varchar('processingFingerprint', { length: 128 }).notNull(),
+  receivedAt: timestamp('receivedAt').defaultNow().notNull(),
+  completedAt: timestamp('completedAt'),
+}, table => [
+  uniqueIndex('managed_site_payment_inbox_provider_event_unique').on(table.providerKey, table.providerEventId),
+  uniqueIndex('managed_site_payment_inbox_event_fingerprint_unique').on(table.eventFingerprint),
+  index('managed_site_payment_inbox_order_status_idx').on(table.draftOrderId, table.processingStatus),
+])
+
+export type ManagedSitePaymentWebhookInbox = typeof managedSitePaymentWebhookInbox.$inferSelect
+
 /** Append-only, content-bound gate observations. A preview transport receipt is never a substitute for these results. */
 export const managedSiteGateResults = mysqlTable('managedSiteGateResults', {
   id: int('id').autoincrement().primaryKey(),
@@ -1806,6 +1831,7 @@ export const managedSiteGateResults = mysqlTable('managedSiteGateResults', {
 export const managedSiteDomainClaims = mysqlTable('managedSiteDomainClaims', {
   id: int('id').autoincrement().primaryKey(),
   canonicalDomain: varchar('canonicalDomain', { length: 253 }).notNull(),
+  activeCanonicalDomainKey: varchar('activeCanonicalDomainKey', { length: 253 }),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
   releaseId: int('releaseId').notNull().references(() => managedSiteReleaseProjections.id),
@@ -1818,7 +1844,7 @@ export const managedSiteDomainClaims = mysqlTable('managedSiteDomainClaims', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
-  uniqueIndex('managed_site_domain_claim_canonical_unique').on(table.canonicalDomain),
+  uniqueIndex('managed_site_domain_claim_active_canonical_unique').on(table.activeCanonicalDomainKey),
   uniqueIndex('managed_site_domain_claim_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('managed_site_domain_claim_release_unique').on(table.releaseId),
   index('managed_site_domain_claim_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status),

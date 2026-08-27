@@ -135,6 +135,7 @@ const statusClass = (status: string) => status === 'verified' || status === 'liv
           <p :class="statusClass(item.status)">{{ item.status }}</p>
           <dl><div><dt>credential reference</dt><dd>{{ item.credentialReferenceConfigured ? '已設定（值不顯示）' : '缺少' }}</dd></div><div><dt>server verified</dt><dd>{{ item.verified ? '是' : '否' }}</dd></div><div><dt>live mutation</dt><dd>{{ item.liveMutationAllowed ? '允許' : '拒絕' }}</dd></div></dl>
           <p v-if="item.missing.length" class="muted">缺少：{{ item.missing.join('、') }}</p>
+          <p v-if="item.capability === 'website_generator' && item.providerKey === 'bailian-qwen' && item.status === 'configured'" class="muted">按下驗證會由 server 發出一個不含客戶資料的極小模型探測請求，可能產生微量 token 費用；這只驗證指定 model 的存取能力，不代表帳號身分、內容品質或正式生成成功。</p>
           <button v-if="item.status === 'configured'" type="button" :disabled="operationStates[`verify-${item.capability}`] === 'loading'" @click="verifyProvider(item)">{{ operationStates[`verify-${item.capability}`] === 'loading' ? '驗證中…' : 'Server connection verify' }}</button>
           <p v-if="operationStates[`verify-${item.capability}`]" class="muted">operation: {{ operationStates[`verify-${item.capability}`] }}</p>
         </article>

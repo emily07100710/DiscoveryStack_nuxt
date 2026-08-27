@@ -134,26 +134,32 @@ export async function buildManagedSitePreview(ownerUserId: number, input: { rele
   const leaseOwner = `preview-${randomBytes(10).toString('hex')}`
   const leased = await repository.acquireAttemptLease(ownerUserId, attempt.id, leaseOwner, clock(), DEPLOYMENT_LEASE_MS)
   if (!leased) conflict('Preview build is already leased, terminal, or waiting for retry.')
+  const leasedAttemptNumber = leased.attemptNumber
   const pendingFingerprint = releaseFingerprint({ previous: release.projectionFingerprint, operation: 'preview_build', requestFingerprint })
   const pending = await repository.transitionRelease(ownerUserId, release.id, release.status, release.projectionFingerprint, { status: 'preview_pending', blockedReasonCode: null, nextSafeAction: 'wait_for_preview_build_receipt', projectionFingerprint: pendingFingerprint })
   if (!pending) {
     await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'blocked', attemptNumber: leased.attemptNumber, errorCode: 'STALE_RELEASE_PROJECTION', errorSummary: 'Release changed before preview transport authority was acquired.' }).catch(() => null)
     conflict('Preview release changed concurrently before build execution.')
   }
+  const pendingProjectionFingerprint = pending.projectionFingerprint
   try {
     const result = await adapter.buildPreview({ projectId: release.projectId, versionId: release.versionId, releaseId: release.id, vaultReference: candidate.vaultReference, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, requestFingerprint, timeoutMs: DEPLOYMENT_TIMEOUT_MS })
     validateDeploymentReceipt(result, { providerKey: configuration.providerKey, projectId: release.projectId, versionId: release.versionId, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, status: 'preview_ready' })
     const receiptFingerprint = stableFingerprint({ ownerUserId, releaseId: release.id, requestFingerprint, result })
-    const receipt = await repository.insertReceipt({ ownerUserId, projectId: release.projectId, draftOrderId: release.draftOrderId, releaseId: release.id, attemptId: leased.id, capability: 'deployment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'preview_build_verified', receiptStatus: 'verified', externalReference: result.providerDeploymentId, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { deploymentUrl: result.deploymentUrl, providerDeploymentId: result.providerDeploymentId, gateAuthority: false, requiresIndependentGateReceipts: true }, receiptFingerprint, verifiedAt: clock() } as any)
-    await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
-    const gates = await runManagedSitePreviewGates(ownerUserId, release.id, receipt.receiptFingerprint, repository, clock)
-    const updatedFingerprint = releaseFingerprint({ previous: pending.projectionFingerprint, previewReceiptFingerprint: receiptFingerprint, gateReceipts: gates.gates.map(gate => gate.receiptFingerprint) })
-    const updated = await repository.transitionRelease(ownerUserId, release.id, 'preview_pending', pending.projectionFingerprint, { status: 'preview_ready', previewUrl: result.deploymentUrl, providerPreviewId: result.providerDeploymentId, blockedReasonCode: null, nextSafeAction: 'inspect_preview_gates', projectionFingerprint: updatedFingerprint })
-    if (!updated) conflict('Preview release changed concurrently before gate acceptance.')
+    const { receipt, gates, updated } = await repository.transaction(async transaction => {
+      const receipt = await transaction.insertReceipt({ ownerUserId, projectId: release.projectId, draftOrderId: release.draftOrderId, releaseId: release.id, attemptId: leased.id, capability: 'deployment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'preview_build_verified', receiptStatus: 'verified', externalReference: result.providerDeploymentId, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { deploymentUrl: result.deploymentUrl, providerDeploymentId: result.providerDeploymentId, gateAuthority: false, requiresIndependentGateReceipts: true }, receiptFingerprint, verifiedAt: clock() } as any)
+      const gates = await runManagedSitePreviewGates(ownerUserId, release.id, receipt.receiptFingerprint, transaction, clock)
+      const updatedFingerprint = releaseFingerprint({ previous: pendingProjectionFingerprint, previewReceiptFingerprint: receiptFingerprint, gateReceipts: gates.gates.map(gate => gate.receiptFingerprint) })
+      const updated = await transaction.transitionRelease(ownerUserId, release.id, 'preview_pending', pendingProjectionFingerprint, { status: 'preview_ready', previewUrl: result.deploymentUrl, providerPreviewId: result.providerDeploymentId, blockedReasonCode: null, nextSafeAction: 'inspect_preview_gates', projectionFingerprint: updatedFingerprint })
+      if (!updated) conflict('Preview release changed concurrently before gate acceptance.')
+      const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
+      if (!completed) conflict('Preview attempt lease changed before local receipt commit.')
+      return { receipt, gates, updated }
+    })
     return { release: updated, receipt, gates: gates.gates }
   } catch (error) {
-    const retryEligibleAt = await failAttempt(ownerUserId, leased, leaseOwner, repository, clock())
-    await repository.transitionRelease(ownerUserId, release.id, 'preview_pending', pending.projectionFingerprint, { status: retryEligibleAt ? 'retry_wait' : 'failed', blockedReasonCode: 'PREVIEW_BUILD_FAILED', nextSafeAction: retryEligibleAt ? 'retry_preview_after_eligibility' : 'inspect_redacted_failure', projectionFingerprint: releaseFingerprint({ previous: pending.projectionFingerprint, previewFailedAt: clock().toISOString() }) }).catch(() => null)
+    const retryEligibleAt = await failAttempt(ownerUserId, { ...leased, attemptNumber: leasedAttemptNumber }, leaseOwner, repository, clock())
+    await repository.transitionRelease(ownerUserId, release.id, 'preview_pending', pendingProjectionFingerprint, { status: retryEligibleAt ? 'retry_wait' : 'failed', blockedReasonCode: 'PREVIEW_BUILD_FAILED', nextSafeAction: retryEligibleAt ? 'retry_preview_after_eligibility' : 'inspect_redacted_failure', projectionFingerprint: releaseFingerprint({ previous: pendingProjectionFingerprint, previewFailedAt: clock().toISOString() }) }).catch(() => null)
     throw error
   }
 }
@@ -203,7 +209,7 @@ export async function bindManagedSiteReleasePayment(ownerUserId: number, input: 
   if (snapshot !== release.commerceSnapshotFingerprint || metadata.commerceSnapshotFingerprint !== snapshot || metadata.previewId !== release.previewId || metadata.quoteId !== release.quoteId || metadata.draftOrderId !== release.draftOrderId || metadata.amountMinor !== quote.totalMinor || metadata.currency !== quote.currency || metadata.planKey !== quote.planKey || metadata.cadenceDays !== quote.cadenceDays || metadata.domainOption !== quote.domainOption) conflict('Payment receipt price snapshot does not equal the exact release quote and order.')
   const receiptFingerprint = stableFingerprint({ ownerUserId, releaseId: release.id, paymentReceiptFingerprint: payment.receiptFingerprint, approvalFingerprint: release.approvalFingerprint, idempotencyKey: input.idempotencyKey })
   if (release.status === 'payment_verified') {
-    const receipt = (await repository.listReceipts(ownerUserId, release.projectId)).find(item => item.releaseId === release.id && item.receiptType === 'release_payment_bound' && item.receiptFingerprint === receiptFingerprint && (item.metadata as any).checkoutReceiptFingerprint === payment.receiptFingerprint)
+    const receipt = (await repository.listReceipts(ownerUserId, release.projectId)).find(item => item.releaseId === release.id && item.receiptType === 'release_payment_bound' && ((item.metadata as any).checkoutReceiptFingerprint === payment.receiptFingerprint || (item.metadata as any).paymentReceiptFingerprint === payment.receiptFingerprint))
     if (!receipt) conflict('Payment was bound under a different exact release payment intent.')
     return { release, receipt, replayed: true }
   }
@@ -249,34 +255,42 @@ export async function deployManagedSiteProduction(ownerUserId: number, input: { 
     await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'blocked', attemptNumber: leased.attemptNumber, errorCode: 'STALE_RELEASE_PROJECTION', errorSummary: 'Release changed before production transport authority was acquired.' }).catch(() => null)
     conflict('Release changed before production deployment transport was authorized.')
   }
+  const pendingProjectionFingerprint = pending.projectionFingerprint
+  const leasedAttemptNumber = leased.attemptNumber
   try {
     const result = await adapter.deployProduction({ projectId: release.projectId, versionId: release.versionId, releaseId: release.id, vaultReference: candidate.vaultReference, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, previewReceiptFingerprint: preview.receiptFingerprint, approvalFingerprint: release.approvalFingerprint, requestFingerprint, timeoutMs: DEPLOYMENT_TIMEOUT_MS })
     validateDeploymentReceipt(result, { providerKey: configuration.providerKey, projectId: release.projectId, versionId: release.versionId, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, status: 'production_verified' })
     const receiptFingerprint = stableFingerprint({ ownerUserId, releaseId: release.id, requestFingerprint, result })
-    const receipt = await repository.insertReceipt({ ownerUserId, projectId: release.projectId, draftOrderId: payment.draftOrderId, releaseId: release.id, attemptId: leased.id, capability: 'deployment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'production_deployment_verified', receiptStatus: 'verified', externalReference: result.providerDeploymentId, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { deploymentUrl: result.deploymentUrl, providerDeploymentId: result.providerDeploymentId, previewReceiptFingerprint: preview.receiptFingerprint, approvalFingerprint: release.approvalFingerprint }, receiptFingerprint, verifiedAt: clock() } as any)
-    const updated = await repository.transitionRelease(ownerUserId, release.id, 'deployment_pending', pending.projectionFingerprint, { status: 'live_verified', activeDeploymentReceiptFingerprint: receiptFingerprint, blockedReasonCode: null, nextSafeAction: 'activate_geo', projectionFingerprint: releaseFingerprint({ previous: pending.projectionFingerprint, deploymentReceiptFingerprint: receiptFingerprint }) })
-    if (!updated) conflict('Release changed concurrently before production deployment acceptance.')
-    await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
+    const { receipt, updated } = await repository.transaction(async transaction => {
+      const receipt = await transaction.insertReceipt({ ownerUserId, projectId: release.projectId, draftOrderId: payment.draftOrderId, releaseId: release.id, attemptId: leased.id, capability: 'deployment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'production_deployment_verified', receiptStatus: 'verified', externalReference: result.providerDeploymentId, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { deploymentUrl: result.deploymentUrl, providerDeploymentId: result.providerDeploymentId, previewReceiptFingerprint: preview.receiptFingerprint, approvalFingerprint: release.approvalFingerprint }, receiptFingerprint, verifiedAt: clock() } as any)
+      const updated = await transaction.transitionRelease(ownerUserId, release.id, 'deployment_pending', pendingProjectionFingerprint, { status: 'live_verified', activeDeploymentReceiptFingerprint: receiptFingerprint, blockedReasonCode: null, nextSafeAction: 'activate_geo', projectionFingerprint: releaseFingerprint({ previous: pendingProjectionFingerprint, deploymentReceiptFingerprint: receiptFingerprint }) })
+      if (!updated) conflict('Release changed concurrently before production deployment acceptance.')
+      const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
+      if (!completed) conflict('Production deployment attempt lease changed before receipt commit.')
+      return { receipt, updated }
+    })
     await managedRepository.updateProject(ownerUserId, release.projectId, { status: 'active' } as any)
     return { release: updated, receipt }
   } catch (error) {
-    const retryEligibleAt = await failAttempt(ownerUserId, leased, leaseOwner, repository, clock())
-    await repository.transitionRelease(ownerUserId, release.id, 'deployment_pending', pending.projectionFingerprint, { status: retryEligibleAt ? 'retry_wait' : 'failed', blockedReasonCode: 'PRODUCTION_DEPLOYMENT_FAILED', nextSafeAction: retryEligibleAt ? 'retry_deployment_after_eligibility' : 'inspect_redacted_failure', projectionFingerprint: releaseFingerprint({ previous: pending.projectionFingerprint, deploymentFailedAt: clock().toISOString() }) }).catch(() => null)
+    const retryEligibleAt = await failAttempt(ownerUserId, { ...leased, attemptNumber: leasedAttemptNumber }, leaseOwner, repository, clock())
+    await repository.transitionRelease(ownerUserId, release.id, 'deployment_pending', pendingProjectionFingerprint, { status: retryEligibleAt ? 'retry_wait' : 'failed', blockedReasonCode: 'PRODUCTION_DEPLOYMENT_FAILED', nextSafeAction: retryEligibleAt ? 'retry_deployment_after_eligibility' : 'inspect_redacted_failure', projectionFingerprint: releaseFingerprint({ previous: pendingProjectionFingerprint, deploymentFailedAt: clock().toISOString() }) }).catch(() => null)
     throw error
   }
 }
 
-export async function createExistingSiteOwnershipChallenge(ownerUserId: number, input: { releaseId: number; idempotencyKey: string }, repository: ManagedSiteLiveConnectorRepository = getManagedSiteLiveConnectorRepository(), clock: () => Date = () => new Date()) {
+export async function createExistingSiteOwnershipChallenge(ownerUserId: number, input: { releaseId: number; idempotencyKey: string; executionMode?: 'mocked' | 'live' }, repository: ManagedSiteLiveConnectorRepository = getManagedSiteLiveConnectorRepository(), clock: () => Date = () => new Date(), adapter?: ManagedSiteExistingSiteOwnershipAdapter) {
   if (!isOpaqueReference(input.idempotencyKey, 128)) invalid('Existing-site challenge idempotency key is invalid.')
   const release = await repository.findRelease(ownerUserId, input.releaseId)
   if (!release || release.releaseKind !== 'existing_site' || release.status !== 'candidate') conflict('Ownership challenge requires an existing-site release candidate.')
   const requestFingerprint = stableFingerprint({ ownerUserId, projectId: release.projectId, releaseId: release.id, canonicalDomain: release.canonicalDomain, contentHash: release.contentHash, operation: 'existing_site_challenge_create' })
   const claimProjectionFingerprint = stableFingerprint({ requestFingerprint, status: 'pending' })
-  const claim = await repository.insertDomainClaim({ canonicalDomain: release.canonicalDomain, ownerUserId, projectId: release.projectId, releaseId: release.id, claimKind: 'existing', status: 'pending', authorityReceiptFingerprint: null, requestFingerprint, idempotencyKey: input.idempotencyKey, projectionFingerprint: claimProjectionFingerprint } as any)
+  const claim = await repository.insertDomainClaim({ canonicalDomain: release.canonicalDomain, activeCanonicalDomainKey: release.canonicalDomain, ownerUserId, projectId: release.projectId, releaseId: release.id, claimKind: 'existing', status: 'pending', authorityReceiptFingerprint: null, requestFingerprint, idempotencyKey: input.idempotencyKey, projectionFingerprint: claimProjectionFingerprint } as any)
   if (claim.ownerUserId !== ownerUserId || claim.projectId !== release.projectId || claim.releaseId !== release.id || claim.requestFingerprint !== requestFingerprint) conflict('Existing-site atomic domain claim replay is mismatched.')
-  const challengeReference = `dns-challenge-${stableFingerprint({ requestFingerprint, claimId: claim.id }).slice(0, 36)}`
+  const providerChallenge = adapter ? await adapter.createChallenge({ ownerUserId, projectId: release.projectId, releaseId: release.id, canonicalDomain: release.canonicalDomain, verificationMethod: 'dns_txt', requestFingerprint, idempotencyKey: input.idempotencyKey, timeoutMs: DEPLOYMENT_TIMEOUT_MS }) : null
+  if (providerChallenge && (providerChallenge.canonicalDomain !== release.canonicalDomain || providerChallenge.projectId !== release.projectId || providerChallenge.verificationMethod !== 'dns_txt' || !isOpaqueReference(providerChallenge.providerEventId, 160) || !isOpaqueReference(providerChallenge.challengeReference, 160) || !isOpaqueReference(providerChallenge.exactResponseIdentity, 256))) conflict('Existing-site challenge provider response is mismatched.')
+  const challengeReference = providerChallenge?.challengeReference || `dns-challenge-${stableFingerprint({ requestFingerprint, claimId: claim.id }).slice(0, 36)}`
   const receiptFingerprint = stableFingerprint({ requestFingerprint, challengeReference })
-  const receipt = await repository.insertReceipt({ ownerUserId, projectId: release.projectId, draftOrderId: null, releaseId: release.id, attemptId: null, capability: 'dns_tls', providerKey: 'discoverystack-ownership-challenge', providerEventId: `challenge-${receiptFingerprint.slice(0, 32)}`, receiptType: 'existing_site_challenge_created', receiptStatus: 'verified', externalReference: challengeReference, exactResponseIdentity: `ownership-challenge:${receiptFingerprint.slice(0, 48)}`, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { verificationMethod: 'dns_txt', challengeValueHash: stableFingerprint(challengeReference), expiresAt: new Date(clock().getTime() + 24 * 60 * 60_000).toISOString(), mutatesDns: false }, receiptFingerprint, verifiedAt: clock() } as any)
+  const receipt = await repository.insertReceipt({ ownerUserId, projectId: release.projectId, draftOrderId: null, releaseId: release.id, attemptId: null, capability: 'dns_tls', providerKey: providerChallenge?.providerKey || 'discoverystack-ownership-challenge', providerEventId: providerChallenge?.providerEventId || `challenge-${receiptFingerprint.slice(0, 32)}`, receiptType: 'existing_site_challenge_created', receiptStatus: 'verified', externalReference: challengeReference, exactResponseIdentity: providerChallenge?.exactResponseIdentity || `ownership-challenge:${receiptFingerprint.slice(0, 48)}`, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { verificationMethod: 'dns_txt', challengeValueHash: stableFingerprint(challengeReference), expiresAt: new Date(clock().getTime() + 24 * 60 * 60_000).toISOString(), mutatesDns: false }, receiptFingerprint, verifiedAt: clock() } as any)
   return { release, claim, receipt, challengeReference, externalMutation: false }
 }
 
@@ -309,12 +323,16 @@ export async function verifyExistingSiteOwnership(ownerUserId: number, input: { 
     const result = await adapter.verify({ projectId: release.projectId, canonicalDomain: release.canonicalDomain, challengeReference, requestFingerprint, timeoutMs: DEPLOYMENT_TIMEOUT_MS })
     if (result.providerKey !== configuration.providerKey || result.projectId !== release.projectId || result.canonicalDomain !== release.canonicalDomain || result.status !== 'verified' || !/^[a-f0-9]{64}$/u.test(result.evidenceHash) || !isOpaqueReference(result.providerEventId, 160) || !isOpaqueReference(result.providerReference, 160) || !isOpaqueReference(result.exactResponseIdentity, 256)) conflict('Existing-site ownership receipt is incomplete or mismatched.')
     const receiptFingerprint = stableFingerprint({ ownerUserId, releaseId: release.id, requestFingerprint, result })
-    const receipt = await repository.insertReceipt({ ownerUserId, projectId: release.projectId, draftOrderId: null, releaseId: release.id, attemptId: leased.id, capability: 'dns_tls', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'existing_site_ownership_verified', receiptStatus: 'verified', externalReference: result.providerReference, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { verificationMethod: result.verificationMethod, evidenceHash: result.evidenceHash }, receiptFingerprint, verifiedAt: clock() } as any)
-    await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
-    const claimUpdated = await repository.transitionDomainClaim(ownerUserId, claim.id, 'pending', claim.projectionFingerprint, { status: 'verified', authorityReceiptFingerprint: receiptFingerprint, projectionFingerprint: stableFingerprint({ previous: claim.projectionFingerprint, receiptFingerprint, status: 'verified' }) })
-    if (!claimUpdated) conflict('Existing-site domain claim changed concurrently before verification acceptance.')
-    const updated = await repository.transitionRelease(ownerUserId, release.id, release.status, release.projectionFingerprint, { status: 'live_verified', activeDeploymentReceiptFingerprint: receiptFingerprint, blockedReasonCode: null, nextSafeAction: 'activate_geo', projectionFingerprint: releaseFingerprint({ previous: release.projectionFingerprint, ownershipReceiptFingerprint: receiptFingerprint }) })
-    if (!updated) conflict('Existing-site release changed concurrently before ownership acceptance.')
+    const { receipt, updated } = await repository.transaction(async transaction => {
+      const receipt = await transaction.insertReceipt({ ownerUserId, projectId: release.projectId, draftOrderId: null, releaseId: release.id, attemptId: leased.id, capability: 'dns_tls', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'existing_site_ownership_verified', receiptStatus: 'verified', externalReference: result.providerReference, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { verificationMethod: result.verificationMethod, evidenceHash: result.evidenceHash }, receiptFingerprint, verifiedAt: clock() } as any)
+      const claimUpdated = await transaction.transitionDomainClaim(ownerUserId, claim.id, 'pending', claim.projectionFingerprint, { status: 'verified', authorityReceiptFingerprint: receiptFingerprint, projectionFingerprint: stableFingerprint({ previous: claim.projectionFingerprint, receiptFingerprint, status: 'verified' }) })
+      if (!claimUpdated) conflict('Existing-site domain claim changed concurrently before verification acceptance.')
+      const updated = await transaction.transitionRelease(ownerUserId, release.id, release.status, release.projectionFingerprint, { status: 'live_verified', activeDeploymentReceiptFingerprint: receiptFingerprint, blockedReasonCode: null, nextSafeAction: 'activate_geo', projectionFingerprint: releaseFingerprint({ previous: release.projectionFingerprint, ownershipReceiptFingerprint: receiptFingerprint }) })
+      if (!updated) conflict('Existing-site release changed concurrently before ownership acceptance.')
+      const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
+      if (!completed) conflict('Ownership verification attempt lease changed before receipt commit.')
+      return { receipt, updated }
+    })
     return { release: updated, receipt }
   } catch (error) {
     const retryEligibleAt = await failAttempt(ownerUserId, leased, leaseOwner, repository, clock())
@@ -372,29 +390,32 @@ export async function rollbackManagedSiteRelease(ownerUserId: number, input: { f
   const leaseOwner = `rollback-${randomBytes(10).toString('hex')}`
   const leased = await repository.acquireAttemptLease(ownerUserId, attempt.id, leaseOwner, clock(), DEPLOYMENT_LEASE_MS)
   if (!leased) conflict('Rollback is already leased, terminal, or waiting for retry.')
+  const leasedAttemptNumber = leased.attemptNumber
   const rollbackPendingFingerprint = releaseFingerprint({ previous: from.projectionFingerprint, operation: 'rollback', requestFingerprint, status: 'rollback_pending' })
   const pendingFrom = await repository.transitionRelease(ownerUserId, from.id, from.status, from.projectionFingerprint, { status: 'rollback_pending', blockedReasonCode: null, nextSafeAction: 'wait_for_rollback_receipt', projectionFingerprint: rollbackPendingFingerprint })
   if (!pendingFrom) {
     await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'blocked', attemptNumber: leased.attemptNumber, errorCode: 'STALE_RELEASE_PROJECTION', errorSummary: 'Release changed before rollback transport authority was acquired.' }).catch(() => null)
     conflict('Rollback source changed before transport was authorized.')
   }
+  const pendingFromProjectionFingerprint = pendingFrom.projectionFingerprint
   try {
     const result = await adapter.rollback({ projectId: from.projectId, fromReleaseId: from.id, toReleaseId: to.id, versionId: to.versionId, contentHash: to.contentHash, canonicalDomain: to.canonicalDomain, priorDeploymentReceiptFingerprint: priorReceipt.receiptFingerprint, requestFingerprint, timeoutMs: DEPLOYMENT_TIMEOUT_MS })
     validateDeploymentReceipt(result, { providerKey: configuration.providerKey, projectId: to.projectId, versionId: to.versionId, contentHash: to.contentHash, canonicalDomain: to.canonicalDomain, status: 'rollback_verified' })
     const receiptFingerprint = stableFingerprint({ ownerUserId, requestFingerprint, result })
-    const receipt = await repository.insertReceipt({ ownerUserId, projectId: to.projectId, draftOrderId: priorReceipt.draftOrderId, releaseId: to.id, attemptId: leased.id, capability: 'deployment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'rollback_deployment_verified', receiptStatus: 'verified', externalReference: result.providerDeploymentId, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: to.contentHash, canonicalDomain: to.canonicalDomain, metadata: { fromReleaseId: from.id, toReleaseId: to.id, priorDeploymentReceiptFingerprint: priorReceipt.receiptFingerprint }, receiptFingerprint, verifiedAt: clock() } as any)
-    const target = await repository.transaction(async transaction => {
-      const fromUpdated = await transaction.transitionRelease(ownerUserId, from.id, 'rollback_pending', pendingFrom.projectionFingerprint, { status: 'rolled_back', blockedReasonCode: null, nextSafeAction: 'retain_for_audit', projectionFingerprint: releaseFingerprint({ previous: pendingFrom.projectionFingerprint, rolledBackTo: to.id, receiptFingerprint }) })
+    const { target, receipt } = await repository.transaction(async transaction => {
+      const receipt = await transaction.insertReceipt({ ownerUserId, projectId: to.projectId, draftOrderId: priorReceipt.draftOrderId, releaseId: to.id, attemptId: leased.id, capability: 'deployment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'rollback_deployment_verified', receiptStatus: 'verified', externalReference: result.providerDeploymentId, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: to.contentHash, canonicalDomain: to.canonicalDomain, metadata: { fromReleaseId: from.id, toReleaseId: to.id, priorDeploymentReceiptFingerprint: priorReceipt.receiptFingerprint }, receiptFingerprint, verifiedAt: clock() } as any)
+      const fromUpdated = await transaction.transitionRelease(ownerUserId, from.id, 'rollback_pending', pendingFromProjectionFingerprint, { status: 'rolled_back', blockedReasonCode: null, nextSafeAction: 'retain_for_audit', projectionFingerprint: releaseFingerprint({ previous: pendingFromProjectionFingerprint, rolledBackTo: to.id, receiptFingerprint }) })
       if (!fromUpdated) conflict('Rollback source release changed concurrently.')
       const toUpdated = await transaction.transitionRelease(ownerUserId, to.id, to.status, to.projectionFingerprint, { status: 'live_verified', activeDeploymentReceiptFingerprint: receiptFingerprint, rollbackFromReleaseId: from.id, blockedReasonCode: null, nextSafeAction: 'reactivate_geo_if_required', projectionFingerprint: releaseFingerprint({ previous: to.projectionFingerprint, rollbackFrom: from.id, receiptFingerprint }) })
       if (!toUpdated) conflict('Rollback target release changed concurrently.')
-      return toUpdated
+      const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leasedAttemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
+      if (!completed) conflict('Rollback attempt lease changed before receipt commit.')
+      return { target: toUpdated, receipt }
     })
-    await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
     return { release: target, receipt }
   } catch (error) {
-    await failAttempt(ownerUserId, leased, leaseOwner, repository, clock())
-    await repository.transitionRelease(ownerUserId, from.id, 'rollback_pending', pendingFrom.projectionFingerprint, { status: 'retry_wait', blockedReasonCode: 'ROLLBACK_FAILED', nextSafeAction: 'retry_rollback_after_eligibility', projectionFingerprint: releaseFingerprint({ previous: pendingFrom.projectionFingerprint, rollbackFailedAt: clock().toISOString() }) }).catch(() => null)
+    await failAttempt(ownerUserId, { ...leased, attemptNumber: leasedAttemptNumber }, leaseOwner, repository, clock())
+    await repository.transitionRelease(ownerUserId, from.id, 'rollback_pending', pendingFromProjectionFingerprint, { status: 'retry_wait', blockedReasonCode: 'ROLLBACK_FAILED', nextSafeAction: 'retry_rollback_after_eligibility', projectionFingerprint: releaseFingerprint({ previous: pendingFromProjectionFingerprint, rollbackFailedAt: clock().toISOString() }) }).catch(() => null)
     throw error
   }
 }
@@ -412,5 +433,8 @@ export function createMockManagedSiteDeploymentAdapter(options: { providerKey?: 
 }
 
 export function createMockExistingSiteOwnershipAdapter(providerKey = 'mock-dns-tls'): ManagedSiteExistingSiteOwnershipAdapter {
-  return { async verify(input): Promise<ManagedSiteExistingSiteOwnershipReceipt> { return { providerKey, providerEventId: `ownership-${stableFingerprint(input).slice(0, 24)}`, providerReference: `ownership-ref-${input.projectId}`, canonicalDomain: input.canonicalDomain, projectId: input.projectId, verificationMethod: 'dns_txt', evidenceHash: stableFingerprint({ challengeReference: input.challengeReference, canonicalDomain: input.canonicalDomain }), status: 'verified', exactResponseIdentity: `ownership-response:${stableFingerprint(input).slice(0, 32)}` } } }
+  return {
+    async createChallenge(input) { return { providerKey, providerEventId: `ownership-challenge-${stableFingerprint(input).slice(0, 20)}`, challengeReference: `challenge-${stableFingerprint(input).slice(0, 24)}`, canonicalDomain: input.canonicalDomain, projectId: input.projectId, verificationMethod: input.verificationMethod, exactResponseIdentity: `ownership-challenge-response:${stableFingerprint(input).slice(0, 24)}` } },
+    async verify(input): Promise<ManagedSiteExistingSiteOwnershipReceipt> { return { providerKey, providerEventId: `ownership-${stableFingerprint(input).slice(0, 24)}`, providerReference: `ownership-ref-${input.projectId}`, canonicalDomain: input.canonicalDomain, projectId: input.projectId, verificationMethod: 'dns_txt', evidenceHash: stableFingerprint({ challengeReference: input.challengeReference, canonicalDomain: input.canonicalDomain }), status: 'verified', exactResponseIdentity: `ownership-response:${stableFingerprint(input).slice(0, 32)}` } },
+  }
 }

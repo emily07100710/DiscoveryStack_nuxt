@@ -7,9 +7,7 @@ describe('managed-site live connectors durable and private contracts', () => {
   it('keeps all routes owner-only except the signature-first provider webhook', () => {
     for (const route of [
       'server/api/managed-sites/live-connectors/readiness.get.ts',
-      'server/api/managed-sites/live-connectors/provider-configurations.post.ts',
       'server/api/managed-sites/live-connectors/workspace.get.ts',
-      'server/api/managed-sites/projects/[id]/live-generation.post.ts',
     ]) {
       const source = read(route)
       expect(source).toContain('requireOwner(event)')
@@ -17,6 +15,8 @@ describe('managed-site live connectors durable and private contracts', () => {
     }
     const fixedRoutes = [
       'server/api/managed-sites/projects/prepurchase.post.ts',
+      'server/api/managed-sites/live-connectors/provider-configurations.post.ts',
+      'server/api/managed-sites/projects/[id]/live-generation.post.ts',
       'server/api/managed-sites/projects/[id]/releases/generated.post.ts',
       'server/api/managed-sites/projects/[id]/releases/existing.post.ts',
       'server/api/managed-sites/projects/[id]/releases/[releaseId]/preview-build.post.ts',
@@ -26,6 +26,7 @@ describe('managed-site live connectors durable and private contracts', () => {
       'server/api/managed-sites/projects/[id]/releases/[releaseId]/payment-bind.post.ts',
       'server/api/managed-sites/projects/[id]/releases/[releaseId]/domain-quote.post.ts',
       'server/api/managed-sites/projects/[id]/releases/[releaseId]/domain-purchase.post.ts',
+      'server/api/managed-sites/projects/[id]/releases/[releaseId]/domain-release.post.ts',
       'server/api/managed-sites/projects/[id]/releases/[releaseId]/dns-tls.post.ts',
       'server/api/managed-sites/projects/[id]/releases/[releaseId]/ownership-challenge.post.ts',
       'server/api/managed-sites/projects/[id]/releases/[releaseId]/ownership-verify.post.ts',
@@ -35,7 +36,11 @@ describe('managed-site live connectors durable and private contracts', () => {
       'server/api/managed-sites/live-connectors/providers/[capability]/verify.post.ts',
     ]
     for (const route of fixedRoutes) expect(read(route)).toContain('managedSiteOwnerContext(event)')
-    expect(fixedRoutes).toHaveLength(17)
+    expect(fixedRoutes).toHaveLength(20)
+    const ownerContext = read('server/managed-sites/live-connectors/http.ts')
+    expect(ownerContext).toContain('requireOwner(event)')
+    expect(ownerContext).toContain('getOwnerDatabaseUserId(owner.openId)')
+    expect(ownerContext).toContain("process.env.NODE_ENV !== 'test'")
     expect(existsSync(new URL('../server/api/managed-sites/projects/[id]/live-orchestration.post.ts', import.meta.url))).toBe(false)
     const webhook = read('server/api/managed-sites/live-connectors/payment-webhook.post.ts')
     expect(webhook).toContain('readRawBody(event, false)')
@@ -56,6 +61,12 @@ describe('managed-site live connectors durable and private contracts', () => {
     expect(repair).toContain('managed_site_domain_claim_canonical_unique')
     expect(repair).toContain('managed_site_release_commerce_lineage_idx')
     expect(repair).not.toMatch(/^\s*(?:INSERT|UPDATE|DELETE|DROP|TRUNCATE)\b/imu)
+    const reachabilityRepair = read('server/database/migrations/0028_tired_white_tiger.sql')
+    expect(reachabilityRepair).toContain('CREATE TABLE `managedSitePaymentWebhookInbox`')
+    expect(reachabilityRepair).toContain('ADD `activeCanonicalDomainKey` varchar(253)')
+    expect(reachabilityRepair).toContain('managed_site_domain_claim_active_canonical_unique')
+    for (const foreignKey of ['ownerUserId_users_id_fk', 'projectId_managedSiteProjects_id_fk', 'releaseId_managedSiteReleaseProjections_id_fk', 'draftOrderId_managedSiteDraftOrders_id_fk']) expect(reachabilityRepair).toContain(foreignKey)
+    expect(reachabilityRepair).not.toMatch(/^\s*(?:INSERT|UPDATE|DELETE|TRUNCATE)\b/imu)
   })
 
   it('renders truthful owner readiness without credential values or public customer controls', () => {

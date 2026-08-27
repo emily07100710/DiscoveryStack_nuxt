@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { createError } from 'h3'
 import { stableFingerprint } from '../../seo-geo-core/repository'
 import type { ManagedSiteAdmittedManifest, ManagedSiteGeneratedFile, ManagedSiteGenerationProviderOutput } from './types'
+import { canonicalArtifactCollisionKey, compareCodeUnits } from './canonical'
 
 export const MANAGED_SITE_GENERATION_MAX_FILES = 100
 export const MANAGED_SITE_GENERATION_MAX_FILE_BYTES = 200_000
@@ -87,7 +88,7 @@ function validateFile(value: unknown): { file: ManagedSiteGeneratedFile; byteSiz
 }
 
 export function computeManagedSiteProviderManifestHash(files: readonly Pick<ManagedSiteGeneratedFile, 'path' | 'mediaType' | 'sha256'>[]): string {
-  return stableFingerprint([...files].map(file => ({ path: file.path, mediaType: file.mediaType, sha256: file.sha256 })).sort((left, right) => left.path.localeCompare(right.path)))
+  return stableFingerprint([...files].map(file => ({ path: file.path, mediaType: file.mediaType, sha256: file.sha256 })).sort((left, right) => compareCodeUnits(left.path, right.path)))
 }
 
 export function admitManagedSiteGenerationOutput(input: unknown, expected: { requestFingerprint: string; providerKey: string }): { output: ManagedSiteGenerationProviderOutput; manifest: ManagedSiteAdmittedManifest; files: ManagedSiteGeneratedFile[] } {
@@ -101,14 +102,14 @@ export function admitManagedSiteGenerationOutput(input: unknown, expected: { req
   const admitted = input.files.map(validateFile)
   const collisionKeys = new Set<string>()
   for (const { file } of admitted) {
-    const key = file.path.normalize('NFKC').toLocaleLowerCase('en-US')
+    const key = canonicalArtifactCollisionKey(file.path)
     if (collisionKeys.has(key)) blocked('Generation provider returned duplicate or case-colliding paths.')
     collisionKeys.add(key)
   }
   if (!admitted.some(({ file }) => file.path === 'src/pages/index.astro')) blocked('Generation candidate requires the fixed Astro entry page.')
   const totalBytes = admitted.reduce((sum, item) => sum + item.byteSize, 0)
   if (totalBytes > MANAGED_SITE_GENERATION_MAX_TOTAL_BYTES) blocked('Generation provider output exceeds the total size limit.')
-  const files = admitted.map(item => item.file).sort((left, right) => left.path.localeCompare(right.path))
+  const files = admitted.map(item => item.file).sort((left, right) => compareCodeUnits(left.path, right.path))
   const providerManifestHash = computeManagedSiteProviderManifestHash(files)
   if (typeof input.manifestHash !== 'string' || input.manifestHash !== providerManifestHash) blocked('Generation provider manifest hash does not match deterministic file identity.')
   const contentHash = stableFingerprint(files.map(file => ({ path: file.path, sha256: file.sha256 })))

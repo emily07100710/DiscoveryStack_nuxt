@@ -12,7 +12,7 @@ describe('managed-site connector CAS, provider race, and atomic domain claim bou
     const live = createLiveConnectorMemoryRepository(); const resolver = async () => ({ ok: true as const, value: 'runtime-only' })
     await configureManagedSiteProvider(1, { capability: 'deployment', providerKey: 'internal-deployment-bearer-v1', readinessStatus: 'configured', credentialReference: 'vault:race-one', transportConfiguration: { endpointOrigin: 'https://provider-one.example' }, idempotencyKey: 'race-config-one' }, live.repository)
     let release!: () => void; const wait = new Promise<void>(resolve => { release = resolve })
-    const registry: any = new Map([['internal-deployment-bearer-v1', new Map([['deployment', async (input: any) => { await wait; return { capability: 'deployment', providerKey: input.providerKey, configurationFingerprint: input.configurationFingerprint, providerAccountId: 'account-race', providerEventId: 'event-race', payloadHash: 'a'.repeat(64), exactResponseIdentity: 'verification-race', observedAt: '2026-08-27T00:00:00.000Z' } }]])]])
+    const registry: any = new Map([['internal-deployment-bearer-v1', new Map([['deployment', async (input: any) => { await wait; return { capability: 'deployment', providerKey: input.providerKey, configurationFingerprint: input.configurationFingerprint, capabilityIdentity: 'deployment-access:internal', providerEventId: 'event-race', payloadHash: 'a'.repeat(64), exactResponseIdentity: 'verification-race', observedAt: '2026-08-27T00:00:00.000Z' } }]])]])
     const verifying = verifyManagedSiteProviderConfiguration(1, 'deployment', live.repository, resolver, () => new Date('2026-08-27T00:00:00.000Z'), registry)
     await Promise.resolve()
     await configureManagedSiteProvider(1, { capability: 'deployment', providerKey: 'internal-deployment-bearer-v1', readinessStatus: 'configured', credentialReference: 'vault:race-two', transportConfiguration: { endpointOrigin: 'https://provider-two.example' }, idempotencyKey: 'race-config-two' }, live.repository)
@@ -33,7 +33,7 @@ describe('managed-site connector CAS, provider race, and atomic domain claim bou
   })
 
   it('atomically rejects concurrent cross-owner claims for one canonical domain', async () => {
-    const live = createLiveConnectorMemoryRepository(); const base = { canonicalDomain: 'unique.acme.taipei', projectId: 10, releaseId: 20, claimKind: 'generated' as const, status: 'pending' as const, authorityReceiptFingerprint: null, requestFingerprint: 'a'.repeat(64), projectionFingerprint: 'b'.repeat(64) }
+    const live = createLiveConnectorMemoryRepository(); const base = { canonicalDomain: 'unique.acme.taipei', activeCanonicalDomainKey: 'unique.acme.taipei', projectId: 10, releaseId: 20, claimKind: 'generated' as const, status: 'pending' as const, authorityReceiptFingerprint: null, requestFingerprint: 'a'.repeat(64), projectionFingerprint: 'b'.repeat(64) }
     const results = await Promise.allSettled([
       live.repository.insertDomainClaim({ ...base, ownerUserId: 1, idempotencyKey: 'domain-owner-one' } as any),
       live.repository.insertDomainClaim({ ...base, ownerUserId: 2, projectId: 11, releaseId: 21, requestFingerprint: 'c'.repeat(64), idempotencyKey: 'domain-owner-two' } as any),
@@ -67,8 +67,8 @@ describe('managed-site connector CAS, provider race, and atomic domain claim bou
         expect(init?.redirect).toBe('error')
         const request = JSON.parse(String(init?.body))
         const challengeHash = createHash('sha256').update(request.challenge).digest('hex')
-        const core = { challengeHash, providerAccountId: 'deployment-account-001', providerEventId: 'deployment-verification-event-001', observedAt: clock().toISOString(), configurationFingerprint: request.configurationFingerprint }
-        return new Response(JSON.stringify({ schemaVersion: 'managed-site-provider-verification-v1', challengeHash, providerAccountId: core.providerAccountId, providerEventId: core.providerEventId, observedAt: core.observedAt, payloadHash: stableFingerprint(core), exactResponseIdentity: 'deployment-verification-response-001' }), { status: 200 })
+        const core = { challengeHash, capabilityIdentity: 'deployment-access:internal', providerEventId: 'deployment-verification-event-001', observedAt: clock().toISOString(), configurationFingerprint: request.configurationFingerprint }
+        return new Response(JSON.stringify({ schemaVersion: 'managed-site-provider-verification-v1', challengeHash, capabilityIdentity: core.capabilityIdentity, providerEventId: core.providerEventId, observedAt: core.observedAt, payloadHash: stableFingerprint(core), exactResponseIdentity: 'deployment-verification-response-001' }), { status: 200 })
       }
       const result = await verifyManagedSiteProviderConfiguration(1, 'deployment', live.repository, async () => ({ ok: true, value: 'runtime-only' }), clock, MANAGED_SITE_PROVIDER_VERIFIERS, fetchImpl as typeof fetch)
       expect(result.configuration).toMatchObject({ readinessStatus: 'verified', providerKey: 'internal-deployment-bearer-v1' })

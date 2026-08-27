@@ -3,6 +3,7 @@ import { createError } from 'h3'
 import { stableFingerprint } from '../../seo-geo-core/repository'
 import { SITE_MODULES, type SiteModule, type SiteSpec } from '../site-spec'
 import type { ManagedSiteBlueprintProviderOutput, ManagedSiteBlueprintSectionV1, ManagedSiteBlueprintV1, ManagedSiteGeneratedFile, ManagedSiteGenerationRequest } from './types'
+import { compareCodeUnits } from './canonical'
 
 export const MANAGED_SITE_BLUEPRINT_MAX_BYTES = 256_000
 const TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u
@@ -90,7 +91,7 @@ export function validateManagedSiteBlueprintProviderOutput(input: unknown, reque
     const page = pages.find(candidate => candidate.pageKey === item.pageKey)
     if (!page || !page.sections.some(section => section.sectionId === item.sectionId && section.kind === 'module_slot' && section.moduleKey === moduleKey)) blocked('Blueprint module placement does not reference its exact allowlisted slot.')
     return { moduleKey, pageKey: String(item.pageKey), sectionId: String(item.sectionId), mode: item.mode as 'safe_placeholder' | 'first_party' }
-  }).sort((left, right) => left.moduleKey.localeCompare(right.moduleKey))
+  }).sort((left, right) => compareCodeUnits(left.moduleKey, right.moduleKey))
   if (new Set(placements.map(item => item.moduleKey)).size !== placements.length || placements.some((item, index) => item.moduleKey !== selected[index])) blocked('Blueprint selected module coverage is missing, duplicated, or excessive.')
   if (!Array.isArray(raw.faq) || raw.faq.length > 20) blocked('Blueprint FAQ is oversized.')
   const faq = raw.faq.map(item => { if (!record(item)) blocked('Blueprint FAQ item is malformed.'); exact(item, ['question', 'answer']); return { question: text(item.question, 'Blueprint FAQ question', 400), answer: text(item.answer, 'Blueprint FAQ answer', 2_000) } })
@@ -127,7 +128,7 @@ export function compileManagedSiteBlueprint(blueprint: ManagedSiteBlueprintV1): 
   files.push({ path: 'public/robots.txt', mediaType: 'text/markdown', content: robots, sha256: sha256(robots) })
   const llms = `${blueprint.brandName}\n\n${blueprint.seoGeo.summaryAnswer}\n\nLimitations:\n${blueprint.seoGeo.evidenceLimitations.map(item => `- ${item}`).join('\n')}`
   files.push({ path: 'public/llms.txt', mediaType: 'text/markdown', content: llms, sha256: sha256(llms) })
-  return files.sort((left, right) => left.path.localeCompare(right.path))
+  return files.sort((left, right) => compareCodeUnits(left.path, right.path))
 }
 
 export function blueprintCompilerFingerprint(blueprint: ManagedSiteBlueprintV1, files: readonly ManagedSiteGeneratedFile[]): string {

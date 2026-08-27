@@ -32,5 +32,11 @@ export async function createAuthoritativeManagedSiteReleaseFixture(options: { ow
     await approveManagedSitePreview(ownerUserId, { releaseId: release.release.id, idempotencyKey: 'fixture-approval-001' }, live.repository, () => managedSiteFixedNow)
   }
   const checkout = options.buildPreview === false || options.createCheckout === false ? null : await createManagedSiteCheckoutSession(ownerUserId, { releaseId: release.release.id, draftOrderId: order.order.id, executionMode: 'mocked', idempotencyKey: 'fixture-checkout-001' }, createMockManagedSiteCheckoutSessionAdapter(), { connectorRepository: live.repository, orderingRepository: ordering.repository, clock: () => managedSiteFixedNow })
-  return { ownerUserId, managed, ordering, live, preview, quote, lead, order, prePurchase, vault, generation, release, deploymentAdapter, checkout }
+  let jointQueue = Promise.resolve()
+  const jointTransaction = async <T>(work: (repositories: { connector: typeof live.repository; ordering: typeof ordering.repository; managed: typeof managed.repository }) => Promise<T>): Promise<T> => {
+    const previous = jointQueue; let releaseQueue!: () => void; jointQueue = new Promise(resolve => { releaseQueue = resolve }); await previous
+    const snapshots = { managed: structuredClone(managed.state), ordering: structuredClone(ordering.state), live: structuredClone(live.state) }
+    try { return await work({ connector: live.repository, ordering: ordering.repository, managed: managed.repository }) } catch (error) { Object.assign(managed.state, snapshots.managed); Object.assign(ordering.state, snapshots.ordering); Object.assign(live.state, snapshots.live); throw error } finally { releaseQueue() }
+  }
+  return { ownerUserId, managed, ordering, live, preview, quote, lead, order, prePurchase, vault, generation, release, deploymentAdapter, checkout, jointTransaction }
 }

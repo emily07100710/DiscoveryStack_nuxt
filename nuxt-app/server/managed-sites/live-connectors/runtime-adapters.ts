@@ -2,6 +2,7 @@ import { createError } from 'h3'
 import { createAuthenticatedBearerManagedSiteDeploymentAdapter } from './deployment-transport'
 import { createBailianQwenManagedSiteGenerationAdapter } from './adapters'
 import { resolveManagedSiteCredential } from './provider-registry'
+import { createInternalDnsTlsBrokerHmacV1Adapter, createInternalDomainBrokerHmacV1Adapter, createInternalHmacV1CheckoutAdapter, createInternalOwnershipBrokerHmacV1Adapter } from './broker-adapters'
 import type { ManagedSiteLiveConnectorRepository } from './types'
 
 export async function managedSiteLiveDeploymentAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) {
@@ -18,6 +19,14 @@ export async function managedSiteLiveGenerationAdapter(ownerUserId: number, repo
   return createBailianQwenManagedSiteGenerationAdapter({ endpoint: transport.endpointOrigin, model: typeof transport.model === 'string' ? transport.model : undefined, providerKey: configuration.providerKey })
 }
 
-export function unsupportedManagedSiteVendorAdapter(capability: 'payment' | 'domain_registration' | 'dns_tls' | 'existing_site_ownership'): never {
-  throw createError({ statusCode: 503, statusMessage: `unsupported_provider_adapter: ${capability} has no owner-selected live adapter.` })
+async function verifiedBroker(ownerUserId: number, capability: 'payment' | 'domain_registration' | 'dns_tls', providerKey: string, repository: ManagedSiteLiveConnectorRepository) {
+  const configuration = await repository.findProviderConfiguration(ownerUserId, capability)
+  const transport = configuration?.transportConfiguration && typeof configuration.transportConfiguration === 'object' && !Array.isArray(configuration.transportConfiguration) ? configuration.transportConfiguration as Record<string, unknown> : {}
+  if (!configuration || configuration.readinessStatus !== 'verified' || configuration.providerKey !== providerKey || !configuration.credentialReference || typeof transport.endpointOrigin !== 'string') throw createError({ statusCode: 503, statusMessage: `Verified ${providerKey} transport is not configured.` })
+  return { endpointOrigin: transport.endpointOrigin, providerKey, credentialReference: configuration.credentialReference, resolveCredential: resolveManagedSiteCredential }
 }
+
+export async function managedSiteLiveCheckoutAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalHmacV1CheckoutAdapter(await verifiedBroker(ownerUserId, 'payment', 'internal_hmac_v1', repository)) }
+export async function managedSiteLiveDomainAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalDomainBrokerHmacV1Adapter(await verifiedBroker(ownerUserId, 'domain_registration', 'internal-domain-broker-hmac-v1', repository)) }
+export async function managedSiteLiveDnsTlsAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalDnsTlsBrokerHmacV1Adapter(await verifiedBroker(ownerUserId, 'dns_tls', 'internal-dns-tls-broker-hmac-v1', repository)) }
+export async function managedSiteLiveOwnershipAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalOwnershipBrokerHmacV1Adapter(await verifiedBroker(ownerUserId, 'dns_tls', 'internal-dns-tls-broker-hmac-v1', repository)) }

@@ -92,7 +92,10 @@ export async function configureManagedSiteProvider(
   if (input.readinessStatus === 'configured' && credentialReference === null) invalid('Configured providers require an opaque credential reference.')
   if (input.readinessStatus === 'mock' && process.env.NODE_ENV !== 'test') invalid('Mock provider configuration is restricted to the test runtime.')
   const transportConfiguration = safeTransportConfiguration(input.transportConfiguration)
-  const allowedTransportFields = input.providerKey === 'bailian-qwen' && input.capability === 'website_generator' ? new Set(['endpointOrigin', 'model']) : input.providerKey === 'internal-deployment-bearer-v1' && input.capability === 'deployment' ? new Set(['endpointOrigin']) : new Set<string>()
+  const hmacBroker = input.providerKey === 'internal_hmac_v1' && input.capability === 'payment'
+    || input.providerKey === 'internal-domain-broker-hmac-v1' && input.capability === 'domain_registration'
+    || input.providerKey === 'internal-dns-tls-broker-hmac-v1' && input.capability === 'dns_tls'
+  const allowedTransportFields = input.providerKey === 'bailian-qwen' && input.capability === 'website_generator' ? new Set(['endpointOrigin', 'model']) : input.providerKey === 'internal-deployment-bearer-v1' && input.capability === 'deployment' || hmacBroker ? new Set(['endpointOrigin']) : new Set<string>()
   if (Object.keys(transportConfiguration).some(key => !allowedTransportFields.has(key))) invalid('Transport configuration is not allowlisted for this exact provider and capability.')
   const configurationFingerprint = stableFingerprint({ capability: input.capability, providerKey: input.providerKey, readinessStatus: input.readinessStatus, credentialReference, transportConfiguration })
   const existing = await repository.findProviderConfiguration(ownerUserId, input.capability)
@@ -122,7 +125,7 @@ export type ManagedSiteProviderVerificationReceipt = {
   capability: ManagedSiteConnectorCapability
   providerKey: string
   configurationFingerprint: string
-  providerAccountId: string
+  capabilityIdentity: string
   providerEventId: string
   payloadHash: string
   exactResponseIdentity: string
@@ -152,7 +155,7 @@ export async function verifyManagedSiteProviderConfiguration(
   }
   const observedAt = new Date(receipt.observedAt)
   const verifiedAt = clock()
-  if (receipt.capability !== capability || receipt.providerKey !== configuration.providerKey || receipt.configurationFingerprint !== configuration.configurationFingerprint || !isOpaqueReference(receipt.providerAccountId, 160) || !isOpaqueReference(receipt.providerEventId, 160) || !/^[a-f0-9]{64}$/u.test(receipt.payloadHash) || !isOpaqueReference(receipt.exactResponseIdentity, 256) || !Number.isFinite(observedAt.getTime()) || Math.abs(verifiedAt.getTime() - observedAt.getTime()) > 10 * 60_000) conflict('Provider verification receipt identity or timestamp is incomplete or mismatched.')
+  if (receipt.capability !== capability || receipt.providerKey !== configuration.providerKey || receipt.configurationFingerprint !== configuration.configurationFingerprint || !isOpaqueReference(receipt.capabilityIdentity, 160) || !isOpaqueReference(receipt.providerEventId, 160) || !/^[a-f0-9]{64}$/u.test(receipt.payloadHash) || !isOpaqueReference(receipt.exactResponseIdentity, 256) || !Number.isFinite(observedAt.getTime()) || Math.abs(verifiedAt.getTime() - observedAt.getTime()) > 10 * 60_000) conflict('Provider verification receipt identity or timestamp is incomplete or mismatched.')
   const receiptFingerprint = stableFingerprint(receipt)
   const verified = await repository.verifyProviderConfigurationCas(ownerUserId, configuration.id, configuration.configurationFingerprint, { readinessStatus: 'verified', blockedReasonCode: null, verificationReceiptFingerprint: receiptFingerprint, verifiedAt })
   if (!verified) conflict('Provider configuration changed before verification completed.')
