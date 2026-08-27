@@ -422,6 +422,7 @@ export interface GeoOutcomeRepositoryPort {
   saveArtifactTransactional(ownerUserId: number, artifact: ModelArtifact): Promise<ModelArtifact>
   getArtifact(ownerUserId: number, artifactId: string): Promise<ModelArtifact | null>
   listArtifacts(ownerUserId: number): Promise<ModelArtifact[]>
+  markArtifactShadowFailed(ownerUserId: number, artifactId: string): Promise<ModelArtifact>
   transitionArtifactWithDecision(ownerUserId: number, artifactId: string, nextStatus: ModelStatus, reviewerUserId: number, reason: string, datasetManifestHash: string, rollbackArtifactHash?: string | null): Promise<{ artifact: ModelArtifact, decision: ModelDecision }>
   listDecisions(ownerUserId: number): Promise<ModelDecision[]>
   claimMutation(ownerUserId: number, routeIdentity: string, idempotencyKey: string, inputFingerprint: string): Promise<MutationClaimResult>

@@ -501,6 +501,17 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
   }
   async getArtifact(ownerUserId: number, artifactId: string) { const [row] = await this.db.select().from(geoOutcomeModelArtifacts).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactId, artifactId))).limit(1); return row ? this.validateArtifactLineage(this.mapArtifact(row)) : null }
   async listArtifacts(ownerUserId: number) { const rows = await this.db.select().from(geoOutcomeModelArtifacts).where(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId)); return Promise.all(rows.map(row => this.validateArtifactLineage(this.mapArtifact(row)))) }
+  async markArtifactShadowFailed(ownerUserId: number, artifactId: string) {
+    const artifact = await this.getArtifact(ownerUserId, artifactId)
+    if (!artifact) throw new Error('Model artifact not found.')
+    if (artifact.status === 'revoked' || artifact.status === 'shadow_failed') return artifact
+    if (artifact.status !== 'approved_for_shadow') throw new Error('Only an approved shadow artifact may be marked shadow_failed.')
+    const result = await this.db.update(geoOutcomeModelArtifacts).set({ status: 'shadow_failed' }).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactId, artifactId), eq(geoOutcomeModelArtifacts.status, 'approved_for_shadow')))
+    if (affectedRows(result) !== 1) throw new Error('Shadow failure status lost its compare-and-swap.')
+    const updated = await this.getArtifact(ownerUserId, artifactId)
+    if (!updated) throw new Error('Shadow failure status was not persisted.')
+    return updated
+  }
   async transitionArtifactWithDecision(ownerUserId: number, artifactId: string, nextStatus: ModelArtifact['status'], reviewerUserId: number, reason: string, datasetManifestHash: string, rollbackArtifactHash: string | null = null) {
     return this.db.transaction(async tx => {
       const repo = new DrizzleGeoOutcomeRepository(tx)
@@ -511,7 +522,7 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
       if (!artifactRow) throw new Error('Artifact row not found.')
       const decision: ModelDecision = { decisionId: `geo-decision-${fingerprint({ ownerUserId, artifactId, previousStatus: artifact.status, newStatus: nextStatus, reason, artifactHash: artifact.artifactHash }).slice(0, 20)}`, ownerUserId, modelArtifactId: artifactId, previousStatus: artifact.status, newStatus: nextStatus, reviewerUserId, reason, artifactHash: artifact.artifactHash, datasetManifestHash, createdAt: new Date().toISOString() }
       await tx.insert(geoOutcomeModelDecisions).values({ ...decision, modelArtifactId: artifactRow.id, createdAt: new Date(decision.createdAt) })
-      const result = await tx.update(geoOutcomeModelArtifacts).set({ status: nextStatus, rollbackArtifactHash, revokedAt: nextStatus === 'revoked' ? new Date() : null }).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactId, artifactId), eq(geoOutcomeModelArtifacts.status, artifact.status)))
+      const result = await tx.update(geoOutcomeModelArtifacts).set({ status: nextStatus, revokedAt: nextStatus === 'revoked' ? new Date() : null }).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactId, artifactId), eq(geoOutcomeModelArtifacts.status, artifact.status)))
       if (affectedRows(result) !== 1) throw new Error('Artifact decision lost its compare-and-swap.')
       return { artifact: (await repo.getArtifact(ownerUserId, artifactId))!, decision }
     })

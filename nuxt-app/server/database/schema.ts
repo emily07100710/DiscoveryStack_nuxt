@@ -2356,3 +2356,135 @@ export const geoOutcomeEvidenceLocators = mysqlTable('geoOutcomeEvidenceLocators
 export type GeoOutcomeIdempotencyClaim = typeof geoOutcomeIdempotencyClaims.$inferSelect
 export type GeoOutcomeObservationVerification = typeof geoOutcomeObservationVerifications.$inferSelect
 export type GeoOutcomeEvidenceLocator = typeof geoOutcomeEvidenceLocators.$inferSelect
+
+/** Durable owner-scoped automation policy. It never grants dataset/model approval authority. */
+export const geoOutcomeModelopsPolicies = mysqlTable('geoOutcomeModelopsPolicies', {
+  id: int('id').autoincrement().primaryKey(),
+  policyId: varchar('policyId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  status: mysqlEnum('status', ['enabled', 'paused', 'revoked']).default('paused').notNull(),
+  cadence: mysqlEnum('cadence', ['weekly', 'biweekly', 'monthly']).notNull(),
+  minimumNewVerifiedCandidates: int('minimumNewVerifiedCandidates').notNull(),
+  minimumNewQueryGroups: int('minimumNewQueryGroups').notNull(),
+  minimumNewWebsites: int('minimumNewWebsites').notNull(),
+  minimumObservationSpanDays: int('minimumObservationSpanDays').notNull(),
+  allowedModelFamilies: json('allowedModelFamilies').notNull(),
+  maximumTrainingRunsPerCycle: int('maximumTrainingRunsPerCycle').notNull(),
+  cooldownHours: int('cooldownHours').notNull(),
+  shadowEvaluationEnabled: boolean('shadowEvaluationEnabled').default(true).notNull(),
+  authorizedByOwnerUserId: int('authorizedByOwnerUserId').references(() => users.id),
+  authorizedAt: timestamp('authorizedAt'),
+  expiresAt: timestamp('expiresAt'),
+  configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+  revokedAt: timestamp('revokedAt'),
+}, table => [
+  uniqueIndex('geo_outcome_modelops_policy_owner_id_unique').on(table.ownerUserId, table.policyId),
+  index('geo_outcome_modelops_policy_owner_status_idx').on(table.ownerUserId, table.status, table.updatedAt),
+])
+
+/** Durable cycle projection. All values are redacted fingerprints or bounded reason metadata. */
+export const geoOutcomeModelopsCycles = mysqlTable('geoOutcomeModelopsCycles', {
+  id: int('id').autoincrement().primaryKey(),
+  cycleId: varchar('cycleId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  policyId: varchar('policyId', { length: 160 }).notNull(),
+  policyFingerprint: varchar('policyFingerprint', { length: 128 }).notNull(),
+  trigger: mysqlEnum('trigger', ['scheduled', 'owner_manual', 'dry_run']).notNull(),
+  status: mysqlEnum('status', ['planned', 'running', 'completed', 'blocked', 'insufficient_data', 'failed', 'retry_wait']).default('planned').notNull(),
+  readinessSnapshotFingerprint: varchar('readinessSnapshotFingerprint', { length: 128 }).notNull(),
+  eligibleObservationFingerprints: json('eligibleObservationFingerprints').notNull(),
+  previousApprovedDatasetFingerprint: varchar('previousApprovedDatasetFingerprint', { length: 128 }),
+  generatedDatasetFingerprint: varchar('generatedDatasetFingerprint', { length: 128 }),
+  trainingRunId: varchar('trainingRunId', { length: 160 }),
+  modelArtifactId: varchar('modelArtifactId', { length: 160 }),
+  artifactHash: varchar('artifactHash', { length: 128 }),
+  shadowEvaluationFingerprint: varchar('shadowEvaluationFingerprint', { length: 128 }),
+  reasonCodes: json('reasonCodes').notNull(),
+  limitations: json('limitations').notNull(),
+  errorClass: varchar('errorClass', { length: 120 }),
+  startedAt: timestamp('startedAt'),
+  completedAt: timestamp('completedAt'),
+  attempt: int('attempt').default(0).notNull(),
+  leaseOwner: varchar('leaseOwner', { length: 128 }),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_modelops_cycle_owner_id_unique').on(table.ownerUserId, table.cycleId),
+  uniqueIndex('geo_outcome_modelops_cycle_owner_key_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('geo_outcome_modelops_cycle_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+  index('geo_outcome_modelops_cycle_lease_idx').on(table.status, table.leaseExpiresAt),
+])
+
+/** Append-only ModelOps event ledger. Payloads are bounded redacted projections only. */
+export const geoOutcomeModelopsEvents = mysqlTable('geoOutcomeModelopsEvents', {
+  id: int('id').autoincrement().primaryKey(),
+  eventId: varchar('eventId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  cycleId: varchar('cycleId', { length: 160 }).notNull(),
+  eventType: varchar('eventType', { length: 96 }).notNull(),
+  eventPayload: json('eventPayload').notNull(),
+  eventFingerprint: varchar('eventFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_modelops_event_id_unique').on(table.eventId),
+  uniqueIndex('geo_outcome_modelops_event_fingerprint_unique').on(table.ownerUserId, table.eventFingerprint),
+  index('geo_outcome_modelops_event_cycle_idx').on(table.ownerUserId, table.cycleId, table.createdAt),
+])
+
+/** Durable shadow evaluation windows and diagnostics; no prediction or causal claims are stored. */
+export const geoOutcomeModelopsShadowEvaluations = mysqlTable('geoOutcomeModelopsShadowEvaluations', {
+  id: int('id').autoincrement().primaryKey(),
+  evaluationId: varchar('evaluationId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  artifactId: varchar('artifactId', { length: 160 }).notNull(),
+  artifactHash: varchar('artifactHash', { length: 128 }).notNull(),
+  evaluationWindowStart: timestamp('evaluationWindowStart').notNull(),
+  evaluationWindowEnd: timestamp('evaluationWindowEnd').notNull(),
+  observationFingerprints: json('observationFingerprints').notNull(),
+  candidateCount: int('candidateCount').notNull(),
+  positiveCount: int('positiveCount').notNull(),
+  negativeCount: int('negativeCount').notNull(),
+  queryGroupCount: int('queryGroupCount').notNull(),
+  websiteCount: int('websiteCount').notNull(),
+  engineCounts: json('engineCounts').notNull(),
+  binaryMetrics: json('binaryMetrics').notNull(),
+  rankingMetrics: json('rankingMetrics').notNull(),
+  calibrationDiagnostics: json('calibrationDiagnostics').notNull(),
+  driftDiagnostics: json('driftDiagnostics').notNull(),
+  status: mysqlEnum('status', ['completed', 'insufficient_data', 'blocked', 'needs_owner_attention']).notNull(),
+  reasonCodes: json('reasonCodes').notNull(),
+  evaluationFingerprint: varchar('evaluationFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_modelops_shadow_evaluation_id_unique').on(table.ownerUserId, table.evaluationId),
+  uniqueIndex('geo_outcome_modelops_shadow_evaluation_fingerprint_unique').on(table.ownerUserId, table.evaluationFingerprint),
+  index('geo_outcome_modelops_shadow_artifact_idx').on(table.ownerUserId, table.artifactId, table.createdAt),
+])
+
+/** Append-only owner-confirmed rollback decision; rollback is never automatic. */
+export const geoOutcomeModelopsRollbackDecisions = mysqlTable('geoOutcomeModelopsRollbackDecisions', {
+  id: int('id').autoincrement().primaryKey(),
+  decisionId: varchar('decisionId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  artifactId: varchar('artifactId', { length: 160 }).notNull(),
+  fromArtifactHash: varchar('fromArtifactHash', { length: 128 }).notNull(),
+  rollbackArtifactHash: varchar('rollbackArtifactHash', { length: 128 }).notNull(),
+  reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
+  reason: varchar('reason', { length: 500 }).notNull(),
+  decisionStatus: mysqlEnum('decisionStatus', ['approved', 'rejected']).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('geo_outcome_modelops_rollback_decision_unique').on(table.decisionId),
+  index('geo_outcome_modelops_rollback_owner_artifact_idx').on(table.ownerUserId, table.artifactId, table.createdAt),
+])
+
+export type GeoOutcomeModelopsPolicy = typeof geoOutcomeModelopsPolicies.$inferSelect
+export type GeoOutcomeModelopsCycle = typeof geoOutcomeModelopsCycles.$inferSelect
+export type GeoOutcomeModelopsEvent = typeof geoOutcomeModelopsEvents.$inferSelect
+export type GeoOutcomeModelopsShadowEvaluation = typeof geoOutcomeModelopsShadowEvaluations.$inferSelect
+export type GeoOutcomeModelopsRollbackDecision = typeof geoOutcomeModelopsRollbackDecisions.$inferSelect

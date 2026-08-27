@@ -14,6 +14,15 @@ const routes = [
   'server/api/geo-outcome-model/models/[id]/review.post.ts',
   'server/api/geo-outcome-model/models/[id]/revoke.post.ts',
   'server/api/geo-outcome-model/models/[id]/predict.post.ts',
+  'server/api/geo-outcome-model/modelops/workspace.get.ts',
+  'server/api/geo-outcome-model/modelops/policies/index.post.ts',
+  'server/api/geo-outcome-model/modelops/policies/[id]/enable.post.ts',
+  'server/api/geo-outcome-model/modelops/policies/[id]/pause.post.ts',
+  'server/api/geo-outcome-model/modelops/policies/[id]/revoke.post.ts',
+  'server/api/geo-outcome-model/modelops/cycles/dry-run.post.ts',
+  'server/api/geo-outcome-model/modelops/cycles/run.post.ts',
+  'server/api/geo-outcome-model/models/[id]/shadow-evaluate.post.ts',
+  'server/api/geo-outcome-model/models/[id]/rollback.post.ts',
 ]
 
 describe('GEO outcome owner boundary', () => {
@@ -32,6 +41,10 @@ describe('GEO outcome owner boundary', () => {
     const prediction = readFileSync(`${root}server/api/geo-outcome-model/models/[id]/predict.post.ts`, 'utf8')
     expect(prediction).toContain('predictionType: \'experimental_prediction\'')
     expect(prediction).not.toContain('coefficients')
+    const projection = readFileSync(`${root}server/api/geo-outcome-model/modelops/_response.ts`, 'utf8')
+    expect(projection).not.toContain('eligibleObservationFingerprints: cycle')
+    expect(projection).not.toContain('artifact.coefficients')
+    expect(projection).toContain('productionActive: false')
     const page = readFileSync(`${root}pages/audit-lab/geo-outcome-model.vue`, 'utf8')
     expect(page).toContain('predictionIsVerifiedOutcome: false')
     expect(page).toContain('externalDatasetStatus')

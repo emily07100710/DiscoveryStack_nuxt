@@ -1,5 +1,6 @@
 const faviconLink = [{ rel: 'icon' as const, type: 'image/svg+xml', href: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%234d5dad%22/%3E%3Cpath d=%22M8 23V16h4v7H8Zm6 0V10h4v13h-4Zm6 0V6h4v17h-4Z%22 fill=%22%23f5f2eb%22/%3E%3C/svg%3E' }]
 const modelImprovementCron = process.env.MODEL_IMPROVEMENT_CRON || '0 18 * * *'
+const geoModelOpsCron = process.env.GEO_MODELOPS_CRON || '*/15 * * * *'
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-16',
@@ -25,7 +26,7 @@ export default defineNuxtConfig({
   },
   nitro: {
     experimental: { tasks: true },
-    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'] },
+    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'], [geoModelOpsCron]: ['content-operations:geo-modelops-tick'] },
   },
   routeRules: {
     '/': { redirect: { to: '/audit-lab', statusCode: 302 } },
@@ -64,8 +65,8 @@ export default defineNuxtConfig({
       discoveryStackPublicSiteOrigin: process.env.DISCOVERYSTACK_PUBLIC_SITE_ORIGIN || 'https://www.example.com',
     },
   },
-  // `pnpm typecheck` remains the authoritative check for the private app.
-  typescript: { typeCheck: true },
+  // `pnpm typecheck` remains authoritative; CI/build can opt out of duplicate checker work only after it passes.
+  typescript: { typeCheck: process.env.NUXT_BUILD_TYPECHECK !== 'false' },
   // Nuxt 4.5 emits `vue-router/volar/sfc-route-blocks` for typed pages. The
   // installed Vue Router 4.x package no longer exports that Volar-only path,
   // while runtime routing remains unaffected. Keep type checking enabled and

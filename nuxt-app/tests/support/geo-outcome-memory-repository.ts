@@ -125,6 +125,18 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
   async saveArtifactTransactional(ownerUserId: number, artifact: ModelArtifact) { assertOwner(ownerUserId, artifact.ownerUserId); return this.withLock(async () => { const existing = this.state.artifacts.find(a => a.ownerUserId === ownerUserId && a.artifactHash === artifact.artifactHash); if (existing) return clone(existing); if (this.state.artifacts.some(a => a.ownerUserId === ownerUserId && a.artifactId === artifact.artifactId)) throw new Error('Artifact collision.'); this.state.artifacts.push(clone(artifact)); return clone(artifact) }) }
   async getArtifact(ownerUserId: number, artifactId: string) { return clone(this.state.artifacts.find(a => a.ownerUserId === ownerUserId && a.artifactId === artifactId) || null) }
   async listArtifacts(ownerUserId: number) { return clone(this.state.artifacts.filter(a => a.ownerUserId === ownerUserId)) }
+  async markArtifactShadowFailed(ownerUserId: number, artifactId: string) {
+    return this.withLock(async () => {
+      const index = this.state.artifacts.findIndex(artifact => artifact.ownerUserId === ownerUserId && artifact.artifactId === artifactId)
+      if (index < 0) throw new Error('Model artifact not found.')
+      const current = this.state.artifacts[index]!
+      if (current.status === 'revoked') return clone(current)
+      if (current.status !== 'approved_for_shadow' && current.status !== 'shadow_failed') throw new Error('Only an approved shadow artifact may be marked shadow_failed.')
+      const updated = { ...current, status: 'shadow_failed' as const }
+      this.state.artifacts.splice(index, 1, clone(updated))
+      return clone(updated)
+    })
+  }
   async transitionArtifactWithDecision(ownerUserId: number, artifactId: string, nextStatus: ModelArtifact['status'], reviewerUserId: number, reason: string, datasetManifestHash: string, rollbackArtifactHash: string | null = null) {
     return this.withLock(async () => {
       const index = this.state.artifacts.findIndex(a => a.ownerUserId === ownerUserId && a.artifactId === artifactId); if (index < 0) throw new Error('Model artifact not found.')
@@ -132,7 +144,7 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
       if (nextStatus === 'approved_for_shadow' && current.status !== 'ready_for_owner_review') throw new Error('Only ready_for_owner_review artifacts may be approved.')
       const decision: ModelDecision = { decisionId: `geo-decision-${fingerprint({ ownerUserId, artifactId, previousStatus: current.status, newStatus: nextStatus, reason, artifactHash: current.artifactHash }).slice(0, 20)}`, ownerUserId, modelArtifactId: artifactId, previousStatus: current.status, newStatus: nextStatus, reviewerUserId, reason, artifactHash: current.artifactHash, datasetManifestHash, createdAt: new Date().toISOString() }
       if (this.state.decisions.some(d => d.decisionId === decision.decisionId)) throw new Error('Duplicate or stale decision.')
-      const updated = { ...current, status: nextStatus, rollbackArtifactHash, revokedAt: nextStatus === 'revoked' ? new Date().toISOString() : null }
+      const updated = { ...current, status: nextStatus, revokedAt: nextStatus === 'revoked' ? new Date().toISOString() : null }
       this.state.artifacts.splice(index, 1, updated); this.state.decisions.push(clone(decision)); return { artifact: clone(updated), decision: clone(decision) }
     })
   }
