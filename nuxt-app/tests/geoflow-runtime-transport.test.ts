@@ -254,6 +254,11 @@ describe('GEOFlow runtime target and credential boundary', () => {
 })
 
 describe('GEOFlow enqueue planning and execution', () => {
+  it('rejects AutoGEO optimization at the base-generation transport boundary', () => {
+    const request = freshRequest({ requestedCapabilities: ['autogeo_optimization'] })
+    expect(planGeoFlowEnqueueRequest(request, makeTarget())).toEqual({ ok: false, error: { code: 'REQUEST_INVALID', retryable: false, contractReason: 'REQUIRED_RULE_MISSING' } })
+  })
+
   it('plans the fixed enqueue POST route', () => {
     const request = freshRequest()
     const result = planGeoFlowEnqueueRequest(request, makeTarget())
@@ -774,15 +779,15 @@ describe('GEOFlow article base-draft transport and validation', () => {
   it('returns a base-draft response', async () => {
     const flow = await articleFor()
     expect(flow.result.ok).toBe(true)
-    if (flow.result.ok) expect(flow.result.value.response.status).toBe('base_draft_ready')
+    if (flow.result.ok) expect(flow.result.value.response.status).toBe('draft_ready')
   })
 
   it('preserves base-draft body Unicode and exact hash', async () => {
     const flow = await articleFor()
     expect(flow.result.ok).toBe(true)
     if (flow.result.ok) {
-      expect(flow.result.value.response.status).toBe('base_draft_ready')
-      if (flow.result.value.response.status === 'base_draft_ready') {
+      expect(flow.result.value.response.status).toBe('draft_ready')
+      if (flow.result.value.response.status === 'draft_ready') {
         expect(flow.result.value.response.contentArtifact.bodyMarkdown).toBe(BODY_MARKDOWN)
         expect(flow.result.value.response.contentArtifact.bodyHash).toBe(BODY_HASH)
       }
@@ -822,7 +827,7 @@ describe('GEOFlow article base-draft transport and validation', () => {
   it('keeps base draft pending-review semantics in response', async () => {
     const flow = await articleFor()
     expect(flow.result.ok).toBe(true)
-    if (flow.result.ok) expect(flow.result.value.response.status).toBe('base_draft_ready')
+    if (flow.result.ok) expect(flow.result.value.response.status).toBe('draft_ready')
   })
 
   it('rejects approved article state', async () => {
@@ -843,7 +848,7 @@ describe('GEOFlow article base-draft transport and validation', () => {
   it('does not upgrade a base draft merely because its article is review-pending', async () => {
     const flow = await articleFor(freshRequest(), makeTarget(), { review_status: 'review_pending' })
     expect(flow.result.ok).toBe(true)
-    if (flow.result.ok) expect(flow.result.value.response.status).toBe('base_draft_ready')
+    if (flow.result.ok) expect(flow.result.value.response.status).toBe('review_required')
   })
 
   it('rejects a wrong article id', async () => {
@@ -1168,9 +1173,8 @@ describe('GEOFlow runtime convergence hardening', () => {
     expect(article.ok).toBe(true)
     if (!article.ok) throw new Error('article failed')
     expect(article.value.kind).toBe('article_base_draft')
-    if (article.value.response.status !== 'base_draft_ready') throw new Error('expected base draft response')
+    if (article.value.response.status !== 'review_required') throw new Error('expected review-required base draft response')
     expect(article.value.response.appliedRuleIds).toEqual([])
-    expect(article.value.response.autogeoExecution).toBe(false)
     expect(article.value.response.limitations).toContain('AutoGEO optimization has not been executed; this is a base draft.')
   })
 

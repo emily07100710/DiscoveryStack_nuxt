@@ -95,7 +95,10 @@ export function normalizeGeoFlowRuntimeTarget(input: unknown): GeoFlowTransportR
 
 export function validateGeoFlowTransportRequest(input: unknown): GeoFlowTransportResult<GeoFlowRequest> {
   const result: ValidationResult<GeoFlowRequest> = validateGeoFlowRequest(input)
-  if (result.ok) return result
+  if (result.ok) {
+    if (result.value.requestedCapabilities.includes('autogeo_optimization')) return failure('REQUEST_INVALID', 'REQUIRED_RULE_MISSING')
+    return result
+  }
   return failure('REQUEST_INVALID', result.reason)
 }
 

@@ -73,7 +73,7 @@ Poll URL 的 job ID 必須來自 verified enqueue result，不接受 caller 另�
 
 Article URL 的 article ID 必須來自 verified job summary。PHP `ArticleController`/`ArticleGeoFlowService` 真實 `data` 欄位包括 `id`、`title`、`slug`、`content`、`excerpt`、`keywords`、`meta_description`、`status`、`review_status`、task/author/category references、timestamps 與 `images`；它不提供 DS provenance flat fields。Adapter 會從 verified job metadata 取得 lineage，再要求 real article data 的 matching task/article identity、exact UTF-8 content hash、bounded title/excerpt/content 與 draft-only status。若 result metadata 出現 `autogeo_execution: true`、任何 non-empty `applied_rule_ids` 或缺少固定 base-draft limitation，adapter 會在 downstream fetch 前 fail closed。結果再經既有 `validateGeoFlowResponse()` 及 `verifyGeoFlowLineage()` 驗證。
 
-產出的 response 固定為 `article_base_draft` 與 `base_draft_ready`，requested rules 只表示 planned requirements，`appliedRuleIds` 必須為空、`autogeoExecution` 必須為 false，並以固定 external article key `article-{calendarEntryId}-{deliverableId}` 綁定 DiscoveryStack identity。它不是 AutoGEO candidate、approved、published、delivered 或 production-ready result。
+產出的 transport result 固定為 `article_base_draft`，response 沿用主契約的 `draft_ready`／`review_required` 狀態。Requested rules 只表示後續最佳化需求，`appliedRuleIds` 必須為空，且 limitations 必須明確記錄 AutoGEO 尚未執行；request 若直接要求 `autogeo_optimization` 會 fail closed，必須改由 isolated AutoGEO optimization stage 處理。結果以固定 external article key `article-{calendarEntryId}-{deliverableId}` 綁定 DiscoveryStack identity。它不是 AutoGEO candidate、approved、published、delivered 或 production-ready result。
 
 ## 5. Retry and idempotency
 

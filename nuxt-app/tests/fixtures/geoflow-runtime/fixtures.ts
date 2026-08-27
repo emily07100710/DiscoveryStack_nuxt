@@ -45,7 +45,7 @@ export function makeRequest(overrides: Record<string, unknown> = {}): GeoFlowReq
     language: 'en',
     generationMode: 'draft',
     revisionContext: null,
-    requestedCapabilities: ['autogeo_optimization'],
+    requestedCapabilities: ['prompt_pack'],
     selectedRuleIds: ['direct-answer-first'],
     authoritySourceIds: ['source-1'],
     evidenceChunks: [

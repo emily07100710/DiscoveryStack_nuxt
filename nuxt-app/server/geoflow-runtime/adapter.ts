@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import {
-  AUTO_GEO_NOT_EXECUTED_LIMITATION,
   deriveExternalArticleKey,
   validateGeoFlowRequest,
   validateGeoFlowResponse,
@@ -35,6 +34,7 @@ const ENQUEUE_PATH = (taskId: number): string => `/api/v1/tasks/${taskId}/enqueu
 const JOB_PATH = (jobId: number): string => `/api/v1/jobs/${jobId}`
 const ARTICLE_PATH = (articleId: number): string => `/api/v1/articles/${articleId}`
 const DISCOVERY_STACK_JOB_TYPE = 'discoverystack_generate_article_v1'
+const AUTO_GEO_NOT_EXECUTED_LIMITATION = 'AutoGEO optimization has not been executed; this is a base draft.'
 const JSON_CONTENT_TYPE = /^application\/json(?:\s*;|$)/iu
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
 const MAX_REMOTE_STATUS_LENGTH = 80
@@ -608,8 +608,8 @@ function parseResultMetadata(context: JobContext, plan: GeoFlowEnqueuePlan, nowM
   const requestMs = Date.parse(plan.request.createdAt)
   if (!Number.isFinite(completedMs) || !Number.isFinite(requestMs) || completedMs < requestMs || completedMs > nowMs + CLOCK_SKEW_MS) return failure('REQUEST_TIME_INVALID')
   if (JSON.stringify(requestedRuleIds) !== JSON.stringify(plan.request.selectedRuleIds)) return failure('RESULT_INVALID')
-  // DS transport is the base-generation boundary. AutoGEO is a separate future worker and
-  // must never be represented as executed by this response, even when it was requested.
+  // DS transport is the base-generation boundary. AutoGEO runs in the isolated
+  // optimization stage and must never be represented as executed by this response.
   if (autogeoExecution !== false || appliedRuleIds.length !== 0 || !limitations.includes(AUTO_GEO_NOT_EXECUTED_LIMITATION)) return failure('RESULT_INVALID')
 
   const evidenceByIdentity = new Set(plan.request.evidenceChunks.map((chunk) => `${chunk.sourceId}\u0000${chunk.artifactId}\u0000${chunk.chunkId}\u0000${chunk.chunkHash}`))
@@ -763,7 +763,7 @@ function candidateResponseFromData(data: JsonRecord, plan: GeoFlowEnqueuePlan, j
   const summary = safeField(data, 'excerpt')
   const candidateStatusResult = candidateStatus(safeField(data, 'status'), safeField(data, 'review_status'))
   if (!candidateStatusResult.ok) return candidateStatusResult
-  const status = candidateStatusResult.value
+  const status = plan.request.requestedCapabilities.includes('human_review') ? 'review_required' : candidateStatusResult.value
   const createdAt = safeField(data, 'created_at')
   const updatedAt = safeField(data, 'updated_at')
   if (!positiveInteger(articleId) || articleId !== job.articleId) return failure('ARTICLE_ID_MISMATCH')
@@ -800,14 +800,12 @@ function candidateResponseFromData(data: JsonRecord, plan: GeoFlowEnqueuePlan, j
       externalJobKey: `job-${job.jobId}`,
       externalArticleKey: job.resultMetadata.externalArticleKey,
       attempt: job.resultMetadata.attempt,
-      status: 'base_draft_ready',
+      status,
       draftIdentity: { externalArticleKey: job.resultMetadata.externalArticleKey, briefFingerprint: job.resultMetadata.briefFingerprint },
       contentArtifact,
       evidenceSnapshotHash: job.resultMetadata.evidenceSnapshotHash,
       citationBindings: citationBindings as Array<{ sourceId: string; artifactId: string; chunkId: string; chunkHash: string }>,
-      requestedRuleIds: [...job.resultMetadata.requestedRuleIds],
       appliedRuleIds: [],
-      autogeoExecution: false,
       providerProvenance: { ...job.resultMetadata.providerProvenance },
       limitations: [...job.resultMetadata.limitations],
       completedAt: job.resultMetadata.completedAt,
@@ -870,7 +868,7 @@ async function performArticleFetch(plan: GeoFlowEnqueuePlan, job: GeoFlowJobValu
   const candidate = candidateResponseFromData(envelope.value, plan, job)
   if (!candidate.ok) return candidate
   const value = {
-    kind: candidate.value.status === 'base_draft_ready' ? 'article_base_draft' as const : 'article_candidate' as const,
+    kind: job.resultMetadata.autogeoExecution ? 'article_candidate' as const : 'article_base_draft' as const,
     requestFingerprint: plan.request.requestFingerprint,
     requestId: plan.request.requestId,
     targetFingerprint: plan.target.targetFingerprint,
@@ -919,7 +917,9 @@ export function validateGeoFlowTransportResult(input: GeoFlowTransportValidation
     const planTargetFingerprint = isRecord(planTarget) ? safeField(planTarget, 'targetFingerprint') : undefined
     if (resultTargetFingerprint !== planTargetFingerprint) return { ok: false, reason: 'IDENTITY_MISMATCH', issues: [{ path: '$.result.targetFingerprint', code: 'IDENTITY_MISMATCH' }] }
   }
-  if (resultKind === 'article_base_draft' && responseResult.value.status !== 'base_draft_ready') return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.result.response.status', code: 'INVALID_INPUT' }] }
-  if (resultKind === 'article_candidate' && responseResult.value.status === 'base_draft_ready') return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.result.response.status', code: 'INVALID_INPUT' }] }
+  if (resultKind !== 'article_base_draft') return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.result.kind', code: 'INVALID_INPUT' }] }
+  if (requestResult.value.requestedCapabilities.includes('autogeo_optimization')) return { ok: false, reason: 'REQUIRED_RULE_MISSING', issues: [{ path: '$.request.requestedCapabilities', code: 'REQUIRED_RULE_MISSING' }] }
+  if (!('appliedRuleIds' in responseResult.value) || responseResult.value.appliedRuleIds.length !== 0) return { ok: false, reason: 'APPLIED_RULE_OUTSIDE_SELECTION', issues: [{ path: '$.result.response.appliedRuleIds', code: 'APPLIED_RULE_OUTSIDE_SELECTION' }] }
+  if (!responseResult.value.limitations.includes(AUTO_GEO_NOT_EXECUTED_LIMITATION)) return { ok: false, reason: 'INVALID_INPUT', issues: [{ path: '$.result.response.limitations', code: 'INVALID_INPUT' }] }
   return responseResult
 }
