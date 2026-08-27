@@ -4,7 +4,7 @@ import { analysePublicHomepage } from '../utils/publicSiteAnalysis'
 import { requireAuditDatabase } from '../audit/repository'
 import { seoGeoProductionPlans } from '../database/schema'
 import { optimiseGeoDocument, referenceRulesAdapter } from '../geo/optimise'
-import type { GeoDocumentInput, GeoRewriteAdapter } from '../geo/contracts'
+import type { GeoDocumentInput, GeoRewriteAdapter, GeoRule } from '../geo/contracts'
 import type { ContentDraftGenerationInput, EvidenceRef } from './contracts'
 import { createDeterministicDiagnosis } from './diagnosis'
 import { contentFingerprint, evaluateContentRisk } from './riskGate'
@@ -261,4 +261,84 @@ export async function runOwnerProductionPlan(input: { ownerUserId: number, planI
   }
   await recalculateProductionPlanStatus(input.ownerUserId, input.planId)
   return { ...await getProductionPlanBundle(input.ownerUserId, input.planId), generated, replayed: false }
+}
+
+
+export type ProductionRepairInstruction = { code: string; instruction: string; locations?: string[] }
+
+/**
+ * Repair-first pass for owner-authorized autonomous workflows. It never calls a
+ * publisher and it never writes a human review row; the caller must re-run the
+ * normal server-side risk and authority gates before publication.
+ */
+export async function runOwnerProductionRepair(input: {
+  ownerUserId: number
+  planId: number
+  deliverableId: number
+  jobId: number
+  originalDraft: { id: number; title: string; body: string; contentHash: string; provenance?: unknown }
+  repairInstructions: readonly ProductionRepairInstruction[]
+  repairAttempt: number
+  repairContractFingerprint: string
+  now?: Date
+  dependencies?: ProductionRuntimeDependencies
+}) {
+  const productionPersistence = input.dependencies?.productionPersistence
+  const resolveContext = productionPersistence?.resolveProductionContext || resolveProductionContext
+  const persistDraft = productionPersistence?.saveContentCandidate || saveContentCandidate
+  const persistRiskGate = productionPersistence?.saveRiskGate || saveRiskGate
+  const persistJobTransition = productionPersistence?.transitionContentJob || transitionContentJob
+  const persistDeliverable = productionPersistence?.updateProductionDeliverable || updateProductionDeliverable
+  const context = await resolveContext({ ownerUserId: input.ownerUserId, planId: input.planId, deliverableId: input.deliverableId, includeArtifacts: true })
+  const contextJob = context.job
+  if (contextJob && (contextJob.id !== input.jobId || contextJob.ownerUserId !== input.ownerUserId)) throw createError({ statusCode: 409, statusMessage: 'Repair requires the current owner-scoped production job.' })
+  const job = contextJob || { id: input.jobId, ownerUserId: input.ownerUserId, status: 'needs_human_review' as const, providerMode: 'autogeo_bailian_qwen' as const }
+  if (!['needs_human_review', 'approved'].includes(job.status)) throw createError({ statusCode: 409, statusMessage: `Repair is not executable from content job status ${job.status}.` })
+  if (!Number.isSafeInteger(input.repairAttempt) || input.repairAttempt < 1 || input.repairAttempt > 3) throw createError({ statusCode: 422, statusMessage: 'Repair attempt must be bounded to 1-3.' })
+  if (!/^[a-f0-9]{64}$/u.test(input.originalDraft.contentHash) || !/^[a-f0-9]{64}$/u.test(input.repairContractFingerprint)) throw createError({ statusCode: 422, statusMessage: 'Repair lineage hash is malformed.' })
+  const now = input.now || new Date()
+  const selectedRules = resolveCanonicalGeoRules(context.rules.map(rule => rule.id))
+  const repairContext = input.repairInstructions.map(item => `${item.code}: ${item.instruction}`).join('\n')
+  const strategyRules = context.rules.map(rule => ({ id: rule.id, title: rule.title, instruction: rule.instruction, rationale: rule.rationale, priority: rule.priority }))
+  const strategyContext = `${JSON.stringify(strategyRules)}\nServer repair contract ${input.repairContractFingerprint}:\n${repairContext}`
+  const optimizationDocument = buildOptimizationDocument({
+    title: input.originalDraft.title,
+    body: input.originalDraft.body,
+    language: context.plan.language,
+    goals: context.opportunity.goals,
+    constraints: [...context.opportunity.constraints, ...input.repairInstructions.map(item => `Repair ${item.code}: ${item.instruction}`)],
+    diagnosisFindings: Array.isArray((context.diagnosisResult as { findings?: unknown }).findings) ? (context.diagnosisResult as { findings: ContentDraftGenerationInput['diagnosisFindings'] }).findings : [],
+    strategyRules,
+    evidenceMaterials: context.evidenceSnapshot.materials,
+  })
+  const runtimeProviders = resolveProductionRuntimeProviders(job.providerMode, { qwenRuntime: input.dependencies?.qwenRuntime, optimizationAdapter: input.dependencies?.optimizationAdapter })
+  const optimizationResult = await optimiseGeoDocument(optimizationDocument, input.dependencies?.optimizationAdapter || runtimeProviders.optimizationAdapter, selectedRules)
+  const candidate = optimizationResult.candidate
+  const source: GeoDocumentInput = {
+    title: optimizationDocument.title,
+    content: input.originalDraft.body,
+    language: context.plan.language,
+    approvedEvidenceContext: context.evidenceSnapshot.context,
+    approvedDiagnosisContext: JSON.stringify(context.diagnosisResult).slice(0, 12000),
+    approvedStrategyContext: strategyContext,
+    approvedBriefGoals: context.opportunity.goals,
+    approvedBriefConstraints: [...context.opportunity.constraints, ...input.repairInstructions.map(item => `Repair ${item.code}: ${item.instruction}`)],
+  }
+  const riskGate = withEvidenceMaterialGate(evaluateContentRisk({ source, candidateTitle: candidate.optimizedTitle, candidateBody: candidate.optimizedContent, evidenceCount: context.evidenceSnapshot.refs.length }), context.evidenceSnapshot.materials)
+  const draft = await persistDraft({
+    jobId: job.id,
+    title: candidate.optimizedTitle,
+    body: candidate.optimizedContent,
+    contentHash: contentFingerprint(candidate.optimizedTitle, candidate.optimizedContent),
+    sourceMode: candidate.provider === 'reference-rules-v1' ? 'reference_fallback' : 'provider_candidate',
+    provenance: { provider: candidate.provider, providerVersion: candidate.providerVersion, providerModel: candidate.provenance.model, providerProvenance: candidate.provenance, runtimeProvider: runtimeProviders.provenance, actualProviderMode: runtimeProviders.mode, fallbackReason: runtimeProviders.fallbackReason ?? candidate.provenance.fallbackReason ?? null, stage: 'optimized', generationMode: 'repair_selected_rule_optimization', parentDraftId: input.originalDraft.id, parentDraftHash: input.originalDraft.contentHash, repairAttempt: input.repairAttempt, repairContractFingerprint: input.repairContractFingerprint, selectedRuleIds: selectedRules.map(rule => rule.id), appliedRuleIds: candidate.appliedRuleIds, evidenceSnapshotHash: context.evidenceSnapshot.hash },
+    evidenceRefs: context.evidenceSnapshot.refs,
+    safetyStatus: riskGate.status === 'blocked' ? 'blocked' : riskGate.status === 'needs_human_review' ? 'needs_review' : 'passed',
+    safetyNotes: [...candidate.safetyNotes, optimizationResult.interpretationLimit, 'Repair output remains bounded by the same evidence, risk, and publication authority gates.'],
+  })
+  const storedGate = await persistRiskGate({ draftId: draft.id, result: riskGate, evidenceSnapshotHash: context.evidenceSnapshot.hash })
+  const nextStatus = riskGate.status === 'blocked' ? 'blocked' : 'needs_human_review'
+  await persistJobTransition({ ownerUserId: input.ownerUserId, jobId: job.id, to: nextStatus, providerProvenance: { stage: 'repair_optimized', repairAttempt: input.repairAttempt, repairContractFingerprint: input.repairContractFingerprint, parentDraftId: input.originalDraft.id, repairedDraftId: draft.id, provider: candidate.provider, providerVersion: candidate.providerVersion, selectedRuleIds: selectedRules.map(rule => rule.id), appliedRuleIds: candidate.appliedRuleIds, runtimeProvider: runtimeProviders.provenance, actualProviderMode: runtimeProviders.mode, fallbackReason: runtimeProviders.fallbackReason ?? candidate.provenance.fallbackReason ?? null } })
+  await persistDeliverable(input.ownerUserId, context.deliverable.id, { status: nextStatus === 'blocked' ? 'blocked' : 'needs_human_review', briefId: context.brief?.id ?? context.deliverable.briefId ?? undefined, jobId: job.id })
+  return { job: { ...job, status: nextStatus }, draft, riskGate: storedGate, repairAttempt: input.repairAttempt, repairContractFingerprint: input.repairContractFingerprint, replayed: false }
 }

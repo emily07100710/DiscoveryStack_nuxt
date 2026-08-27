@@ -21,6 +21,7 @@ const DEFAULT_POLICY: ModelOpsPolicyConfig = {
   maximumTrainingRunsPerCycle: 1,
   cooldownHours: 168,
   shadowEvaluationEnabled: true,
+  autonomousExecutionEnabled: false,
   expiresAt: null,
 }
 const LIMITS = { candidates: 10_000, queryGroups: 5_000, websites: 1_000, spanDays: 3_650, runs: 5, cooldownHours: 8_760 } as const
@@ -46,6 +47,7 @@ function asPolicyConfig(input: unknown): ModelOpsPolicyConfig {
     maximumTrainingRunsPerCycle: value.maximumTrainingRunsPerCycle === undefined ? DEFAULT_POLICY.maximumTrainingRunsPerCycle : boundedInt(value.maximumTrainingRunsPerCycle, 'maximumTrainingRunsPerCycle', 1, LIMITS.runs),
     cooldownHours: value.cooldownHours === undefined ? DEFAULT_POLICY.cooldownHours : boundedInt(value.cooldownHours, 'cooldownHours', 0, LIMITS.cooldownHours),
     shadowEvaluationEnabled: value.shadowEvaluationEnabled === undefined ? DEFAULT_POLICY.shadowEvaluationEnabled : value.shadowEvaluationEnabled === true,
+    autonomousExecutionEnabled: value.autonomousExecutionEnabled === undefined ? DEFAULT_POLICY.autonomousExecutionEnabled : value.autonomousExecutionEnabled === true,
     expiresAt: value.expiresAt === undefined || value.expiresAt === null ? null : new Date(String(value.expiresAt)).toISOString(),
   }
   if (!['weekly', 'biweekly', 'monthly'].includes(config.cadence)) throw new Error('cadence is invalid.')
@@ -101,6 +103,31 @@ async function latestApprovedDataset(ownerUserId: number, outcomeRepository: Geo
   return datasets.filter(dataset => dataset.status === 'approved' && decisions.some(decision => decision.manifestId === dataset.manifestId && decision.manifestFingerprint === dataset.manifestFingerprint && decision.newStatus === 'approved')).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1) || null
 }
 async function existingTraining(ownerUserId: number, dataset: DatasetManifest, family: ModelFamily, outcomeRepository: GeoOutcomeRepositoryPort): Promise<TrainingRun | null> { return (await outcomeRepository.listTrainingRuns(ownerUserId)).filter(run => run.datasetManifestId === dataset.manifestId && run.modelFamily === family).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1) || null }
+
+async function finalizePolicyShadow(ownerUserId: number, cycle: ModelOpsCycle, policy: ModelOpsPolicy, dataset: DatasetManifest, trainingRun: TrainingRun, artifact: ModelArtifact, outcomeRepository: GeoOutcomeRepositoryPort, modelOpsRepository: ModelOpsRepositoryPort, at: Date): Promise<{ cycle: ModelOpsCycle; artifact: ModelArtifact; shadowEvaluation: ModelOpsShadowEvaluation | null }> {
+  if (!policy.autonomousExecutionEnabled || !policy.shadowEvaluationEnabled) return { cycle, artifact, shadowEvaluation: null }
+  if (artifact.status === 'ready_for_owner_review') {
+    const transition = await outcomeRepository.transitionArtifactWithDecision(ownerUserId, artifact.artifactId, 'approved_for_shadow', null, 'Owner-authorized ModelOps policy admitted this experimental artifact to shadow evaluation; no production activation is implied.', dataset.manifestFingerprint)
+    artifact = transition.artifact
+    await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'artifact_admitted_to_shadow_by_policy', { artifactId: artifact.artifactId, artifactHash: artifact.artifactHash, decisionId: transition.decision.decisionId, reviewerUserId: null, productionActivation: false })
+  }
+  if (artifact.status !== 'approved_for_shadow') {
+    const blocked = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: 'blocked', reasonCodes: ['shadow_admission_blocked'], errorClass: 'shadow_admission_gate', completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null })
+    return { cycle: blocked, artifact, shadowEvaluation: null }
+  }
+  const shadowEvaluation = await evaluateModelOpsShadow(ownerUserId, artifact.artifactId, outcomeRepository, modelOpsRepository, at)
+  const degraded = shadowEvaluation.status === 'needs_owner_attention'
+  const updated = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: degraded ? 'blocked' : 'completed', shadowEvaluationFingerprint: shadowEvaluation.evaluationFingerprint, reasonCodes: degraded ? ['shadow_degradation_stop'] : [`shadow_${shadowEvaluation.status}`], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null, errorClass: degraded ? 'shadow_degradation' : null })
+  await append(modelOpsRepository, ownerUserId, cycle.cycleId, degraded ? 'shadow_degradation_stop' : 'shadow_evaluation_recorded', { artifactId: artifact.artifactId, artifactHash: artifact.artifactHash, evaluationId: shadowEvaluation.evaluationId, status: shadowEvaluation.status, productionActivation: false, rollbackRequired: degraded })
+  return { cycle: updated, artifact, shadowEvaluation }
+}
+
+async function approveDatasetByPolicy(ownerUserId: number, cycle: ModelOpsCycle, policy: ModelOpsPolicy, dataset: DatasetManifest, outcomeRepository: GeoOutcomeRepositoryPort, modelOpsRepository: ModelOpsRepositoryPort): Promise<DatasetManifest> {
+  if (!policy.autonomousExecutionEnabled || dataset.status !== 'ready_for_review') return dataset
+  const transition = await outcomeRepository.transitionDatasetWithDecision(ownerUserId, dataset.manifestId, 'approved', null, 'Owner-authorized ModelOps policy approved this governed dataset for experimental training; no production activation is implied.')
+  await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'dataset_approved_by_policy', { manifestId: dataset.manifestId, manifestFingerprint: transition.manifest.manifestFingerprint, decisionId: transition.decision.decisionId, reviewerUserId: null, productionActivation: false })
+  return transition.manifest
+}
 
 export interface ModelOpsDryRunPlan { mode: 'dry_run'; ownerUserId: number; policyId: string | null; policyStatus: ModelOpsPolicy['status'] | 'missing'; wouldCreateCycle: boolean; wouldCreateDataset: boolean; wouldCreateTrainingRun: boolean; readiness: ReturnType<typeof getDatasetReadiness>; newVerifiedCandidates: number; newQueryGroups: number; newWebsites: number; observationSpanDays: number | null; reasonCodes: string[]; limitations: string[] }
 export async function dryRunModelOpsCycle(ownerUserId: number, trigger: 'owner_manual' | 'scheduled' | 'dry_run', outcomeRepository: GeoOutcomeRepositoryPort, modelOpsRepository: ModelOpsRepositoryPort, at = new Date()): Promise<ModelOpsDryRunPlan> {
@@ -159,6 +186,10 @@ async function executeApprovedDatasetIfNeeded(ownerUserId: number, cycle: ModelO
   }
   const artifact = trainingRun.artifactId ? await outcomeRepository.getArtifact(ownerUserId, trainingRun.artifactId) : null
   if (trainingRun.status !== 'completed' || !artifact) throw new Error('Completed training run has no durable artifact.')
+  if (policy.autonomousExecutionEnabled) {
+    const shadow = await finalizePolicyShadow(ownerUserId, cycle, policy, dataset, trainingRun, artifact, outcomeRepository, modelOpsRepository, at)
+    return { cycle: shadow.cycle, dataset, trainingRun, artifact: shadow.artifact, shadowEvaluation: shadow.shadowEvaluation }
+  }
   cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: 'completed', modelArtifactId: artifact.artifactId, artifactHash: artifact.artifactHash, reasonCodes: ['artifact_ready_for_owner_shadow_review'], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null })
   await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'artifact_ready_for_owner_review', { artifactId: artifact.artifactId, artifactHash: artifact.artifactHash })
   return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null }
@@ -176,13 +207,22 @@ export async function executeModelOpsCycle(ownerUserId: number, cycleId: string,
     if (counts.candidates < policy.minimumNewVerifiedCandidates || counts.queryGroups < policy.minimumNewQueryGroups || counts.websites < policy.minimumNewWebsites || counts.observationSpanDays === null || counts.observationSpanDays < policy.minimumObservationSpanDays) { cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: 'insufficient_data', reasonCodes: ['insufficient_data'], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null }); await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'readiness_insufficient_data', counts); return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null } }
     if (!fresh.length) { cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: 'insufficient_data', reasonCodes: ['no_new_verified_candidates'], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null }); await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'readiness_no_new_data', {}); return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null } }
     const built = buildCitationSelectionDataset(observations, ownerUserId); if (!built.members.length) { cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: 'insufficient_data', reasonCodes: ['insufficient_label_pairs'], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null }); await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'dataset_not_created', { reason: 'insufficient_label_pairs' }); return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null } }
-    dataset = await outcomeRepository.saveDatasetTransactional(ownerUserId, built.manifest, built.members); cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { generatedDatasetFingerprint: dataset.manifestFingerprint, reasonCodes: dataset.status === 'gate_blocked' ? ['dataset_candidate_gate_blocked'] : ['dataset_candidate_ready_for_owner_review'] }); await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'dataset_candidate_created', { datasetFingerprint: dataset.manifestFingerprint, status: dataset.status, memberCount: built.members.length })
+    dataset = await outcomeRepository.saveDatasetTransactional(ownerUserId, built.manifest, built.members)
+    dataset = await approveDatasetByPolicy(ownerUserId, cycle, policy, dataset, outcomeRepository, modelOpsRepository)
+    cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { generatedDatasetFingerprint: dataset.manifestFingerprint, reasonCodes: dataset.status === 'gate_blocked' ? ['dataset_candidate_gate_blocked'] : dataset.status === 'approved' && policy.autonomousExecutionEnabled ? ['dataset_approved_by_policy'] : ['dataset_candidate_ready_for_owner_review'] })
+    await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'dataset_candidate_created', { datasetFingerprint: dataset.manifestFingerprint, status: dataset.status, memberCount: built.members.length, autonomousExecutionEnabled: policy.autonomousExecutionEnabled })
     if (dataset.status !== 'approved') { cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: dataset.status === 'gate_blocked' ? 'blocked' : 'completed', completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null }); return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null } }
     const family = policy.allowedModelFamilies[0]!; if (policy.maximumTrainingRunsPerCycle < 1) { cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: 'blocked', reasonCodes: ['training_run_limit_zero'], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null }); return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null } }
     trainingRun = await existingTraining(ownerUserId, dataset, family, outcomeRepository); if (!trainingRun) trainingRun = await createTrainingRun(ownerUserId, { datasetManifestId: dataset.manifestId, modelFamily: family }, outcomeRepository); cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { trainingRunId: trainingRun.trainingRunId }); await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'training_run_queued', { trainingRunId: trainingRun.trainingRunId, modelFamily: family })
     trainingRun = await executeTrainingRun(ownerUserId, trainingRun.trainingRunId, outcomeRepository); if (trainingRun.status === 'failed') { cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: 'failed', errorClass: 'training_failed', reasonCodes: ['training_failed'], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null }); await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'training_failed', { trainingRunId: trainingRun.trainingRunId }); return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null } }
     if (trainingRun.status === 'blocked') { cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: 'blocked', errorClass: 'training_gate_blocked', reasonCodes: ['training_gate_blocked'], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null }); await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'training_blocked', { trainingRunId: trainingRun.trainingRunId }); return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null } }
-    if (trainingRun.artifactId) artifact = await outcomeRepository.getArtifact(ownerUserId, trainingRun.artifactId); cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: 'completed', modelArtifactId: artifact?.artifactId || null, artifactHash: artifact?.artifactHash || null, reasonCodes: ['artifact_ready_for_owner_shadow_review'], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null }); await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'artifact_ready_for_owner_review', { artifactId: artifact?.artifactId || null, artifactHash: artifact?.artifactHash || null }); return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null }
+    if (trainingRun.artifactId) artifact = await outcomeRepository.getArtifact(ownerUserId, trainingRun.artifactId)
+    if (!artifact) throw new Error('Completed training run has no durable artifact.')
+    if (policy.autonomousExecutionEnabled) {
+      const shadow = await finalizePolicyShadow(ownerUserId, cycle, policy, dataset, trainingRun, artifact, outcomeRepository, modelOpsRepository, at)
+      return { cycle: shadow.cycle, dataset, trainingRun, artifact: shadow.artifact, shadowEvaluation: shadow.shadowEvaluation }
+    }
+    cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: 'completed', modelArtifactId: artifact.artifactId, artifactHash: artifact.artifactHash, reasonCodes: ['artifact_ready_for_owner_shadow_review'], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null }); await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'artifact_ready_for_owner_review', { artifactId: artifact.artifactId, artifactHash: artifact.artifactHash }); return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null }
   } catch (error) {
     const retry = isRetryable(error) && cycle.attempt < 3; cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: retry ? 'retry_wait' : 'failed', errorClass: retry ? 'retryable_database_failure' : 'permanent_failure', reasonCodes: [retry ? 'retry_wait' : 'permanent_failure'], completedAt: retry ? null : at.toISOString(), leaseOwner: null, leaseExpiresAt: null }); await append(modelOpsRepository, ownerUserId, cycle.cycleId, retry ? 'cycle_retry_wait' : 'cycle_failed', { errorClass: retry ? 'retryable_database_failure' : 'permanent_failure' }); return { cycle, dataset, trainingRun, artifact, shadowEvaluation: null }
   }

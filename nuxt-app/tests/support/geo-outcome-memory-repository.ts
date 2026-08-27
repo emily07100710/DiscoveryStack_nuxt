@@ -87,7 +87,7 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
       this.state.datasets.push(clone(manifest)); this.state.datasetMembers[manifest.manifestId] = clone(members); return clone(manifest)
     })
   }
-  async transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetManifest['status'], reviewerUserId: number, reason: string) {
+  async transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetManifest['status'], reviewerUserId: number | null, reason: string) {
     return this.withLock(async () => {
       const index = this.state.datasets.findIndex(d => d.ownerUserId === ownerUserId && d.manifestId === manifestId)
       if (index < 0) throw new Error('Dataset manifest not found.')
@@ -137,7 +137,7 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
       return clone(updated)
     })
   }
-  async transitionArtifactWithDecision(ownerUserId: number, artifactId: string, nextStatus: ModelArtifact['status'], reviewerUserId: number, reason: string, datasetManifestHash: string, rollbackArtifactHash: string | null = null) {
+  async transitionArtifactWithDecision(ownerUserId: number, artifactId: string, nextStatus: ModelArtifact['status'], reviewerUserId: number | null, reason: string, datasetManifestHash: string, rollbackArtifactHash: string | null = null) {
     return this.withLock(async () => {
       const index = this.state.artifacts.findIndex(a => a.ownerUserId === ownerUserId && a.artifactId === artifactId); if (index < 0) throw new Error('Model artifact not found.')
       const current = this.state.artifacts[index]!; if (current.status === 'revoked') throw new Error('Revoked models cannot be restored.')

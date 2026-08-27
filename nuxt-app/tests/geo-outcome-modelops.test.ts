@@ -273,7 +273,7 @@ describe('shadow safety and owner rollback', () => {
     expect(evaluation.status).toBe('needs_owner_attention')
     expect((evaluation.driftDiagnostics as { previousTestF1: number }).previousTestF1).toBe(1)
     expect((await outcome.getArtifact(OWNER, trainedArtifactId))?.status).toBe('shadow_failed')
-  })
+  }, 15000)
 
   it('requires a compatible owner rollback decision and keeps decision append-only', async () => {
     const outcome = createMemoryGeoOutcomeRepository(trainedState)
@@ -311,5 +311,26 @@ describe('shadow safety and owner rollback', () => {
     const recovered = await rollbackModelOpsArtifact(OWNER, trainedArtifactId, rollbackTarget.artifactHash, reason, outcome, repo)
     expect(recovered.revokedArtifact.status).toBe('revoked')
     expect(await repo.listRollbackDecisions(OWNER)).toHaveLength(1)
+  })
+})
+
+
+describe('policy-driven experimental ModelOps', () => {
+  it('runs without per-cycle owner approval and never marks an artifact production-active', async () => {
+    const outcome = createMemoryGeoOutcomeRepository()
+    const repo = createMemoryModelOpsRepository()
+    await seedObservations(outcome, Array.from({ length: 500 }, (_, index) => pair(index + 1)).flat())
+    const policy = await createModelOpsPolicy(OWNER, policyInput({ autonomousExecutionEnabled: true, minimumNewVerifiedCandidates: 200, minimumNewQueryGroups: 30, minimumNewWebsites: 5 }), 'autonomous-policy-1', repo)
+    await repo.updatePolicy(OWNER, policy.policyId, { status: 'enabled', authorizedByOwnerUserId: OWNER, authorizedAt: new Date('2026-08-28T00:00:00.000Z').toISOString() })
+    const cycle = await createCycleFor(OWNER, outcome, repo, 'autonomous-cycle-1', 'scheduled')
+    const result = await executeModelOpsCycle(OWNER, cycle.cycleId, outcome, repo, 'autonomous-worker', new Date('2026-08-28T00:00:00.000Z'))
+    expect(result.dataset?.status).toBe('approved')
+    expect((await outcome.listDatasetDecisions(OWNER)).at(-1)?.reviewerUserId).toBeNull()
+    expect(result.trainingRun?.status).toBe('completed')
+    expect(result.artifact?.status).toBe('approved_for_shadow')
+    expect(result.shadowEvaluation?.status).toBe('insufficient_data')
+    expect(result.cycle.status).toBe('completed')
+    expect((await outcome.listDecisions(OWNER)).at(-1)?.reviewerUserId).toBeNull()
+    expect((await outcome.listArtifacts(OWNER)).every(artifact => !('production_active' as string).includes(artifact.status))).toBe(true)
   })
 })

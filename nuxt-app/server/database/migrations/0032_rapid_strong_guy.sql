@@ -1,0 +1,2 @@
+ALTER TABLE `geoOutcomeDatasetDecisions` MODIFY COLUMN `reviewerUserId` int;--> statement-breakpoint
+ALTER TABLE `geoOutcomeModelopsPolicies` ADD `autonomousExecutionEnabled` boolean DEFAULT false NOT NULL;

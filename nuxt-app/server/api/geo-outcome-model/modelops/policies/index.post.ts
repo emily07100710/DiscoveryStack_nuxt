@@ -3,7 +3,7 @@ import { getProductionModelOpsDependencies } from '../../../../geo-outcome-model
 import { requireGeoOutcomeOwner, requiredIdempotency, routeError, readGeoBody, setGeoOutcomePrivateApiHeaders, strictKeys, withMutationIdempotency } from '../../_helpers'
 import { projectPolicy } from '../_response'
 
-const allowedKeys = ['idempotencyKey', 'cadence', 'minimumNewVerifiedCandidates', 'minimumNewQueryGroups', 'minimumNewWebsites', 'minimumObservationSpanDays', 'allowedModelFamilies', 'maximumTrainingRunsPerCycle', 'cooldownHours', 'shadowEvaluationEnabled', 'expiresAt'] as const
+const allowedKeys = ['idempotencyKey', 'cadence', 'minimumNewVerifiedCandidates', 'minimumNewQueryGroups', 'minimumNewWebsites', 'minimumObservationSpanDays', 'allowedModelFamilies', 'maximumTrainingRunsPerCycle', 'cooldownHours', 'shadowEvaluationEnabled', 'autonomousExecutionEnabled', 'expiresAt'] as const
 
 export default defineEventHandler(async event => {
   setGeoOutcomePrivateApiHeaders(event)
@@ -14,7 +14,7 @@ export default defineEventHandler(async event => {
     const idempotencyKey = requiredIdempotency(body)
     const { modelOpsRepository } = getProductionModelOpsDependencies()
     const policy = await withMutationIdempotency(ownerUserId, 'geo-outcome-model/modelops/policies:create', idempotencyKey, body, async () => createModelOpsPolicy(ownerUserId, body, idempotencyKey, modelOpsRepository))
-    return { status: 'success', policy: projectPolicy(policy), automaticallyEnabled: false, approvalsChanged: false }
+    return { status: 'success', policy: projectPolicy(policy), automaticallyEnabled: false, approvalsChanged: false, executionMode: policy.autonomousExecutionEnabled ? 'policy-driven-experimental' : 'owner-review' }
   } catch (error) {
     return routeError(error)
   }

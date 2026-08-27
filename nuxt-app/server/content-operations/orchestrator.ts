@@ -3,12 +3,13 @@ import { createError } from 'h3'
 import { executeFirstPartyPublication } from '../first-party-publishing/executor'
 import { validateFirstPartyPublishTarget } from '../first-party-publishing/target-guard'
 import type { ApprovedFirstPartyPublication, FirstPartyExecutionResult, FirstPartyFetch, NonceProvider, ServerCredentialResolver } from '../first-party-publishing/types'
-import { runOwnerProductionDeliverable, type ProductionRuntimeDependencies } from '../seo-geo-core/service'
+import { runOwnerProductionDeliverable, runOwnerProductionRepair, type ProductionRuntimeDependencies } from '../seo-geo-core/service'
 import type { CanonicalContext, ContentOperationsRepository, EventInsert, PublicationAttemptFinalization, PublicationAttemptInsert, PublicationAttemptReservation, PublicationTargetInsert, RunInsert } from './repository'
 import { createContentOperationsRepository } from './repository'
 import { buildPublicationIdentity, validatePersistedPublicationIdentity, type PublicationIdentity } from './publication-identity'
 import { materializeOwnerDueContent, getDefaultContentOperationsClock } from './service'
 import { evaluateOwnerAutopilotPolicy, type OwnerAutopilotPolicy } from './autopilot-policy'
+import { buildMachineAuthorization, buildRepairContract, decideBalancedAutopilot, type AutopilotPolicySnapshot, type EntityStrategyProfile, type QueryOwnership } from './balanced-autopilot'
 import { projectAutopilotPolicy } from './autopilot-service'
 import { getContentOperationsRuntimeDependencies } from './runtime-dependencies'
 import { normalizePublicHttpsOrigin, parseEntryPublicationTargetsInput, parseExecuteInput, parsePublicationTargetInput, parsePublicationTargetPatchInput, sanitizeErrorSummary, stableFingerprint, stableStringify } from './normalization'
@@ -52,6 +53,7 @@ export type ContentOperationOrchestratorDependencies = {
   autopilotPolicy?: OwnerAutopilotPolicy
   autopilotPoliciesByTarget?: Readonly<Record<number, OwnerAutopilotPolicy | undefined>>
   productionDeliverableRunner?: (input: { ownerUserId: number; clientId?: number; calendarEntryId?: number; planId: number; deliverableId: number; now?: Date; dependencies?: ProductionRuntimeDependencies }) => Promise<ContentDraftResult>
+  repairRunner?: (input: { ownerUserId: number; planId: number; deliverableId: number; jobId: number; originalDraft: { id: number; title: string; body: string; contentHash: string; provenance?: unknown }; repairInstructions: readonly { code: string; instruction: string; locations?: string[] }[]; repairAttempt: number; repairContractFingerprint: string; now?: Date; dependencies?: ProductionRuntimeDependencies }) => Promise<ContentDraftResult>
   publicationExecutor?: FirstPartyPublicationExecutor
   multiChannelRegistry?: MultiChannelExecutorRegistry
   multiChannelHttpTransport?: MultiChannelHttpTransport
@@ -289,6 +291,48 @@ function canonicalEvidenceForAutopilot(context: CanonicalContext, expectedHash: 
   if (!freshnessBasis || Date.parse(freshnessBasis) !== minimum) badRequest('Governed autopilot evidence freshness basis is not derived from all approved references.')
   if (snapshot.refs.some(ref => !ref.approvedAt || Date.parse(ref.approvedAt) > now.getTime())) badRequest('Governed autopilot evidence reference approval metadata is incomplete or stale.')
   return { evidenceApproved: true as const, evidenceCapturedAt: freshnessBasis }
+}
+
+function balancedPolicySnapshot(policy: OwnerAutopilotPolicy): AutopilotPolicySnapshot {
+  return {
+    policyId: policy.policyId,
+    policyVersion: policy.policyVersion,
+    ownerUserId: policy.ownerUserId,
+    clientId: policy.clientId,
+    websiteId: policy.websiteId,
+    mode: policy.mode,
+    status: policy.status,
+    allowedContentTypes: [...policy.allowedContentTypes],
+    allowedLocales: [...policy.allowedLanguages],
+    allowedDestinations: [...policy.allowedDestinations],
+    allowedCadences: [...policy.allowedCadences],
+    allowedRiskClasses: [...policy.allowedRiskClasses],
+    entityStrategyProfileId: policy.entityStrategyProfileId,
+    maximumRepairAttempts: policy.maximumRepairAttempts,
+    maximumTopicSubstitutions: policy.maximumTopicSubstitutions,
+    generationBudget: policy.generationBudget,
+    publicationBudget: policy.publicationBudget,
+    configurationFingerprint: policy.configurationFingerprint,
+    activatedAt: policy.activatedAt,
+    expiresAt: policy.expiresAt,
+    revokedAt: policy.revokedAt,
+  }
+}
+
+function listStrings(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [] }
+function recordOf(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
+
+function balancedEntityProfile(value: unknown): EntityStrategyProfile | null {
+  const row = recordOf(value)
+  if (typeof row.profileId !== 'string' || typeof row.canonicalBrandName !== 'string' || typeof row.canonicalWebsiteOrigin !== 'string' || typeof row.evidenceSnapshotHash !== 'string' || typeof row.profileFingerprint !== 'string' || typeof row.effectiveAt !== 'object' && typeof row.effectiveAt !== 'string') return null
+  const timestamp = row.effectiveAt instanceof Date ? row.effectiveAt.toISOString() : String(row.effectiveAt)
+  return { canonicalBrandName: row.canonicalBrandName, brandAliases: listStrings(row.brandAliases), canonicalWebsiteOrigin: row.canonicalWebsiteOrigin, businessType: typeof row.businessType === 'string' ? row.businessType : '', primaryLocale: typeof row.primaryLocale === 'string' ? row.primaryLocale : 'en', secondaryLocales: listStrings(row.secondaryLocales), primaryLocations: listStrings(row.primaryLocations), serviceAreas: listStrings(row.serviceAreas), primaryServices: listStrings(row.primaryServices), secondaryServices: listStrings(row.secondaryServices), targetAudience: listStrings(row.targetAudience), primaryQueryClusters: listStrings(row.primaryQueryClusters), supportingQueryClusters: listStrings(row.supportingQueryClusters), canonicalPillarPages: listStrings(row.canonicalPillarPages), servicePageBindings: recordOf(row.servicePageBindings) as Record<string, string>, approvedBrandFacts: listStrings(row.approvedBrandFacts), approvedDifferentiators: listStrings(row.approvedDifferentiators), prohibitedClaims: listStrings(row.prohibitedClaims), preferredTone: typeof row.preferredTone === 'string' ? row.preferredTone : 'clear', requiredDisclosures: listStrings(row.requiredDisclosures), internalLinkPolicy: typeof row.internalLinkPolicy === 'string' ? row.internalLinkPolicy : 'canonical pages only', structuredDataIdentity: recordOf(row.structuredDataIdentity) as Record<string, string>, evidenceSnapshotHash: row.evidenceSnapshotHash, profileFingerprint: row.profileFingerprint, version: typeof row.version === 'number' ? row.version : 1, status: row.status === 'revoked' ? 'revoked' : 'active', effectiveAt: timestamp, revokedAt: row.revokedAt instanceof Date ? row.revokedAt.toISOString() : typeof row.revokedAt === 'string' ? row.revokedAt : null }
+}
+
+function balancedQueryOwnership(value: unknown): QueryOwnership | null {
+  const row = recordOf(value)
+  if (typeof row.ownerPageId !== 'string' || typeof row.normalizedQuery !== 'string' || typeof row.queryCluster !== 'string' || typeof row.evidenceSnapshotHash !== 'string' || typeof row.fingerprint !== 'string') return null
+  return { ownerPageId: row.ownerPageId, normalizedQuery: row.normalizedQuery, queryCluster: row.queryCluster, supportingArticleIds: listStrings(row.supportingArticleIds), evidenceSnapshotHash: row.evidenceSnapshotHash, fingerprint: row.fingerprint, status: row.status === 'revoked' ? 'revoked' : 'active' }
 }
 
 async function defaultFetch(url: string, init: Parameters<typeof fetch>[1]): Promise<Awaited<ReturnType<typeof fetch>>> {
@@ -962,6 +1006,63 @@ export async function executeContentOperationEntry(input: { ownerUserId: number;
   return { entryId: entry.id, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: ['entry is not executable from its current durable status'] }
 }
 
+async function persistBalancedAutopilotDecision(input: { ownerUserId: number; entry: ContentOperationCalendarEntryRow; lineage: Awaited<ReturnType<ContentOperationsRepository['resolveWorkspaceEntry']>>; policy: OwnerAutopilotPolicy; target: ContentOperationPublicationTargetRow; draft: { id: number; title: string; body: string; contentHash: string; provenance?: unknown }; gate: { status: string; evidenceSnapshotHash?: string; riskLevel?: string; gateVersion?: string; findings?: unknown } | null; evidenceAuthority: { evidenceApproved: boolean; evidenceCapturedAt: string | null }; now: Date; repository: ContentOperationsRepository; providerModel: string | null; unsupportedFactualClaim: boolean }): Promise<{ decision: ReturnType<typeof decideBalancedAutopilot>; repairContract?: ReturnType<typeof buildRepairContract> }> {
+  if (!input.lineage?.client || !input.lineage.calendar || !input.lineage.entry) throw new Error('balanced autopilot lineage is incomplete')
+  const repairs = await input.repository.listRepairAttempts(input.ownerUserId, input.entry.id)
+  const substitutions = await input.repository.listTopicSubstitutions(input.ownerUserId, input.entry.id)
+  const profileRow = await input.repository.findEntityStrategyProfile(input.ownerUserId, input.lineage.client.id, input.policy.websiteId, input.policy.entityStrategyProfileId)
+  const ownershipRow = await input.repository.findQueryOwnership(input.ownerUserId, input.lineage.client.id, input.policy.websiteId, input.entry.topicCluster)
+  const findings = Array.isArray(input.gate?.findings) ? input.gate?.findings : []
+  const reasonCodes = [...new Set(findings.map(item => safeString(readRecord(item).id)).filter(Boolean).map(value => String(value).replace(/[^A-Za-z0-9]+/gu, '_').toUpperCase()).filter(Boolean))]
+  if (input.unsupportedFactualClaim) reasonCodes.push('UNSUPPORTED_FACTUAL_CLAIM')
+  const riskClass = input.gate?.riskLevel === 'low' || input.gate?.riskLevel === 'high' ? input.gate.riskLevel : 'general'
+  const policySnapshot = balancedPolicySnapshot(input.policy)
+  const draftProvenance = readRecord(input.draft.provenance)
+  const repairedChildLineageVerified = Boolean(input.draft.id > 0 && input.gate) || Boolean(safeString(draftProvenance.evidenceSnapshotHash) === input.entry.evidenceSnapshotHash && Number(draftProvenance.parentDraftId) > 0 && Number(draftProvenance.repairAttempt) > 0)
+  const decision = decideBalancedAutopilot({
+    policy: policySnapshot,
+    candidateId: `entry-${input.entry.id}:draft-${input.draft.id}`,
+    contentType: input.entry.contentType,
+    locale: input.entry.language,
+    destinationId: input.target.targetId,
+    cadenceDays: input.lineage.calendar.cadenceDays,
+    riskClass,
+    qualityStatus: input.gate?.status === 'passed' ? 'passed' : input.gate?.status === 'needs_human_review' ? 'needs_repair' : 'blocked',
+    reasonCodes,
+    contentHash: input.draft.contentHash,
+    evidenceSnapshotHash: input.entry.evidenceSnapshotHash,
+    evidenceStatus: input.evidenceAuthority.evidenceApproved && input.evidenceAuthority.evidenceCapturedAt ? 'approved_fresh' : 'missing',
+    providerProvenanceComplete: Boolean(input.providerModel && safeString(readRecord(input.draft.provenance).stage) === 'optimized' && Boolean(readRecord(input.draft.provenance).evidenceSnapshotHash) && readRecord(input.draft.provenance).evidenceSnapshotHash === input.entry.evidenceSnapshotHash && readRecord(readRecord(input.draft.provenance).providerProvenance).providerExecution === true),
+    targetIdentityVerified: input.target.status === 'active' && input.target.executionEnabled === true,
+    lineageVerified: input.lineage.calendar.productionPlanId > 0 && (input.draft.contentHash === input.entry.contentHash || repairedChildLineageVerified),
+    repairAttempts: repairs.length,
+    topicSubstitutions: substitutions.length,
+    candidateSafeTopics: [input.lineage.deliverable.title, input.entry.topicCluster].filter((value): value is string => Boolean(value)),
+    entityProfile: balancedEntityProfile(profileRow),
+    queryOwnership: balancedQueryOwnership(ownershipRow),
+    contentText: input.draft.body,
+    primaryQuery: input.entry.topicCluster,
+    now: input.now,
+  })
+  if (decision.action === 'repair') {
+    const repairContract = buildRepairContract({ originalDraftId: String(input.draft.id), originalContentHash: input.draft.contentHash, repairAttempt: repairs.length + 1, reasonCodes: decision.reasons, requestedRepairs: decision.repairInstructions, providerModel: input.providerModel, candidateId: `entry-${input.entry.id}:draft-${input.draft.id}`, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, createdAt: input.now.toISOString() })
+    await input.repository.insertRepairAttempt({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, websiteId: input.policy.websiteId, entryId: input.entry.id, originalDraftId: String(input.draft.id), originalContentHash: input.draft.contentHash, repairAttempt: repairs.length + 1, reasonCodes: repairContract.reasonCodes, failingMetrics: repairContract.failingMetrics, evidenceDeficiencies: repairContract.evidenceDeficiencies, entityCoverageDeficiencies: repairContract.entityCoverageDeficiencies, prohibitedClaimLocations: repairContract.prohibitedClaimLocations, citationDeficiencies: repairContract.citationDeficiencies, keywordStuffingLocations: repairContract.keywordStuffingLocations, internalLinkDeficiencies: repairContract.internalLinkDeficiencies, requestedRepairs: repairContract.requestedRepairs, providerModel: repairContract.providerModel, repairedDraftId: null, repairedContentHash: null, parentLineage: repairContract.parentLineage, repairFingerprint: repairContract.repairFingerprint, status: 'planned' })
+    await input.repository.appendEvent({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, calendarId: input.entry.calendarId, entryId: input.entry.id, runId: null, eventType: 'autopilot_repair_planned', fromStatus: input.entry.status, toStatus: input.entry.status, eventFingerprint: stableFingerprint({ entryId: input.entry.id, event: 'autopilot_repair_planned', repairFingerprint: repairContract.repairFingerprint }), metadata: { decisionCode: decision.code, decisionFingerprint: decision.decisionFingerprint, repairContract } })
+    return { decision, repairContract }
+  }
+  if (decision.action === 'substitute' && decision.nextTopic) {
+    const substitutionFingerprint = stableFingerprint({ entryId: input.entry.id, originalTopic: input.entry.topicCluster, substitutedTopic: decision.nextTopic, reasons: decision.reasons, attempt: substitutions.length + 1 })
+    await input.repository.insertTopicSubstitution({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, websiteId: input.policy.websiteId, entryId: input.entry.id, substitutionAttempt: substitutions.length + 1, originalTopic: input.entry.topicCluster, substitutedTopic: decision.nextTopic, reasonCodes: decision.reasons, lineage: { policyId: input.policy.policyId, policyVersion: input.policy.policyVersion, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, decisionFingerprint: decision.decisionFingerprint }, substitutionFingerprint, status: 'applied' })
+    await input.repository.appendEvent({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, calendarId: input.entry.calendarId, entryId: input.entry.id, runId: null, eventType: 'autopilot_topic_substituted', fromStatus: input.entry.status, toStatus: input.entry.status, eventFingerprint: stableFingerprint({ entryId: input.entry.id, event: 'autopilot_topic_substituted', substitutionFingerprint }), metadata: { decisionCode: decision.code, decisionFingerprint: decision.decisionFingerprint, originalTopic: input.entry.topicCluster, substitutedTopic: decision.nextTopic } })
+  }
+  if (decision.action === 'publish') {
+    const authorization = buildMachineAuthorization({ decision, policy: policySnapshot, candidateId: `entry-${input.entry.id}:draft-${input.draft.id}`, contentHash: input.draft.contentHash, contentType: input.entry.contentType, locale: input.entry.language, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, evidenceCapturedAt: input.evidenceAuthority.evidenceCapturedAt || input.now.toISOString(), riskClass, riskReasonCodes: decision.reasons, draftId: String(input.draft.id), providerModel: input.providerModel || 'unknown', repairAttempts: repairs.length, substitutionCount: substitutions.length, destinationId: input.target.targetId, now: input.now.toISOString() })
+    await input.repository.insertMachineAuthorization({ authorizationId: authorization.authorizationId, ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, websiteId: input.policy.websiteId, entryId: input.entry.id, draftId: input.draft.id, policyId: authorization.policy.policyId, policyVersion: authorization.policy.policyVersion, candidateId: authorization.candidate.candidateId, contentHash: authorization.candidate.contentHash, evidenceSnapshotHash: authorization.evidence.snapshotHash, riskClass: authorization.risk.class, qualityStatus: authorization.quality.status, targetId: authorization.target.destinationId, authorizationPayload: authorization, authorizationFingerprint: authorization.authorizationFingerprint, status: 'authorized', decidedAt: input.now })
+    await input.repository.appendEvent({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, calendarId: input.entry.calendarId, entryId: input.entry.id, runId: null, eventType: 'autopilot_machine_authorized', fromStatus: input.entry.status, toStatus: input.entry.status, eventFingerprint: stableFingerprint({ entryId: input.entry.id, event: 'autopilot_machine_authorized', authorizationFingerprint: authorization.authorizationFingerprint }), metadata: { authorizationId: authorization.authorizationId, authorizationFingerprint: authorization.authorizationFingerprint, decisionFingerprint: decision.decisionFingerprint, policyId: input.policy.policyId, policyVersion: input.policy.policyVersion, humanReviewId: null } })
+  }
+  return { decision }
+}
+
 export type OwnerContentEntryWorkflowDependencies = ContentOperationOrchestratorDependencies & {
   reviewService?: (input: { ownerUserId: number; entryId: number; jobId: number; draftId: number; decision: 'approved_for_delivery' | 'changes_requested' | 'rejected'; reviewNote?: string }) => Promise<unknown>
 }
@@ -976,40 +1077,74 @@ export async function runOwnerContentEntryWorkflow(input: { ownerUserId: number;
   const current = await repository.findEntry(input.ownerUserId, input.entryId)
   if (!current || !current.jobId || !current.draftId) badRequest('Application workflow generation did not persist a complete job/draft lineage.')
   if (dependencies.autopilotPolicy) {
-    const lineage = await repository.resolveWorkspaceEntry(input.ownerUserId, input.entryId)
-    const targetBindings = await repository.listEntryTargetBindings(input.ownerUserId, input.entryId)
-    const boundTargets = targetBindings.length ? await Promise.all(targetBindings.sort((left, right) => left.slot - right.slot).map(binding => repository.findPublicationTarget(input.ownerUserId, binding.targetId))) : []
-    const targets = boundTargets.filter((target): target is ContentOperationPublicationTargetRow => Boolean(target))
-    const target = targets[0] || lineage?.target || await repository.findActivePublicationTarget(input.ownerUserId, lineage?.client?.id || 0)
-    if (!lineage || !lineage.client || !lineage.job || !lineage.draft || !target) badRequest('Governed autopilot workflow lineage or target is incomplete.')
-    const evaluationTargets = targets.length ? targets : [target]
-    const draft = lineage.draft as typeof lineage.draft & { provenance: unknown }
-    const context = await repository.resolveCanonicalContext(input.ownerUserId, lineage.calendar.productionPlanId, current.productionDeliverableId)
-    if (context.plan.id !== lineage.calendar.productionPlanId || context.deliverable.id !== current.productionDeliverableId || context.strategy.id !== current.strategyRecommendationId || context.evidenceSnapshot.hash !== current.evidenceSnapshotHash) badRequest('Governed autopilot promotion requires a current canonical production context.')
-    const evidenceAuthority = canonicalEvidenceForAutopilot(context, current.evidenceSnapshotHash, now)
-    const gate = await repository.findRiskGate(input.ownerUserId, draft.id, current.evidenceSnapshotHash)
-    const riskGate = gate as typeof gate & { gateVersion?: string; findings?: unknown; riskLevel?: string }
-    const provenance = readRecord(draft.provenance)
-    const providerProvenance = readRecord(provenance.providerProvenance)
-    const providerModel = safeString(provenance.providerModel) || safeString(provenance.model) || safeString(providerProvenance.model) || (safeString(provenance.provider) ? `${safeString(provenance.provider)}:${safeString(provenance.providerVersion) || 'unknown'}` : null)
-    const findings = Array.isArray(riskGate?.findings) ? riskGate.findings : []
-    const unsupportedFactualClaim = findings.some(item => /unsupported|source_bound_claim|fabricated|performance|guarantee/iu.test(safeString(readRecord(item).id) || ''))
-    const prospectiveEntry = { ...current, status: 'ready_to_publish' as const }
-    for (const candidateTarget of evaluationTargets) {
-      const targetPolicy = dependencies.autopilotPoliciesByTarget?.[candidateTarget.id] || dependencies.autopilotPolicy
-      const evaluation = evaluateOwnerAutopilotPolicy({ policy: targetPolicy, ownerUserId: input.ownerUserId, clientId: lineage.client.id, targetRowId: candidateTarget.id, targetId: candidateTarget.targetId, targetStatus: candidateTarget.status, targetExecutionEnabled: candidateTarget.executionEnabled, entry: prospectiveEntry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: null, riskGateStatus: gate?.status || null, riskLevel: safeString(riskGate?.riskLevel), qualityGateVersion: safeString(riskGate?.gateVersion), evidenceApproved: evidenceAuthority.evidenceApproved, evidenceCapturedAt: evidenceAuthority.evidenceCapturedAt, providerExecution: provenance.providerExecution === true && providerProvenance.providerExecution === true, providerModel, providerProvenanceComplete: Boolean(providerModel && provenance.stage === 'optimized' && provenance.evidenceSnapshotHash === current.evidenceSnapshotHash && providerProvenance.providerExecution === true), unsupportedFactualClaim, contentHashMatchesDraft: draft.contentHash === current.contentHash, now })
-      if (!evaluation.allowed) return { ...result, outcome: 'blocked', limitations: [...evaluation.reasons, `decisionCode=${evaluation.code}`, 'governed autopilot did not promote the entry; no review or executor call was created'] }
+    let balancedPass = 0
+    while (balancedPass <= dependencies.autopilotPolicy.maximumRepairAttempts) {
+      const live = await repository.findEntry(input.ownerUserId, input.entryId)
+      if (!live || !live.jobId || !live.draftId) badRequest('Balanced autopilot requires a current owner-scoped job and draft lineage.')
+      const lineage = await repository.resolveWorkspaceEntry(input.ownerUserId, input.entryId)
+      const targetBindings = await repository.listEntryTargetBindings(input.ownerUserId, input.entryId)
+      const boundTargets = targetBindings.length ? await Promise.all(targetBindings.sort((left, right) => left.slot - right.slot).map(binding => repository.findPublicationTarget(input.ownerUserId, binding.targetId))) : []
+      const targets = boundTargets.filter((target): target is ContentOperationPublicationTargetRow => Boolean(target))
+      const target = targets[0] || lineage?.target || await repository.findActivePublicationTarget(input.ownerUserId, lineage?.client?.id || 0)
+      if (!lineage || !lineage.client || !lineage.job || !lineage.draft || !target) badRequest('Governed autopilot workflow lineage or target is incomplete.')
+      const evaluationTargets = targets.length ? targets : [target]
+      const draft = lineage.draft as typeof lineage.draft & { title: string; body: string; provenance: unknown }
+      const context = await repository.resolveCanonicalContext(input.ownerUserId, lineage.calendar.productionPlanId, live.productionDeliverableId)
+      if (context.plan.id !== lineage.calendar.productionPlanId || context.deliverable.id !== live.productionDeliverableId || context.strategy.id !== live.strategyRecommendationId || context.evidenceSnapshot.hash !== live.evidenceSnapshotHash) badRequest('Governed autopilot promotion requires a current canonical production context.')
+      const evidenceAuthority = canonicalEvidenceForAutopilot(context, live.evidenceSnapshotHash, now)
+      const gate = await repository.findRiskGate(input.ownerUserId, draft.id, live.evidenceSnapshotHash)
+      const riskGate = gate as typeof gate & { gateVersion?: string; findings?: unknown; riskLevel?: string }
+      const provenance = readRecord(draft.provenance)
+      const providerProvenance = readRecord(provenance.providerProvenance)
+      const providerModel = safeString(provenance.providerModel) || safeString(provenance.model) || safeString(providerProvenance.model) || (safeString(provenance.provider) ? `${safeString(provenance.provider)}:${safeString(provenance.providerVersion) || 'unknown'}` : null)
+      const findings = Array.isArray(riskGate?.findings) ? riskGate.findings : []
+      const unsupportedFactualClaim = findings.some(item => /unsupported|source_bound_claim|fabricated|performance|guarantee/iu.test(safeString(readRecord(item).id) || ''))
+      const prospectiveEntry = { ...live, status: 'ready_to_publish' as const }
+      for (const candidateTarget of evaluationTargets) {
+        const targetPolicy = dependencies.autopilotPoliciesByTarget?.[candidateTarget.id] || dependencies.autopilotPolicy
+        if (targetPolicy && !targetPolicy.mode) {
+          const evaluation = evaluateOwnerAutopilotPolicy({ policy: targetPolicy, ownerUserId: input.ownerUserId, clientId: lineage.client.id, targetRowId: candidateTarget.id, targetId: candidateTarget.targetId, targetStatus: candidateTarget.status, targetExecutionEnabled: candidateTarget.executionEnabled, entry: prospectiveEntry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: null, riskGateStatus: gate?.status || null, riskLevel: safeString(riskGate?.riskLevel), qualityGateVersion: safeString(riskGate?.gateVersion), evidenceApproved: evidenceAuthority.evidenceApproved, evidenceCapturedAt: evidenceAuthority.evidenceCapturedAt, providerExecution: provenance.providerExecution === true && providerProvenance.providerExecution === true, providerModel, providerProvenanceComplete: Boolean(providerModel && provenance.stage === 'optimized' && provenance.evidenceSnapshotHash === live.evidenceSnapshotHash && providerProvenance.providerExecution === true), unsupportedFactualClaim, contentHashMatchesDraft: draft.contentHash === live.contentHash, now })
+          if (!evaluation.allowed) return { ...result, outcome: 'blocked', limitations: [...evaluation.reasons, `decisionCode=${evaluation.code}`, 'legacy governed autopilot did not promote the entry; no review or executor call was created'] }
+        }
+      }
+      const balanced = await persistBalancedAutopilotDecision({ ownerUserId: input.ownerUserId, entry: live, lineage, policy: dependencies.autopilotPolicy, target, draft, gate: riskGate, evidenceAuthority, now, repository, providerModel, unsupportedFactualClaim })
+      if (balanced.decision.action === 'repair' && balanced.repairContract) {
+        const repairRunner = dependencies.repairRunner || (async repairInput => runOwnerProductionRepair({ ...repairInput, dependencies: dependencies.productionRuntime }))
+        try {
+          await repairRunner({ ownerUserId: input.ownerUserId, planId: lineage.calendar.productionPlanId, deliverableId: live.productionDeliverableId, jobId: live.jobId, originalDraft: { id: draft.id, title: draft.title, body: draft.body, contentHash: draft.contentHash, provenance: draft.provenance }, repairInstructions: balanced.decision.repairInstructions, repairAttempt: balanced.repairContract.repairAttempt, repairContractFingerprint: balanced.repairContract.repairFingerprint, now, dependencies: dependencies.productionRuntime })
+          const repairedDraft = await repository.findLatestOptimizedDraft(input.ownerUserId, live.jobId)
+          if (!repairedDraft || repairedDraft.id === draft.id || !/^[a-f0-9]{64}$/u.test(repairedDraft.contentHash)) throw new Error('Repair runner did not persist a new optimized child draft with a valid content hash.')
+          await repository.updateRepairAttempt(input.ownerUserId, balanced.repairContract.repairFingerprint, { repairedDraftId: String(repairedDraft.id), repairedContentHash: repairedDraft.contentHash, status: 'succeeded' })
+        } catch (error) {
+          await repository.updateRepairAttempt(input.ownerUserId, balanced.repairContract.repairFingerprint, { status: 'failed' }).catch(() => undefined)
+          throw error
+        }
+        balancedPass += 1
+        continue
+      }
+      if (balanced.decision.action === 'substitute' || balanced.decision.action === 'skip' || balanced.decision.action === 'hard_block') {
+        const terminalStatus = balanced.decision.action === 'hard_block' ? 'blocked' : 'skipped'
+        const terminal = await repository.transaction(async transaction => {
+          const updated = await transaction.updateEntry(input.ownerUserId, live.id, { status: terminalStatus })
+          const runs = await transaction.listRuns(input.ownerUserId, live.id)
+          for (const run of runs.filter(run => ['queued', 'processing', 'retry_wait'].includes(run.state))) await transaction.updateRun(input.ownerUserId, run.id, { state: 'cancelled', errorCode: `AUTOPILOT_${balanced.decision.code}`, errorSummary: balanced.decision.reasons.join('; ').slice(0, 500) })
+          await transaction.appendEvent(event(input.ownerUserId, live, null, `autopilot_${balanced.decision.action}`, live.status, updated.status, { decisionCode: balanced.decision.code, decisionFingerprint: balanced.decision.decisionFingerprint, nextTopic: balanced.decision.nextTopic, targetId: target.targetId }, { entryId: live.id, event: `autopilot_${balanced.decision.action}` }))
+          return updated
+        })
+        return { ...result, entry: terminal, resultingStatus: terminal.status, outcome: 'blocked', limitations: [...balanced.decision.reasons, balanced.decision.action === 'substitute' ? 'a safe replacement topic was durably recorded and this entry was skipped without blocking the calendar' : 'no human review row or external executor call was created'] }
+      }
+      const promoted = await repository.transaction(async transaction => {
+        const updated = await transaction.updateEntry(input.ownerUserId, live.id, { status: 'ready_to_publish', reviewId: null, publicationAuthorityReference: null })
+        const runs = await transaction.listRuns(input.ownerUserId, live.id)
+        for (const run of runs.filter(run => run.stage === 'review_wait' && ['queued', 'processing', 'retry_wait'].includes(run.state))) await transaction.updateRun(input.ownerUserId, run.id, { state: 'cancelled', errorCode: 'AUTOPILOT_SUPERSEDED_REVIEW_WAIT', errorSummary: 'Balanced autopilot policy authorized publication without a per-article human review.' })
+        await ensureRun(transaction, input.ownerUserId, updated, 'publication', { jobId: live.jobId!, draftId: live.draftId!, evidenceSnapshotHash: live.evidenceSnapshotHash })
+        await transaction.appendEvent(event(input.ownerUserId, live, null, 'autopilot_entry_authorized', live.status, updated.status, { policyId: dependencies.autopilotPolicy?.policyId || null, policyVersion: dependencies.autopilotPolicy?.policyVersion || null, targetCount: targets.length || 1, reviewId: null, authorityReference: 'machine-authorization-record' }, { entryId: live.id, event: 'autopilot_entry_authorized', policyId: dependencies.autopilotPolicy?.policyId || 'missing' }))
+        return updated
+      })
+      result = await executeContentOperationEntry({ ownerUserId: input.ownerUserId, entryId: promoted.id, trigger: 'scheduler', now, value: { idempotencyKey: `${input.idempotencyKey}:publication`.slice(0, 128), mode }, dependencies: { ...dependencies, repository } })
+      return result
     }
-    const promoted = await repository.transaction(async transaction => {
-      const updated = await transaction.updateEntry(input.ownerUserId, current.id, { status: 'ready_to_publish', reviewId: null, publicationAuthorityReference: null })
-      const runs = await transaction.listRuns(input.ownerUserId, current.id)
-      for (const run of runs.filter(run => run.stage === 'review_wait' && ['queued', 'processing', 'retry_wait'].includes(run.state))) await transaction.updateRun(input.ownerUserId, run.id, { state: 'cancelled', errorCode: 'AUTOPILOT_SUPERSEDED_REVIEW_WAIT', errorSummary: 'Governed autopilot policy authorized publication without a per-article human review.' })
-      await ensureRun(transaction, input.ownerUserId, updated, 'publication', { jobId: current.jobId!, draftId: current.draftId!, evidenceSnapshotHash: current.evidenceSnapshotHash })
-      await transaction.appendEvent(event(input.ownerUserId, current, null, 'autopilot_entry_authorized', current.status, updated.status, { policyId: dependencies.autopilotPolicy?.policyId || null, policyVersion: dependencies.autopilotPolicy?.policyVersion || null, targetCount: targets.length || 1, reviewId: null, authorityReference: 'policy-snapshot-derived' }, { entryId: current.id, event: 'autopilot_entry_authorized', policyId: dependencies.autopilotPolicy?.policyId || 'missing' }))
-      return updated
-    })
-    result = await executeContentOperationEntry({ ownerUserId: input.ownerUserId, entryId: promoted.id, trigger: 'scheduler', now, value: { idempotencyKey: `${input.idempotencyKey}:publication`.slice(0, 128), mode }, dependencies: { ...dependencies, repository } })
-    return result
+    return { ...result, outcome: 'blocked', limitations: ['balanced repair budget was exhausted without a publishable candidate; no human review row or external executor call was created'] }
   }
   if (!input.reviewDecision || !dependencies.reviewService) return result
   const lineage = await repository.resolveWorkspaceEntry(input.ownerUserId, input.entryId)

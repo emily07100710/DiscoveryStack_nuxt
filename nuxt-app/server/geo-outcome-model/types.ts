@@ -260,7 +260,7 @@ export interface DatasetDecision {
   manifestId: string
   previousStatus: DatasetStatus
   newStatus: DatasetStatus
-  reviewerUserId: number
+  reviewerUserId: number | null
   reason: string
   manifestFingerprint: string
   createdAt: string
@@ -412,7 +412,7 @@ export interface GeoOutcomeRepositoryPort {
   getDataset(ownerUserId: number, manifestId: string): Promise<DatasetManifest | null>
   getDatasetMembers(ownerUserId: number, manifestId: string): Promise<DatasetMember[]>
   saveDatasetTransactional(ownerUserId: number, manifest: DatasetManifest, members: DatasetMember[]): Promise<DatasetManifest>
-  transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetStatus, reviewerUserId: number, reason: string): Promise<{ manifest: DatasetManifest, decision: DatasetDecision }>
+  transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetStatus, reviewerUserId: number | null, reason: string): Promise<{ manifest: DatasetManifest, decision: DatasetDecision }>
   listDatasetDecisions(ownerUserId: number): Promise<DatasetDecision[]>
   createTrainingRun(ownerUserId: number, run: TrainingRun): Promise<TrainingRun>
   getTrainingRun(ownerUserId: number, trainingRunId: string): Promise<TrainingRun | null>
@@ -423,7 +423,7 @@ export interface GeoOutcomeRepositoryPort {
   getArtifact(ownerUserId: number, artifactId: string): Promise<ModelArtifact | null>
   listArtifacts(ownerUserId: number): Promise<ModelArtifact[]>
   markArtifactShadowFailed(ownerUserId: number, artifactId: string): Promise<ModelArtifact>
-  transitionArtifactWithDecision(ownerUserId: number, artifactId: string, nextStatus: ModelStatus, reviewerUserId: number, reason: string, datasetManifestHash: string, rollbackArtifactHash?: string | null): Promise<{ artifact: ModelArtifact, decision: ModelDecision }>
+  transitionArtifactWithDecision(ownerUserId: number, artifactId: string, nextStatus: ModelStatus, reviewerUserId: number | null, reason: string, datasetManifestHash: string, rollbackArtifactHash?: string | null): Promise<{ artifact: ModelArtifact, decision: ModelDecision }>
   listDecisions(ownerUserId: number): Promise<ModelDecision[]>
   claimMutation(ownerUserId: number, routeIdentity: string, idempotencyKey: string, inputFingerprint: string): Promise<MutationClaimResult>
   completeMutation(ownerUserId: number, routeIdentity: string, idempotencyKey: string, inputFingerprint: string, responseProjection: unknown): Promise<MutationClaim>

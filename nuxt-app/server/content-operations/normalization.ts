@@ -294,12 +294,22 @@ const strictExecute = z.object({
 const strictAutopilotPolicy = z.object({
   expiresAt: z.string().trim().min(1).max(64),
   targetRowId: z.number().int().positive().optional(),
+  websiteId: z.string().trim().min(1).max(128).optional(),
+  mode: z.enum(['balanced', 'aggressive_growth', 'conservative_brand']).optional(),
   allowedTargetIds: z.array(z.string().trim().min(1).max(128)).min(1).max(20).optional(),
   cadenceDays: z.union([z.literal(3), z.literal(7), z.literal(15), z.literal(30)]).optional(),
   evidenceFreshnessHours: z.number().int().min(1).max(24 * 365).optional(),
   maximumRiskLevel: z.enum(['low', 'general', 'high']).optional(),
   requiredQualityGateVersion: z.string().trim().min(1).max(96).optional(),
   allowedProviderModels: z.array(z.string().trim().min(1).max(128)).min(1).max(20).optional(),
+  allowedDestinations: z.array(z.string().trim().min(1).max(160)).min(1).max(20).optional(),
+  allowedCadences: z.array(z.union([z.literal(3), z.literal(7), z.literal(15), z.literal(30)])).min(1).max(4).optional(),
+  allowedRiskClasses: z.array(z.enum(['low', 'general', 'high'])).min(1).max(3).optional(),
+  entityStrategyProfileId: z.string().trim().min(1).max(160).optional(),
+  maximumRepairAttempts: z.number().int().min(1).max(3).optional(),
+  maximumTopicSubstitutions: z.number().int().min(0).max(2).optional(),
+  generationBudget: z.number().int().min(0).max(1000000).optional(),
+  publicationBudget: z.number().int().min(0).max(1000000).optional(),
   requireApprovedForDelivery: z.boolean().optional().default(false),
   allowedContentTypes: z.array(z.enum(['article', 'faq', 'service_page'])).min(1).max(3),
   allowedLanguages: z.array(z.enum(['en', 'zh-hant'])).min(1).max(2),
@@ -340,12 +350,22 @@ export function parseExecuteInput(value: unknown): ExecuteContentOperationInput 
 export type AutopilotPolicyRequestInput = {
   expiresAt: string
   targetRowId?: number
+  websiteId?: string
+  mode?: 'balanced' | 'aggressive_growth' | 'conservative_brand'
   allowedTargetIds?: string[]
   cadenceDays?: 3 | 7 | 15 | 30
   evidenceFreshnessHours?: number
   maximumRiskLevel?: 'low' | 'general' | 'high'
   requiredQualityGateVersion?: string
   allowedProviderModels?: string[]
+  allowedDestinations?: string[]
+  allowedCadences?: Array<3 | 7 | 15 | 30>
+  allowedRiskClasses?: Array<'low' | 'general' | 'high'>
+  entityStrategyProfileId?: string
+  maximumRepairAttempts?: number
+  maximumTopicSubstitutions?: number
+  generationBudget?: number
+  publicationBudget?: number
   requireApprovedForDelivery: boolean
   allowedContentTypes: Array<'article' | 'faq' | 'service_page'>
   allowedLanguages: Array<'en' | 'zh-hant'>

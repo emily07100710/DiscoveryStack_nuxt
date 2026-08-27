@@ -17,6 +17,8 @@ export interface ModelOpsPolicyConfig {
   maximumTrainingRunsPerCycle: number
   cooldownHours: number
   shadowEvaluationEnabled: boolean
+  /** One-time owner policy may run dataset approval and shadow preparation; never activates production. */
+  autonomousExecutionEnabled: boolean
   expiresAt: string | null
 }
 
