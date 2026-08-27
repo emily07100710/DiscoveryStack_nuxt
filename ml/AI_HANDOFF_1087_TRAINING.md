@@ -76,3 +76,11 @@ artifact 只允許包含 checkpoint／model state、tokenizer、training config�
 ## 9. 下一個 AI 的執行清單
 
 第一，使用 owner-only Drive 的 v5 snapshot 與 output-free CPU fallback R2 Notebook；不要打開或修改 v4 Notebook。第二，在可用 GPU runtime 執行 sequential cells，不要 Run All；先保存 validator、smoke 與 runtime evidence。第三，先執行 bounded fast path，確認取得 checkpoint 與 validation macro-F1；若 GPU 不可用，應停止並保留 handoff，不要用 CPU 假裝完成正式訓練。第四，只有 selection 完成後才評估兩個 test split與建立 artifact。第五，更新 v5 private state／safe results，並只提交本 handoff、v5 schema、runbook、output-free generators/checkers；不要提交 raw data 或 executed Notebook。
+
+## 10. Second-layer `frictionReasonSignals` handoff
+
+第二層使用獨立 private derivative，不覆寫 parent v5-1087，也不涉及 frozen v4-500。candidate derivative 保留相同 1,087 IDs 與 split，derived manifestHash=`f85409be384a1eea7936d52137ccf0baa816962b8e47347cce1b72c691bfbb2d`、derived datasetDigest=`8fe1c25e6e70ef47ce938ff83cf566f05b793033ad88b566e15b9a5a7aaf5c8b`。目前 candidate support 僅是 service_clarity_gap 23、trust_gap 254、proof_or_case_gap 2、cta_clarity_gap 237；其餘八個 labels 為 0，且所有 candidate／non-hit 狀態仍屬 `unknown`，不是人工確證 labels。
+
+v5.1 script 已修正為 per-row tri-state masked BCE：明確 `present` 只產生 target=1、mask=1；明確 `absent` 只產生 target=0、mask=1；`candidate_present`、`unreviewed`、`unknown` 全部 mask=0。eligibility gate 目前要求每個 label 至少有 train present 5、train absent 5、validation present 2、validation absent 2；缺一即停止，且停止發生在 Transformers/model 初始化前。validator 本地已確認 parent immutability、ID／split、derivative hash 與 candidate structure；本地執行的 gate report 也確認 12 個 labels 全部缺 explicit positives／negatives，因此沒有模型、checkpoint、metrics 或 artifact 可宣稱。
+
+Annotation contract 與 adjudication workflow 位於 private workspace 的 `v5_1_friction_reasons_work/friction_reason_annotation_contract.json`、`FRICTION_REASON_ADJUDICATION_WORKFLOW.md`、`friction_reason_annotation_queue_v5_1.jsonl`。人工 review 必須按 label 定義提供 evidence；booking、mobile、speed、booking/checkout/form 類 labels 需要實際 measurement 或 interaction evidence，不能由文字猜測；`search_intent_mismatch` 需要明確 query context。人工完成後建立新的 v5.2 adjudicated derivative，保留 parent linkage 與 split，重新做 schema/hash/eligibility validation，再於 private Kaggle T4 x2 notebook 執行 sequential preflight、smoke、bounded fast path、validation selection；在此之前不得執行或宣稱第二層 supervised training。
