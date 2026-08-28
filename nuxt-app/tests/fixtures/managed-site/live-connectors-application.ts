@@ -10,7 +10,8 @@ import { createManagedSiteMemoryRepository } from './repository'
 import { createOrderingMemoryRepository } from './ordering-repository'
 import { createLiveConnectorMemoryRepository } from './live-connectors-repository'
 
-export const managedSiteFixedNow = new Date('2026-08-27T00:00:00.000Z')
+/** Stable for one test process while remaining inside real TTL windows on any run date. */
+export const managedSiteFixedNow = new Date()
 
 export async function managedSiteExactPaymentWebhookPayload(line: Awaited<ReturnType<typeof createAuthoritativeManagedSiteReleaseFixture>>, input: { providerEventId: string; eventType: string; providerReference?: string; exactResponseIdentity?: string }) {
   const configuration = await line.live.repository.findProviderConfiguration(line.ownerUserId, 'payment')

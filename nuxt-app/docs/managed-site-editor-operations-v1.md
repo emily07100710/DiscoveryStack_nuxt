@@ -18,9 +18,9 @@ The editor never delivers platform source code. Customer export includes canonic
 
 Production storage is S3-compatible. A platform owner records a fixed bucket, region, prefix and optional HTTPS endpoint/CDN origin plus an opaque uppercase credential reference. The referenced environment value is server-only JSON containing `accessKeyId`, `secretAccessKey` and optional `sessionToken`. Caller-provided URLs, buckets and keys are rejected. Local filesystem storage is development-only and cannot resolve in `NODE_ENV=production`.
 
-An optional HTTP security scanner uses `NUXT_MEDIA_SCANNER_ENDPOINT` and `NUXT_MEDIA_SCANNER_CREDENTIAL_REF`. The endpoint must be a fixed public HTTPS hostname; redirects, IP literals, localhost and `.local` are rejected. Requests have bounded timeouts/retries and responses are limited to 32 KiB. If either setting is absent, uploads remain quarantined. External credential tests are explicit opt-in; normal tests use injected deterministic adapters and make no provider calls.
+An optional HTTP security scanner uses `NUXT_MEDIA_SCANNER_ENDPOINT` and `NUXT_MEDIA_SCANNER_CREDENTIAL_REF`. The endpoint must be one exact server-owned public HTTPS scheme/hostname/port/path authority. Credentials, query, fragment, redirects, IP literals, localhost, `.local`, `.onion`, `.example` and IANA/special-use hostnames are rejected. Requests use manual redirect handling, bounded timeouts/retries and responses limited to 32 KiB. The durable connection must also hold a matching authority fingerprint and successful health receipt. DNS rebinding and ultimate egress control must additionally be enforced by the deployment network/proxy. If scanner settings or verified health authority are absent, uploads remain quarantined. External credential tests are explicit opt-in; normal tests use injected deterministic adapters and make no provider calls.
 
-Allowed source formats are JPEG, PNG, WebP and AVIF. SVG, archives, executables, PDF/polyglot markers, extension mismatch and images over 50 MiB, 12,000 pixels per side or 40 megapixels fail closed. Bulk intent limit is 25 files and 100 MiB. Upload grants and private reads expire within 15 minutes (normal reads use five minutes). Filename is display metadata only; server-generated keys contain numeric tenant/project authority and random identities, not customer email or filenames.
+Allowed source formats are JPEG, PNG, WebP and AVIF. SVG, archives, executables, PDF/polyglot markers, extension mismatch and images over 50 MiB, 12,000 pixels per side or 40 megapixels fail closed. Bulk intent limit is 25 files and 100 MiB. Upload grants expire after ten minutes; private reads and editor thumbnails use at most five minutes. Filename is display metadata only; server-generated keys contain numeric tenant/project authority and random identities, not customer email or filenames.
 
 The server decoder applies orientation, strips EXIF/GPS and other metadata, and writes exact hash/dimension lineage for:
 
@@ -42,9 +42,11 @@ Any validation failure is quarantined. Missing scanner is `not_configured`, not 
 
 Page:
 
-`append-only draft → short-lived noindex preview → publication intent → existing first-party publication/deployment authority → provider receipt`
+`append-only draft → short-lived noindex preview → durable publication work/intent → leased revalidation → existing first-party executor → exact verified receipt → published`
 
-Editor commands require `expectedPageVersion` and idempotency identity. CAS conflicts never overwrite newer drafts. Publish resolves the existing approved managed-site release and active first-party target on the server, compiles exact page/media fingerprints, reserves usage bindings and writes an intent receipt. It does not call a provider or claim deployment. Rollback restores an old validated version as a new draft and creates a new governed publication intent.
+Editor commands require `expectedPageVersion` and idempotency identity. CAS conflicts never overwrite newer drafts. Publish resolves the existing approved managed-site release and active first-party targets on the server, compiles exact page/media fingerprints, reserves usage bindings and atomically queues one work item per target. The production scheduler leases those records and invokes the existing injected first-party executor. It rechecks the page, exact artifact bytes/hash, media version/hash/rights/visibility, release and target immediately before delivery. Retryable failures remain queued; blocked or partially failed multi-target deliveries do not advance the page. Rollback follows the same new-work/new-receipt path.
+
+Media storage counters and monthly upload/processing counters use unique atomic reservation claims. Completion commits only the bytes/count actually retained; validation failure releases the claim, dedupe does not retain original-byte usage, retry cannot charge twice, and permanent deletion credits the per-upload committed original bytes exactly once. AI request/token budgets use the same reserve/commit/release principle with a unique daily bucket.
 
 AI:
 
@@ -67,7 +69,9 @@ Desktop/tablet/mobile projections are deterministic. The first hero image is eag
 - AI: propose and apply-to-draft
 - Owner-only storage connection configuration
 
-The scheduler has per-tick and per-tenant bounds, leases, retry/stale recovery and tasks for upload expiry, processing retry discovery, scheduled visibility, trash retention and publication retry. It does not permanently delete retained assets or call deployment providers by itself.
+The Drizzle scheduler claims at most 20 tenants and 10 jobs per tenant per tick (200 total) with CAS leases, stale recovery, bounded exponential retry and append-only attempt receipts. Its handlers cover upload expiry, processing retry, scheduled visibility, trash-retention notification and publication retry. Any external action is made only through the governed injected storage/scanner/first-party adapter. It never permanently deletes retained assets automatically.
+
+Editor media responses strip object keys. Ready thumbnail variants receive ephemeral tenant-scoped signed reads and are rendered in the media grid and bound page blocks. Expiry refreshes workspace authority; signed URLs are never serialized into PageDocument, artifacts or permanent HTML. Preview may label otherwise-valid private or rights-unapproved media as not publishable, while public compilation rejects it.
 
 ## Deployment boundary
 
