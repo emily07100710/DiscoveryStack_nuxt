@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "discoverystack-frappe-upstream-lock-v1",
+  "schemaVersion": "discoverystack-frappe-upstream-lock-v2",
   "retrievedAt": "2026-08-29T00:00:00.000Z",
   "supportBranch": "version-16",
   "frappe": {
@@ -24,7 +24,8 @@
     "trademarkPolicyUrl": "https://raw.githubusercontent.com/frappe/erpnext/v16.33.0/TRADEMARK_POLICY.md",
     "trademarkPolicySha256": "fe34b15d9302c2019f8872c43a536ca49ae7b70bf15e109842d27544299c11b3"
   },
-  "image": {
+  "legacyOfficialImage": {
+    "authority": "base-image-only-not-production-runtime-authority",
     "reference": "docker.io/frappe/erpnext:v16.33.0",
     "indexDigest": "sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd",
     "linuxAmd64Digest": "sha256:6ca471e9a9220f556ab162bf41a90a3a5de001a3f05ffe5f6d85627025578e29",
@@ -41,6 +42,18 @@
         "commitVerifiedInImage": true
       }
     }
+  },
+  "projectImage": {
+    "buildManifest": "infrastructure/frappe/build-manifest.json",
+    "dockerfile": "infrastructure/frappe/Dockerfile.system-factory",
+    "frappeSourceCommit": "5cba016e86b54b57f34a3864282b92300ef20fb0",
+    "erpnextSourceCommit": "b24c9eba551905e256e336ff170a91a92d197a2f",
+    "customAppSha256": "cd13356f4b6eb2b38fd0062b6adb24f8b4309e65970cbd4119b84bd689d48369",
+    "buildRecipeFingerprint": "81534904f4ea8b9321da267b309fb04099cc27c1893d46e5e091b3d720c52dba",
+    "imageManifestDigest": "sha256:5d5edb656ed098c0fa8ec733347bef70dc81e33267388ad19a84206874e3337d",
+    "imageConfigDigest": "sha256:bb242fa753dbfb109e2418c09db2739edc3195194bb39f7de21139b912c8bef8",
+    "productionApproved": false,
+    "status": "LOCAL_VERIFIED_PRODUCTION_PUBLICATION_AND_APPROVAL_BLOCKED"
   },
   "runtimeImages": {
     "mariadb": "docker.io/library/mariadb:11.8@sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3",

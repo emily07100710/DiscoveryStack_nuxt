@@ -1,13 +1,12 @@
 name: discoverystack-frappe-factory
 
-x-frappe-image: &frappe-image docker.io/frappe/erpnext:v16.33.0@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+x-frappe-image: &frappe-image ${FRAPPE_FACTORY_IMAGE:?build the reviewed project-owned immutable image first}
 x-frappe-common: &frappe-common
   image: *frappe-image
   restart: "no"
   networks: [frappe_private]
   volumes:
     - sites:/home/frappe/frappe-bench/sites
-    - ../../services/frappe/discovery_stack:/workspace/discovery_stack:ro
   environment:
     DB_HOST: mariadb
     DB_PORT: "3306"

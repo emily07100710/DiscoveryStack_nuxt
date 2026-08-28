@@ -29,11 +29,25 @@ Templates: `light_crm`, `appointment_booking`, `membership_course`, `service_pro
 
 ## Runtime and security
 
-`../infrastructure/frappe/UPSTREAM.lock.json` pins official repositories, exact tags/commits, licenses and the multi-architecture ERPNext image digest. The private compose scaffold includes MariaDB, separate Redis cache/queue, web, workers, scheduler and Socket.IO on an internal network. Secrets are runtime injected; `.env.example` has names only.
+`../infrastructure/frappe/UPSTREAM.lock.json` pins official repositories, exact tags/commits and licenses. The former official image is retained only as base-image provenance because its embedded Frappe revision does not match the reviewed source revision. `Dockerfile.system-factory` builds a project-owned image from the exact Frappe and ERPNext commits plus an exact DiscoveryStack app content hash. Production live execution remains blocked until the resulting manifest/config digests are independently reviewed and recorded. The private compose scaffold uses only that project image and includes MariaDB, separate Redis cache/queue, web, workers, scheduler and Socket.IO on an internal network. Secrets are runtime injected; `.env.example` has names only.
 
 Nuxt↔Frappe requests use a raw-body SHA-256 and HMAC envelope bound to method, fixed path, timestamp, nonce, sender, receiver and key ID. Hash and signature are verified before payload parsing, tenant lookup or nonce write. Nonces are atomically unique. External origins are exact server allowlists and reject credentials, non-HTTPS, private/link-local/loopback/special-use hosts, redirects, oversized responses and unbounded timeouts. Errors and receipts are secret-free.
 
-Provisioning has fixed operations, leases, maximum attempts, bounded exponential retry, stale recovery, exact response identity and append-only receipts. Dry-run resolves no credential and makes no external call. Health must pass before invitation. Invitations store token/email hashes only and expire/revoke fail closed.
+Provisioning has fixed operations, leases, maximum attempts, bounded exponential retry, stale recovery, exact response identity and append-only receipts. One scheduler tick claims at most 20 tenants, executes at most 10 ordered steps per tenant and at most 100 steps total. Disabled execution makes no external call. Health must pass before invitation.
+
+Bench/site lifecycle authority and tenant-app authority are separate. `create_site`, `install_apps`, `migrate_site`, `backup_site`, `restore_site`, and `apply_upgrade` exist only on the injected `SystemFactoryControlPlanePort`; its reviewed transport receives fixed command templates and opaque credential references. The tenant app exposes only these implemented authenticated methods:
+
+- `discovery_stack.api.apply_compiled_spec`
+- `discovery_stack.api.configure_roles`
+- `discovery_stack.api.configure_modules`
+- `discovery_stack.api.health`
+- `discovery_stack.api.prepare_admin_invitation`
+- `discovery_stack.api.activate_admin_invitation`
+- `discovery_stack.api.suspend_tenant`
+
+Tenant methods require both Frappe API authentication and a raw-body HMAC envelope. No Administrator credential is sent to the browser. Unknown response fields, redirects, malformed bodies, authority drift, request collisions, 401/403/409, exhausted retries and unhealthy responses fail closed.
+
+Invitations store token/email hashes only and expire/revoke fail closed. Acceptance is durable: claim a leased activation run, call the idempotent tenant activation with the password held only in request memory, verify exact tenant/principal/role/user receipt identity, then atomically consume the token, append the receipt/event, activate the tenant, revoke older portal sessions and create one hashed customer session. External failure leaves the token safely retryable; Frappe replay cannot create a second account.
 
 Upgrades are reviewed version-lock intents, never a remote self-updater. Backup precedes apply; verification failure produces a rollback receipt and the prior tenant remains active.
 
@@ -47,8 +61,8 @@ Owner APIs under `/api/system-factory/**` use owner session, exact same-origin m
 
 The owner layout adds exactly one `系統工廠` entry. The workbench includes Overview, Requirements/SystemSpec, Templates/Modules, Preview, Quote/Payment, Provisioning, Health, Users/Roles/Invitations, Integrations, Upgrade/Backup/Rollback and Audit/Receipts/Advanced, plus explicit loading/empty/error/unauthorized/saving/success/retry/collision/stale wording. No fake KPI, income, deployment or health value is shown.
 
-The existing customer portal adds only a safe system status projection. It exposes no server credential, Administrator secret or sensitive upstream provenance. Invitation activation fails closed until the server-only Frappe activator is configured.
+The existing customer portal adds only a safe system status projection. It exposes no server credential, Administrator secret or sensitive upstream provenance. Invitation activation uses the configured server-only tenant adapter and returns a customer session only after the Frappe receipt and local transaction both verify.
 
 ## Runtime limitations
 
-Mock executor success proves orchestration contracts, not a real Frappe site. A disposable Docker smoke is separate evidence. Production migration apply, database runtime validation, deployment, payment/provider calls, customer-site writes, real invitation mail and real upgrade/rollback remain explicit environment-controlled operations.
+Mock executor success proves orchestration contracts, not a real Frappe site. A disposable Docker smoke is separate evidence. Until the project image is successfully built and its installed source identities and digest are recorded, production image authority is `BLOCKED` and live adapters refuse approval. Production migration apply, database runtime validation, deployment, payment/provider calls, customer-site writes, real invitation mail and real upgrade/rollback remain explicit environment-controlled operations.

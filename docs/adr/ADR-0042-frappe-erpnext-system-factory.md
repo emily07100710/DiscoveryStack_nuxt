@@ -4,6 +4,10 @@ Status: accepted for V1 repository foundation
 
 DiscoveryStack uses exact-pinned Frappe Framework v16 plus ERPNext v16 as a private operational engine. Custom behavior lives in the `discovery_stack` Frappe app and in the Nuxt server adapter. ERPNext core is not forked or patched.
 
+Bench and site lifecycle commands are control-plane authority, never tenant-site whitelisted API methods. A server-only `SystemFactoryControlPlanePort` receives fixed reviewed command templates and opaque credentials. Tenant-app HTTP exposes only methods actually implemented in the custom app, with Frappe authentication plus raw-body HMAC, atomic nonce and exact tenant/idempotency/receipt lineage.
+
+The official ERPNext image tag/digest is base provenance, not proof that its embedded Frappe source matches the separately reviewed source tag. A project-owned Dockerfile replaces both app trees with exact commits and bakes an exact custom-app content hash. Live production execution stays disabled until an independently reviewed immutable image manifest digest and installed source identities match the lock.
+
 Each paid customer defaults to an isolated Frappe site and database. DiscoveryStack retains owner/client/website/Managed Site/order/payment authority and projects an allowlisted compiled SystemSpec into that site. Customer access is an account and hosted-service right; it does not include this Git repository, server/container credentials, an Administrator secret, or a source archive.
 
 An LLM may only propose a strict structured SystemSpec. Provider output is normalized and validated again. A deterministic compiler emits typed metadata; it never evaluates Python, SQL, JavaScript, shell, Docker instructions, migrations, imports, or expressions supplied by a user or provider.
