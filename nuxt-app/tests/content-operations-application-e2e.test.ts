@@ -381,4 +381,43 @@ describe('Content Operations application-level lifecycle V1', () => {
     expect(repairRunner).toHaveBeenCalledTimes(1); expect(publicationExecutor).toHaveBeenCalledTimes(1)
     expect(fixture.repairAttempts).toHaveLength(1); expect(fixture.repairAttempts[0]).toMatchObject({ status: 'succeeded', originalDraftId: String(parentDraftId), repairedDraftId: String(childEntry.draftId), repairedContentHash: child.contentHash })
   })
+
+  it('creates a fresh replacement from the formal scheduler and skips safely when every bounded option is exhausted', async () => {
+    async function setup(label: string, maximumTopicSubstitutions: number) {
+      const fixture = new ContentOperationsFixture()
+      const client = fixture.addClient(1); client.canonicalSiteOrigin = `https://owner1-${label}.com`; client.publicationTransport = 'first_party_signed_api'
+      const calendar = await fixture.addCalendar(1, '2026-08-25', 1)
+      const entry = fixture.entries.find(row => row.calendarId === calendar.id)!
+      const target = (await createOwnerPublicationTarget(1, client.id, { idempotencyKey: `scheduler-${label}-target`, framework: 'nuxt', transport: 'first_party_signed_api', targetOrigin: client.canonicalSiteOrigin, contentRoot: 'content', defaultBranch: null, repositoryOwner: null, repositoryName: null, endpointPath: '/api/first-party/content-ingest', credentialReference: `ref-scheduler-${label}`, allowedContentTypes: ['article'], allowedLanguages: ['en'], maximumPayloadBytes: 1_000_000, executionEnabled: true }, fixture.repository)).target
+      const profile = await saveOwnerEntityStrategyProfile(1, client.id, { targetRowId: target.id, idempotencyKey: `scheduler-${label}-profile`, canonicalBrandName: 'Fixture Brand', brandAliases: [], canonicalWebsiteOrigin: client.canonicalSiteOrigin, businessType: 'services', primaryLocale: 'en', secondaryLocales: [], primaryLocations: [], serviceAreas: [], primaryServices: ['content strategy'], secondaryServices: [], targetAudience: ['owners'], primaryQueryClusters: [entry.topicCluster], supportingQueryClusters: [], canonicalPillarPages: [`${client.canonicalSiteOrigin}/pillar`], servicePageBindings: {}, approvedBrandFacts: ['Fixture Brand provides content strategy.'], approvedDifferentiators: [], prohibitedClaims: ['guaranteed results'], preferredTone: 'clear', requiredDisclosures: [], internalLinkPolicy: 'canonical links only', structuredDataIdentity: { name: 'Fixture Brand' }, evidenceSnapshotHash: entry.evidenceSnapshotHash }, fixture.repository, NOW)
+      await saveOwnerQueryOwnership(1, client.id, { targetRowId: target.id, idempotencyKey: `scheduler-${label}-query`, ownerPageId: `${client.canonicalSiteOrigin}/pillar`, normalizedQuery: entry.topicCluster, queryCluster: entry.topicCluster, supportingArticleIds: [], evidenceSnapshotHash: entry.evidenceSnapshotHash }, fixture.repository, NOW)
+      await enableOwnerAutopilot(1, client.id, { policyVersion: 'governed-autopilot-policy-v4', targetRowId: target.id, entityStrategyProfileId: profile.profile.profileId, mode: 'balanced', expiresAt: '2026-12-31T23:59:59.000Z', allowedContentTypes: ['article'], allowedLanguages: ['en'], allowedDestinations: [target.targetId], allowedCadences: [3], allowedRiskClasses: ['general'], maximumRepairAttempts: 0, maximumTopicSubstitutions, generationBudget: 1, publicationBudget: 1 }, fixture.repository, NOW)
+      await materializeOwnerDueContent(1, { calendarId: calendar.id, expectedPlanFingerprint: calendar.planFingerprint, idempotencyKey: `scheduler-${label}-materialize` }, fixture.repository, { clock: { now: () => NOW, localDate: () => '2026-08-25' }, eligibleEntryIds: [entry.id] })
+      const runtime = createProviderBackedMockRuntime({ lowQuality: true })
+      const publicationExecutor = vi.fn()
+      const dependencies = { productionRuntime: productionRuntime(fixture, runtime), publicationExecutor }
+      await runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies })
+      const review = await runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies })
+      return { fixture, entry, runtime, publicationExecutor, review }
+    }
+
+    const substituted = await setup('substitute', 1)
+    expect(substituted.review.results.map(result => result.outcome)).toEqual(['blocked'])
+    expect(substituted.fixture.entries.find(row => row.id === substituted.entry.id)?.status).toBe('skipped')
+    expect(substituted.fixture.topicSubstitutions).toHaveLength(1)
+    const replacement = substituted.fixture.entries.find(row => row.replacementOfEntryId === substituted.entry.id)
+    expect(replacement).toMatchObject({ status: 'materialized', replacementFingerprint: substituted.fixture.topicSubstitutions[0]!.substitutionFingerprint })
+    expect(replacement?.topicCluster).not.toBe(substituted.entry.topicCluster)
+    expect(substituted.fixture.runs.some(run => run.entryId === replacement?.id && run.stage === 'generation' && run.state === 'queued')).toBe(true)
+    expect(substituted.publicationExecutor).not.toHaveBeenCalled()
+    expect(substituted.runtime.qwenFetch).toHaveBeenCalledTimes(1); expect(substituted.runtime.autoGeoProvider).toHaveBeenCalledTimes(1)
+
+    const exhausted = await setup('exhausted', 0)
+    expect(exhausted.review.results.map(result => result.outcome)).toEqual(['blocked'])
+    expect(exhausted.fixture.entries.find(row => row.id === exhausted.entry.id)?.status).toBe('skipped')
+    expect(exhausted.fixture.topicSubstitutions).toHaveLength(0); expect(exhausted.fixture.repairAttempts).toHaveLength(0)
+    expect(exhausted.fixture.entries.some(row => row.replacementOfEntryId === exhausted.entry.id)).toBe(false)
+    expect(exhausted.publicationExecutor).not.toHaveBeenCalled()
+    expect(exhausted.runtime.qwenFetch).toHaveBeenCalledTimes(1); expect(exhausted.runtime.autoGeoProvider).toHaveBeenCalledTimes(1)
+  })
 })
