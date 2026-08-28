@@ -43,10 +43,13 @@ def verify_before_lookup_or_write(request, expected_sender, expected_receiver, e
     return payload, {"sender": sender, "receiver": receiver, "key_id": key_id, "nonce": nonce, "body_hash": body_hash}
 
 
-def consume_nonce_after_verification(envelope):
+def consume_nonce_after_verification(envelope, persisted_body_hash=None):
     import frappe
     try:
-        frappe.get_doc({"doctype": "DiscoveryStack Envelope Nonce", "nonce": envelope["nonce"], "sender": envelope["sender"], "receiver": envelope["receiver"], "key_id": envelope["key_id"], "body_hash": envelope["body_hash"]}).insert(ignore_permissions=True)
+        body_hash = persisted_body_hash or envelope["body_hash"]
+        if not isinstance(body_hash, str) or len(body_hash) != 64:
+            raise PermissionError("Signed envelope persisted hash is invalid.")
+        frappe.get_doc({"doctype": "DiscoveryStack Envelope Nonce", "nonce": envelope["nonce"], "sender": envelope["sender"], "receiver": envelope["receiver"], "key_id": envelope["key_id"], "body_hash": body_hash}).insert(ignore_permissions=True)
     except frappe.DuplicateEntryError as error:
         raise PermissionError("Signed envelope replay is rejected.") from error
     return True

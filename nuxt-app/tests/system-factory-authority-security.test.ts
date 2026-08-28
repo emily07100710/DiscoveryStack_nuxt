@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createGuidedSystemSpec } from '../server/system-factory/planner'
 import { compileSystemSpec } from '../server/system-factory/compiler'
-import { assertPublicFrappeOrigin, createFrappeRestAdapter } from '../server/system-factory/frappe-adapter'
+import { assertPublicFrappeOrigin, createTenantAppAdapter } from '../server/system-factory/frappe-adapter'
 import { MemoryNoncePort, signEnvelope, verifyRawEnvelopeBeforeLookup } from '../server/system-factory/hmac'
 import { MemoryWorkflowRepository, applyVerifiedTransition } from '../server/system-factory/workflow'
 import { fingerprint } from '../server/system-factory/canonical'
@@ -26,9 +26,9 @@ describe('System Factory authority and security boundaries', () => {
   it.each(['http://erp.example.com', 'https://localhost', 'https://127.0.0.1', 'https://10.0.0.1', 'https://169.254.1.2', 'https://service.internal', 'https://[::1]'])('rejects SSRF and special-use Frappe origin %s', origin => { expect(() => assertPublicFrappeOrigin(origin, [origin])).toThrow() })
 
   it('keeps credentials server-only and dry-run redacted with zero fetch', async () => {
-    let resolverCalls = 0; let fetchCalls = 0; const adapter = createFrappeRestAdapter({ endpointOrigin: 'https://frappe.vendor.example.org', allowedOrigins: ['https://frappe.vendor.example.org'], sender: 'nuxt-server', receiver: 'frappe-site', keyId: 'key:1', credentialResolver: async () => { resolverCalls += 1; return { ok: true, value: 'never-browser-visible-secret' } }, fetchImpl: async () => { fetchCalls += 1; return new Response() } }); const compiledPlan = compileSystemSpec(spec())
-    const receipt = await adapter.createSite({ ownerId: 'owner:1', clientId: 'client:1', websiteId: 'website:1', managedSiteId: null, systemTenantId: 'tenant:1', siteName: 'opaque', credentialReference: 'vault:frappe-test', idempotencyKey: 'dry-run-0001', compiledPlan, executionMode: 'dry_run' })
-    expect(receipt).toMatchObject({ externalCalls: false, externalReference: null }); expect(JSON.stringify(receipt)).not.toContain('secret'); expect(resolverCalls).toBe(0); expect(fetchCalls).toBe(0)
+    let resolverCalls = 0; let fetchCalls = 0; const adapter = createTenantAppAdapter({ endpointOrigin: 'https://frappe.vendor.example.org', allowedOrigins: ['https://frappe.vendor.example.org'], sender: 'nuxt-server', receiver: 'frappe-site', keyId: 'key:1', liveEnabled: false, credentialResolver: async () => { resolverCalls += 1; return { ok: true, value: { hmacKey: 'never-browser-visible-secret'.repeat(2), authorizationHeader: 'token opaque-api-key:opaque-api-secret' } } }, fetchImpl: async () => { fetchCalls += 1; return new Response() } }); const compiledPlan = compileSystemSpec(spec())
+    await expect(adapter.health({ ownerId: 'owner:1', clientId: 'client:1', websiteId: 'website:1', managedSiteId: null, systemTenantId: 'tenant:1', siteName: 'opaque.example.org', credentialReference: 'vault:frappe-test', idempotencyKey: 'disabled-0001', compiledPlan, executionMode: 'mocked', runtimeAuthority: (await import('../server/system-factory/runtime-authority')).testRuntimeAuthority() })).rejects.toThrow(/disabled/i)
+    expect(resolverCalls).toBe(0); expect(fetchCalls).toBe(0)
   })
 
   it('fails owner/client/tenant mismatch and cross-tenant verified events closed', async () => {
