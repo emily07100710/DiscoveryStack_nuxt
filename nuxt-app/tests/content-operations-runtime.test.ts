@@ -4,6 +4,7 @@ import { OUTCOME_DATA_CONTRACT_VERSION } from '../server/outcome-learning'
 import { createContentOperationsRepository, createOwnerContentClient, createCalendarFromProductionPlan, getOwnerContentOperationsWorkspace, materializeOwnerDueContent, recordOwnerOutcomeAssessment, replanOwnerContentCalendar, runContentOperationsTick } from '../server/content-operations'
 import { createContentOperationsRepositoryFromDatabase } from '../server/content-operations/repository'
 import { normalizePublicHttpsOrigin, stableFingerprint } from '../server/content-operations/normalization'
+import { canonicalContentOperationRunIdentity } from '../server/content-operations/run-identity'
 import { ContentOperationsFixture, HASH, fixtureClient } from './fixtures/content-operations/repository'
 
 const clock = { now: () => new Date('2026-01-01T12:00:00.000Z'), localDate: () => '2026-01-01' }
@@ -233,7 +234,8 @@ describe('Content Operations repair concurrency and integrity regressions', () =
     const stale = new ContentOperationsFixture()
     const staleCalendar = await stale.addCalendar(1, '2026-01-01', 1)
     const staleEntry = stale.entries.find(entry => entry.calendarId === staleCalendar.id)!
-    await stale.repository.insertRun({ ownerUserId: 1, entryId: staleEntry.id, stage: 'generation', state: 'queued', attemptNumber: 0, idempotencyKey: `content-operation-run:${staleEntry.idempotencyKey}:generation`.slice(0, 128), inputFingerprint: 'b'.repeat(64), outputFingerprint: null, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, errorCode: null, errorSummary: null, startedAt: null, completedAt: null })
+    const staleIdentity = canonicalContentOperationRunIdentity(staleEntry, 'generation')
+    await stale.repository.insertRun({ ownerUserId: 1, entryId: staleEntry.id, stage: 'generation', state: 'queued', attemptNumber: 0, idempotencyKey: staleIdentity.idempotencyKey, inputFingerprint: 'b'.repeat(64), outputFingerprint: null, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, errorCode: null, errorSummary: null, startedAt: null, completedAt: null })
     await expect(materializeOwnerDueContent(1, validMaterializeInput(staleCalendar, 'stale-run'), stale.repository, { clock })).rejects.toMatchObject({ statusCode: 409 })
     expect(stale.entries.find(entry => entry.id === staleEntry.id)?.status).toBe('planned')
     expect(stale.events).toHaveLength(0)
@@ -241,8 +243,8 @@ describe('Content Operations repair concurrency and integrity regressions', () =
     const conflicted = new ContentOperationsFixture()
     const conflictedCalendar = await conflicted.addCalendar(1, '2026-01-01', 1)
     const conflictedEntry = conflicted.entries.find(entry => entry.calendarId === conflictedCalendar.id)!
-    const inputFingerprint = stableFingerprint({ entryId: conflictedEntry.engineEntryId, stage: 'generation', evidenceSnapshotHash: conflictedEntry.evidenceSnapshotHash, planFingerprint: conflictedCalendar.planFingerprint })
-    const run = await conflicted.repository.insertRun({ ownerUserId: 1, entryId: conflictedEntry.id, stage: 'generation', state: 'queued', attemptNumber: 0, idempotencyKey: `content-operation-run:${conflictedEntry.idempotencyKey}:generation`.slice(0, 128), inputFingerprint, outputFingerprint: null, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, errorCode: null, errorSummary: null, startedAt: null, completedAt: null })
+    const identity = canonicalContentOperationRunIdentity(conflictedEntry, 'generation')
+    const run = await conflicted.repository.insertRun({ ownerUserId: 1, entryId: conflictedEntry.id, stage: 'generation', state: 'queued', attemptNumber: 0, idempotencyKey: identity.idempotencyKey, inputFingerprint: identity.inputFingerprint, outputFingerprint: null, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, errorCode: null, errorSummary: null, startedAt: null, completedAt: null })
     await conflicted.repository.acquireRunLease(1, run.id, 'other-worker', clock.now(), 300000)
     await expect(materializeOwnerDueContent(1, validMaterializeInput(conflictedCalendar, 'lease-conflict'), conflicted.repository, { clock, leaseToken: 'this-worker' })).rejects.toMatchObject({ statusCode: 409 })
     expect(conflicted.entries.find(entry => entry.id === conflictedEntry.id)?.status).toBe('planned')

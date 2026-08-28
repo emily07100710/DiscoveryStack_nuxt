@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto'
 import type { ContentOperationCalendarEntryRow } from './types'
-import type { AutopilotMode, AutopilotRiskClass } from './balanced-autopilot'
+import { V4_RISK_SEMANTICS_VERSION, type AutopilotBusinessRiskClass, type AutopilotMode, type AutopilotRiskClass, type AutopilotRiskSeverity } from './balanced-autopilot'
 
 export const GOVERNED_AUTOPILOT_POLICY_VERSION = 'governed-autopilot-policy-v3' as const
+export const GOVERNED_AUTOPILOT_POLICY_V4_VERSION = 'governed-autopilot-policy-v4' as const
+export type GovernedAutopilotPolicyVersion = typeof GOVERNED_AUTOPILOT_POLICY_VERSION | typeof GOVERNED_AUTOPILOT_POLICY_V4_VERSION
 
 export type AutopilotPolicyStatus = 'enabled' | 'paused' | 'revoked'
 export type AutopilotRiskLevel = 'low' | 'general' | 'high'
@@ -36,7 +38,7 @@ export type AutopilotDecisionCode =
 
 export type OwnerAutopilotPolicy = {
   readonly policyId: string
-  readonly policyVersion: typeof GOVERNED_AUTOPILOT_POLICY_VERSION
+  readonly policyVersion: GovernedAutopilotPolicyVersion
   readonly ownerUserId: number
   readonly authorizedByOwnerUserId: number
   readonly clientId: number
@@ -55,6 +57,9 @@ export type OwnerAutopilotPolicy = {
   readonly allowedDestinations: readonly string[]
   readonly allowedCadences: readonly number[]
   readonly allowedRiskClasses: readonly AutopilotRiskClass[]
+  readonly riskSemanticsVersion: typeof V4_RISK_SEMANTICS_VERSION | null
+  readonly maximumRiskSeverity: AutopilotRiskSeverity | null
+  readonly allowedBusinessRiskClasses: readonly AutopilotBusinessRiskClass[]
   readonly entityStrategyProfileId: string
   readonly maximumRepairAttempts: number
   readonly maximumTopicSubstitutions: number
@@ -83,6 +88,8 @@ export type AutopilotEvaluationInput = {
   readonly reviewDecision: string | null
   readonly riskGateStatus: string | null
   readonly riskLevel?: AutopilotRiskLevel | string | null
+  readonly riskSeverity?: AutopilotRiskSeverity | string | null
+  readonly businessRiskClass?: AutopilotBusinessRiskClass | string | null
   readonly qualityGateVersion?: string | null
   readonly evidenceApproved?: boolean
   readonly evidenceCapturedAt?: string | null
@@ -111,7 +118,7 @@ function strictIso(value: string): string {
 }
 
 export type CanonicalAutopilotPolicyConfiguration = {
-  policyVersion: typeof GOVERNED_AUTOPILOT_POLICY_VERSION
+  policyVersion: GovernedAutopilotPolicyVersion
   ownerUserId: number
   authorizedByOwnerUserId: number
   clientId: number
@@ -129,6 +136,9 @@ export type CanonicalAutopilotPolicyConfiguration = {
   allowedDestinations: string[]
   allowedCadences: number[]
   allowedRiskClasses: AutopilotRiskClass[]
+  riskSemanticsVersion?: typeof V4_RISK_SEMANTICS_VERSION
+  maximumRiskSeverity?: AutopilotRiskSeverity
+  allowedBusinessRiskClasses?: AutopilotBusinessRiskClass[]
   entityStrategyProfileId: string
   maximumRepairAttempts: number
   maximumTopicSubstitutions: number
@@ -143,11 +153,11 @@ export type CanonicalAutopilotPolicyConfiguration = {
 }
 
 export function buildCanonicalAutopilotPolicyConfiguration(policy: OwnerAutopilotPolicy): CanonicalAutopilotPolicyConfiguration {
-  if (policy.policyVersion !== GOVERNED_AUTOPILOT_POLICY_VERSION) throw new Error('autopilot policy version is invalid')
+  if (policy.policyVersion !== GOVERNED_AUTOPILOT_POLICY_VERSION && policy.policyVersion !== GOVERNED_AUTOPILOT_POLICY_V4_VERSION) throw new Error('autopilot policy version is invalid')
   if (![policy.ownerUserId, policy.authorizedByOwnerUserId, policy.clientId, policy.targetRowId].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('autopilot policy identity is invalid')
   const targetId = policy.targetId.normalize('NFKC').trim()
   const websiteId = policy.websiteId.normalize('NFKC').trim()
-  if (!targetId || !websiteId || !['balanced', 'aggressive_growth', 'conservative_brand'].includes(policy.mode) || !validCadence(policy.cadenceDays) || !validRiskLevel(policy.maximumRiskLevel) || !Number.isSafeInteger(policy.evidenceFreshnessHours) || policy.evidenceFreshnessHours < 1 || policy.evidenceFreshnessHours > 24 * 365 || !policy.requiredQualityGateVersion.trim() || policy.requirePassedRiskGate !== true) throw new Error('autopilot policy bounds are invalid')
+  if (!targetId || !websiteId || !['balanced', 'aggressive_growth', 'conservative_brand'].includes(policy.mode) || !validCadence(policy.cadenceDays) || !Number.isSafeInteger(policy.evidenceFreshnessHours) || policy.evidenceFreshnessHours < 1 || policy.evidenceFreshnessHours > 24 * 365 || !policy.requiredQualityGateVersion.trim() || policy.requirePassedRiskGate !== true) throw new Error('autopilot policy bounds are invalid')
   if (![policy.maximumRepairAttempts, policy.maximumTopicSubstitutions, policy.generationBudget, policy.publicationBudget].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 1000000)) throw new Error('autopilot policy budgets are invalid')
   const authorizedAt = strictIso(policy.authorizedAt)
   const expiresAt = strictIso(policy.expiresAt)
@@ -159,10 +169,17 @@ export function buildCanonicalAutopilotPolicyConfiguration(policy: OwnerAutopilo
   const allowedDestinations = normalizedList(policy.allowedDestinations)
   const allowedCadences = [...new Set(policy.allowedCadences.filter(value => Number.isSafeInteger(value) && value > 0))].sort((a, b) => a - b)
   const allowedRiskClasses = [...new Set(policy.allowedRiskClasses)].sort()
+  const allowedBusinessRiskClasses = [...new Set(policy.allowedBusinessRiskClasses)].sort()
   const allowedProviderModels = normalizedList(policy.allowedProviderModels)
-  if (!allowedContentTypes.length || !allowedLanguages.length || !allowedTargetIds.length || !allowedProviderModels.length || !allowedDestinations.length || !allowedCadences.length || !allowedRiskClasses.length || !allowedTargetIds.includes(targetId.toLowerCase()) || !allowedCadences.includes(policy.cadenceDays) || !allowedRiskClasses.includes(policy.maximumRiskLevel)) throw new Error('autopilot policy allowlists are invalid')
+  if (!allowedContentTypes.length || !allowedLanguages.length || !allowedTargetIds.length || !allowedProviderModels.length || !allowedDestinations.length || !allowedCadences.length || !allowedTargetIds.includes(targetId.toLowerCase()) || !allowedCadences.includes(policy.cadenceDays)) throw new Error('autopilot policy allowlists are invalid')
   if (!policy.entityStrategyProfileId.trim()) throw new Error('autopilot entity strategy profile is required')
-  return { policyVersion: GOVERNED_AUTOPILOT_POLICY_VERSION, ownerUserId: policy.ownerUserId, authorizedByOwnerUserId: policy.authorizedByOwnerUserId, clientId: policy.clientId, targetRowId: policy.targetRowId, targetId, websiteId, mode: policy.mode, authorizedAt, expiresAt, activatedAt, allowedContentTypes, allowedLanguages, cadenceDays: policy.cadenceDays, allowedTargetIds, allowedDestinations, allowedCadences, allowedRiskClasses, entityStrategyProfileId: policy.entityStrategyProfileId.trim(), maximumRepairAttempts: policy.maximumRepairAttempts, maximumTopicSubstitutions: policy.maximumTopicSubstitutions, generationBudget: policy.generationBudget, publicationBudget: policy.publicationBudget, evidenceFreshnessHours: policy.evidenceFreshnessHours, maximumRiskLevel: policy.maximumRiskLevel, requiredQualityGateVersion: policy.requiredQualityGateVersion.trim(), allowedProviderModels, requireApprovedForDelivery: policy.requireApprovedForDelivery === true, requirePassedRiskGate: true }
+  const common = { ownerUserId: policy.ownerUserId, authorizedByOwnerUserId: policy.authorizedByOwnerUserId, clientId: policy.clientId, targetRowId: policy.targetRowId, targetId, websiteId, mode: policy.mode, authorizedAt, expiresAt, activatedAt, allowedContentTypes, allowedLanguages, cadenceDays: policy.cadenceDays, allowedTargetIds, allowedDestinations, allowedCadences, entityStrategyProfileId: policy.entityStrategyProfileId.trim(), maximumRepairAttempts: policy.maximumRepairAttempts, maximumTopicSubstitutions: policy.maximumTopicSubstitutions, generationBudget: policy.generationBudget, publicationBudget: policy.publicationBudget, evidenceFreshnessHours: policy.evidenceFreshnessHours, requiredQualityGateVersion: policy.requiredQualityGateVersion.trim(), allowedProviderModels, requireApprovedForDelivery: policy.requireApprovedForDelivery === true, requirePassedRiskGate: true as const }
+  if (policy.policyVersion === GOVERNED_AUTOPILOT_POLICY_VERSION) {
+    if (!validRiskLevel(policy.maximumRiskLevel) || !allowedRiskClasses.length || !allowedRiskClasses.includes(policy.maximumRiskLevel)) throw new Error('legacy V3 risk allowlists are invalid')
+    return { policyVersion: GOVERNED_AUTOPILOT_POLICY_VERSION, ...common, allowedRiskClasses, maximumRiskLevel: policy.maximumRiskLevel }
+  }
+  if (policy.riskSemanticsVersion !== V4_RISK_SEMANTICS_VERSION || !validRiskSeverity(policy.maximumRiskSeverity) || !allowedBusinessRiskClasses.length || allowedBusinessRiskClasses.some(value => !validBusinessRiskClass(value))) throw new Error('V4 risk semantics are invalid')
+  return { policyVersion: GOVERNED_AUTOPILOT_POLICY_V4_VERSION, ...common, allowedRiskClasses: [], riskSemanticsVersion: V4_RISK_SEMANTICS_VERSION, maximumRiskSeverity: policy.maximumRiskSeverity, allowedBusinessRiskClasses, maximumRiskLevel: 'general' }
 }
 
 export function computeAutopilotConfigurationFingerprint(configuration: CanonicalAutopilotPolicyConfiguration): string {
@@ -184,8 +201,11 @@ function opaquePolicyId(ownerUserId: number, clientId: number, targetRowId: numb
 
 function validCadence(value: unknown): value is 3 | 7 | 15 | 30 { return value === 3 || value === 7 || value === 15 || value === 30 }
 function validRiskLevel(value: unknown): value is AutopilotRiskLevel { return value === 'low' || value === 'general' || value === 'high' }
+function validRiskSeverity(value: unknown): value is AutopilotRiskSeverity { return value === 'low' || value === 'moderate' || value === 'high' || value === 'critical' }
+function validBusinessRiskClass(value: unknown): value is AutopilotBusinessRiskClass { return value === 'general' || value === 'medical' || value === 'legal' || value === 'financial' || value === 'political' || value === 'sensitive_personal_data' }
 
 export function enableOwnerAutopilotPolicy(input: {
+  policyVersion?: GovernedAutopilotPolicyVersion
   ownerUserId: number
   clientId: number
   targetRowId: number
@@ -202,6 +222,8 @@ export function enableOwnerAutopilotPolicy(input: {
   allowedDestinations?: readonly string[]
   allowedCadences?: readonly number[]
   allowedRiskClasses?: readonly AutopilotRiskClass[]
+  maximumRiskSeverity?: AutopilotRiskSeverity
+  allowedBusinessRiskClasses?: readonly AutopilotBusinessRiskClass[]
   entityStrategyProfileId?: string
   maximumRepairAttempts?: number
   maximumTopicSubstitutions?: number
@@ -225,8 +247,11 @@ export function enableOwnerAutopilotPolicy(input: {
   const allowedDestinations = normalizedList(input.allowedDestinations?.length ? input.allowedDestinations : [input.targetId])
   const allowedCadences = [...new Set(input.allowedCadences?.length ? input.allowedCadences : [cadenceDays])].filter(value => Number.isSafeInteger(value) && value > 0).sort((a, b) => a - b)
   const evidenceFreshnessHours = input.evidenceFreshnessHours ?? 720
+  const policyVersion = input.policyVersion || GOVERNED_AUTOPILOT_POLICY_VERSION
   const maximumRiskLevel = input.maximumRiskLevel ?? 'general'
-  const allowedRiskClasses: AutopilotRiskClass[] = [...new Set(input.allowedRiskClasses?.length ? input.allowedRiskClasses : maximumRiskLevel === 'low' ? ['low'] : maximumRiskLevel === 'high' ? ['low', 'general', 'high'] : ['low', 'general'])].filter((value): value is AutopilotRiskClass => validRiskLevel(value))
+  const allowedRiskClasses: AutopilotRiskClass[] = policyVersion === GOVERNED_AUTOPILOT_POLICY_VERSION ? [...new Set(input.allowedRiskClasses?.length ? input.allowedRiskClasses : maximumRiskLevel === 'low' ? ['low'] : maximumRiskLevel === 'high' ? ['low', 'general', 'high'] : ['low', 'general'])].filter((value): value is AutopilotRiskClass => validRiskLevel(value)) : []
+  const maximumRiskSeverity = policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION ? input.maximumRiskSeverity || 'moderate' : null
+  const allowedBusinessRiskClasses = policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION ? [...new Set(input.allowedBusinessRiskClasses?.length ? input.allowedBusinessRiskClasses : ['general'])].filter(validBusinessRiskClass) : []
   const entityStrategyProfileId = input.entityStrategyProfileId?.trim() || `entity-profile-${input.ownerUserId}-${input.clientId}-${input.targetRowId}`
   const maximumRepairAttempts = input.maximumRepairAttempts ?? 3
   const maximumTopicSubstitutions = input.maximumTopicSubstitutions ?? 2
@@ -234,12 +259,12 @@ export function enableOwnerAutopilotPolicy(input: {
   const publicationBudget = input.publicationBudget ?? 0
   const requiredQualityGateVersion = input.requiredQualityGateVersion?.trim() || 'content-risk-gate-v1'
   const allowedProviderModels = normalizedList(input.allowedProviderModels?.length ? input.allowedProviderModels : ['bailian:qwen-plus'])
-  if (!allowedContentTypes.length || !allowedLanguages.length || !allowedTargetIds.length || !allowedDestinations.length || !allowedCadences.length || !allowedRiskClasses.length || !allowedProviderModels.length) throw new Error('autopilot policy allowlists must not be empty')
-  if (!validCadence(cadenceDays) || !allowedCadences.includes(cadenceDays) || !Number.isSafeInteger(evidenceFreshnessHours) || evidenceFreshnessHours < 1 || evidenceFreshnessHours > 24 * 365 || !validRiskLevel(maximumRiskLevel) || !Number.isSafeInteger(maximumRepairAttempts) || maximumRepairAttempts < 1 || maximumRepairAttempts > 3 || !Number.isSafeInteger(maximumTopicSubstitutions) || maximumTopicSubstitutions < 0 || maximumTopicSubstitutions > 2 || ![generationBudget, publicationBudget].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 1000000)) throw new Error('autopilot policy bounds are invalid')
+  if (!allowedContentTypes.length || !allowedLanguages.length || !allowedTargetIds.length || !allowedDestinations.length || !allowedCadences.length || !allowedProviderModels.length || policyVersion === GOVERNED_AUTOPILOT_POLICY_VERSION && !allowedRiskClasses.length || policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION && !allowedBusinessRiskClasses.length) throw new Error('autopilot policy allowlists must not be empty')
+  if (!validCadence(cadenceDays) || !allowedCadences.includes(cadenceDays) || !Number.isSafeInteger(evidenceFreshnessHours) || evidenceFreshnessHours < 1 || evidenceFreshnessHours > 24 * 365 || !validRiskLevel(maximumRiskLevel) || !Number.isSafeInteger(maximumRepairAttempts) || maximumRepairAttempts < 0 || maximumRepairAttempts > 3 || !Number.isSafeInteger(maximumTopicSubstitutions) || maximumTopicSubstitutions < 0 || maximumTopicSubstitutions > 2 || ![generationBudget, publicationBudget].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 1000000)) throw new Error('autopilot policy bounds are invalid')
   const activatedAt = authorizedAt
   const base: Omit<OwnerAutopilotPolicy, 'configurationFingerprint'> = {
     policyId: 'pending',
-    policyVersion: GOVERNED_AUTOPILOT_POLICY_VERSION,
+    policyVersion,
     ownerUserId: input.ownerUserId,
     authorizedByOwnerUserId: input.authorizedByOwnerUserId,
     clientId: input.clientId,
@@ -258,6 +283,9 @@ export function enableOwnerAutopilotPolicy(input: {
     allowedDestinations,
     allowedCadences,
     allowedRiskClasses,
+    riskSemanticsVersion: policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION ? V4_RISK_SEMANTICS_VERSION : null,
+    maximumRiskSeverity,
+    allowedBusinessRiskClasses,
     entityStrategyProfileId,
     maximumRepairAttempts,
     maximumTopicSubstitutions,
@@ -312,9 +340,16 @@ export function evaluateOwnerAutopilotPolicy(input: AutopilotEvaluationInput): A
   if (!normalizedList(policy.allowedProviderModels).includes(input.providerModel.normalize('NFKC').trim().toLowerCase())) return deny('AUTOPILOT_PROVIDER_NOT_ALLOWED', 'provider/model is outside the owner autopilot allowlist')
   if (input.qualityGateVersion !== policy.requiredQualityGateVersion) return deny('AUTOPILOT_QUALITY_GATE_REQUIRED', 'required quality gate version did not pass')
   if (input.riskGateStatus !== 'passed') return deny('AUTOPILOT_RISK_GATE_REQUIRED', 'passed risk gate is required')
-  if (!validRiskLevel(input.riskLevel)) return deny('AUTOPILOT_RISK_LEVEL_NOT_ALLOWED', 'candidate risk level is missing or malformed')
-  const riskRank: Record<AutopilotRiskLevel, number> = { low: 0, general: 1, high: 2 }
-  if (riskRank[input.riskLevel] > riskRank[policy.maximumRiskLevel]) return deny('AUTOPILOT_RISK_LEVEL_NOT_ALLOWED', 'candidate risk level exceeds the governed maximum')
+  if (policy.policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION) {
+    if (!validRiskSeverity(input.riskSeverity) || !validBusinessRiskClass(input.businessRiskClass) || !validRiskSeverity(policy.maximumRiskSeverity)) return deny('AUTOPILOT_RISK_LEVEL_NOT_ALLOWED', 'V4 risk severity or business class is missing or malformed')
+    const severityRank: Record<AutopilotRiskSeverity, number> = { low: 0, moderate: 1, high: 2, critical: 3 }
+    if (severityRank[input.riskSeverity] > severityRank[policy.maximumRiskSeverity]) return deny('AUTOPILOT_RISK_LEVEL_NOT_ALLOWED', 'candidate risk severity exceeds the governed maximum')
+    if (!policy.allowedBusinessRiskClasses.includes(input.businessRiskClass)) return deny('AUTOPILOT_RISK_LEVEL_NOT_ALLOWED', 'candidate business risk class is outside the governed allowlist')
+  } else {
+    if (!validRiskLevel(input.riskLevel)) return deny('AUTOPILOT_RISK_LEVEL_NOT_ALLOWED', 'candidate legacy V3 risk level is missing or malformed')
+    const riskRank: Record<AutopilotRiskLevel, number> = { low: 0, general: 1, high: 2 }
+    if (riskRank[input.riskLevel] > riskRank[policy.maximumRiskLevel]) return deny('AUTOPILOT_RISK_LEVEL_NOT_ALLOWED', 'candidate legacy V3 risk level exceeds the governed maximum')
+  }
   if (input.unsupportedFactualClaim === true) return deny('AUTOPILOT_UNSUPPORTED_FACTUAL_CLAIM', 'unsupported factual claims require human handling')
   if (input.contentHashMatchesDraft !== true) return deny('AUTOPILOT_HASH_MISMATCH', 'content hash does not match the persisted optimized draft')
   if (policy.requireApprovedForDelivery && input.reviewDecision !== 'approved_for_delivery') return deny('AUTOPILOT_REVIEW_REQUIRED', 'owner approved_for_delivery review is required by this policy')

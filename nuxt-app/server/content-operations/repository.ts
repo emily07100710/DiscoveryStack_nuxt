@@ -3,6 +3,7 @@ import { createError } from 'h3'
 import { getDatabase } from '../database'
 import {
   contentOperationAutopilotPolicies,
+  contentOperationBudgetReservations,
   contentOperationEntityStrategyProfiles,
   contentOperationCalendarEntries,
   contentOperationCalendarEntryTargets,
@@ -26,6 +27,7 @@ import {
 import { getProductionPlanBundle, resolveProductionContext } from '../seo-geo-core/repository'
 import type {
   ContentOperationAutopilotPolicyRow,
+  ContentOperationBudgetReservationRow,
   ContentOperationEntityStrategyProfileRow,
   ContentOperationMachineAuthorizationRow,
   ContentOperationCalendarEntryRow,
@@ -61,6 +63,8 @@ export type QueryOwnershipInsert = Omit<ContentOperationQueryOwnershipRow, 'id' 
 export type RepairAttemptInsert = Omit<ContentOperationRepairAttemptRow, 'id' | 'createdAt'>
 export type TopicSubstitutionInsert = Omit<ContentOperationTopicSubstitutionRow, 'id' | 'createdAt'>
 export type MachineAuthorizationInsert = Omit<ContentOperationMachineAuthorizationRow, 'id' | 'createdAt'>
+export type BudgetReservationInput = Omit<ContentOperationBudgetReservationRow, 'id' | 'createdAt'>
+export type BudgetReservationResult = { reserved: boolean; replayed: boolean; reservation: ContentOperationBudgetReservationRow | null; used: number; limit: number }
 export type PublicationAttemptInsert = Omit<ContentOperationPublicationAttemptRow, 'id' | 'createdAt' | 'websiteId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'authorityReference' | 'receiptFingerprint'> & Partial<Pick<ContentOperationPublicationAttemptRow, 'websiteId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'authorityReference' | 'receiptFingerprint'>>
 export type PublicationAttemptReservationInput = Omit<PublicationAttemptInsert, 'attemptNumber' | 'status' | 'artifactFingerprint' | 'remoteState' | 'remoteRevision' | 'errorCode' | 'errorSummary' | 'completedAt'> & {
   attemptNumber: number
@@ -94,16 +98,25 @@ export type ContentOperationsRepository = {
   insertAutopilotPolicy(input: AutopilotPolicyInsert): Promise<ContentOperationAutopilotPolicyRow>
   revokeAutopilotPolicy(ownerUserId: number, policyId: string, revokedAt: Date): Promise<ContentOperationAutopilotPolicyRow | null>
   findEntityStrategyProfile(ownerUserId: number, clientId: number, websiteId: string, profileId?: string): Promise<ContentOperationEntityStrategyProfileRow | null>
+  listEntityStrategyProfiles(ownerUserId: number, clientId?: number, websiteId?: string): Promise<ContentOperationEntityStrategyProfileRow[]>
   insertEntityStrategyProfile(input: EntityStrategyProfileInsert): Promise<ContentOperationEntityStrategyProfileRow>
+  revokeEntityStrategyProfile(ownerUserId: number, profileId: string, revokedAt: Date): Promise<ContentOperationEntityStrategyProfileRow | null>
   findQueryOwnership(ownerUserId: number, clientId: number, websiteId: string, normalizedQuery: string): Promise<ContentOperationQueryOwnershipRow | null>
+  listQueryOwnership(ownerUserId: number, clientId?: number, websiteId?: string): Promise<ContentOperationQueryOwnershipRow[]>
   insertQueryOwnership(input: QueryOwnershipInsert): Promise<ContentOperationQueryOwnershipRow>
+  revokeQueryOwnership(ownerUserId: number, fingerprint: string, revokedAt: Date): Promise<ContentOperationQueryOwnershipRow | null>
   listRepairAttempts(ownerUserId: number, entryId: number): Promise<ContentOperationRepairAttemptRow[]>
   insertRepairAttempt(input: RepairAttemptInsert): Promise<ContentOperationRepairAttemptRow>
+  claimRepairAttempt(ownerUserId: number, repairFingerprint: string, leaseOwner: string, now: Date, leaseExpiresAt: Date): Promise<ContentOperationRepairAttemptRow | null>
   updateRepairAttempt(ownerUserId: number, repairFingerprint: string, patch: Partial<RepairAttemptInsert>): Promise<ContentOperationRepairAttemptRow>
   listTopicSubstitutions(ownerUserId: number, entryId: number): Promise<ContentOperationTopicSubstitutionRow[]>
   insertTopicSubstitution(input: TopicSubstitutionInsert): Promise<ContentOperationTopicSubstitutionRow>
   findMachineAuthorization(ownerUserId: number, entryId: number, authorizationFingerprint: string): Promise<ContentOperationMachineAuthorizationRow | null>
+  findMachineAuthorizationForTarget(ownerUserId: number, entryId: number, publicationTargetId: number): Promise<ContentOperationMachineAuthorizationRow | null>
   insertMachineAuthorization(input: MachineAuthorizationInsert): Promise<ContentOperationMachineAuthorizationRow>
+  transitionMachineAuthorization(ownerUserId: number, authorizationFingerprint: string, fromStatus: 'authorized' | 'executing' | 'published', toStatus: 'authorized' | 'executing' | 'published' | 'revoked', at?: Date): Promise<ContentOperationMachineAuthorizationRow | null>
+  reserveAutopilotBudget(input: BudgetReservationInput): Promise<BudgetReservationResult>
+  listAutopilotBudgetReservations(ownerUserId: number, policyId?: string): Promise<ContentOperationBudgetReservationRow[]>
   findCalendarByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationCalendarRow | null>
   findCalendar(ownerUserId: number, calendarId: number): Promise<ContentOperationCalendarRow | null>
   insertCalendar(input: CalendarInsert): Promise<ContentOperationCalendarRow>
@@ -249,6 +262,9 @@ function makeRepository(database: any): ContentOperationsRepository {
       const [row] = await database.select().from(contentOperationEntityStrategyProfiles).where(and(eq(contentOperationEntityStrategyProfiles.ownerUserId, ownerUserId), eq(contentOperationEntityStrategyProfiles.clientId, clientId), eq(contentOperationEntityStrategyProfiles.websiteId, websiteId), profileId ? eq(contentOperationEntityStrategyProfiles.profileId, profileId) : eq(contentOperationEntityStrategyProfiles.status, 'active'))).orderBy(desc(contentOperationEntityStrategyProfiles.version)).limit(1)
       return row || null
     },
+    async listEntityStrategyProfiles(ownerUserId, clientId, websiteId) {
+      return database.select().from(contentOperationEntityStrategyProfiles).where(and(eq(contentOperationEntityStrategyProfiles.ownerUserId, ownerUserId), clientId === undefined ? undefined : eq(contentOperationEntityStrategyProfiles.clientId, clientId), websiteId === undefined ? undefined : eq(contentOperationEntityStrategyProfiles.websiteId, websiteId))).orderBy(desc(contentOperationEntityStrategyProfiles.version)).limit(100)
+    },
     async insertEntityStrategyProfile(input) {
       try {
         const id = rowId(await database.insert(contentOperationEntityStrategyProfiles).values(input as any))
@@ -262,9 +278,18 @@ function makeRepository(database: any): ContentOperationsRepository {
         throw error
       }
     },
+    async revokeEntityStrategyProfile(ownerUserId, profileId, revokedAt) {
+      const result = await database.update(contentOperationEntityStrategyProfiles).set({ status: 'revoked', revokedAt, activeScopeKey: null }).where(and(eq(contentOperationEntityStrategyProfiles.ownerUserId, ownerUserId), eq(contentOperationEntityStrategyProfiles.profileId, profileId), eq(contentOperationEntityStrategyProfiles.status, 'active')))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      const [row] = await database.select().from(contentOperationEntityStrategyProfiles).where(and(eq(contentOperationEntityStrategyProfiles.ownerUserId, ownerUserId), eq(contentOperationEntityStrategyProfiles.profileId, profileId))).limit(1)
+      return row || null
+    },
     async findQueryOwnership(ownerUserId, clientId, websiteId, normalizedQuery) {
       const [row] = await database.select().from(contentOperationQueryOwnership).where(and(eq(contentOperationQueryOwnership.ownerUserId, ownerUserId), eq(contentOperationQueryOwnership.clientId, clientId), eq(contentOperationQueryOwnership.websiteId, websiteId), eq(contentOperationQueryOwnership.normalizedQuery, normalizedQuery), eq(contentOperationQueryOwnership.status, 'active'))).orderBy(desc(contentOperationQueryOwnership.createdAt)).limit(1)
       return row || null
+    },
+    async listQueryOwnership(ownerUserId, clientId, websiteId) {
+      return database.select().from(contentOperationQueryOwnership).where(and(eq(contentOperationQueryOwnership.ownerUserId, ownerUserId), clientId === undefined ? undefined : eq(contentOperationQueryOwnership.clientId, clientId), websiteId === undefined ? undefined : eq(contentOperationQueryOwnership.websiteId, websiteId))).orderBy(desc(contentOperationQueryOwnership.createdAt)).limit(200)
     },
     async insertQueryOwnership(input) {
       try {
@@ -278,6 +303,12 @@ function makeRepository(database: any): ContentOperationsRepository {
         if (replay) return replay
         throw createError({ statusCode: 409, statusMessage: 'An active canonical query ownership fingerprint already exists.' })
       }
+    },
+    async revokeQueryOwnership(ownerUserId, fingerprint, revokedAt) {
+      const result = await database.update(contentOperationQueryOwnership).set({ status: 'revoked', revokedAt, activeScopeKey: null }).where(and(eq(contentOperationQueryOwnership.ownerUserId, ownerUserId), eq(contentOperationQueryOwnership.fingerprint, fingerprint), eq(contentOperationQueryOwnership.status, 'active')))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      const [row] = await database.select().from(contentOperationQueryOwnership).where(and(eq(contentOperationQueryOwnership.ownerUserId, ownerUserId), eq(contentOperationQueryOwnership.fingerprint, fingerprint))).limit(1)
+      return row || null
     },
     async listRepairAttempts(ownerUserId, entryId) {
       return database.select().from(contentOperationRepairAttempts).where(and(eq(contentOperationRepairAttempts.ownerUserId, ownerUserId), eq(contentOperationRepairAttempts.entryId, entryId))).orderBy(contentOperationRepairAttempts.repairAttempt, contentOperationRepairAttempts.createdAt).limit(3)
@@ -295,11 +326,18 @@ function makeRepository(database: any): ContentOperationsRepository {
         throw error
       }
     },
+    async claimRepairAttempt(ownerUserId, repairFingerprint, leaseOwner, now, leaseExpiresAt) {
+      const result = await database.update(contentOperationRepairAttempts).set({ leaseOwner, leaseExpiresAt }).where(and(eq(contentOperationRepairAttempts.ownerUserId, ownerUserId), eq(contentOperationRepairAttempts.repairFingerprint, repairFingerprint), eq(contentOperationRepairAttempts.status, 'planned'), or(isNull(contentOperationRepairAttempts.leaseOwner), isNull(contentOperationRepairAttempts.leaseExpiresAt), lt(contentOperationRepairAttempts.leaseExpiresAt, now))))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      const [row] = await database.select().from(contentOperationRepairAttempts).where(and(eq(contentOperationRepairAttempts.ownerUserId, ownerUserId), eq(contentOperationRepairAttempts.repairFingerprint, repairFingerprint))).limit(1)
+      return row || null
+    },
     async updateRepairAttempt(ownerUserId, repairFingerprint, patch) {
       const safePatch: Record<string, unknown> = {}
       if (patch.repairedDraftId !== undefined) safePatch.repairedDraftId = patch.repairedDraftId
       if (patch.repairedContentHash !== undefined) safePatch.repairedContentHash = patch.repairedContentHash
       if (patch.status !== undefined) safePatch.status = patch.status
+      if (patch.status !== undefined) { safePatch.leaseOwner = null; safePatch.leaseExpiresAt = null }
       if (!Object.keys(safePatch).length) throw createError({ statusCode: 422, statusMessage: 'Repair attempt completion patch is empty.' })
       const result = await database.update(contentOperationRepairAttempts).set(safePatch).where(and(eq(contentOperationRepairAttempts.ownerUserId, ownerUserId), eq(contentOperationRepairAttempts.repairFingerprint, repairFingerprint)))
       const affected = Number((Array.isArray(result) ? result[0] : result)?.affectedRows ?? 0)
@@ -328,6 +366,10 @@ function makeRepository(database: any): ContentOperationsRepository {
       const [row] = await database.select().from(contentOperationMachineAuthorizations).where(and(eq(contentOperationMachineAuthorizations.ownerUserId, ownerUserId), eq(contentOperationMachineAuthorizations.entryId, entryId), eq(contentOperationMachineAuthorizations.authorizationFingerprint, authorizationFingerprint))).limit(1)
       return row || null
     },
+    async findMachineAuthorizationForTarget(ownerUserId, entryId, publicationTargetId) {
+      const [row] = await database.select().from(contentOperationMachineAuthorizations).where(and(eq(contentOperationMachineAuthorizations.ownerUserId, ownerUserId), eq(contentOperationMachineAuthorizations.entryId, entryId), eq(contentOperationMachineAuthorizations.publicationTargetId, publicationTargetId))).orderBy(desc(contentOperationMachineAuthorizations.createdAt)).limit(1)
+      return row || null
+    },
     async insertMachineAuthorization(input) {
       try {
         const id = rowId(await database.insert(contentOperationMachineAuthorizations).values(input as any))
@@ -340,6 +382,37 @@ function makeRepository(database: any): ContentOperationsRepository {
         if (replay) return replay
         throw error
       }
+    },
+    async transitionMachineAuthorization(ownerUserId, authorizationFingerprint, fromStatus, toStatus, at) {
+      const timestamps = toStatus === 'executing' ? { claimedAt: at || new Date() } : toStatus === 'revoked' ? { revokedAt: at || new Date() } : {}
+      const result = await database.update(contentOperationMachineAuthorizations).set({ status: toStatus, ...timestamps }).where(and(eq(contentOperationMachineAuthorizations.ownerUserId, ownerUserId), eq(contentOperationMachineAuthorizations.authorizationFingerprint, authorizationFingerprint), eq(contentOperationMachineAuthorizations.status, fromStatus)))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      const [row] = await database.select().from(contentOperationMachineAuthorizations).where(and(eq(contentOperationMachineAuthorizations.ownerUserId, ownerUserId), eq(contentOperationMachineAuthorizations.authorizationFingerprint, authorizationFingerprint))).limit(1)
+      return row || null
+    },
+    async reserveAutopilotBudget(input) {
+      return database.transaction(async (transaction: any) => {
+        const [existing] = await transaction.select().from(contentOperationBudgetReservations).where(and(eq(contentOperationBudgetReservations.ownerUserId, input.ownerUserId), eq(contentOperationBudgetReservations.policyId, input.policyId), eq(contentOperationBudgetReservations.kind, input.kind), eq(contentOperationBudgetReservations.idempotencyKey, input.idempotencyKey))).limit(1)
+        const [policy] = await transaction.select().from(contentOperationAutopilotPolicies).where(and(eq(contentOperationAutopilotPolicies.ownerUserId, input.ownerUserId), eq(contentOperationAutopilotPolicies.policyId, input.policyId), eq(contentOperationAutopilotPolicies.publicationTargetId, input.publicationTargetId))).limit(1)
+        if (!policy) return { reserved: false, replayed: false, reservation: null, used: 0, limit: 0 }
+        const usedColumn = input.kind === 'generation' ? contentOperationAutopilotPolicies.generationBudgetUsed : contentOperationAutopilotPolicies.publicationBudgetUsed
+        const limit = input.kind === 'generation' ? policy.generationBudget : policy.publicationBudget
+        const used = input.kind === 'generation' ? policy.generationBudgetUsed : policy.publicationBudgetUsed
+        if (existing) {
+          if (existing.inputFingerprint !== input.inputFingerprint || existing.entryId !== input.entryId || existing.publicationTargetId !== input.publicationTargetId || existing.units !== input.units) throw createError({ statusCode: 409, statusMessage: 'Autopilot budget idempotency collision.' })
+          return { reserved: true, replayed: true, reservation: existing, used, limit }
+        }
+        if (policy.status !== 'enabled' || input.units < 1 || used + input.units > limit) return { reserved: false, replayed: false, reservation: null, used, limit }
+        const patch = input.kind === 'generation' ? { generationBudgetUsed: sql`${contentOperationAutopilotPolicies.generationBudgetUsed} + ${input.units}` } : { publicationBudgetUsed: sql`${contentOperationAutopilotPolicies.publicationBudgetUsed} + ${input.units}` }
+        const updated = await transaction.update(contentOperationAutopilotPolicies).set(patch).where(and(eq(contentOperationAutopilotPolicies.ownerUserId, input.ownerUserId), eq(contentOperationAutopilotPolicies.policyId, input.policyId), eq(contentOperationAutopilotPolicies.status, 'enabled'), lte(usedColumn, limit - input.units)))
+        if (Number(updated?.[0]?.affectedRows || 0) !== 1) return { reserved: false, replayed: false, reservation: null, used, limit }
+        const id = rowId(await transaction.insert(contentOperationBudgetReservations).values(input))
+        const [reservation] = await transaction.select().from(contentOperationBudgetReservations).where(eq(contentOperationBudgetReservations.id, id)).limit(1)
+        return { reserved: true, replayed: false, reservation: reservation || null, used: used + input.units, limit }
+      })
+    },
+    async listAutopilotBudgetReservations(ownerUserId, policyId) {
+      return database.select().from(contentOperationBudgetReservations).where(and(eq(contentOperationBudgetReservations.ownerUserId, ownerUserId), policyId === undefined ? undefined : eq(contentOperationBudgetReservations.policyId, policyId))).orderBy(desc(contentOperationBudgetReservations.createdAt)).limit(500)
     },
     async findCalendarByIdempotency(ownerUserId, idempotencyKey) {
       const [row] = await database.select().from(contentOperationCalendars).where(and(eq(contentOperationCalendars.ownerUserId, ownerUserId), eq(contentOperationCalendars.idempotencyKey, idempotencyKey))).limit(1)

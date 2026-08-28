@@ -5,6 +5,7 @@ import type {
   ModelOpsCycleClaimResult,
   ModelOpsEvent,
   ModelOpsPolicy,
+  ModelOpsAdvisoryAssignment,
   ModelOpsRepositoryPort,
   ModelOpsRollbackDecision,
   ModelOpsShadowEvaluation,
@@ -15,11 +16,12 @@ const assertOwner = (expected: number, actual: number) => { if (expected !== act
 const now = () => Date.now()
 
 export class InMemoryModelOpsRepository implements ModelOpsRepositoryPort {
-  private state: MemoryModelOpsState
+  private state: MemoryModelOpsState & { advisoryAssignments: ModelOpsAdvisoryAssignment[] }
   private lock: Promise<void> = Promise.resolve()
 
   constructor(initial?: MemoryModelOpsState) {
-    this.state = clone(initial || { policies: [], cycles: [], events: [], shadowEvaluations: [], rollbackDecisions: [] })
+    this.state = clone(initial || { policies: [], cycles: [], events: [], shadowEvaluations: [], rollbackDecisions: [], advisoryAssignments: [] }) as MemoryModelOpsState & { advisoryAssignments: ModelOpsAdvisoryAssignment[] }
+    this.state.advisoryAssignments ||= []
   }
 
   exportState(): MemoryModelOpsState { return clone(this.state) }
@@ -132,6 +134,30 @@ export class InMemoryModelOpsRepository implements ModelOpsRepositoryPort {
     })
   }
   async listRollbackDecisions(ownerUserId: number) { return clone(this.state.rollbackDecisions.filter(item => item.ownerUserId === ownerUserId)) }
+
+  async listAdvisoryAssignments(ownerUserId: number) { return clone(this.state.advisoryAssignments.filter(item => item.ownerUserId === ownerUserId)) }
+  async saveAdvisoryAssignment(ownerUserId: number, assignment: ModelOpsAdvisoryAssignment) {
+    assertOwner(ownerUserId, assignment.ownerUserId)
+    return this.withLock(async () => {
+      const replay = this.state.advisoryAssignments.find(item => item.ownerUserId === ownerUserId && item.assignmentFingerprint === assignment.assignmentFingerprint)
+      if (replay) return clone(replay)
+      if (assignment.status !== 'advisory' || assignment.activeScopeKey === null) throw new Error('Only an active advisory assignment can be created.')
+      if (this.state.advisoryAssignments.some(item => item.ownerUserId === ownerUserId && item.activeScopeKey === assignment.activeScopeKey)) throw new Error('Active advisory assignment collision.')
+      this.state.advisoryAssignments.push(clone(assignment))
+      return clone(assignment)
+    })
+  }
+  async compareAndSwapAdvisoryAssignment(ownerUserId: number, assignmentId: string, expectedVersion: number, patch: Partial<ModelOpsAdvisoryAssignment>) {
+    return this.withLock(async () => {
+      const index = this.state.advisoryAssignments.findIndex(item => item.ownerUserId === ownerUserId && item.assignmentId === assignmentId && item.version === expectedVersion)
+      if (index < 0) return null
+      const current = this.state.advisoryAssignments[index]!
+      if (current.status !== 'advisory' || patch.status !== 'rolled_back' || patch.activeScopeKey !== null || patch.version !== expectedVersion + 1 || !patch.rollbackFromAssignmentId) throw new Error('Advisory assignment CAS transition is invalid.')
+      const updated = { ...current, ...clone(patch), ownerUserId } as ModelOpsAdvisoryAssignment
+      this.state.advisoryAssignments.splice(index, 1, updated)
+      return clone(updated)
+    })
+  }
 
   async transaction<T>(work: (repository: ModelOpsRepositoryPort) => Promise<T>): Promise<T> {
     const snapshot = clone(this.state)

@@ -232,6 +232,13 @@
       "when": 1787865390123,
       "tag": "0032_rapid_strong_guy",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "5",
+      "when": 1787900904837,
+      "tag": "0033_glorious_mockingbird",
+      "breakpoints": true
     }
   ]
 }

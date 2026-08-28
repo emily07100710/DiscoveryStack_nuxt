@@ -59,6 +59,16 @@ describe('governed owner autopilot policy', () => {
     expect(evaluation({ riskLevel: { value: 'low' } }).code).toBe('AUTOPILOT_RISK_LEVEL_NOT_ALLOWED')
   })
 
+  it('keeps V3 exact compatibility while V4 separates severity from business class in its fingerprint', () => {
+    expect(evaluation({ riskLevel: 'low' })).toMatchObject({ allowed: true, code: 'AUTOPILOT_ALLOWED' })
+    const v4 = enableOwnerAutopilotPolicy({ ...basePolicyInput, policyVersion: 'governed-autopilot-policy-v4', entityStrategyProfileId: 'profile-1', allowedDestinations: ['target-1'], allowedCadences: [3], maximumRiskSeverity: 'moderate', allowedBusinessRiskClasses: ['general'], allowedRiskClasses: ['general'] })
+    expect(v4).toMatchObject({ policyVersion: 'governed-autopilot-policy-v4', riskSemanticsVersion: 'risk-severity-and-business-class-v1', maximumRiskSeverity: 'moderate', allowedBusinessRiskClasses: ['general'] })
+    expect(v4.configurationFingerprint).not.toBe(policy().configurationFingerprint)
+    expect(evaluateOwnerAutopilotPolicy({ ...evaluationInput(), policy: v4, riskLevel: 'low', riskSeverity: 'low', businessRiskClass: 'general' })).toMatchObject({ allowed: true, code: 'AUTOPILOT_ALLOWED' })
+    expect(evaluateOwnerAutopilotPolicy({ ...evaluationInput(), policy: v4, riskLevel: 'low', riskSeverity: 'high', businessRiskClass: 'general' }).allowed).toBe(false)
+    expect(evaluateOwnerAutopilotPolicy({ ...evaluationInput(), policy: v4, riskLevel: 'low', riskSeverity: 'low', businessRiskClass: 'medical' }).allowed).toBe(false)
+  })
+
   it('denies missing, stale, future, paused, expired, and revoked policies fail-closed', () => {
     expect(evaluateOwnerAutopilotPolicy({ ...evaluationInput(), policy: null }).code).toBe('AUTOPILOT_NOT_AUTHORIZED')
     expect(evaluation({ evidenceApproved: false }).code).toBe('AUTOPILOT_EVIDENCE_NOT_APPROVED')

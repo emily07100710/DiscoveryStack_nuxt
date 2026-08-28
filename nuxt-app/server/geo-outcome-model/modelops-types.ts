@@ -109,6 +109,23 @@ export interface ModelOpsRollbackDecision {
   createdAt: string
 }
 
+export interface ModelOpsAdvisoryAssignment {
+  assignmentId: string
+  ownerUserId: number
+  policyId: string
+  policyFingerprint: string
+  currentArtifactHash: string
+  candidateArtifactHash: string
+  shadowEvaluationFingerprint: string
+  status: 'advisory' | 'rolled_back'
+  activeScopeKey: string | null
+  version: number
+  rollbackFromAssignmentId: string | null
+  assignmentFingerprint: string
+  createdAt: string
+  rolledBackAt: string | null
+}
+
 export interface ModelOpsCycleClaimResult {
   outcome: 'claimed' | 'replay' | 'in_progress' | 'stale_recovered' | 'collision'
   cycle: ModelOpsCycle
@@ -121,6 +138,7 @@ export interface ModelOpsWorkspace {
   events: ModelOpsEvent[]
   shadowEvaluations: ModelOpsShadowEvaluation[]
   rollbackDecisions: ModelOpsRollbackDecision[]
+  advisoryAssignments: ModelOpsAdvisoryAssignment[]
   outcome: {
     readiness: { development: DatasetManifest['readiness'], shadow: DatasetManifest['readiness'] }
     datasets: DatasetManifest[]
@@ -148,6 +166,9 @@ export interface ModelOpsRepositoryPort {
   listShadowEvaluations(ownerUserId: number, artifactId?: string): Promise<ModelOpsShadowEvaluation[]>
   appendRollbackDecision(ownerUserId: number, decision: ModelOpsRollbackDecision): Promise<ModelOpsRollbackDecision>
   listRollbackDecisions(ownerUserId: number): Promise<ModelOpsRollbackDecision[]>
+  listAdvisoryAssignments(ownerUserId: number): Promise<ModelOpsAdvisoryAssignment[]>
+  saveAdvisoryAssignment(ownerUserId: number, assignment: ModelOpsAdvisoryAssignment): Promise<ModelOpsAdvisoryAssignment>
+  compareAndSwapAdvisoryAssignment(ownerUserId: number, assignmentId: string, expectedVersion: number, patch: Partial<ModelOpsAdvisoryAssignment>): Promise<ModelOpsAdvisoryAssignment | null>
   transaction<T>(work: (repository: ModelOpsRepositoryPort) => Promise<T>): Promise<T>
 }
 
@@ -157,6 +178,7 @@ export interface MemoryModelOpsState {
   events: ModelOpsEvent[]
   shadowEvaluations: ModelOpsShadowEvaluation[]
   rollbackDecisions: ModelOpsRollbackDecision[]
+  advisoryAssignments?: ModelOpsAdvisoryAssignment[]
 }
 
 export interface ModelOpsDependencies {

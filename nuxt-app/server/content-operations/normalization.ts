@@ -292,6 +292,7 @@ const strictExecute = z.object({
 }).strict()
 
 const strictAutopilotPolicy = z.object({
+  policyVersion: z.enum(['governed-autopilot-policy-v3', 'governed-autopilot-policy-v4']).optional(),
   expiresAt: z.string().trim().min(1).max(64),
   targetRowId: z.number().int().positive().optional(),
   websiteId: z.string().trim().min(1).max(128).optional(),
@@ -300,13 +301,15 @@ const strictAutopilotPolicy = z.object({
   cadenceDays: z.union([z.literal(3), z.literal(7), z.literal(15), z.literal(30)]).optional(),
   evidenceFreshnessHours: z.number().int().min(1).max(24 * 365).optional(),
   maximumRiskLevel: z.enum(['low', 'general', 'high']).optional(),
+  maximumRiskSeverity: z.enum(['low', 'moderate', 'high', 'critical']).optional(),
   requiredQualityGateVersion: z.string().trim().min(1).max(96).optional(),
   allowedProviderModels: z.array(z.string().trim().min(1).max(128)).min(1).max(20).optional(),
   allowedDestinations: z.array(z.string().trim().min(1).max(160)).min(1).max(20).optional(),
   allowedCadences: z.array(z.union([z.literal(3), z.literal(7), z.literal(15), z.literal(30)])).min(1).max(4).optional(),
-  allowedRiskClasses: z.array(z.enum(['low', 'general', 'high'])).min(1).max(3).optional(),
+  allowedRiskClasses: z.array(z.enum(['low', 'general', 'high', 'medical', 'legal', 'financial', 'political', 'sensitive_personal_data'])).min(1).max(8).optional(),
+  allowedBusinessRiskClasses: z.array(z.enum(['general', 'medical', 'legal', 'financial', 'political', 'sensitive_personal_data'])).min(1).max(6).optional(),
   entityStrategyProfileId: z.string().trim().min(1).max(160).optional(),
-  maximumRepairAttempts: z.number().int().min(1).max(3).optional(),
+  maximumRepairAttempts: z.number().int().min(0).max(3).optional(),
   maximumTopicSubstitutions: z.number().int().min(0).max(2).optional(),
   generationBudget: z.number().int().min(0).max(1000000).optional(),
   publicationBudget: z.number().int().min(0).max(1000000).optional(),
@@ -348,6 +351,7 @@ export function parseExecuteInput(value: unknown): ExecuteContentOperationInput 
 }
 
 export type AutopilotPolicyRequestInput = {
+  policyVersion?: 'governed-autopilot-policy-v3' | 'governed-autopilot-policy-v4'
   expiresAt: string
   targetRowId?: number
   websiteId?: string
@@ -356,11 +360,13 @@ export type AutopilotPolicyRequestInput = {
   cadenceDays?: 3 | 7 | 15 | 30
   evidenceFreshnessHours?: number
   maximumRiskLevel?: 'low' | 'general' | 'high'
+  maximumRiskSeverity?: 'low' | 'moderate' | 'high' | 'critical'
   requiredQualityGateVersion?: string
   allowedProviderModels?: string[]
   allowedDestinations?: string[]
   allowedCadences?: Array<3 | 7 | 15 | 30>
-  allowedRiskClasses?: Array<'low' | 'general' | 'high'>
+  allowedRiskClasses?: Array<'low' | 'general' | 'high' | 'medical' | 'legal' | 'financial' | 'political' | 'sensitive_personal_data'>
+  allowedBusinessRiskClasses?: Array<'general' | 'medical' | 'legal' | 'financial' | 'political' | 'sensitive_personal_data'>
   entityStrategyProfileId?: string
   maximumRepairAttempts?: number
   maximumTopicSubstitutions?: number

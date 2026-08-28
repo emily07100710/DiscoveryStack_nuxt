@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildMachineAuthorization, buildRepairContract, decideBalancedAutopilot, detectKeywordStuffing, normalizeEntityStrategyProfile, normalizeQueryOwnership } from '../server/content-operations/balanced-autopilot'
 import type { AutopilotPolicySnapshot } from '../server/content-operations/balanced-autopilot'
+import { evaluateCanonicalGeoContentQuality } from '../server/content-operations/quality-evaluation'
 
 const NOW = new Date('2026-08-28T12:00:00.000Z')
 const HASH = 'a'.repeat(64)
@@ -70,5 +71,11 @@ describe('balanced autonomous GEO decision engine', () => {
     const contract = buildRepairContract({ originalDraftId: 'draft-1', originalContentHash: HASH, repairAttempt: 1, reasonCodes: ['BRAND_MISSING'], requestedRepairs: decision.repairInstructions, candidateId: 'candidate-1', evidenceSnapshotHash: HASH, createdAt: NOW.toISOString() })
     expect(contract.parentLineage.contentHash).toBe(HASH)
     expect(contract.repairFingerprint).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('emits a canonical content-quality evaluation independent from raw risk findings', () => {
+    const evaluation = evaluateCanonicalGeoContentQuality({ content: '# Answer\n\nEvidence-bound content for the canonical owner page and its audience.'.repeat(3), contentHash: HASH, evidenceSnapshotHash: HASH, riskGateStatus: 'passed', riskGateVersion: 'content-risk-gate-v1', riskFindings: [], entityProfileFingerprint: HASH, queryOwnershipFingerprint: HASH })
+    expect(evaluation).toMatchObject({ evaluationVersion: 'geo-content-quality-evaluation-v1', status: 'passed', metrics: { evidenceAuthorityBound: true, entityAuthorityBound: true, queryAuthorityBound: true } })
+    expect(evaluation.evaluationFingerprint).toMatch(/^[a-f0-9]{64}$/)
   })
 })

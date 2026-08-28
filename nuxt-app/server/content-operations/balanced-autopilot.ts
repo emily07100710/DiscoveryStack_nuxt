@@ -2,10 +2,13 @@ import { createHash } from 'node:crypto'
 
 export const BALANCED_AUTOPILOT_POLICY_VERSION = 'balanced-autopilot-policy-v1' as const
 export const BALANCED_AUTOPILOT_ENGINE_VERSION = 'balanced-autopilot-decision-engine-v1' as const
+export const V4_RISK_SEMANTICS_VERSION = 'risk-severity-and-business-class-v1' as const
 
 export type AutopilotMode = 'balanced' | 'aggressive_growth' | 'conservative_brand'
 export type AutopilotAction = 'publish' | 'repair' | 'substitute' | 'skip' | 'hard_block'
 export type AutopilotRiskClass = 'low' | 'general' | 'high'
+export type AutopilotRiskSeverity = 'low' | 'moderate' | 'high' | 'critical'
+export type AutopilotBusinessRiskClass = 'general' | 'medical' | 'legal' | 'financial' | 'political' | 'sensitive_personal_data'
 
 export type EntityStrategyProfile = {
   canonicalBrandName: string
@@ -61,6 +64,9 @@ export type AutopilotPolicySnapshot = {
   allowedDestinations: string[]
   allowedCadences: number[]
   allowedRiskClasses: AutopilotRiskClass[]
+  riskSemanticsVersion?: typeof V4_RISK_SEMANTICS_VERSION
+  maximumRiskSeverity?: AutopilotRiskSeverity
+  allowedBusinessRiskClasses?: AutopilotBusinessRiskClass[]
   entityStrategyProfileId: string
   maximumRepairAttempts: number
   maximumTopicSubstitutions: number
@@ -80,6 +86,8 @@ export type BalancedAutopilotInput = {
   destinationId: string
   cadenceDays: number
   riskClass: AutopilotRiskClass
+  riskSeverity?: AutopilotRiskSeverity
+  businessRiskClass?: AutopilotBusinessRiskClass
   qualityStatus: 'passed' | 'needs_repair' | 'blocked'
   reasonCodes: string[]
   contentHash: string
@@ -141,15 +149,16 @@ export type RepairContract = {
 }
 
 export type MachineAuthorization = {
-  authorizationVersion: 'machine-authorization-v1'
+  authorizationVersion: 'machine-authorization-v2'
   authorizationId: string
   policy: { policyId: string; policyVersion: string; configurationFingerprint: string; ownerUserId: number; clientId: number; websiteId: string; mode: AutopilotMode }
   candidate: { candidateId: string; contentHash: string; contentType: string; locale: string }
   evidence: { snapshotHash: string; status: 'approved_fresh'; capturedAt: string }
-  risk: { class: AutopilotRiskClass; reasonCodes: string[] }
-  quality: { status: 'passed'; reasonCodes: string[]; engineVersion: string }
+  risk: { severity: AutopilotRiskSeverity; businessClass: AutopilotBusinessRiskClass; semanticsVersion: typeof V4_RISK_SEMANTICS_VERSION; reasonCodes: string[]; fingerprint: string }
+  quality: { status: 'passed'; reasonCodes: string[]; engineVersion: string; fingerprint: string }
   content: { draftId: string; contentHash: string; providerModel: string; repairAttempts: number; substitutionCount: number }
-  target: { websiteId: string; destinationId: string; identityVerified: true }
+  target: { websiteId: string; targetRowId: number; destinationId: string; identityVerified: true }
+  lineage: { entryId: number; jobId: number; draftId: string; entityProfileFingerprint: string; queryOwnershipFingerprint: string }
   decision: { action: 'publish'; decidedAt: string; decisionFingerprint: string }
   authorizationFingerprint: string
 }
@@ -199,15 +208,15 @@ function list(value: readonly string[]): string[] { return [...new Set(value.map
 function hasIso(value: string): boolean { return Number.isFinite(Date.parse(value)) }
 
 export function defaultAutopilotMode(mode: AutopilotMode): Pick<AutopilotPolicySnapshot, 'mode' | 'maximumRepairAttempts' | 'maximumTopicSubstitutions' | 'allowedRiskClasses'> {
-  if (mode === 'aggressive_growth') return { mode, maximumRepairAttempts: 3, maximumTopicSubstitutions: 2, allowedRiskClasses: ['low', 'general'] }
-  if (mode === 'conservative_brand') return { mode, maximumRepairAttempts: 3, maximumTopicSubstitutions: 2, allowedRiskClasses: ['low', 'general'] }
+  if (mode === 'aggressive_growth') return { mode, maximumRepairAttempts: 2, maximumTopicSubstitutions: 2, allowedRiskClasses: ['low', 'general'] }
+  if (mode === 'conservative_brand') return { mode, maximumRepairAttempts: 3, maximumTopicSubstitutions: 0, allowedRiskClasses: ['low', 'general'] }
   return { mode: 'balanced', maximumRepairAttempts: 3, maximumTopicSubstitutions: 2, allowedRiskClasses: ['low', 'general'] }
 }
 
 export function normalizeEntityStrategyProfile(input: Omit<EntityStrategyProfile, 'profileFingerprint'> & { profileFingerprint?: string }): EntityStrategyProfile {
   if (!input.canonicalBrandName.trim() || !input.canonicalWebsiteOrigin.trim() || !input.businessType.trim() || !input.primaryLocale.trim() || !input.evidenceSnapshotHash.match(/^[a-f0-9]{64}$/u)) throw new Error('Entity Strategy Profile identity or evidence snapshot is invalid.')
   if (!hasIso(input.effectiveAt) || (input.revokedAt !== null && !hasIso(input.revokedAt))) throw new Error('Entity Strategy Profile timestamps are invalid.')
-  const normalizedProfile = { ...input, canonicalBrandName: input.canonicalBrandName.normalize('NFKC').trim(), brandAliases: list(input.brandAliases), primaryLocations: list(input.primaryLocations), serviceAreas: list(input.serviceAreas), primaryServices: list(input.primaryServices), secondaryServices: list(input.secondaryServices), targetAudience: list(input.targetAudience), primaryQueryClusters: list(input.primaryQueryClusters), supportingQueryClusters: list(input.supportingQueryClusters), canonicalPillarPages: [...new Set(input.canonicalPillarPages.map(value => value.trim()).filter(Boolean))].sort(), approvedBrandFacts: list(input.approvedBrandFacts), approvedDifferentiators: list(input.approvedDifferentiators), prohibitedClaims: list(input.prohibitedClaims), requiredDisclosures: list(input.requiredDisclosures), version: input.version, status: input.status } as EntityStrategyProfile
+  const normalizedProfile: EntityStrategyProfile = { ...input, canonicalBrandName: input.canonicalBrandName.normalize('NFKC').trim(), brandAliases: list(input.brandAliases), canonicalWebsiteOrigin: input.canonicalWebsiteOrigin.trim(), businessType: input.businessType.trim(), primaryLocale: input.primaryLocale.trim(), secondaryLocales: list(input.secondaryLocales), primaryLocations: list(input.primaryLocations), serviceAreas: list(input.serviceAreas), primaryServices: list(input.primaryServices), secondaryServices: list(input.secondaryServices), targetAudience: list(input.targetAudience), primaryQueryClusters: list(input.primaryQueryClusters), supportingQueryClusters: list(input.supportingQueryClusters), canonicalPillarPages: [...new Set(input.canonicalPillarPages.map(value => value.trim()).filter(Boolean))].sort(), servicePageBindings: { ...input.servicePageBindings }, approvedBrandFacts: list(input.approvedBrandFacts), approvedDifferentiators: list(input.approvedDifferentiators), prohibitedClaims: list(input.prohibitedClaims), preferredTone: input.preferredTone.trim(), requiredDisclosures: list(input.requiredDisclosures), internalLinkPolicy: input.internalLinkPolicy.trim(), structuredDataIdentity: { ...input.structuredDataIdentity }, evidenceSnapshotHash: input.evidenceSnapshotHash, version: input.version, status: input.status, effectiveAt: new Date(input.effectiveAt).toISOString(), revokedAt: input.revokedAt === null ? null : new Date(input.revokedAt).toISOString(), profileFingerprint: '' }
   if (!Number.isSafeInteger(normalizedProfile.version) || normalizedProfile.version < 1 || normalizedProfile.status === 'revoked' && !normalizedProfile.revokedAt) throw new Error('Entity Strategy Profile version or status is invalid.')
   const { profileFingerprint: _ignored, ...fingerprinted } = normalizedProfile
   const profileFingerprint = hash(fingerprinted)
@@ -281,7 +290,14 @@ export function decideBalancedAutopilot(input: BalancedAutopilotInput): Balanced
   if (!policy.allowedLocales.map(normalized).includes(normalized(input.locale))) return common('hard_block', 'LOCALE_NOT_ALLOWED', ['locale is outside policy allowlist'])
   if (!policy.allowedDestinations.map(normalized).includes(normalized(input.destinationId))) return common('hard_block', 'DESTINATION_NOT_ALLOWED', ['destination is outside policy allowlist'])
   if (!policy.allowedCadences.includes(input.cadenceDays)) return common('hard_block', 'CADENCE_NOT_ALLOWED', ['cadence is outside policy allowlist'])
-  if (!policy.allowedRiskClasses.includes(input.riskClass)) return common('hard_block', 'RISK_CLASS_NOT_ALLOWED', ['risk class is outside policy allowlist'])
+  if (policy.riskSemanticsVersion === V4_RISK_SEMANTICS_VERSION) {
+    const severity = input.riskSeverity
+    const businessClass = input.businessRiskClass
+    const severityRank: Record<AutopilotRiskSeverity, number> = { low: 0, moderate: 1, high: 2, critical: 3 }
+    if (!severity || !businessClass || !policy.maximumRiskSeverity || !policy.allowedBusinessRiskClasses) return common('hard_block', 'RISK_SEMANTICS_INVALID', ['V4 risk severity or business class is missing'])
+    if (severityRank[severity] > severityRank[policy.maximumRiskSeverity]) return common('hard_block', 'RISK_SEVERITY_NOT_ALLOWED', ['risk severity exceeds the governed maximum'])
+    if (!policy.allowedBusinessRiskClasses.includes(businessClass)) return common('hard_block', 'BUSINESS_RISK_CLASS_NOT_ALLOWED', ['business risk class is outside policy allowlist'])
+  } else if (!policy.allowedRiskClasses.includes(input.riskClass)) return common('hard_block', 'RISK_CLASS_NOT_ALLOWED', ['legacy V3 risk class is outside policy allowlist'])
   if (!input.targetIdentityVerified) return common('hard_block', 'TARGET_IDENTITY_UNVERIFIED', ['publication target identity is not verified'])
   if (!input.lineageVerified) return common('hard_block', 'LINEAGE_UNVERIFIED', ['content/evidence/policy lineage is not verified'])
   if (input.evidenceStatus !== 'approved_fresh') return common('hard_block', 'EVIDENCE_NOT_CURRENT', [`evidence status is ${input.evidenceStatus}`])
@@ -290,7 +306,10 @@ export function decideBalancedAutopilot(input: BalancedAutopilotInput): Balanced
   if (explicitHardBlock) return common('hard_block', explicitHardBlock, reasons)
   const stuffing = input.contentText ? detectKeywordStuffing({ text: input.contentText, primaryQuery: input.primaryQuery }) : undefined
   const entityDeficiencies: string[] = []
-  if (input.entityProfile) {
+  // V4 binds the canonical profile and its fingerprint as authority. Literal
+  // substring checks are only a legacy heuristic and are not a canonical
+  // quality metric (aliases, locale and structured output make them ambiguous).
+  if (input.entityProfile && policy.policyVersion === 'governed-autopilot-policy-v3') {
     const text = normalized(input.contentText || '')
     if (!text.includes(normalized(input.entityProfile.canonicalBrandName))) entityDeficiencies.push('BRAND_MISSING')
     if (input.primaryQuery && input.entityProfile.primaryQueryClusters.map(normalized).includes(normalized(input.primaryQuery)) && !input.entityProfile.primaryLocations.some(location => text.includes(normalized(location)))) entityDeficiencies.push('LOCATION_MISSING')
@@ -300,25 +319,35 @@ export function decideBalancedAutopilot(input: BalancedAutopilotInput): Balanced
   const instructions = repairInstructionsFor(repairReasons, input.entityProfile, stuffing)
   const hasSoftDeficiency = input.qualityStatus !== 'passed' || repairReasons.length > 0
   if (!hasSoftDeficiency) return common('publish', 'AUTOPILOT_AUTHORIZED', ['quality, risk, evidence, target and lineage gates passed'], [], null, true)
-  if (input.repairAttempts < policy.maximumRepairAttempts) return common('repair', 'REPAIR_REQUIRED', repairReasons, instructions)
-  if (input.topicSubstitutions < policy.maximumTopicSubstitutions) {
+  const modeRepairLimit = policy.mode === 'aggressive_growth' ? Math.min(2, policy.maximumRepairAttempts) : policy.maximumRepairAttempts
+  const modeSubstitutionLimit = policy.mode === 'conservative_brand' ? 0 : policy.maximumTopicSubstitutions
+  if (input.repairAttempts < modeRepairLimit) return common('repair', policy.mode === 'conservative_brand' ? 'BRAND_REPAIR_REQUIRED' : 'REPAIR_REQUIRED', repairReasons, instructions)
+  if (input.topicSubstitutions < modeSubstitutionLimit) {
     const nextTopic = input.candidateSafeTopics.find(topic => topic.trim() && normalized(topic) !== normalized(input.primaryQuery || '')) || null
     if (nextTopic) return common('substitute', 'TOPIC_SUBSTITUTION_REQUIRED', [...repairReasons, 'repair budget exhausted'], instructions, nextTopic)
   }
   return common('skip', 'SKIPPED_AFTER_BOUNDED_REPAIR', [...repairReasons, 'repair and substitution budgets exhausted'], instructions)
 }
 
-export function buildMachineAuthorization(input: { decision: BalancedAutopilotDecision; policy: AutopilotPolicySnapshot; candidateId: string; contentHash: string; contentType: string; locale: string; evidenceSnapshotHash: string; evidenceCapturedAt: string; riskClass: AutopilotRiskClass; riskReasonCodes: string[]; draftId: string; providerModel: string; repairAttempts: number; substitutionCount: number; destinationId: string; now: string }): MachineAuthorization {
+export function buildMachineAuthorization(input: { decision: BalancedAutopilotDecision; policy: AutopilotPolicySnapshot; candidateId: string; contentHash: string; contentType: string; locale: string; evidenceSnapshotHash: string; evidenceCapturedAt: string; riskClass?: AutopilotRiskClass; riskSeverity?: AutopilotRiskSeverity; businessRiskClass?: AutopilotBusinessRiskClass; riskReasonCodes: string[]; qualityFingerprint?: string; entryId?: number; jobId?: number; draftId: string; entityProfileFingerprint?: string; queryOwnershipFingerprint?: string; providerModel: string; repairAttempts: number; substitutionCount: number; targetRowId?: number; destinationId: string; now: string }): MachineAuthorization {
   if (input.decision.action !== 'publish' || !input.decision.machineAuthorized) throw new Error('Only an allowed publish decision can create machine authorization.')
   if (!hasIso(input.evidenceCapturedAt) || !hasIso(input.now) || Date.parse(input.evidenceCapturedAt) > Date.parse(input.now)) throw new Error('Machine authorization timestamps are invalid.')
-  const base = { authorizationVersion: 'machine-authorization-v1' as const, authorizationId: `machine-auth-${hash({ policyId: input.policy.policyId, candidateId: input.candidateId, contentHash: input.contentHash, evidenceSnapshotHash: input.evidenceSnapshotHash }).slice(0, 32)}`, policy: { policyId: input.policy.policyId, policyVersion: input.policy.policyVersion, configurationFingerprint: input.policy.configurationFingerprint, ownerUserId: input.policy.ownerUserId, clientId: input.policy.clientId, websiteId: input.policy.websiteId, mode: input.policy.mode }, candidate: { candidateId: input.candidateId, contentHash: input.contentHash, contentType: input.contentType, locale: input.locale }, evidence: { snapshotHash: input.evidenceSnapshotHash, status: 'approved_fresh' as const, capturedAt: new Date(input.evidenceCapturedAt).toISOString() }, risk: { class: input.riskClass, reasonCodes: [...new Set(input.riskReasonCodes)] }, quality: { status: 'passed' as const, reasonCodes: [], engineVersion: BALANCED_AUTOPILOT_ENGINE_VERSION }, content: { draftId: input.draftId, contentHash: input.contentHash, providerModel: input.providerModel, repairAttempts: input.repairAttempts, substitutionCount: input.substitutionCount }, target: { websiteId: input.policy.websiteId, destinationId: input.destinationId, identityVerified: true as const }, decision: { action: 'publish' as const, decidedAt: new Date(input.now).toISOString(), decisionFingerprint: input.decision.decisionFingerprint } }
+  const riskSeverity = input.riskSeverity || (input.riskClass === 'high' ? 'high' : 'low')
+  const businessRiskClass = input.businessRiskClass || 'general'
+  const riskReasonCodes = [...new Set(input.riskReasonCodes)].sort()
+  const risk = { severity: riskSeverity, businessClass: businessRiskClass, semanticsVersion: V4_RISK_SEMANTICS_VERSION, reasonCodes: riskReasonCodes, fingerprint: hash({ severity: riskSeverity, businessClass: businessRiskClass, semanticsVersion: V4_RISK_SEMANTICS_VERSION, reasonCodes: riskReasonCodes }) }
+  const quality = { status: 'passed' as const, reasonCodes: [], engineVersion: BALANCED_AUTOPILOT_ENGINE_VERSION, fingerprint: input.qualityFingerprint || hash({ status: 'passed', contentHash: input.contentHash, engineVersion: BALANCED_AUTOPILOT_ENGINE_VERSION }) }
+  const targetRowId = input.targetRowId || 0
+  const entryId = input.entryId || 0
+  const jobId = input.jobId || 0
+  const base = { authorizationVersion: 'machine-authorization-v2' as const, authorizationId: `machine-auth-${hash({ policyId: input.policy.policyId, targetRowId, entryId, jobId, draftId: input.draftId, contentHash: input.contentHash, evidenceSnapshotHash: input.evidenceSnapshotHash }).slice(0, 32)}`, policy: { policyId: input.policy.policyId, policyVersion: input.policy.policyVersion, configurationFingerprint: input.policy.configurationFingerprint, ownerUserId: input.policy.ownerUserId, clientId: input.policy.clientId, websiteId: input.policy.websiteId, mode: input.policy.mode }, candidate: { candidateId: input.candidateId, contentHash: input.contentHash, contentType: input.contentType, locale: input.locale }, evidence: { snapshotHash: input.evidenceSnapshotHash, status: 'approved_fresh' as const, capturedAt: new Date(input.evidenceCapturedAt).toISOString() }, risk, quality, content: { draftId: input.draftId, contentHash: input.contentHash, providerModel: input.providerModel, repairAttempts: input.repairAttempts, substitutionCount: input.substitutionCount }, target: { websiteId: input.policy.websiteId, targetRowId, destinationId: input.destinationId, identityVerified: true as const }, lineage: { entryId, jobId, draftId: input.draftId, entityProfileFingerprint: input.entityProfileFingerprint || 'legacy-v3', queryOwnershipFingerprint: input.queryOwnershipFingerprint || 'legacy-v3' }, decision: { action: 'publish' as const, decidedAt: new Date(input.now).toISOString(), decisionFingerprint: input.decision.decisionFingerprint } }
   return { ...base, authorizationFingerprint: hash(base) }
 }
 
 export function balancedAutopilotModeMatrix(): Record<AutopilotMode, { intent: string; qualityHandling: string; safetyHandling: string; defaultRepairAttempts: number; defaultTopicSubstitutions: number }> {
   return {
     balanced: { intent: '一般低風險內容以 repair-first 維持穩定品質與品牌一致性。', qualityHandling: '一般品質缺陷先修稿，再有限 topic substitution；正常內容不需逐篇 owner review。', safetyHandling: '只允許 approved fresh evidence、通過 risk gate 與完整 lineage；危險內容 hard block。', defaultRepairAttempts: 3, defaultTopicSubstitutions: 2 },
-    aggressive_growth: { intent: '在相同安全邊界內提高安全主題覆蓋與替代排程速度。', qualityHandling: '使用相同 repair-first 規則，允許 bounded substitution，不以關鍵字密度或模型分數放寬。', safetyHandling: '不得繞過 evidence、risk、credential、target 或 publication authority。', defaultRepairAttempts: 3, defaultTopicSubstitutions: 2 },
-    conservative_brand: { intent: '優先保護品牌語氣、approved facts 與 canonical entity identity。', qualityHandling: '品牌、語氣、entity 或 query ownership 缺陷優先修稿；無法修復則 skip，不偽造核准。', safetyHandling: '可比 balanced 更早 skip 品牌不一致內容，但不把一般 wellness 詞彙誤判成醫療風險。', defaultRepairAttempts: 3, defaultTopicSubstitutions: 2 },
+    aggressive_growth: { intent: '在相同安全邊界內提高安全主題覆蓋與替代排程速度。', qualityHandling: 'soft quality 最多修復兩次後優先建立 bounded replacement；不以模型分數放寬 hard gates。', safetyHandling: '不得繞過 evidence、risk、credential、target 或 publication authority。', defaultRepairAttempts: 2, defaultTopicSubstitutions: 2 },
+    conservative_brand: { intent: '優先保護品牌語氣、approved facts 與 canonical entity identity。', qualityHandling: '允許三次品牌修復但不自動替換主題；無法修復即 skip。', safetyHandling: '與其他模式使用完全相同的 hard safety gates。', defaultRepairAttempts: 3, defaultTopicSubstitutions: 0 },
   }
 }

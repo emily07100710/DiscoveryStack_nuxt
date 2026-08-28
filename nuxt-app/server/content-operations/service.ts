@@ -64,6 +64,7 @@ import type {
   WorkspacePayload,
 } from './types'
 import { CONTENT_OPERATIONS_LIMITATIONS } from './types'
+import { canonicalContentOperationRunIdentity } from './run-identity'
 
 const CALENDAR_ENGINE_VERSION = 'content-calendar-cadence-engine-v1'
 const DEFAULT_LEASE_MS = 5 * 60 * 1000
@@ -272,6 +273,8 @@ function entryInsert(ownerUserId: number, calendarId: number, deliverableId: num
     publicationSlug: null,
     publicationPath: null,
     publicationIdentityFingerprint: null,
+    replacementOfEntryId: null,
+    replacementFingerprint: null,
     status: entryStatusForDatabase(entry.status),
     engineEntryId: entry.entryId,
     idempotencyKey: durableEntryIdempotencyKey(calendarId, entry),
@@ -293,15 +296,16 @@ function eventInput(ownerUserId: number, input: { clientId?: number | null; cale
   }
 }
 
-function runInsert(ownerUserId: number, entry: ContentOperationCalendarEntryRow, stage: RunInsert['stage'], planFingerprint: string): RunInsert {
+function runInsert(ownerUserId: number, entry: ContentOperationCalendarEntryRow, stage: RunInsert['stage'], _planFingerprint: string): RunInsert {
+  const identity = canonicalContentOperationRunIdentity(entry, stage)
   return {
     ownerUserId,
     entryId: entry.id,
     stage,
     state: 'queued',
     attemptNumber: 0,
-    idempotencyKey: `content-operation-run:${entry.idempotencyKey}:${stage}`.slice(0, 128),
-    inputFingerprint: stableFingerprint({ entryId: entry.engineEntryId, stage, evidenceSnapshotHash: entry.evidenceSnapshotHash, planFingerprint }),
+    idempotencyKey: identity.idempotencyKey,
+    inputFingerprint: identity.inputFingerprint,
     outputFingerprint: null,
     leaseOwner: null,
     leaseExpiresAt: null,
@@ -746,11 +750,13 @@ export async function buildOwnerContentLearningDataset(ownerUserId: number, repo
 
 export async function getOwnerContentOperationsWorkspace(ownerUserId: number, repository?: ContentOperationsRepository): Promise<WorkspacePayload> {
   const db = await getRepository(repository)
-  const [clients, calendars, entries, runs, outcomeAssessments, targets] = await Promise.all([db.listClients(ownerUserId), db.listCalendars(ownerUserId), db.listEntries(ownerUserId), db.listRuns(ownerUserId), db.listOutcomes(ownerUserId), db.listPublicationTargets(ownerUserId)])
+  const [clients, calendars, entries, runs, outcomeAssessments, targets, entityProfiles, queryOwnership, budgetReservations] = await Promise.all([db.listClients(ownerUserId), db.listCalendars(ownerUserId), db.listEntries(ownerUserId), db.listRuns(ownerUserId), db.listOutcomes(ownerUserId), db.listPublicationTargets(ownerUserId), db.listEntityStrategyProfiles(ownerUserId), db.listQueryOwnership(ownerUserId), db.listAutopilotBudgetReservations(ownerUserId)])
+  const policies = (await Promise.all(clients.map(client => db.listAutopilotPolicies(ownerUserId, client.id)))).flat()
   const targetByRowId = new Map(targets.map(target => [target.id, target]))
   const entryDetails = await Promise.all(entries.map(async entry => {
-    const [lineage, bindings, attempts] = await Promise.all([db.resolveWorkspaceEntry(ownerUserId, entry.id), db.listEntryTargetBindings(ownerUserId, entry.id), db.listPublicationAttempts(ownerUserId, entry.id)])
-    return { lineage, bindings, attempts }
+    const [lineage, bindings, attempts, repairs, substitutions] = await Promise.all([db.resolveWorkspaceEntry(ownerUserId, entry.id), db.listEntryTargetBindings(ownerUserId, entry.id), db.listPublicationAttempts(ownerUserId, entry.id), db.listRepairAttempts(ownerUserId, entry.id), db.listTopicSubstitutions(ownerUserId, entry.id)])
+    const machineAuthorizations = (await Promise.all(bindings.map(binding => db.findMachineAuthorizationForTarget(ownerUserId, entry.id, binding.targetId)))).filter((row): row is NonNullable<typeof row> => Boolean(row))
+    return { lineage, bindings, attempts, repairs, substitutions, machineAuthorizations }
   }))
   const projections = entries.map((entry, index) => {
     const detail = entryDetails[index]!
@@ -771,7 +777,8 @@ export async function getOwnerContentOperationsWorkspace(ownerUserId: number, re
   const publicationTargets = targets.map(target => ({ id: target.id, clientId: target.clientId, targetId: target.targetId, websiteId: target.websiteId ?? null, framework: target.framework, transport: target.transport, targetOrigin: target.targetOrigin, contentRoot: target.contentRoot, defaultBranch: target.defaultBranch, repositoryOwner: target.repositoryOwner, repositoryName: target.repositoryName, endpointPath: target.endpointPath, allowedContentTypes: target.allowedContentTypes, allowedLanguages: target.allowedLanguages, maximumPayloadBytes: target.maximumPayloadBytes, status: target.status, activeSlot: target.activeSlot, executionEnabled: target.executionEnabled, credentialConfigured: Boolean(target.credentialReference), destinationPublicationIdentityConfigured: Boolean(target.destinationPublicationIdentity), serviceReferenceConfigured: Boolean(target.serviceReference), configurationFingerprint: target.configurationFingerprint, idempotencyKey: target.idempotencyKey, createdAt: target.createdAt, updatedAt: target.updatedAt }))
   const capabilities = { schedulerAvailable: true, generationExecutorConfigured: generationProviderConfigured, firstPartyPublisherConfigured: firstPartyTransportConfigured, outcomeCollectionConfigured: true, externalRuntimeAvailability: { generationProviderConfigured, firstPartyTransportConfigured, nonFirstPartyTransportConfigured, credentialResolverAvailable: credentialResolverConfigured } }
   const readiness = { schedulerAvailable: true, generationExecutorAvailable: generationProviderConfigured, publicationTargetConfigured: activeTargets.length > 0, publicationExecutionEnabled: activeTargets.some(target => target.executionEnabled), credentialReferenceConfigured: activeTargets.some(target => Boolean(target.credentialReference)), runtimeCredentialResolverAvailable: credentialResolverConfigured, outcomeCollectionConfigured: true }
-  return { clients: clients.map(publicClient), calendars, entries: projections, runs, outcomeAssessments: outcomeAssessments.map(outcome => ({ ...outcome, validPairCount: outcomeValidPairCount(outcome.assessmentSnapshot) })), publicationTargets, capabilities, readiness, limitations: [...CONTENT_OPERATIONS_LIMITATIONS] }
+  const governance = { policies, entityProfiles, queryOwnership, budgetReservations, repairs: entryDetails.flatMap(detail => detail.repairs), substitutions: entryDetails.flatMap(detail => detail.substitutions), machineAuthorizations: entryDetails.flatMap(detail => detail.machineAuthorizations) }
+  return { clients: clients.map(publicClient), calendars, entries: projections, runs, outcomeAssessments: outcomeAssessments.map(outcome => ({ ...outcome, validPairCount: outcomeValidPairCount(outcome.assessmentSnapshot) })), publicationTargets, governance, capabilities, readiness, limitations: [...CONTENT_OPERATIONS_LIMITATIONS] }
 }
 
 export function getDefaultContentOperationsClock(): Clock {

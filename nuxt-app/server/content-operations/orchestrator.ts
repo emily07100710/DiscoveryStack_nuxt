@@ -8,7 +8,7 @@ import type { CanonicalContext, ContentOperationsRepository, EventInsert, Public
 import { createContentOperationsRepository } from './repository'
 import { buildPublicationIdentity, validatePersistedPublicationIdentity, type PublicationIdentity } from './publication-identity'
 import { materializeOwnerDueContent, getDefaultContentOperationsClock } from './service'
-import { evaluateOwnerAutopilotPolicy, type OwnerAutopilotPolicy } from './autopilot-policy'
+import { evaluateOwnerAutopilotPolicy, GOVERNED_AUTOPILOT_POLICY_V4_VERSION, type OwnerAutopilotPolicy } from './autopilot-policy'
 import { buildMachineAuthorization, buildRepairContract, decideBalancedAutopilot, type AutopilotPolicySnapshot, type EntityStrategyProfile, type QueryOwnership } from './balanced-autopilot'
 import { projectAutopilotPolicy } from './autopilot-service'
 import { getContentOperationsRuntimeDependencies } from './runtime-dependencies'
@@ -21,6 +21,8 @@ import { GEOFlow_PINNED_SOURCE_SHA } from '../publication-routing'
 import type { MultiChannelDispatchResult, MultiChannelExecutorRegistry, MultiChannelHttpTransport, MultiChannelLocalTransport, PublicationTargetInput as RoutingTargetInput, RoutingPlan } from '../publication-routing'
 import { createMultiChannelExecutorRegistry, createRoutingPlan, executeMultiChannelPublication } from '../publication-routing'
 import type { MultiChannelAdapterInput, MultiChannelAdapterResult } from '../publication-routing/multi-channel-executors'
+import { canonicalContentOperationRunIdentity } from './run-identity'
+import { evaluateCanonicalGeoContentQuality } from './quality-evaluation'
 
 const MAX_ATTEMPTS = 3
 const DEFAULT_LEASE_MS = 5 * 60 * 1000
@@ -216,10 +218,6 @@ function activeSlotFor(targets: readonly ContentOperationPublicationTargetRow[])
   collision('An owner client may have at most 20 active publication targets.')
 }
 
-function runKey(entryId: number, stage: RunInsert['stage'], fingerprint: string): string {
-  return `orchestrator:${stage}:${entryId}:${fingerprint.slice(0, 32)}`.slice(0, 128)
-}
-
 function runPayload(ownerUserId: number, entry: ContentOperationCalendarEntryRow, stage: RunInsert['stage'], inputFingerprint: string, idempotencyKey: string): RunInsert {
   return {
     ownerUserId,
@@ -240,13 +238,12 @@ function runPayload(ownerUserId: number, entry: ContentOperationCalendarEntryRow
   }
 }
 
-async function ensureRun(repository: ContentOperationsRepository, ownerUserId: number, entry: ContentOperationCalendarEntryRow, stage: RunInsert['stage'], input: unknown): Promise<ContentOperationRunRow> {
-  const fingerprint = stableFingerprint(input)
-  const key = runKey(entry.id, stage, fingerprint)
-  const payload = runPayload(ownerUserId, entry, stage, fingerprint, key)
-  const existing = await repository.findRunByIdempotency(ownerUserId, key)
+async function ensureRun(repository: ContentOperationsRepository, ownerUserId: number, entry: ContentOperationCalendarEntryRow, stage: RunInsert['stage'], _input?: unknown): Promise<ContentOperationRunRow> {
+  const identity = canonicalContentOperationRunIdentity(entry, stage)
+  const payload = runPayload(ownerUserId, entry, stage, identity.inputFingerprint, identity.idempotencyKey)
+  const existing = await repository.findRunByIdempotency(ownerUserId, identity.idempotencyKey)
   if (existing) {
-    if (existing.ownerUserId !== ownerUserId || existing.entryId !== entry.id || existing.stage !== stage || existing.inputFingerprint !== fingerprint) collision('Content operation run idempotency collision.')
+    if (existing.ownerUserId !== ownerUserId || existing.entryId !== entry.id || existing.stage !== stage || existing.inputFingerprint !== identity.inputFingerprint) collision('Content operation run idempotency collision.')
     return existing
   }
   return repository.insertRun(payload)
@@ -307,6 +304,9 @@ function balancedPolicySnapshot(policy: OwnerAutopilotPolicy): AutopilotPolicySn
     allowedDestinations: [...policy.allowedDestinations],
     allowedCadences: [...policy.allowedCadences],
     allowedRiskClasses: [...policy.allowedRiskClasses],
+    riskSemanticsVersion: policy.riskSemanticsVersion || undefined,
+    maximumRiskSeverity: policy.maximumRiskSeverity || undefined,
+    allowedBusinessRiskClasses: [...policy.allowedBusinessRiskClasses],
     entityStrategyProfileId: policy.entityStrategyProfileId,
     maximumRepairAttempts: policy.maximumRepairAttempts,
     maximumTopicSubstitutions: policy.maximumTopicSubstitutions,
@@ -357,7 +357,7 @@ function defaultPublisher(dependencies: ContentOperationOrchestratorDependencies
 
 function publicationFromLineage(ownerUserId: number, entry: ContentOperationCalendarEntryRow, calendar: { productionPlanId: number }, target: ContentOperationPublicationTargetRow, job: { id: number; productionPlanId: number | null; productionDeliverableId: number | null; strategyRecommendationId: number | null; evidenceSnapshotHash: string }, draft: { id: number; version: number; title: string; body: string; contentHash: string; provenance: unknown; safetyStatus: string }, review: { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string } | null, rules: string[], authoritySourceIds: string[], identity: PublicationIdentity, now: Date, authorityReference?: string): ApprovedFirstPartyPublication {
   if (job.productionPlanId !== calendar.productionPlanId || job.productionDeliverableId !== entry.productionDeliverableId || job.strategyRecommendationId !== entry.strategyRecommendationId || job.evidenceSnapshotHash !== entry.evidenceSnapshotHash) badRequest('Publication lineage does not match the calendar entry.')
-  const governed = typeof authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(authorityReference)
+  const governed = typeof authorityReference === 'string' && (/^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(authorityReference) || /^[a-f0-9]{64}$/u.test(authorityReference))
   if (!governed && (!review || review.reviewerUserId !== ownerUserId || review.jobId !== job.id || review.draftId !== draft.id || review.decision !== 'approved_for_delivery' || review.evidenceSnapshotHash !== entry.evidenceSnapshotHash)) badRequest('A current owner approved_for_delivery review is required.')
   if (draft.safetyStatus !== 'passed' || readRecord(draft.provenance).stage !== 'optimized') badRequest('Only a passed optimized draft can be published.')
   return {
@@ -480,14 +480,30 @@ async function executeMultiChannelPublicationPath(ownerUserId: number, entry: Co
   const priorAttempts = await repository.listPublicationAttempts(ownerUserId, entry.id)
   const plannedAt = priorAttempts.length ? Math.min(...priorAttempts.map(attempt => (attempt.startedAt || attempt.createdAt).getTime())) : now.getTime()
   let authorityReference: string | null = null
+  const targetMachineAuthorizations = new Map<number, NonNullable<Awaited<ReturnType<typeof repository.findMachineAuthorizationForTarget>>>>()
   if (input.trigger === 'scheduler' && schedulerMayUseGovernedAutopilot) {
     for (const target of targets) {
       const targetPolicy = dependencies.autopilotPoliciesByTarget?.[target.id] || dependencies.autopilotPolicy
+      if (targetPolicy?.policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION) {
+        const [policyRow, profile, query, authorization] = await Promise.all([
+          repository.findAutopilotPolicy(ownerUserId, lineage.client.id, target.id),
+          repository.findEntityStrategyProfile(ownerUserId, lineage.client.id, targetPolicy.websiteId, targetPolicy.entityStrategyProfileId),
+          repository.findQueryOwnership(ownerUserId, lineage.client.id, targetPolicy.websiteId, entry.topicCluster),
+          repository.findMachineAuthorizationForTarget(ownerUserId, entry.id, target.id),
+        ])
+        const payload = readRecord(authorization?.authorizationPayload)
+        const { authorizationFingerprint: _embedded, ...payloadBase } = payload
+        const qualityFingerprint = evaluateCanonicalGeoContentQuality({ content: draft.body, contentHash: draft.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, riskGateStatus: riskGate.status, riskGateVersion: riskGate.gateVersion || null, riskFindings: findings, entityProfileFingerprint: profile?.profileFingerprint || null, queryOwnershipFingerprint: query?.fingerprint || null }).evaluationFingerprint
+        const deliveredTargetReplay = priorAttempts.some(attempt => attempt.targetId === target.id && attempt.status === 'delivered' && Boolean(attempt.receiptFingerprint))
+        if (!policyRow || policyRow.status !== 'enabled' || policyRow.configurationFingerprint !== targetPolicy.configurationFingerprint || Date.parse(targetPolicy.expiresAt) <= now.getTime() || !profile || profile.status !== 'active' || profile.evidenceSnapshotHash !== entry.evidenceSnapshotHash || !query || query.status !== 'active' || query.evidenceSnapshotHash !== entry.evidenceSnapshotHash || !authorization || !authorization.authorizationExpiresAt || (authorization.status !== 'authorized' && !(authorization.status === 'published' && deliveredTargetReplay)) || (authorization.authorizationExpiresAt.getTime() <= now.getTime() && !deliveredTargetReplay) || authorization.policyFingerprint !== targetPolicy.configurationFingerprint || authorization.entityProfileFingerprint !== profile.profileFingerprint || authorization.queryOwnershipFingerprint !== query.fingerprint || authorization.jobId !== job.id || authorization.draftId !== draft.id || authorization.contentHash !== draft.contentHash || authorization.evidenceSnapshotHash !== entry.evidenceSnapshotHash || authorization.publicationTargetId !== target.id || authorization.targetId !== target.targetId || authorization.qualityFingerprint !== qualityFingerprint || stableFingerprint(payloadBase) !== authorization.authorizationFingerprint) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: ['exact per-target V4 authorization reload failed; no executor was called'] }
+        targetMachineAuthorizations.set(target.id, authorization)
+        continue
+      }
       const evaluation = evaluateOwnerAutopilotPolicy({ policy: targetPolicy, ownerUserId, clientId: lineage.client.id, targetRowId: target.id, targetId: target.targetId, targetStatus: target.status, targetExecutionEnabled: target.executionEnabled, entry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: latestReview?.decision || null, riskGateStatus: gate.status, riskLevel, qualityGateVersion, evidenceApproved, evidenceCapturedAt, providerExecution, providerModel, providerProvenanceComplete: Boolean(providerModel && provenance.stage === 'optimized' && provenance.evidenceSnapshotHash === entry.evidenceSnapshotHash && providerProvenance.providerExecution === true), unsupportedFactualClaim, contentHashMatchesDraft: draft.contentHash === entry.contentHash, now })
       if (!evaluation.allowed) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: [...evaluation.reasons, `decisionCode=${evaluation.code}`] }
     }
     const policyIds = targets.map(target => dependencies.autopilotPoliciesByTarget?.[target.id] || dependencies.autopilotPolicy).filter((policy): policy is OwnerAutopilotPolicy => Boolean(policy)).map(policy => policy.policyId).sort()
-    authorityReference = `ref-autopilot-${(policyIds.length ? policyIds.join('.') : 'missing').slice(0, 140)}`
+    authorityReference = targetMachineAuthorizations.size ? `ref-autopilot-v4-${stableFingerprint([...targetMachineAuthorizations.values()].map(row => row.authorizationFingerprint).sort()).slice(0, 64)}` : `ref-autopilot-${(policyIds.length ? policyIds.join('.') : 'missing').slice(0, 140)}`
   } else if (input.trigger === 'scheduler' || !latestReview || latestReview.reviewerUserId !== ownerUserId || latestReview.jobId !== job.id || latestReview.draftId !== draft.id || latestReview.decision !== 'approved_for_delivery' || latestReview.evidenceSnapshotHash !== entry.evidenceSnapshotHash) {
     if (!latestReview || latestReview.reviewerUserId !== ownerUserId || latestReview.jobId !== job.id || latestReview.draftId !== draft.id || latestReview.decision !== 'approved_for_delivery' || latestReview.evidenceSnapshotHash !== entry.evidenceSnapshotHash) badRequest('A current owner approved_for_delivery review is required before multi-channel publication.')
   }
@@ -549,6 +565,7 @@ async function executeMultiChannelPublicationPath(ownerUserId: number, entry: Co
     }
   }
   const reservations = new Map<string, PublicationAttemptReservation>()
+  const claimedMachineAuthorizations = new Map<string, NonNullable<Awaited<ReturnType<typeof repository.findMachineAuthorizationForTarget>>>>()
   const dispatchInputs = new Map<string, { idempotencyKey: string; executorRunId: string; attempt: number }>()
   const results: MultiChannelDispatchResult[] = []
   const routeAttempts = new Map<string, typeof priorAttempts[number]>()
@@ -588,7 +605,16 @@ async function executeMultiChannelPublicationPath(ownerUserId: number, entry: Co
         const target = routeTarget.get(route.targetId)
         const identityForRoute = routeIdentity.get(route.routeId)
         if (!target || !identityForRoute) badRequest('Publication route target identity could not be resolved.')
-        const reservation = await repository.reservePublicationAttempt({ ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, websiteId: target.websiteId || null, routingPlanId: plan.planFingerprint, routeId: route.routeId, executorRunId, authorityReference, mode: requestedMode, attemptNumber: attempt, idempotencyKey, inputFingerprint: requestFingerprint, publicationId: identityForRoute.publicationId, publicationSlug: identityForRoute.slug, publicationPath: identityForRoute.path, contentHash: draft.contentHash, publicationContentHash: bodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, startedAt: now, leaseToken: token, jobId: job.id, draftId: draft.id, reviewId: authorityReference ? null : latestReview?.id || null, riskGateId: gate.id })
+        const targetAuthorization = targetMachineAuthorizations.get(target.id)
+        if (targetAuthorization) {
+          const claimed = await repository.transitionMachineAuthorization(ownerUserId, targetAuthorization.authorizationFingerprint, 'authorized', 'executing', now)
+          if (!claimed) { results.push({ status: 'failed', routeId: route.routeId, executor: route.executor, attempt, receipt: null, receiptFingerprint: null, replay: true, collision: false, reasons: ['per-target machine authorization CAS was not acquired; executor was not called'] }); continue }
+          const budget = await repository.reserveAutopilotBudget({ ownerUserId, policyId: targetAuthorization.policyId, publicationTargetId: target.id, entryId: entry.id, kind: 'publication', units: 1, idempotencyKey: `publication:${targetAuthorization.authorizationFingerprint}`.slice(0, 160), inputFingerprint: stableFingerprint({ version: 'autopilot-budget-v1', kind: 'publication', authorizationFingerprint: targetAuthorization.authorizationFingerprint, entryId: entry.id, targetId: target.id }) })
+          if (!budget.reserved) { await repository.transitionMachineAuthorization(ownerUserId, targetAuthorization.authorizationFingerprint, 'executing', 'revoked', now); results.push({ status: 'failed', routeId: route.routeId, executor: route.executor, attempt, receipt: null, receiptFingerprint: null, replay: false, collision: false, reasons: ['per-target publication budget exhausted; executor was not called'] }); continue }
+          claimedMachineAuthorizations.set(route.routeId, targetAuthorization)
+        }
+        const routeAuthorityReference = targetAuthorization?.authorizationFingerprint || authorityReference
+        const reservation = await repository.reservePublicationAttempt({ ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, websiteId: target.websiteId || null, routingPlanId: plan.planFingerprint, routeId: route.routeId, executorRunId, authorityReference: routeAuthorityReference, mode: requestedMode, attemptNumber: attempt, idempotencyKey, inputFingerprint: requestFingerprint, publicationId: identityForRoute.publicationId, publicationSlug: identityForRoute.slug, publicationPath: identityForRoute.path, contentHash: draft.contentHash, publicationContentHash: bodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, startedAt: now, leaseToken: token, jobId: job.id, draftId: draft.id, reviewId: routeAuthorityReference ? null : latestReview?.id || null, riskGateId: gate.id })
         reservations.set(route.routeId, reservation)
       }
       results.push(await executeMultiChannelPublication({ plan, routeId: route.routeId, content: draft.body, idempotencyKey, executorRunId, attempt, now: now.getTime(), mode: requestedMode, knownReceipts: previousLedger, registry, resolveCredential: dependencies.resolveMultiChannelCredential }))
@@ -611,11 +637,17 @@ async function executeMultiChannelPublicationPath(ownerUserId: number, entry: Co
           const patch: PublicationAttemptFinalization = { status: result.status === 'delivered' ? 'delivered' : result.status === 'retry_wait' ? 'retryable_failure' : result.status === 'planned' ? 'dry_run_succeeded' : 'permanent_failure', artifactFingerprint: stableFingerprint({ routeId: route.routeId, receiptFingerprint: result.receiptFingerprint, status: result.status }), remoteState: result.status, receiptLedger: result.receipt ? [result.receipt] : [], remoteRevision: null, receiptFingerprint: result.receiptFingerprint, publicationUrl: null, errorCode: result.status === 'delivered' || result.status === 'planned' ? null : 'MULTI_CHANNEL_DISPATCH_BLOCKED', errorSummary: result.status === 'delivered' || result.status === 'planned' ? null : sanitizeErrorSummary(result.reasons.join('; ')), completedAt: now }
           const stored = await transaction.finalizePublicationAttempt(ownerUserId, reservation.attempt.id, patch)
           if (!stored) badRequest('A per-target multi-channel attempt could not be finalized from planned state.')
+          const machineAuthorization = claimedMachineAuthorizations.get(route.routeId)
+          if (machineAuthorization) {
+            const nextAuthorizationStatus = result.status === 'delivered' ? 'published' : result.status === 'retry_wait' ? 'authorized' : 'revoked'
+            const transitioned = await transaction.transitionMachineAuthorization(ownerUserId, machineAuthorization.authorizationFingerprint, 'executing', nextAuthorizationStatus, now)
+            if (!transitioned) badRequest('Per-target machine authorization finalization CAS failed.')
+          }
         } else if (requestedMode === 'dry_run' && !await transaction.findPublicationAttemptByIdempotency(ownerUserId, dispatch.idempotencyKey)) {
           await transaction.insertPublicationAttempt({ ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, websiteId: target.websiteId || null, routingPlanId: plan.planFingerprint, routeId: route.routeId, executorRunId: dispatch.executorRunId, authorityReference, publicationUrl: null, receiptFingerprint: result.receiptFingerprint, mode: requestedMode, attemptNumber: dispatch.attempt, idempotencyKey: dispatch.idempotencyKey, inputFingerprint: requestFingerprint, publicationId: identityForRoute.publicationId, publicationSlug: identityForRoute.slug, publicationPath: identityForRoute.path, contentHash: draft.contentHash, publicationContentHash: bodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, artifactFingerprint: finalization.artifactFingerprint, status: 'dry_run_succeeded', remoteState: 'dry_run', receiptLedger: [], remoteRevision: null, errorCode: null, errorSummary: null, startedAt: now, completedAt: now })
         }
         const routeEvent = event(ownerUserId, entry, leased.id, `publication_route_${result.status}`, entry.status, aggregateStatus === 'delivered' ? 'delivered' : aggregateStatus === 'retryable_failure' ? 'ready_to_publish' : entry.status, { routeId: route.routeId, targetId: target.id, status: result.status, replay: result.replay, receiptFingerprint: result.receiptFingerprint, reason: result.reasons[0] || null }, { entryId: entry.id, planFingerprint: plan.planFingerprint, routeId: route.routeId, attempt: result.attempt, status: result.status })
-        await transaction.appendEvent({ ...routeEvent, clientId: lineage.client.id, websiteId: target.websiteId || null, deliverableId: entry.productionDeliverableId, draftId: draft.id, routingPlanId: plan.planFingerprint, routeId: route.routeId, executorRunId: dispatch.executorRunId, contentHash: bodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, authorityReference })
+        await transaction.appendEvent({ ...routeEvent, clientId: lineage.client.id, websiteId: target.websiteId || null, deliverableId: entry.productionDeliverableId, draftId: draft.id, routingPlanId: plan.planFingerprint, routeId: route.routeId, executorRunId: dispatch.executorRunId, contentHash: bodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, authorityReference: targetMachineAuthorizations.get(target.id)?.authorizationFingerprint || authorityReference })
       }
       const nextStatus = aggregateStatus === 'delivered' ? 'delivered' : aggregateStatus === 'retryable_failure' ? 'ready_to_publish' : aggregateStatus === 'dry_run_succeeded' ? entry.status : 'blocked'
       const updated = await transaction.updateEntry(ownerUserId, entry.id, { status: nextStatus, contentHash: draft.contentHash, publicationContentHash: bodyHash, publicationTargetId: targets[0]!.id, publicationSlug: identity.slug, publicationPath: identity.path, publicationIdentityFingerprint: identity.identityFingerprint, publicationRoutingPlanId: plan.planFingerprint, publicationAuthorityReference: authorityReference, publicationTargetCount: targets.length })
@@ -626,6 +658,7 @@ async function executeMultiChannelPublicationPath(ownerUserId: number, entry: Co
     })
     return { entryId: entry.id, entry: finalized.updated, previousStatus: entry.status, resultingStatus: finalized.updated.status, runId: finalized.completed.id, stage: 'publication', outcome: aggregateStatus === 'delivered' ? 'delivered' : aggregateStatus === 'dry_run_succeeded' ? 'dry_run_succeeded' : aggregateStatus === 'retryable_failure' ? 'retry_wait' : 'blocked', retryAt: aggregateStatus === 'retryable_failure' ? retryDate(now, batchAttempt) : null, limitations: aggregateStatus === 'delivered' ? ['all target routes delivered with exact remote identity and body hash; each target has an independent append-only attempt'] : aggregateStatus === 'retryable_failure' ? ['only unresolved retryable target routes are eligible for the next batch attempt; delivered routes replay from verified receipts'] : ['multi-channel publication did not complete; no unvalidated target is treated as delivered'] }
   } catch (error) {
+    for (const authorization of claimedMachineAuthorizations.values()) await repository.transitionMachineAuthorization(ownerUserId, authorization.authorizationFingerprint, 'executing', 'authorized', now).catch(() => null)
     const released = await repository.releaseRunLease(ownerUserId, leased.id, 'blocked', token, now, { code: 'MULTI_CHANNEL_EXECUTION_FAILED', summary: sanitizeErrorSummary(error) })
     if (!released) badRequest('Multi-channel publication failure lease could not be completed.')
     throw error
@@ -686,6 +719,7 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
   const riskGate = gate as typeof gate & { gateVersion?: string; findings?: unknown; riskLevel?: string }
   if (!gate || gate.draftId !== draft.id || gate.evidenceSnapshotHash !== entry.evidenceSnapshotHash || gate.status !== 'passed' || !safeString(riskGate.gateVersion) || !safeString(riskGate.riskLevel)) badRequest('Publication requires the latest exact passed risk gate.')
   let authorityReference: string | null = null
+  let machineAuthorization: Awaited<ReturnType<typeof repository.findMachineAuthorizationForTarget>> = null
   if (input.trigger === 'scheduler' && dependencies.autopilotPolicy) {
     const provenance = readRecord(draft.provenance)
     const providerProvenance = readRecord(provenance.providerProvenance)
@@ -694,9 +728,37 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
     const { evidenceApproved, evidenceCapturedAt } = evidenceAuthority
     const findings = Array.isArray(riskGate.findings) ? riskGate.findings : []
     const unsupportedFactualClaim = findings.some(item => { const record = readRecord(item); const id = safeString(record.id) || ''; return /unsupported|source_bound_claim|fabricated|performance|guarantee/iu.test(id) })
-    const autopilot = evaluateOwnerAutopilotPolicy({ policy: dependencies.autopilotPolicy, ownerUserId, clientId: lineage.client.id, targetRowId: target.id, targetId: target.targetId, targetStatus: target.status, targetExecutionEnabled: target.executionEnabled, entry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: latestReview?.decision || null, riskGateStatus: gate.status, riskLevel: safeString(riskGate.riskLevel), qualityGateVersion: safeString(riskGate.gateVersion), evidenceApproved, evidenceCapturedAt, providerExecution: provenance.providerExecution === true && providerProvenance.providerExecution === true, providerModel, providerProvenanceComplete: Boolean(providerModel && provenance.stage === 'optimized' && provenance.evidenceSnapshotHash === entry.evidenceSnapshotHash && providerProvenance.providerExecution === true), unsupportedFactualClaim, contentHashMatchesDraft: draft.contentHash === entry.contentHash, now })
-    if (!autopilot.allowed) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: [...autopilot.reasons, `decisionCode=${autopilot.code}`] }
-    authorityReference = `ref-autopilot-${dependencies.autopilotPolicy!.policyId}`
+    if (dependencies.autopilotPolicy.policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION) {
+      const currentPolicyRow = await repository.findAutopilotPolicy(ownerUserId, lineage.client.id, target.id)
+      const currentProfile = await repository.findEntityStrategyProfile(ownerUserId, lineage.client.id, dependencies.autopilotPolicy.websiteId, dependencies.autopilotPolicy.entityStrategyProfileId)
+      const currentQuery = await repository.findQueryOwnership(ownerUserId, lineage.client.id, dependencies.autopilotPolicy.websiteId, entry.topicCluster)
+      machineAuthorization = await repository.findMachineAuthorizationForTarget(ownerUserId, entry.id, target.id)
+      const payload = readRecord(machineAuthorization?.authorizationPayload)
+      const { authorizationFingerprint: _embeddedFingerprint, ...payloadBase } = payload
+      const riskPayload = readRecord(payload.risk)
+      const expectedQualityFingerprint = evaluateCanonicalGeoContentQuality({ content: draft.body, contentHash: draft.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, riskGateStatus: riskGate.status, riskGateVersion: riskGate.gateVersion || null, riskFindings: Array.isArray(riskGate.findings) ? riskGate.findings : [], entityProfileFingerprint: currentProfile?.profileFingerprint || null, queryOwnershipFingerprint: currentQuery?.fingerprint || null }).evaluationFingerprint
+      const authorizationExpiresAt = machineAuthorization?.authorizationExpiresAt?.getTime() || 0
+      const valid = Boolean(
+        currentPolicyRow && currentPolicyRow.status === 'enabled' && currentPolicyRow.configurationFingerprint === dependencies.autopilotPolicy.configurationFingerprint
+        && Date.parse(dependencies.autopilotPolicy.expiresAt) > now.getTime()
+        && currentProfile?.status === 'active' && currentProfile.profileFingerprint === machineAuthorization?.entityProfileFingerprint && currentProfile.evidenceSnapshotHash === entry.evidenceSnapshotHash
+        && currentQuery?.status === 'active' && currentQuery.fingerprint === machineAuthorization?.queryOwnershipFingerprint && currentQuery.evidenceSnapshotHash === entry.evidenceSnapshotHash
+        && machineAuthorization?.status === 'authorized' && authorizationExpiresAt > now.getTime()
+        && machineAuthorization.ownerUserId === ownerUserId && machineAuthorization.clientId === lineage.client.id && machineAuthorization.websiteId === target.websiteId
+        && machineAuthorization.entryId === entry.id && machineAuthorization.jobId === job.id && machineAuthorization.draftId === draft.id && machineAuthorization.publicationTargetId === target.id
+        && machineAuthorization.targetId === target.targetId && machineAuthorization.contentHash === draft.contentHash && machineAuthorization.evidenceSnapshotHash === entry.evidenceSnapshotHash
+        && machineAuthorization.policyId === dependencies.autopilotPolicy.policyId && machineAuthorization.policyFingerprint === dependencies.autopilotPolicy.configurationFingerprint
+        && riskPayload.severity === (riskGate.riskLevel === 'high' ? 'high' : 'low') && riskPayload.businessClass === 'general' && riskPayload.fingerprint === machineAuthorization.riskFingerprint
+        && machineAuthorization.qualityFingerprint === expectedQualityFingerprint
+        && stableFingerprint(payloadBase) === machineAuthorization.authorizationFingerprint,
+      )
+      if (!valid) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: ['exact V4 machine authorization reload failed; executor was not called'] }
+      authorityReference = machineAuthorization!.authorizationFingerprint
+    } else {
+      const autopilot = evaluateOwnerAutopilotPolicy({ policy: dependencies.autopilotPolicy, ownerUserId, clientId: lineage.client.id, targetRowId: target.id, targetId: target.targetId, targetStatus: target.status, targetExecutionEnabled: target.executionEnabled, entry, entryCadenceDays: lineage.calendar.cadenceDays, reviewDecision: latestReview?.decision || null, riskGateStatus: gate.status, riskLevel: safeString(riskGate.riskLevel), qualityGateVersion: safeString(riskGate.gateVersion), evidenceApproved, evidenceCapturedAt, providerExecution: provenance.providerExecution === true && providerProvenance.providerExecution === true, providerModel, providerProvenanceComplete: Boolean(providerModel && provenance.stage === 'optimized' && provenance.evidenceSnapshotHash === entry.evidenceSnapshotHash && providerProvenance.providerExecution === true), unsupportedFactualClaim, contentHashMatchesDraft: draft.contentHash === entry.contentHash, now })
+      if (!autopilot.allowed) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: [...autopilot.reasons, `decisionCode=${autopilot.code}`] }
+      authorityReference = `ref-autopilot-${dependencies.autopilotPolicy.policyId}`
+    }
   }
   const rules = context.rules.map(rule => rule.id)
   const authoritySourceIds = context.evidenceSnapshot.refs.map(ref => ref.artifactId ? `artifact:${ref.artifactId}` : `source:${ref.sourceId}`).filter(Boolean)
@@ -727,6 +789,20 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
     if (!current) badRequest('Publication run disappeared before lease acquisition.')
     const retryAttempt = attempts.find(attempt => attempt.runId === current.id && attempt.status === 'retryable_failure')
     return { entryId: entry.id, entry: persistedEntry, previousStatus: entry.status, resultingStatus: entry.status, runId: current.id, stage: 'publication', outcome: 'replayed', retryAt: retryAttempt ? current.retryEligibleAt : current.retryEligibleAt, limitations: ['another worker currently owns the publication lease'] }
+  }
+  if (machineAuthorization) {
+    const claimed = await repository.transitionMachineAuthorization(ownerUserId, machineAuthorization.authorizationFingerprint, 'authorized', 'executing', now)
+    if (!claimed) {
+      await repository.releaseRunLease(ownerUserId, leased.id, 'queued', token, now, { code: 'MACHINE_AUTH_ALREADY_CLAIMED', summary: 'Machine authorization was not claimable.' })
+      return { entryId: entry.id, entry: persistedEntry, previousStatus: entry.status, resultingStatus: entry.status, runId: leased.id, stage: 'publication', outcome: 'replayed', retryAt: null, limitations: ['machine authorization CAS was not acquired; executor was not called'] }
+    }
+    const budgetFingerprint = stableFingerprint({ version: 'autopilot-budget-v1', kind: 'publication', authorizationFingerprint: machineAuthorization.authorizationFingerprint, entryId: entry.id, targetId: target.id })
+    const budget = await repository.reserveAutopilotBudget({ ownerUserId, policyId: machineAuthorization.policyId, publicationTargetId: target.id, entryId: entry.id, kind: 'publication', units: 1, idempotencyKey: `publication:${machineAuthorization.authorizationFingerprint}`.slice(0, 160), inputFingerprint: budgetFingerprint })
+    if (!budget.reserved) {
+      await repository.transitionMachineAuthorization(ownerUserId, machineAuthorization.authorizationFingerprint, 'executing', 'revoked', now)
+      await repository.releaseRunLease(ownerUserId, leased.id, 'blocked', token, now, { code: 'PUBLICATION_BUDGET_EXHAUSTED', summary: `Publication budget exhausted (${budget.used}/${budget.limit}).` })
+      return { entryId: entry.id, entry: persistedEntry, previousStatus: entry.status, resultingStatus: entry.status, runId: leased.id, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: ['publication budget exhausted; executor was not called'] }
+    }
   }
   const publication = publicationFromLineage(ownerUserId, persistedEntry, lineage.calendar, target, job, draft, latestReview, rules, authoritySourceIds, identity, now, authorityReference || undefined)
   const mode = requestedMode
@@ -782,6 +858,10 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
       const updated = await transaction.updateEntry(ownerUserId, entry.id, { status: 'delivered', contentHash: result.contentHash, publicationTargetId: target.id, publicationSlug: identity.slug, publicationPath: identity.path, publicationIdentityFingerprint: identity.identityFingerprint })
       const completed = await transaction.releaseRunLease(ownerUserId, leased.id, 'succeeded', token, now)
       if (!completed) badRequest('Publication success lease could not be completed.')
+      if (machineAuthorization) {
+        const published = await transaction.transitionMachineAuthorization(ownerUserId, machineAuthorization.authorizationFingerprint, 'executing', 'published', now)
+        if (!published) badRequest('Machine authorization publication CAS failed.')
+      }
       await transaction.appendEvent(event(ownerUserId, entry, completed.id, 'publication_delivered', entry.status, updated.status, { attemptId: stored.id, attemptNumber, publicationId: result.publicationId, remoteState: result.remoteState, remoteRevision: result.remoteRevision }, { entryId: entry.id, attemptKey, event: 'publication_delivered' }))
       return { stored, updated, completed }
     })
@@ -803,6 +883,10 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
     const updated = status === 'blocked' || status === 'permanent_failure' ? await transaction.updateEntry(ownerUserId, entry.id, { status: 'blocked' }) : await transaction.updateEntry(ownerUserId, entry.id, { status: 'ready_to_publish' })
     const completed = await transaction.releaseRunLease(ownerUserId, leased.id, nextRunState, token, now, { code: 'code' in result ? result.code : 'REQUEST_BLOCKED', summary: failureSummary, retryEligibleAt: retryAt })
     if (!completed) badRequest('Publication failure lease could not be completed.')
+    if (machineAuthorization) {
+      const transitioned = await transaction.transitionMachineAuthorization(ownerUserId, machineAuthorization.authorizationFingerprint, 'executing', status === 'retryable_failure' ? 'authorized' : 'revoked', now)
+      if (!transitioned) badRequest('Machine authorization failure CAS failed.')
+    }
     await transaction.appendEvent(event(ownerUserId, entry, completed.id, `publication_${status}`, entry.status, updated.status, { attemptId: stored.id, attemptNumber, errorCode: stored.errorCode, retryAt }, { entryId: entry.id, attemptKey, event: `publication_${status}` }))
     return { stored, updated, completed }
   })
@@ -819,6 +903,18 @@ async function executeGeneration(ownerUserId: number, entry: ContentOperationCal
   const token = randomUUID()
   const leased = await repository.acquireRunLease(ownerUserId, run.id, token, now, leaseMsFor(dependencies.leaseMs))
   if (!leased) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: run.id, stage: 'generation', outcome: 'replayed', retryAt: run.retryEligibleAt, limitations: ['another worker currently owns the generation lease'] }
+  const generationPolicies = [...new Map(Object.values(dependencies.autopilotPoliciesByTarget || {})
+    .filter((policy): policy is OwnerAutopilotPolicy => Boolean(policy?.policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION))
+    .map(policy => [policy.policyId, policy])).values()]
+  for (const policy of generationPolicies) {
+    const inputFingerprint = stableFingerprint({ version: 'autopilot-budget-v1', kind: 'generation', policyId: policy.policyId, entryId: entry.id, draftId: null, evidenceSnapshotHash: entry.evidenceSnapshotHash })
+    const budget = await repository.reserveAutopilotBudget({ ownerUserId, policyId: policy.policyId, publicationTargetId: policy.targetRowId, entryId: entry.id, kind: 'generation', units: 1, idempotencyKey: `generation:${entry.id}:${policy.policyId}`.slice(0, 160), inputFingerprint })
+    if (!budget.reserved) {
+      const blockedEntry = await repository.updateEntry(ownerUserId, entry.id, { status: 'blocked' })
+      await repository.releaseRunLease(ownerUserId, leased.id, 'blocked', token, now, { code: 'GENERATION_BUDGET_EXHAUSTED', summary: `Generation budget exhausted (${budget.used}/${budget.limit}).` })
+      return { entryId: entry.id, entry: blockedEntry, previousStatus: entry.status, resultingStatus: blockedEntry.status, runId: run.id, stage: 'generation', outcome: 'blocked', retryAt: null, limitations: ['generation budget exhausted; provider was not called'] }
+    }
+  }
   const productionRuntime = dependencies.productionRuntime || {}
   const runner = dependencies.productionDeliverableRunner || (async input => runOwnerProductionDeliverable(input))
   try {
@@ -858,6 +954,62 @@ async function executeGeneration(ownerUserId: number, entry: ContentOperationCal
       return { updated, completed }
     })
     return { entryId: entry.id, entry: failed.updated, previousStatus: entry.status, resultingStatus: failed.updated.status, runId: failed.completed.id, stage: 'generation', outcome: 'blocked', retryAt: null, limitations: ['generation exception was converted to a bounded blocked result', `error=${sanitizeErrorSummary(error)}`] }
+  }
+}
+
+async function executeV4MachineReview(
+  ownerUserId: number,
+  entry: ContentOperationCalendarEntryRow,
+  repository: ContentOperationsRepository,
+  dependencies: ContentOperationOrchestratorDependencies,
+  now: Date,
+  expectedRunId?: number,
+): Promise<ExecuteContentOperationResult> {
+  if (!entry.jobId || !entry.draftId) badRequest('V4 machine review requires exact job and draft lineage.')
+  const reviewRun = await ensureRun(repository, ownerUserId, entry, 'review_wait')
+  if (expectedRunId !== undefined && reviewRun.id !== expectedRunId) badRequest('The expected V4 review run is stale.')
+  const token = randomUUID()
+  const leased = await repository.acquireRunLease(ownerUserId, reviewRun.id, token, now, leaseMsFor(dependencies.leaseMs))
+  if (!leased) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: reviewRun.id, stage: 'review_wait', outcome: 'replayed', retryAt: reviewRun.retryEligibleAt, limitations: ['another worker owns the durable V4 review lease'] }
+  try {
+    const lineage = await repository.resolveWorkspaceEntry(ownerUserId, entry.id)
+    if (!lineage?.client || !lineage.calendar || !lineage.job || !lineage.draft) badRequest('V4 machine review lineage is incomplete.')
+    const bindings = await repository.listEntryTargetBindings(ownerUserId, entry.id)
+    const rows = bindings.length
+      ? await Promise.all(bindings.sort((left, right) => left.slot - right.slot).map(binding => repository.findPublicationTarget(ownerUserId, binding.targetId)))
+      : [lineage.target || await repository.findActivePublicationTarget(ownerUserId, lineage.client.id)]
+    const targets = rows.filter((row): row is ContentOperationPublicationTargetRow => Boolean(row))
+    if (!targets.length || targets.some(target => target.status !== 'active' || !target.executionEnabled)) badRequest('V4 machine review requires active executable target identities.')
+    const draft = lineage.draft as typeof lineage.draft & { title: string; body: string; provenance: unknown }
+    const context = await repository.resolveCanonicalContext(ownerUserId, lineage.calendar.productionPlanId, entry.productionDeliverableId)
+    if (context.evidenceSnapshot.hash !== entry.evidenceSnapshotHash || context.deliverable.id !== entry.productionDeliverableId || context.strategy.id !== entry.strategyRecommendationId) badRequest('V4 canonical context is stale.')
+    const evidenceAuthority = canonicalEvidenceForAutopilot(context, entry.evidenceSnapshotHash, now)
+    const gate = await repository.findRiskGate(ownerUserId, draft.id, entry.evidenceSnapshotHash) as Awaited<ReturnType<typeof repository.findRiskGate>> & { gateVersion?: string; findings?: unknown; riskLevel?: string }
+    if (!gate || gate.status !== 'passed' || gate.evidenceSnapshotHash !== entry.evidenceSnapshotHash || draft.contentHash !== entry.contentHash) badRequest('V4 machine review requires the exact passed draft/risk/evidence tuple.')
+    const provenance = readRecord(draft.provenance)
+    const providerProvenance = readRecord(provenance.providerProvenance)
+    const providerModel = safeString(provenance.providerModel) || safeString(provenance.model) || safeString(providerProvenance.model) || (safeString(provenance.provider) ? `${safeString(provenance.provider)}:${safeString(provenance.providerVersion) || 'unknown'}` : null)
+    const findings = Array.isArray(gate.findings) ? gate.findings : []
+    const unsupportedFactualClaim = findings.some(item => /unsupported|source_bound_claim|fabricated|performance|guarantee/iu.test(safeString(readRecord(item).id) || ''))
+    for (const target of targets) {
+      const policyRow = await repository.findAutopilotPolicy(ownerUserId, lineage.client.id, target.id)
+      const policy = policyRow ? projectAutopilotPolicy(policyRow, target.targetId) : undefined
+      if (!policy || policy.policyVersion !== GOVERNED_AUTOPILOT_POLICY_V4_VERSION || policy.status !== 'enabled') badRequest('Every V4 target requires a current enabled repository policy.')
+      const balanced = await persistBalancedAutopilotDecision({ ownerUserId, entry, lineage, policy, target, draft, gate, evidenceAuthority, now, repository, providerModel, unsupportedFactualClaim })
+      if (balanced.decision.action !== 'publish') badRequest(`V4 machine review did not authorize publication: ${balanced.decision.code}`)
+    }
+    const ready = await repository.transaction(async transaction => {
+      const updated = await transaction.updateEntry(ownerUserId, entry.id, { status: 'ready_to_publish', reviewId: null })
+      const completed = await transaction.releaseRunLease(ownerUserId, leased.id, 'succeeded', token, now)
+      if (!completed) badRequest('V4 review lease could not be completed.')
+      const publicationRun = await ensureRun(transaction, ownerUserId, updated, 'publication')
+      await transaction.appendEvent(event(ownerUserId, entry, completed.id, 'v4_machine_review_authorized', entry.status, updated.status, { targetCount: targets.length, humanReviewId: null }, { entryId: entry.id, draftId: entry.draftId, event: 'v4_machine_review_authorized' }))
+      return { updated, publicationRun }
+    })
+    return executePublication(ownerUserId, ready.updated, { trigger: 'scheduler', mode: 'execute', idempotencyKey: `scheduler:publication:${ready.publicationRun.id}:attempt:1` }, repository, dependencies, now, ready.publicationRun.id)
+  } catch (error) {
+    await repository.releaseRunLease(ownerUserId, leased.id, 'blocked', token, now, { code: 'V4_MACHINE_REVIEW_BLOCKED', summary: sanitizeErrorSummary(error) }).catch(() => null)
+    return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: reviewRun.id, stage: 'review_wait', outcome: 'blocked', retryAt: null, limitations: ['V4 machine review failed closed before publication', `error=${sanitizeErrorSummary(error)}`] }
   }
 }
 
@@ -997,6 +1149,8 @@ export async function executeContentOperationEntry(input: { ownerUserId: number;
   }
   if (entry.status === 'materialized' || entry.status === 'awaiting_generation') return executeGeneration(input.ownerUserId, entry, repository, dependencies, now, input.expectedRunId)
   if (entry.status === 'awaiting_review') {
+    const v4Policies = Object.values(dependencies.autopilotPoliciesByTarget || {}).filter((policy): policy is OwnerAutopilotPolicy => Boolean(policy && policy.policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION))
+    if (input.trigger === 'scheduler' && (dependencies.autopilotPolicy?.policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION || v4Policies.length > 0)) return executeV4MachineReview(input.ownerUserId, entry, repository, dependencies, now, input.expectedRunId)
     const synchronized = await synchronizeReview(input.ownerUserId, entry, repository, now, leaseMsFor(dependencies.leaseMs), input.expectedRunId)
     if (synchronized.outcome === 'awaiting_review' || synchronized.outcome === 'blocked') return { entryId: entry.id, previousStatus: entry.status, resultingStatus: synchronized.entry.status, runId: synchronized.run.id, stage: 'review_wait', outcome: synchronized.outcome, retryAt: synchronized.run.retryEligibleAt, limitations: synchronized.outcome === 'awaiting_review' ? ['no automatic human approval was created; waiting for the owner review'] : ['review decision blocked publication'] }
     if (synchronized.outcome === 'ready_to_publish') return { entryId: entry.id, previousStatus: entry.status, resultingStatus: synchronized.entry.status, runId: synchronized.run.id, stage: 'review_wait', outcome: 'ready_to_publish', retryAt: null, limitations: ['owner approval is synchronized; publication requires a separate explicit execute request'] }
@@ -1015,7 +1169,11 @@ async function persistBalancedAutopilotDecision(input: { ownerUserId: number; en
   const findings = Array.isArray(input.gate?.findings) ? input.gate?.findings : []
   const reasonCodes = [...new Set(findings.map(item => safeString(readRecord(item).id)).filter(Boolean).map(value => String(value).replace(/[^A-Za-z0-9]+/gu, '_').toUpperCase()).filter(Boolean))]
   if (input.unsupportedFactualClaim) reasonCodes.push('UNSUPPORTED_FACTUAL_CLAIM')
+  const qualityEvaluation = evaluateCanonicalGeoContentQuality({ content: input.draft.body, contentHash: input.draft.contentHash, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, riskGateStatus: input.gate?.status || null, riskGateVersion: input.gate?.gateVersion || null, riskFindings: findings, entityProfileFingerprint: profileRow?.profileFingerprint || (input.policy.policyVersion === 'governed-autopilot-policy-v3' ? 'legacy-v3' : null), queryOwnershipFingerprint: ownershipRow?.fingerprint || (input.policy.policyVersion === 'governed-autopilot-policy-v3' ? 'legacy-v3' : null) })
+  reasonCodes.push(...qualityEvaluation.reasonCodes)
   const riskClass = input.gate?.riskLevel === 'low' || input.gate?.riskLevel === 'high' ? input.gate.riskLevel : 'general'
+  const riskSeverity = input.gate?.riskLevel === 'high' ? 'high' as const : input.gate?.riskLevel === 'general' ? 'moderate' as const : 'low' as const
+  const businessRiskClass = reasonCodes.some(code => /MEDICAL/u.test(code)) ? 'medical' as const : reasonCodes.some(code => /LEGAL/u.test(code)) ? 'legal' as const : reasonCodes.some(code => /FINANC|INVEST/u.test(code)) ? 'financial' as const : 'general' as const
   const policySnapshot = balancedPolicySnapshot(input.policy)
   const draftProvenance = readRecord(input.draft.provenance)
   const repairedChildLineageVerified = Boolean(input.draft.id > 0 && input.gate) || Boolean(safeString(draftProvenance.evidenceSnapshotHash) === input.entry.evidenceSnapshotHash && Number(draftProvenance.parentDraftId) > 0 && Number(draftProvenance.repairAttempt) > 0)
@@ -1027,7 +1185,9 @@ async function persistBalancedAutopilotDecision(input: { ownerUserId: number; en
     destinationId: input.target.targetId,
     cadenceDays: input.lineage.calendar.cadenceDays,
     riskClass,
-    qualityStatus: input.gate?.status === 'passed' ? 'passed' : input.gate?.status === 'needs_human_review' ? 'needs_repair' : 'blocked',
+    riskSeverity,
+    businessRiskClass,
+    qualityStatus: qualityEvaluation.status,
     reasonCodes,
     contentHash: input.draft.contentHash,
     evidenceSnapshotHash: input.entry.evidenceSnapshotHash,
@@ -1045,19 +1205,35 @@ async function persistBalancedAutopilotDecision(input: { ownerUserId: number; en
     now: input.now,
   })
   if (decision.action === 'repair') {
-    const repairContract = buildRepairContract({ originalDraftId: String(input.draft.id), originalContentHash: input.draft.contentHash, repairAttempt: repairs.length + 1, reasonCodes: decision.reasons, requestedRepairs: decision.repairInstructions, providerModel: input.providerModel, candidateId: `entry-${input.entry.id}:draft-${input.draft.id}`, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, createdAt: input.now.toISOString() })
-    await input.repository.insertRepairAttempt({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, websiteId: input.policy.websiteId, entryId: input.entry.id, originalDraftId: String(input.draft.id), originalContentHash: input.draft.contentHash, repairAttempt: repairs.length + 1, reasonCodes: repairContract.reasonCodes, failingMetrics: repairContract.failingMetrics, evidenceDeficiencies: repairContract.evidenceDeficiencies, entityCoverageDeficiencies: repairContract.entityCoverageDeficiencies, prohibitedClaimLocations: repairContract.prohibitedClaimLocations, citationDeficiencies: repairContract.citationDeficiencies, keywordStuffingLocations: repairContract.keywordStuffingLocations, internalLinkDeficiencies: repairContract.internalLinkDeficiencies, requestedRepairs: repairContract.requestedRepairs, providerModel: repairContract.providerModel, repairedDraftId: null, repairedContentHash: null, parentLineage: repairContract.parentLineage, repairFingerprint: repairContract.repairFingerprint, status: 'planned' })
+    const qualityMetrics: Record<string, number | string | null> = Object.fromEntries(Object.entries(qualityEvaluation.metrics).map(([key, value]) => [key, typeof value === 'boolean' ? Number(value) : value]))
+    const repairContract = buildRepairContract({ originalDraftId: String(input.draft.id), originalContentHash: input.draft.contentHash, repairAttempt: repairs.length + 1, reasonCodes: decision.reasons, failingMetrics: qualityMetrics, evidenceDeficiencies: qualityEvaluation.reasonCodes.filter(code => /EVIDENCE/u.test(code)), entityCoverageDeficiencies: qualityEvaluation.reasonCodes.filter(code => /ENTITY|QUERY/u.test(code)), requestedRepairs: decision.repairInstructions, providerModel: input.providerModel, candidateId: `entry-${input.entry.id}:draft-${input.draft.id}`, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, createdAt: input.now.toISOString() })
+    await input.repository.insertRepairAttempt({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, websiteId: input.policy.websiteId, entryId: input.entry.id, originalDraftId: String(input.draft.id), originalContentHash: input.draft.contentHash, repairAttempt: repairs.length + 1, reasonCodes: repairContract.reasonCodes, failingMetrics: repairContract.failingMetrics, evidenceDeficiencies: repairContract.evidenceDeficiencies, entityCoverageDeficiencies: repairContract.entityCoverageDeficiencies, prohibitedClaimLocations: repairContract.prohibitedClaimLocations, citationDeficiencies: repairContract.citationDeficiencies, keywordStuffingLocations: repairContract.keywordStuffingLocations, internalLinkDeficiencies: repairContract.internalLinkDeficiencies, requestedRepairs: repairContract.requestedRepairs, providerModel: repairContract.providerModel, repairedDraftId: null, repairedContentHash: null, parentLineage: repairContract.parentLineage, repairFingerprint: repairContract.repairFingerprint, status: 'planned', leaseOwner: null, leaseExpiresAt: null })
     await input.repository.appendEvent({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, calendarId: input.entry.calendarId, entryId: input.entry.id, runId: null, eventType: 'autopilot_repair_planned', fromStatus: input.entry.status, toStatus: input.entry.status, eventFingerprint: stableFingerprint({ entryId: input.entry.id, event: 'autopilot_repair_planned', repairFingerprint: repairContract.repairFingerprint }), metadata: { decisionCode: decision.code, decisionFingerprint: decision.decisionFingerprint, repairContract } })
     return { decision, repairContract }
   }
   if (decision.action === 'substitute' && decision.nextTopic) {
+    if (decision.nextTopic.normalize('NFKC').trim().toLowerCase() === input.entry.topicCluster.normalize('NFKC').trim().toLowerCase()) throw new Error('Topic substitution cannot select the original topic.')
     const substitutionFingerprint = stableFingerprint({ entryId: input.entry.id, originalTopic: input.entry.topicCluster, substitutedTopic: decision.nextTopic, reasons: decision.reasons, attempt: substitutions.length + 1 })
-    await input.repository.insertTopicSubstitution({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, websiteId: input.policy.websiteId, entryId: input.entry.id, substitutionAttempt: substitutions.length + 1, originalTopic: input.entry.topicCluster, substitutedTopic: decision.nextTopic, reasonCodes: decision.reasons, lineage: { policyId: input.policy.policyId, policyVersion: input.policy.policyVersion, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, decisionFingerprint: decision.decisionFingerprint }, substitutionFingerprint, status: 'applied' })
-    await input.repository.appendEvent({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, calendarId: input.entry.calendarId, entryId: input.entry.id, runId: null, eventType: 'autopilot_topic_substituted', fromStatus: input.entry.status, toStatus: input.entry.status, eventFingerprint: stableFingerprint({ entryId: input.entry.id, event: 'autopilot_topic_substituted', substitutionFingerprint }), metadata: { decisionCode: decision.code, decisionFingerprint: decision.decisionFingerprint, originalTopic: input.entry.topicCluster, substitutedTopic: decision.nextTopic } })
+    const replacement = await input.repository.transaction(async transaction => {
+      const existing = (await transaction.listEntries(input.ownerUserId, input.entry.calendarId)).find(row => row.replacementFingerprint === substitutionFingerprint)
+      let replacementEntry = existing
+      if (!replacementEntry) {
+        const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, ...base } = input.entry
+        replacementEntry = await transaction.insertEntry({ ...base, jobId: null, draftId: null, reviewId: null, contentHash: null, publicationContentHash: null, publicationTargetId: null, publicationSlug: null, publicationPath: null, publicationIdentityFingerprint: null, publicationRoutingPlanId: null, publicationAuthorityReference: null, publicationTargetCount: 0, topicCluster: decision.nextTopic!, status: 'materialized', engineEntryId: `replacement-${substitutionFingerprint.slice(0, 48)}`, idempotencyKey: `replacement:${substitutionFingerprint}`.slice(0, 128), replacementOfEntryId: input.entry.id, replacementFingerprint: substitutionFingerprint })
+        const bindings = await transaction.listEntryTargetBindings(input.ownerUserId, input.entry.id)
+        for (const binding of bindings) await transaction.insertEntryTargetBinding({ ownerUserId: binding.ownerUserId, clientId: binding.clientId, entryId: replacementEntry.id, targetId: binding.targetId, slot: binding.slot, bindingFingerprint: stableFingerprint({ replacementFingerprint: substitutionFingerprint, targetId: binding.targetId, slot: binding.slot }) })
+      }
+      const generationRun = await ensureRun(transaction, input.ownerUserId, replacementEntry, 'generation')
+      await transaction.insertTopicSubstitution({ ownerUserId: input.ownerUserId, clientId: input.lineage!.client!.id, websiteId: input.policy.websiteId, entryId: input.entry.id, substitutionAttempt: substitutions.length + 1, originalTopic: input.entry.topicCluster, substitutedTopic: decision.nextTopic!, reasonCodes: decision.reasons, lineage: { policyId: input.policy.policyId, policyVersion: input.policy.policyVersion, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, decisionFingerprint: decision.decisionFingerprint, replacementEntryId: replacementEntry.id, replacementRunId: generationRun.id, replacementFingerprint: substitutionFingerprint }, substitutionFingerprint, status: 'applied' })
+      return { replacementEntry, generationRun }
+    })
+    await input.repository.appendEvent({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, calendarId: input.entry.calendarId, entryId: input.entry.id, runId: replacement.generationRun.id, eventType: 'autopilot_topic_substituted', fromStatus: input.entry.status, toStatus: input.entry.status, eventFingerprint: stableFingerprint({ entryId: input.entry.id, event: 'autopilot_topic_substituted', substitutionFingerprint }), metadata: { decisionCode: decision.code, decisionFingerprint: decision.decisionFingerprint, originalTopic: input.entry.topicCluster, substitutedTopic: decision.nextTopic, replacementEntryId: replacement.replacementEntry.id, replacementRunId: replacement.generationRun.id } })
   }
   if (decision.action === 'publish') {
-    const authorization = buildMachineAuthorization({ decision, policy: policySnapshot, candidateId: `entry-${input.entry.id}:draft-${input.draft.id}`, contentHash: input.draft.contentHash, contentType: input.entry.contentType, locale: input.entry.language, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, evidenceCapturedAt: input.evidenceAuthority.evidenceCapturedAt || input.now.toISOString(), riskClass, riskReasonCodes: decision.reasons, draftId: String(input.draft.id), providerModel: input.providerModel || 'unknown', repairAttempts: repairs.length, substitutionCount: substitutions.length, destinationId: input.target.targetId, now: input.now.toISOString() })
-    await input.repository.insertMachineAuthorization({ authorizationId: authorization.authorizationId, ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, websiteId: input.policy.websiteId, entryId: input.entry.id, draftId: input.draft.id, policyId: authorization.policy.policyId, policyVersion: authorization.policy.policyVersion, candidateId: authorization.candidate.candidateId, contentHash: authorization.candidate.contentHash, evidenceSnapshotHash: authorization.evidence.snapshotHash, riskClass: authorization.risk.class, qualityStatus: authorization.quality.status, targetId: authorization.target.destinationId, authorizationPayload: authorization, authorizationFingerprint: authorization.authorizationFingerprint, status: 'authorized', decidedAt: input.now })
+    if (input.policy.policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION && (!profileRow || !ownershipRow || profileRow.evidenceSnapshotHash !== input.entry.evidenceSnapshotHash || ownershipRow.evidenceSnapshotHash !== input.entry.evidenceSnapshotHash)) throw new Error('V4 machine authorization requires exact active profile/query evidence lineage.')
+    const qualityFingerprint = qualityEvaluation.evaluationFingerprint
+    const authorization = buildMachineAuthorization({ decision, policy: policySnapshot, candidateId: `entry-${input.entry.id}:draft-${input.draft.id}`, contentHash: input.draft.contentHash, contentType: input.entry.contentType, locale: input.entry.language, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, evidenceCapturedAt: input.evidenceAuthority.evidenceCapturedAt || input.now.toISOString(), riskClass, riskSeverity, businessRiskClass, riskReasonCodes: decision.reasons, qualityFingerprint, entryId: input.entry.id, jobId: Number(input.lineage.job?.id), draftId: String(input.draft.id), entityProfileFingerprint: profileRow?.profileFingerprint || 'legacy-v3', queryOwnershipFingerprint: ownershipRow?.fingerprint || 'legacy-v3', providerModel: input.providerModel || 'unknown', repairAttempts: repairs.length, substitutionCount: substitutions.length, targetRowId: input.target.id, destinationId: input.target.targetId, now: input.now.toISOString() })
+    await input.repository.insertMachineAuthorization({ authorizationId: authorization.authorizationId, ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, websiteId: input.policy.websiteId, entryId: input.entry.id, jobId: Number(input.lineage.job?.id), draftId: input.draft.id, publicationTargetId: input.target.id, policyId: authorization.policy.policyId, policyVersion: authorization.policy.policyVersion, policyFingerprint: authorization.policy.configurationFingerprint, candidateId: authorization.candidate.candidateId, contentHash: authorization.candidate.contentHash, evidenceSnapshotHash: authorization.evidence.snapshotHash, entityProfileFingerprint: authorization.lineage.entityProfileFingerprint, queryOwnershipFingerprint: authorization.lineage.queryOwnershipFingerprint, riskClass: authorization.risk.businessClass, riskFingerprint: authorization.risk.fingerprint, qualityStatus: authorization.quality.status, qualityFingerprint: authorization.quality.fingerprint, targetId: authorization.target.destinationId, authorizationPayload: authorization, authorizationFingerprint: authorization.authorizationFingerprint, status: 'authorized', decidedAt: input.now, authorizationExpiresAt: new Date(Math.min(Date.parse(input.policy.expiresAt), input.now.getTime() + 15 * 60 * 1000)), claimedAt: null, revokedAt: null })
     await input.repository.appendEvent({ ownerUserId: input.ownerUserId, clientId: input.lineage.client.id, calendarId: input.entry.calendarId, entryId: input.entry.id, runId: null, eventType: 'autopilot_machine_authorized', fromStatus: input.entry.status, toStatus: input.entry.status, eventFingerprint: stableFingerprint({ entryId: input.entry.id, event: 'autopilot_machine_authorized', authorizationFingerprint: authorization.authorizationFingerprint }), metadata: { authorizationId: authorization.authorizationId, authorizationFingerprint: authorization.authorizationFingerprint, decisionFingerprint: decision.decisionFingerprint, policyId: input.policy.policyId, policyVersion: input.policy.policyVersion, humanReviewId: null } })
   }
   return { decision }
@@ -1109,6 +1285,9 @@ export async function runOwnerContentEntryWorkflow(input: { ownerUserId: number;
       }
       const balanced = await persistBalancedAutopilotDecision({ ownerUserId: input.ownerUserId, entry: live, lineage, policy: dependencies.autopilotPolicy, target, draft, gate: riskGate, evidenceAuthority, now, repository, providerModel, unsupportedFactualClaim })
       if (balanced.decision.action === 'repair' && balanced.repairContract) {
+        const repairLeaseOwner = randomUUID()
+        const claimedRepair = await repository.claimRepairAttempt(input.ownerUserId, balanced.repairContract.repairFingerprint, repairLeaseOwner, now, new Date(now.getTime() + leaseMsFor(dependencies.leaseMs)))
+        if (!claimedRepair) return { ...result, outcome: 'replayed', limitations: ['another worker owns the durable repair lease; repair provider was not called'] }
         const repairRunner = dependencies.repairRunner || (async repairInput => runOwnerProductionRepair({ ...repairInput, dependencies: dependencies.productionRuntime }))
         try {
           await repairRunner({ ownerUserId: input.ownerUserId, planId: lineage.calendar.productionPlanId, deliverableId: live.productionDeliverableId, jobId: live.jobId, originalDraft: { id: draft.id, title: draft.title, body: draft.body, contentHash: draft.contentHash, provenance: draft.provenance }, repairInstructions: balanced.decision.repairInstructions, repairAttempt: balanced.repairContract.repairAttempt, repairContractFingerprint: balanced.repairContract.repairFingerprint, now, dependencies: dependencies.productionRuntime })
@@ -1189,7 +1368,7 @@ export async function runContentOperationsExecutionTick(input: { ownerUserId?: n
       const mode = run.stage === 'publication' ? 'execute' : 'dry_run'
       let persistedAutopilotPolicy: OwnerAutopilotPolicy | undefined
       let persistedAutopilotPoliciesByTarget: Record<number, OwnerAutopilotPolicy | undefined> | undefined
-      if (run.stage === 'publication') {
+      if (run.stage === 'generation' || run.stage === 'review_wait' || run.stage === 'publication') {
         const lineage = await repository.resolveWorkspaceEntry(run.ownerUserId, entry.id)
         if (lineage?.client) {
           const bindings = await repository.listEntryTargetBindings(run.ownerUserId, entry.id)

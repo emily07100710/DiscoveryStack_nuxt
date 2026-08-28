@@ -814,11 +814,16 @@ export const contentOperationAutopilotPolicies = mysqlTable('contentOperationAut
   allowedDestinations: json('allowedDestinations').notNull().default([]),
   allowedCadences: json('allowedCadences').notNull().default([]),
   allowedRiskClasses: json('allowedRiskClasses').notNull().default([]),
+  riskSemanticsVersion: varchar('riskSemanticsVersion', { length: 96 }),
+  maximumRiskSeverity: varchar('maximumRiskSeverity', { length: 40 }),
+  allowedBusinessRiskClasses: json('allowedBusinessRiskClasses'),
   entityStrategyProfileId: varchar('entityStrategyProfileId', { length: 160 }),
   maximumRepairAttempts: int('maximumRepairAttempts').default(3).notNull(),
   maximumTopicSubstitutions: int('maximumTopicSubstitutions').default(2).notNull(),
   generationBudget: int('generationBudget').default(0).notNull(),
   publicationBudget: int('publicationBudget').default(0).notNull(),
+  generationBudgetUsed: int('generationBudgetUsed').default(0).notNull(),
+  publicationBudgetUsed: int('publicationBudgetUsed').default(0).notNull(),
   activatedAt: timestamp('activatedAt').defaultNow().notNull(),
   configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
@@ -827,6 +832,23 @@ export const contentOperationAutopilotPolicies = mysqlTable('contentOperationAut
   uniqueIndex('content_operation_autopilot_policy_id_unique').on(table.policyId),
   uniqueIndex('content_operation_autopilot_owner_target_unique').on(table.ownerUserId, table.publicationTargetId),
   index('content_operation_autopilot_owner_status_idx').on(table.ownerUserId, table.status, table.expiresAt),
+])
+
+/** Collision-safe atomic budget debits. A replay returns the same row and never consumes twice. */
+export const contentOperationBudgetReservations = mysqlTable('contentOperationBudgetReservations', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  policyId: varchar('policyId', { length: 160 }).notNull(),
+  publicationTargetId: int('publicationTargetId').notNull().references(() => contentOperationPublicationTargets.id),
+  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  kind: mysqlEnum('kind', ['generation', 'publication']).notNull(),
+  units: int('units').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 160 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('content_operation_budget_owner_key_unique').on(table.ownerUserId, table.policyId, table.kind, table.idempotencyKey),
+  index('content_operation_budget_owner_policy_idx').on(table.ownerUserId, table.policyId, table.kind),
 ])
 
 /** Durable owner/client/website-scoped entity strategy; all facts are server-approved projections. */
@@ -862,6 +884,7 @@ export const contentOperationEntityStrategyProfiles = mysqlTable('contentOperati
   profileFingerprint: varchar('profileFingerprint', { length: 128 }).notNull(),
   version: int('version').notNull(),
   status: mysqlEnum('status', ['active', 'revoked']).default('active').notNull(),
+  activeScopeKey: varchar('activeScopeKey', { length: 128 }),
   effectiveAt: timestamp('effectiveAt').notNull(),
   revokedAt: timestamp('revokedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
@@ -869,6 +892,7 @@ export const contentOperationEntityStrategyProfiles = mysqlTable('contentOperati
 }, table => [
   uniqueIndex('content_operation_entity_profile_owner_id_unique').on(table.ownerUserId, table.profileId),
   uniqueIndex('content_operation_entity_profile_owner_fingerprint_unique').on(table.ownerUserId, table.profileFingerprint),
+  uniqueIndex('content_operation_entity_profile_active_scope_unique').on(table.ownerUserId, table.activeScopeKey),
   index('content_operation_entity_profile_owner_scope_idx').on(table.ownerUserId, table.clientId, table.websiteId, table.status),
 ])
 
@@ -885,10 +909,12 @@ export const contentOperationQueryOwnership = mysqlTable('contentOperationQueryO
   evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
   fingerprint: varchar('fingerprint', { length: 128 }).notNull(),
   status: mysqlEnum('status', ['active', 'revoked']).default('active').notNull(),
+  activeScopeKey: varchar('activeScopeKey', { length: 128 }),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   revokedAt: timestamp('revokedAt'),
 }, table => [
   uniqueIndex('content_operation_query_ownership_owner_fingerprint_unique').on(table.ownerUserId, table.fingerprint),
+  uniqueIndex('content_operation_query_ownership_active_scope_unique').on(table.ownerUserId, table.activeScopeKey),
   index('content_operation_query_ownership_scope_query_idx').on(table.ownerUserId, table.clientId, table.websiteId, table.normalizedQuery, table.status),
 ])
 
@@ -917,6 +943,8 @@ export const contentOperationRepairAttempts = mysqlTable('contentOperationRepair
   parentLineage: json('parentLineage').notNull(),
   repairFingerprint: varchar('repairFingerprint', { length: 128 }).notNull(),
   status: mysqlEnum('status', ['planned', 'succeeded', 'failed', 'skipped']).default('planned').notNull(),
+  leaseOwner: varchar('leaseOwner', { length: 128 }),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
   uniqueIndex('content_operation_repair_owner_fingerprint_unique').on(table.ownerUserId, table.repairFingerprint),
@@ -951,23 +979,34 @@ export const contentOperationMachineAuthorizations = mysqlTable('contentOperatio
   clientId: int('clientId').notNull().references(() => contentOperationClients.id),
   websiteId: varchar('websiteId', { length: 128 }).notNull(),
   entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  jobId: int('jobId').references(() => seoGeoContentJobs.id),
   draftId: int('draftId').notNull().references(() => seoGeoContentDrafts.id),
+  publicationTargetId: int('publicationTargetId').references(() => contentOperationPublicationTargets.id),
   policyId: varchar('policyId', { length: 160 }).notNull(),
   policyVersion: varchar('policyVersion', { length: 128 }).notNull(),
   candidateId: varchar('candidateId', { length: 160 }).notNull(),
   contentHash: varchar('contentHash', { length: 128 }).notNull(),
   evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  policyFingerprint: varchar('policyFingerprint', { length: 128 }),
+  entityProfileFingerprint: varchar('entityProfileFingerprint', { length: 128 }),
+  queryOwnershipFingerprint: varchar('queryOwnershipFingerprint', { length: 128 }),
   riskClass: varchar('riskClass', { length: 40 }).notNull(),
+  riskFingerprint: varchar('riskFingerprint', { length: 128 }),
   qualityStatus: varchar('qualityStatus', { length: 40 }).notNull(),
+  qualityFingerprint: varchar('qualityFingerprint', { length: 128 }),
   targetId: varchar('targetId', { length: 160 }).notNull(),
   authorizationPayload: json('authorizationPayload').notNull(),
   authorizationFingerprint: varchar('authorizationFingerprint', { length: 128 }).notNull(),
-  status: mysqlEnum('status', ['authorized', 'published', 'revoked']).default('authorized').notNull(),
+  status: mysqlEnum('status', ['authorized', 'executing', 'published', 'revoked']).default('authorized').notNull(),
   decidedAt: timestamp('decidedAt').notNull(),
+  authorizationExpiresAt: timestamp('authorizationExpiresAt'),
+  claimedAt: timestamp('claimedAt'),
+  revokedAt: timestamp('revokedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
   uniqueIndex('content_operation_machine_auth_owner_id_unique').on(table.ownerUserId, table.authorizationId),
   uniqueIndex('content_operation_machine_auth_owner_fingerprint_unique').on(table.ownerUserId, table.authorizationFingerprint),
+  uniqueIndex('content_operation_machine_auth_owner_target_unique').on(table.ownerUserId, table.entryId, table.publicationTargetId, table.authorizationFingerprint),
   index('content_operation_machine_auth_owner_entry_idx').on(table.ownerUserId, table.entryId, table.createdAt),
 ])
 
@@ -1075,6 +1114,8 @@ export const contentOperationCalendarEntries = mysqlTable('contentOperationCalen
   publicationRoutingPlanId: varchar('publicationRoutingPlanId', { length: 128 }),
   publicationAuthorityReference: varchar('publicationAuthorityReference', { length: 160 }),
   publicationTargetCount: int('publicationTargetCount').default(0).notNull(),
+  replacementOfEntryId: int('replacementOfEntryId'),
+  replacementFingerprint: varchar('replacementFingerprint', { length: 128 }),
   status: mysqlEnum('status', ['planned', 'materialized', 'awaiting_generation', 'awaiting_review', 'ready_to_publish', 'publishing', 'delivered', 'completed', 'cancelled', 'skipped', 'blocked']).default('planned').notNull(),
   engineEntryId: varchar('engineEntryId', { length: 128 }).notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
@@ -1083,6 +1124,7 @@ export const contentOperationCalendarEntries = mysqlTable('contentOperationCalen
 }, table => [
   uniqueIndex('content_operation_entries_calendar_engine_unique').on(table.calendarId, table.engineEntryId),
   uniqueIndex('content_operation_entries_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('content_operation_entries_owner_replacement_unique').on(table.ownerUserId, table.replacementFingerprint),
   index('content_operation_entries_owner_status_idx').on(table.ownerUserId, table.status, table.plannedLocalDate),
   index('content_operation_entries_calendar_status_idx').on(table.calendarId, table.status),
 ])
@@ -2638,8 +2680,32 @@ export const geoOutcomeModelopsRollbackDecisions = mysqlTable('geoOutcomeModelop
   index('geo_outcome_modelops_rollback_owner_artifact_idx').on(table.ownerUserId, table.artifactId, table.createdAt),
 ])
 
+/** Advisory-only model assignment. This table intentionally has no production_active state. */
+export const geoOutcomeModelopsAdvisoryAssignments = mysqlTable('geoOutcomeModelopsAdvisoryAssignments', {
+  id: int('id').autoincrement().primaryKey(),
+  assignmentId: varchar('assignmentId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  policyId: varchar('policyId', { length: 160 }).notNull(),
+  policyFingerprint: varchar('policyFingerprint', { length: 128 }).notNull(),
+  currentArtifactHash: varchar('currentArtifactHash', { length: 128 }).notNull(),
+  candidateArtifactHash: varchar('candidateArtifactHash', { length: 128 }).notNull(),
+  shadowEvaluationFingerprint: varchar('shadowEvaluationFingerprint', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['advisory', 'rolled_back']).default('advisory').notNull(),
+  activeScopeKey: varchar('activeScopeKey', { length: 128 }),
+  version: int('version').default(1).notNull(),
+  rollbackFromAssignmentId: varchar('rollbackFromAssignmentId', { length: 160 }),
+  assignmentFingerprint: varchar('assignmentFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  rolledBackAt: timestamp('rolledBackAt'),
+}, table => [
+  uniqueIndex('geo_outcome_modelops_advisory_assignment_unique').on(table.ownerUserId, table.assignmentId),
+  uniqueIndex('geo_outcome_modelops_advisory_fingerprint_unique').on(table.ownerUserId, table.assignmentFingerprint),
+  uniqueIndex('geo_outcome_modelops_advisory_active_unique').on(table.ownerUserId, table.activeScopeKey),
+])
+
 export type GeoOutcomeModelopsPolicy = typeof geoOutcomeModelopsPolicies.$inferSelect
 export type GeoOutcomeModelopsCycle = typeof geoOutcomeModelopsCycles.$inferSelect
 export type GeoOutcomeModelopsEvent = typeof geoOutcomeModelopsEvents.$inferSelect
 export type GeoOutcomeModelopsShadowEvaluation = typeof geoOutcomeModelopsShadowEvaluations.$inferSelect
 export type GeoOutcomeModelopsRollbackDecision = typeof geoOutcomeModelopsRollbackDecisions.$inferSelect
+export type GeoOutcomeModelopsAdvisoryAssignment = typeof geoOutcomeModelopsAdvisoryAssignments.$inferSelect

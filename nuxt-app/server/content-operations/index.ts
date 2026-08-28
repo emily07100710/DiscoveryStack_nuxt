@@ -34,6 +34,8 @@ export {
 } from './service'
 export { runContentOperationsTick } from './scheduler'
 export { enableOwnerAutopilot, revokeOwnerAutopilot, getOwnerAutopilotPolicy, projectAutopilotPolicy } from './autopilot-service'
+export { saveOwnerEntityStrategyProfile, listOwnerEntityStrategyProfiles, revokeOwnerEntityStrategyProfile, saveOwnerQueryOwnership, listOwnerQueryOwnership, revokeOwnerQueryOwnership } from './governance-service'
+export { evaluateCanonicalGeoContentQuality, GEO_CONTENT_QUALITY_EVALUATION_VERSION } from './quality-evaluation'
 export { enableOwnerAutopilotPolicy, evaluateOwnerAutopilotPolicy, revokeOwnerAutopilotPolicy } from './autopilot-policy'
 export type { OwnerAutopilotPolicy, AutopilotEvaluation, AutopilotDecisionCode } from './autopilot-policy'
 export {   bindOwnerEntryPublicationTargets, createOwnerPublicationTarget, executeContentOperationEntry, listOwnerPublicationTargets, runContentOperationsExecutionTick, runOwnerContentEntryWorkflow, updateOwnerPublicationTarget } from './orchestrator'

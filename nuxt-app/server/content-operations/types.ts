@@ -1,6 +1,6 @@
 import type { ContentCalendarEntry, ContentCalendarRequest, ContentCalendarResult, DueContentWork } from '../content-calendar'
 import type { PublishedContentOutcomeAssessment, OutcomeLearningCandidateResult } from '../outcome-learning'
-import type { contentOperationAutopilotPolicies, contentOperationCalendarEntries, contentOperationCalendarEntryTargets, contentOperationCalendars, contentOperationClients, contentOperationEntityStrategyProfiles, contentOperationEvents, contentOperationMachineAuthorizations, contentOperationOutcomeAssessments, contentOperationPublicationAttempts, contentOperationPublicationTargets, contentOperationQueryOwnership, contentOperationRepairAttempts, contentOperationRuns, contentOperationTopicSubstitutions } from '../database/schema'
+import type { contentOperationAutopilotPolicies, contentOperationBudgetReservations, contentOperationCalendarEntries, contentOperationCalendarEntryTargets, contentOperationCalendars, contentOperationClients, contentOperationEntityStrategyProfiles, contentOperationEvents, contentOperationMachineAuthorizations, contentOperationOutcomeAssessments, contentOperationPublicationAttempts, contentOperationPublicationTargets, contentOperationQueryOwnership, contentOperationRepairAttempts, contentOperationRuns, contentOperationTopicSubstitutions } from '../database/schema'
 
 export type ContentOperationClientRow = typeof contentOperationClients.$inferSelect
 export type ContentOperationCalendarRow = typeof contentOperationCalendars.$inferSelect
@@ -20,6 +20,7 @@ export type ContentOperationQueryOwnershipRow = typeof contentOperationQueryOwne
 export type ContentOperationRepairAttemptRow = typeof contentOperationRepairAttempts.$inferSelect
 export type ContentOperationTopicSubstitutionRow = typeof contentOperationTopicSubstitutions.$inferSelect
 export type ContentOperationMachineAuthorizationRow = typeof contentOperationMachineAuthorizations.$inferSelect
+export type ContentOperationBudgetReservationRow = typeof contentOperationBudgetReservations.$inferSelect
 export type ContentOperationPublicationAttemptRow = Omit<PublicationAttemptRow, 'websiteId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'authorityReference' | 'receiptFingerprint' | 'publicationUrl' | 'publicationContentHash' | 'receiptLedger'> & Partial<Pick<PublicationAttemptRow, 'websiteId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'authorityReference' | 'receiptFingerprint' | 'publicationUrl' | 'publicationContentHash' | 'receiptLedger'>>
 export type ContentOperationEventRow = Omit<EventRow, 'websiteId' | 'deliverableId' | 'draftId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'contentHash' | 'evidenceSnapshotHash' | 'authorityReference'> & Partial<Pick<EventRow, 'websiteId' | 'deliverableId' | 'draftId' | 'routingPlanId' | 'routeId' | 'executorRunId' | 'contentHash' | 'evidenceSnapshotHash' | 'authorityReference'>>
 export type ContentOperationOutcomeAssessmentRow = Omit<OutcomeAssessmentRow, 'targetId' | 'draftId' | 'publicationReceiptFingerprint' | 'publishedUrl' | 'contentHash' | 'evidenceSnapshotHash'> & Partial<Pick<OutcomeAssessmentRow, 'targetId' | 'draftId' | 'publicationReceiptFingerprint' | 'publishedUrl' | 'contentHash' | 'evidenceSnapshotHash'>>
@@ -215,6 +216,15 @@ export type WorkspacePayload = {
   runs: ContentOperationRunRow[]
   outcomeAssessments: WorkspaceOutcomeProjection[]
   publicationTargets: Array<Record<string, unknown> & { id: number; clientId: number; targetId: string; framework: string; transport: string; targetOrigin: string; contentRoot: string; defaultBranch: string | null; status: string; activeSlot: number | null; executionEnabled: boolean; credentialConfigured: boolean }>
+  governance: {
+    policies: ContentOperationAutopilotPolicyRow[]
+    entityProfiles: ContentOperationEntityStrategyProfileRow[]
+    queryOwnership: ContentOperationQueryOwnershipRow[]
+    budgetReservations: ContentOperationBudgetReservationRow[]
+    repairs: ContentOperationRepairAttemptRow[]
+    substitutions: ContentOperationTopicSubstitutionRow[]
+    machineAuthorizations: ContentOperationMachineAuthorizationRow[]
+  }
   capabilities: {
     schedulerAvailable: boolean
     generationExecutorConfigured: boolean
