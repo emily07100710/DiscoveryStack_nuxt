@@ -34,9 +34,11 @@ export interface PageEditorRepository {
   compareAndAppend(ownerUserId: number, projectId: number, expectedVersion: number, page: PageDocument, operation: AppliedPageOperation): Promise<boolean>
   findOperation(ownerUserId: number, projectId: number, idempotencyKey: string): Promise<AppliedPageOperation | null>
   appendPublicationReceipt(ownerUserId: number, projectId: number, receipt: PagePublicationReceipt): Promise<PagePublicationReceipt>
+  enqueuePublication?(input: PagePublicationEnqueue): Promise<{ receipt: PagePublicationReceipt; workIds: number[]; replayed: boolean }>
   listPublicationReceipts(ownerUserId: number, projectId: number, pageId: string): Promise<PagePublicationReceipt[]>
 }
 export interface PagePublicationReceipt { pageId: string; pageVersion: number; status: 'intent_created' | 'succeeded' | 'failed' | 'rolled_back'; artifactFingerprint: string; mediaSetFingerprint: string; releaseReference: string | null; publicationTargetReference: string | null; receiptFingerprint: string; createdAt: string }
+export interface PagePublicationEnqueue { ownerUserId: number; projectId: number; clientId: number; page: PageDocument; artifact: CompiledPageArtifact; releaseId: number; targetIds: number[]; operationKind: 'publish' | 'rollback'; idempotencyKey: string; createdAt: Date }
 export type MediaAuthorityResolver = (actor: PageActor, binding: PageMediaBinding) => Promise<MediaAssetProjection | null>
 
 export interface AiPlanningContext { page: PageDocument; approvedMedia: Array<Pick<MediaAssetProjection, 'assetId' | 'version' | 'sha256' | 'width' | 'height' | 'filename' | 'visibility' | 'status'>>; commandCatalog: readonly PageCommandType[]; untrustedContentBoundary: true; maxOperations: number }
