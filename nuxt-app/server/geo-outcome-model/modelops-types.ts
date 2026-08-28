@@ -117,6 +117,13 @@ export interface ModelOpsAdvisoryAssignment {
   currentArtifactHash: string
   candidateArtifactHash: string
   shadowEvaluationFingerprint: string
+  cycleId: string
+  candidateArtifactId: string
+  datasetFingerprint: string
+  splitFingerprint: string
+  metricsFingerprint: string
+  reasonCodes: string[]
+  productionActivation: false
   status: 'advisory' | 'rolled_back'
   activeScopeKey: string | null
   version: number

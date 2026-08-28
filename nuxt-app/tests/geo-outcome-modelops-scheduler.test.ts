@@ -100,4 +100,22 @@ describe('content-operations:geo-modelops-tick', () => {
     expect(result.trainingExecutions).toBe(5)
     expect(result.processed.some(item => item.ownerUserId === 47 && item.reason === 'training_execution_budget_exhausted')).toBe(true)
   })
+
+  it('reloads the persisted autonomous execution flag and does not train after it is disabled', async () => {
+    const ownerUserId = 42
+    const state = combinedState(sourceState, [ownerUserId])
+    state.datasets = []; state.datasetMembers = {}; state.trainingRuns = []; state.artifacts = []; state.datasetDecisions = []; state.decisions = []
+    const outcome = createMemoryGeoOutcomeRepository(state)
+    const modelOps = createMemoryModelOpsRepository()
+    const policy = await createModelOpsPolicy(ownerUserId, { ...POLICY, autonomousExecutionEnabled: true, cooldownHours: 0 }, 'persisted-autonomous-disable', modelOps)
+    await modelOps.updatePolicy(ownerUserId, policy.policyId, { status: 'enabled', authorizedByOwnerUserId: ownerUserId, authorizedAt: '2026-08-28T00:00:00.000Z' })
+    const disabled = await modelOps.updatePolicy(ownerUserId, policy.policyId, { autonomousExecutionEnabled: false })
+    expect(disabled.autonomousExecutionEnabled).toBe(false)
+
+    const result = await runGeoModelOpsTick({ outcomeRepository: outcome, modelOpsRepository: modelOps }, new Date('2026-08-28T00:00:01.000Z'), 'scheduler-disabled-autonomous-worker')
+
+    expect(result.trainingExecutions).toBe(0)
+    expect(await outcome.listTrainingRuns(ownerUserId)).toHaveLength(0)
+    expect((await outcome.listDatasets(ownerUserId)).at(-1)?.status).toBe('ready_for_review')
+  })
 })

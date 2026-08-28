@@ -5,6 +5,7 @@ import { fingerprint } from './canonical'
 import { canBePrimaryCitationTruth } from './observation-contract'
 import { getWorkspace, createTrainingRun, executeTrainingRun, reviewModel } from './service'
 import { scoreWithParameters } from './trainer'
+import { assignModelOpsAdvisory, rollbackModelOpsAdvisory } from './modelops-advisory'
 import type { DatasetManifest, DatasetMember, EvaluationBundle, GeoOutcomeRepositoryPort, ModelArtifact, ModelArtifactSummary, TrainingRun } from './types'
 import type { ModelFamily } from './constants'
 import type { TrainedParameters } from './trainer'
@@ -117,6 +118,20 @@ async function finalizePolicyShadow(ownerUserId: number, cycle: ModelOpsCycle, p
   }
   const shadowEvaluation = await evaluateModelOpsShadow(ownerUserId, artifact.artifactId, outcomeRepository, modelOpsRepository, at)
   const degraded = shadowEvaluation.status === 'needs_owner_attention'
+  const activeCandidateAssignment = (await modelOpsRepository.listAdvisoryAssignments(ownerUserId)).find(item => item.status === 'advisory' && item.candidateArtifactHash === artifact.artifactHash)
+  if (degraded && activeCandidateAssignment) {
+    await rollbackModelOpsAdvisory({ ownerUserId, assignmentId: activeCandidateAssignment.assignmentId, expectedVersion: activeCandidateAssignment.version, reasonCodes: ['shadow_degradation_stop', ...shadowEvaluation.reasonCodes], now: at }, modelOpsRepository)
+    await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'advisory_automatic_rollback', { assignmentId: activeCandidateAssignment.assignmentId, candidateArtifactHash: artifact.artifactHash, reasonCodes: shadowEvaluation.reasonCodes, productionActivation: false })
+  }
+  if (shadowEvaluation.status === 'completed') {
+    const current = (await outcomeRepository.listArtifacts(ownerUserId)).filter(item => item.artifactHash !== artifact.artifactHash && item.status === 'approved_for_shadow' && item.taskType === artifact.taskType && item.modelFamily === artifact.modelFamily && item.featureCatalogVersion === artifact.featureCatalogVersion && item.labelContractVersion === artifact.labelContractVersion).at(-1)
+    if (current) {
+      const assignment = await assignModelOpsAdvisory({ ownerUserId, policyId: policy.policyId, cycleId: cycle.cycleId, candidateArtifactId: artifact.artifactId, currentArtifactHash: current.artifactHash, candidateArtifactHash: artifact.artifactHash, datasetFingerprint: dataset.manifestFingerprint, splitFingerprint: fingerprint(splitFor(dataset)), metricsFingerprint: fingerprint({ binaryMetrics: shadowEvaluation.binaryMetrics, rankingMetrics: shadowEvaluation.rankingMetrics, calibrationDiagnostics: shadowEvaluation.calibrationDiagnostics, driftDiagnostics: shadowEvaluation.driftDiagnostics }), now: at }, modelOpsRepository)
+      await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'advisory_assignment_created', { assignmentId: assignment.assignmentId, currentArtifactHash: current.artifactHash, candidateArtifactHash: artifact.artifactHash, productionActivation: false })
+    } else {
+      await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'advisory_assignment_blocked', { reasonCode: 'compatible_current_artifact_missing', candidateArtifactHash: artifact.artifactHash, productionActivation: false })
+    }
+  }
   const updated = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { status: degraded ? 'blocked' : 'completed', shadowEvaluationFingerprint: shadowEvaluation.evaluationFingerprint, reasonCodes: degraded ? ['shadow_degradation_stop'] : [`shadow_${shadowEvaluation.status}`], completedAt: at.toISOString(), leaseOwner: null, leaseExpiresAt: null, errorClass: degraded ? 'shadow_degradation' : null })
   await append(modelOpsRepository, ownerUserId, cycle.cycleId, degraded ? 'shadow_degradation_stop' : 'shadow_evaluation_recorded', { artifactId: artifact.artifactId, artifactHash: artifact.artifactHash, evaluationId: shadowEvaluation.evaluationId, status: shadowEvaluation.status, productionActivation: false, rollbackRequired: degraded })
   return { cycle: updated, artifact, shadowEvaluation }
@@ -257,6 +272,8 @@ export async function rollbackModelOpsArtifact(ownerUserId: number, artifactId: 
   const current = await outcomeRepository.getArtifact(ownerUserId, artifactId); if (!current) throw new Error('Model artifact not found.'); if (current.status !== 'approved_for_shadow' && current.status !== 'shadow_failed' && current.status !== 'revoked') throw new Error('Only a shadow artifact requiring rollback may be rolled back.')
   const target = (await outcomeRepository.listArtifacts(ownerUserId)).find(item => item.artifactHash === rollbackArtifactHash && item.status === 'approved_for_shadow' && item.taskType === current.taskType && item.modelFamily === current.modelFamily && item.featureCatalogVersion === current.featureCatalogVersion && item.labelContractVersion === current.labelContractVersion); if (!target) throw new Error('Compatible rollback artifact was not found.')
   const decisionFingerprint = fingerprint({ ownerUserId, artifactId, fromArtifactHash: current.artifactHash, rollbackArtifactHash, reviewerUserId, reason: cleanReason }); const decision: ModelOpsRollbackDecision = { decisionId: `geo-modelops-rollback-${decisionFingerprint.slice(0, 24)}`, ownerUserId, artifactId, fromArtifactHash: current.artifactHash, rollbackArtifactHash, reviewerUserId, reason: cleanReason, decisionStatus: 'approved', createdAt: now() }; const saved = await modelOpsRepository.appendRollbackDecision(ownerUserId, decision)
+  const advisory = (await modelOpsRepository.listAdvisoryAssignments(ownerUserId)).find(item => item.status === 'advisory' && item.candidateArtifactHash === current.artifactHash)
+  if (advisory) await rollbackModelOpsAdvisory({ ownerUserId, assignmentId: advisory.assignmentId, expectedVersion: advisory.version, reasonCodes: ['artifact_revoked', 'owner_rollback_lineage'], now: new Date() }, modelOpsRepository)
   if (current.status === 'revoked') { await append(modelOpsRepository, ownerUserId, `rollback-${artifactId}`, 'owner_rollback_approved', { decisionId: saved.decisionId, rollbackArtifactHash }); return { decision: saved, revokedArtifact: artifactSummary(current) } }
   const revokedArtifact = await reviewModel(ownerUserId, artifactId, 'revoke', reviewerUserId, cleanReason, outcomeRepository); await append(modelOpsRepository, ownerUserId, `rollback-${artifactId}`, 'owner_rollback_approved', { decisionId: saved.decisionId, rollbackArtifactHash }); return { decision: saved, revokedArtifact: revokedArtifact.artifact }
 }

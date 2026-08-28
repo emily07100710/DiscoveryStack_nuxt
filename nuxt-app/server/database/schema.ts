@@ -2690,6 +2690,16 @@ export const geoOutcomeModelopsAdvisoryAssignments = mysqlTable('geoOutcomeModel
   currentArtifactHash: varchar('currentArtifactHash', { length: 128 }).notNull(),
   candidateArtifactHash: varchar('candidateArtifactHash', { length: 128 }).notNull(),
   shadowEvaluationFingerprint: varchar('shadowEvaluationFingerprint', { length: 128 }).notNull(),
+  // Additive nullable columns let the generated DDL preserve pre-V4 rows. The
+  // repository rejects any such legacy row as incomplete instead of inventing
+  // advisory lineage during migration.
+  cycleId: varchar('cycleId', { length: 160 }),
+  candidateArtifactId: varchar('candidateArtifactId', { length: 160 }),
+  datasetFingerprint: varchar('datasetFingerprint', { length: 128 }),
+  splitFingerprint: varchar('splitFingerprint', { length: 128 }),
+  metricsFingerprint: varchar('metricsFingerprint', { length: 128 }),
+  reasonCodes: json('reasonCodes'),
+  productionActivation: boolean('productionActivation').default(false).notNull(),
   status: mysqlEnum('status', ['advisory', 'rolled_back']).default('advisory').notNull(),
   activeScopeKey: varchar('activeScopeKey', { length: 128 }),
   version: int('version').default(1).notNull(),
