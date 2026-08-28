@@ -367,7 +367,7 @@ function makeRepository(database: any): ContentOperationsRepository {
       return row || null
     },
     async findMachineAuthorizationForTarget(ownerUserId, entryId, publicationTargetId) {
-      const [row] = await database.select().from(contentOperationMachineAuthorizations).where(and(eq(contentOperationMachineAuthorizations.ownerUserId, ownerUserId), eq(contentOperationMachineAuthorizations.entryId, entryId), eq(contentOperationMachineAuthorizations.publicationTargetId, publicationTargetId))).orderBy(desc(contentOperationMachineAuthorizations.createdAt)).limit(1)
+      const [row] = await database.select().from(contentOperationMachineAuthorizations).where(and(eq(contentOperationMachineAuthorizations.ownerUserId, ownerUserId), eq(contentOperationMachineAuthorizations.entryId, entryId), eq(contentOperationMachineAuthorizations.publicationTargetId, publicationTargetId))).orderBy(desc(contentOperationMachineAuthorizations.createdAt), desc(contentOperationMachineAuthorizations.id)).limit(1)
       return row || null
     },
     async insertMachineAuthorization(input) {

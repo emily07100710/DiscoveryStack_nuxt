@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createGeoFlowQwenGenerationRuntime } from '../server/geoflow-runtime/qwen'
-import { createAutoGeoIsolatedWorkerAdapter } from '../server/geo/isolated-worker'
 import { geoRules } from '../server/geo/rules'
 import type { GeoRewriteAdapter } from '../server/geo/contracts'
 import { bindOwnerEntryPublicationTargets, createOwnerPublicationTarget, runContentOperationsExecutionTick, runOwnerContentEntryWorkflow } from '../server/content-operations/orchestrator'
+import type { ContentOperationOrchestratorDependencies } from '../server/content-operations/orchestrator'
 import { enableOwnerAutopilot, revokeOwnerAutopilot } from '../server/content-operations/autopilot-service'
 import { saveOwnerEntityStrategyProfile, saveOwnerQueryOwnership } from '../server/content-operations/governance-service'
 import { materializeOwnerDueContent } from '../server/content-operations/service'
+import { contentFingerprint } from '../server/seo-geo-core/riskGate'
 import { buildOwnerContentLearningDataset, getOwnerContentOperationsWorkspace, recordOwnerOutcomeAssessment } from '../server/content-operations/service'
 import type { ContentOperationPublicationTargetRow } from '../server/content-operations/types'
 import { createMultiChannelExecutorRegistry, type MultiChannelExecutorRegistry } from '../server/publication-routing'
@@ -45,20 +46,18 @@ async function addTarget(fixture: ContentOperationsFixture, clientId: number, ke
   return fixture.targets.find(target => target.id === result.target.id)!
 }
 
-function createProviderBackedMockRuntime(options: { qwenFetch?: ReturnType<typeof vi.fn>; highRisk?: boolean } = {}) {
-  const baseBody = '# 核准內容主題\\n\\n核准的 mock evidence：這是一段只供 owner 查核的內容。本文只整理已核准資料，不新增任何外部事實。發布前由 owner 逐項核對來源、範圍、語言與頁面路徑。'
-  const responseBody = options.highRisk ? `${baseBody}\\n\\nApproved test evidence records ranked #1 as a prohibited measurement claim.` : baseBody.repeat(3)
+function createProviderBackedMockRuntime(options: { qwenFetch?: ReturnType<typeof vi.fn>; highRisk?: boolean; lowQuality?: boolean } = {}) {
+  const baseBody = '# Fixture Brand 的 opportunity-1 內容策略\n\nFixture Brand 以 opportunity-1 回答 owner 的內容策略問題，以下只整理已核准資料與適用範圍。[cite:1]\n\n## 可核對的依據\n\n這份 mock 內容不新增外部事實，來源、語言與頁面路徑都維持在核准 evidence 邊界內。\n\n## 下一步\n\nOwner 可依 canonical pillar page 與 approved facts 再次核對內容，再由 policy-governed runtime 決定發布。'
+  const responseBody = options.highRisk ? `${baseBody}\n\nApproved test evidence records ranked #1 as a prohibited measurement claim.` : options.lowQuality ? baseBody.replace('[cite:1]', '') : baseBody
   const qwenFetch = options.qwenFetch || vi.fn().mockResolvedValue(new Response(JSON.stringify({ model: 'qwen-plus', choices: [{ message: { content: responseBody } }] }), { status: 200 }))
   const autoGeoProvider = vi.fn()
   const qwenRuntime = createGeoFlowQwenGenerationRuntime({ endpoint: 'https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions', credentialRef: 'ref-qwen-credential', resolveCredential: async () => 'mock-qwen-secret', fetchImpl: qwenFetch as typeof fetch, now: () => NOW.toISOString() })
-  const isolated = createAutoGeoIsolatedWorkerAdapter()
   const optimizationAdapter: GeoRewriteAdapter = {
     id: 'custom',
     version: 'mock-autogeo-provider-v1',
-    async rewrite(document: Parameters<typeof isolated.rewrite>[0], rules: Parameters<typeof isolated.rewrite>[1]) {
-      const optimized = await isolated.rewrite(document, rules)
+    async rewrite(document, rules) {
       autoGeoProvider()
-      return { ...optimized, provider: 'autogeo-bailian-qwen', providerVersion: 'qwen-plus', provenance: { ...optimized.provenance, execution: 'autogeo-framework-bailian-qwen', providerExecution: true, requestedProvider: 'autogeo-bailian-qwen', model: 'qwen-plus' } }
+      return { provider: 'autogeo-bailian-qwen', providerVersion: 'qwen-plus', optimizedTitle: document.title, optimizedContent: document.content, appliedRuleIds: rules.map(rule => rule.id), safetyNotes: ['injected AutoGEO mock; no external call'], provenance: { execution: 'autogeo-framework-bailian-qwen', providerExecution: true, requestedProvider: 'autogeo-bailian-qwen', model: 'qwen-plus', upstreamRepository: 'cxcscmu/AutoGEO', upstreamRevision: 'injected-test-mock', rewriteMethod: 'autogeo_api', ruleset: 'Researchy-GEO / Gemini default rules' } }
     },
   }
   return { qwenRuntime, optimizationAdapter, qwenFetch, autoGeoProvider }
@@ -246,20 +245,31 @@ describe('Content Operations application-level lifecycle V1', () => {
     expect(context.fixture.runs.some(run => run.entryId === replacement?.id && run.stage === 'generation' && run.state === 'queued')).toBe(true)
   })
 
-  it('runs V4 balanced autopilot from formal scheduler durable state through publication without injected policy or human review', async () => {
+  it('runs formal V4 across three independently authorized targets, preserves two receipts, and retries only the failed target', async () => {
     const fixture = new ContentOperationsFixture()
     const client = fixture.addClient(1)
     client.canonicalSiteOrigin = 'https://owner1-test.com'
-    client.publicationTransport = 'first_party_signed_api'
+    client.publicationTransport = 'first_party_git'
     const calendar = await fixture.addCalendar(1, '2026-08-25', 1)
     const entry = fixture.entries.find(item => item.calendarId === calendar.id)
     if (!entry) throw new Error('scheduler V4 fixture entry missing')
     const targetResult = await createOwnerPublicationTarget(1, client.id, {
-      idempotencyKey: 'scheduler-v4-target', framework: 'nuxt', transport: 'first_party_signed_api', targetOrigin: client.canonicalSiteOrigin,
-      contentRoot: 'content', defaultBranch: null, repositoryOwner: null, repositoryName: null, endpointPath: '/api/first-party/content-ingest',
-      credentialReference: 'server-ref-scheduler-v4', allowedContentTypes: ['article'], allowedLanguages: ['en'], maximumPayloadBytes: 1000000, executionEnabled: true,
+      idempotencyKey: 'scheduler-v4-target', framework: 'nuxt', transport: 'first_party_git', targetOrigin: 'https://api.github.com',
+      contentRoot: 'content', defaultBranch: 'main', repositoryOwner: 'mock-owner', repositoryName: 'mock-repository', endpointPath: null,
+      credentialReference: 'ref-scheduler-v4', allowedContentTypes: ['article'], allowedLanguages: ['en'], maximumPayloadBytes: 1000000, executionEnabled: true,
     }, fixture.repository)
     const target = targetResult.target
+    const wordpress = (await createOwnerPublicationTarget(1, client.id, {
+      idempotencyKey: 'scheduler-v4-wordpress', framework: 'wordpress', transport: 'wordpress_rest', targetOrigin: 'https://wordpress.owner1-test.com',
+      contentRoot: 'wp-content', defaultBranch: null, repositoryOwner: null, repositoryName: null, endpointPath: '/wp-json/wp/v2/posts',
+      credentialReference: 'ref-scheduler-v4-wordpress', allowedContentTypes: ['article'], allowedLanguages: ['en'], maximumPayloadBytes: 1000000, executionEnabled: true,
+    }, fixture.repository)).target
+    const generic = (await createOwnerPublicationTarget(1, client.id, {
+      idempotencyKey: 'scheduler-v4-generic', framework: 'generic_http', transport: 'generic_http', targetOrigin: 'https://generic.owner1-test.com',
+      contentRoot: 'content', defaultBranch: null, repositoryOwner: null, repositoryName: null, endpointPath: '/content-ingest',
+      credentialReference: 'ref-scheduler-v4-generic', allowedContentTypes: ['article'], allowedLanguages: ['en'], maximumPayloadBytes: 1000000, executionEnabled: true,
+    }, fixture.repository)).target
+    await bindOwnerEntryPublicationTargets(1, entry.id, { targetRowIds: [target.id, wordpress.id, generic.id] }, fixture.repository)
     const evidenceSnapshotHash = entry.evidenceSnapshotHash
     const profile = await saveOwnerEntityStrategyProfile(1, client.id, {
       targetRowId: target.id, idempotencyKey: 'scheduler-v4-profile', canonicalBrandName: 'Fixture Brand', brandAliases: [],
@@ -273,47 +283,102 @@ describe('Content Operations application-level lifecycle V1', () => {
       targetRowId: target.id, idempotencyKey: 'scheduler-v4-query', ownerPageId: 'https://owner1-test.com/pillar', normalizedQuery: entry.topicCluster,
       queryCluster: entry.topicCluster, supportingArticleIds: ['supporting-article-1'], evidenceSnapshotHash,
     }, fixture.repository, NOW)
-    await enableOwnerAutopilot(1, client.id, {
-      policyVersion: 'governed-autopilot-policy-v4', targetRowId: target.id, entityStrategyProfileId: profile.profile.profileId, mode: 'balanced', expiresAt: '2026-12-31T23:59:59.000Z',
-      allowedContentTypes: ['article'], allowedLanguages: ['en'], allowedDestinations: [target.targetId], allowedCadences: [3], allowedRiskClasses: ['general'],
-      maximumRepairAttempts: 3, maximumTopicSubstitutions: 2, generationBudget: 1, publicationBudget: 1,
-    }, fixture.repository, NOW)
+    for (const scopedTarget of [target, wordpress, generic]) {
+      await enableOwnerAutopilot(1, client.id, {
+        policyVersion: 'governed-autopilot-policy-v4', targetRowId: scopedTarget.id, entityStrategyProfileId: profile.profile.profileId, mode: 'balanced', expiresAt: '2026-12-31T23:59:59.000Z',
+        allowedContentTypes: ['article'], allowedLanguages: ['en'], allowedDestinations: [scopedTarget.targetId], allowedCadences: [3], allowedRiskClasses: ['general'],
+        maximumRepairAttempts: 3, maximumTopicSubstitutions: 2, generationBudget: 1, publicationBudget: 1,
+      }, fixture.repository, NOW)
+    }
     const clock = { now: () => NOW, localDate: () => '2026-08-25' }
     const materialized = await materializeOwnerDueContent(1, { calendarId: calendar.id, expectedPlanFingerprint: calendar.planFingerprint, idempotencyKey: 'scheduler-v4-materialize' }, fixture.repository, { clock, eligibleEntryIds: [entry.id] })
     expect(materialized.entries.find(row => row.id === entry.id)?.status).toBe('materialized')
     expect(fixture.runs.some(run => run.entryId === entry.id && run.stage === 'generation' && run.state === 'queued')).toBe(true)
 
     const runtime = createProviderBackedMockRuntime()
+    const mocked = mockedMultiChannelRegistry(callNumber => callNumber === 2)
     const publicationExecutor = vi.fn(async ({ publication }: { publication: { productionDeliverableId: string; contentHash: string } }) => ({ status: 'delivered' as const, remoteState: 'created' as const, publicationId: publication.productionDeliverableId, contentHash: publication.contentHash, remoteRevision: 'scheduler-v4-revision', artifactFingerprint: hash('scheduler-v4-artifact'), idempotencyKey: 'scheduler-v4-executor' }))
-    const generationTick = await runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies: { productionRuntime: productionRuntime(fixture, runtime), publicationExecutor } })
+    const dependencies = { productionRuntime: productionRuntime(fixture, runtime), publicationExecutor, multiChannelRegistry: mocked.registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' }
+    const generationTick = await runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies })
     expect(generationTick.results.some(result => result.outcome === 'awaiting_review')).toBe(true)
     expect(fixture.entries.find(row => row.id === entry.id)?.status).toBe('awaiting_review')
     expect(fixture.reviews.size).toBe(0)
 
     const publicationTicks = await Promise.all([
-      runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies: { productionRuntime: productionRuntime(fixture, runtime), publicationExecutor } }),
-      runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies: { productionRuntime: productionRuntime(fixture, runtime), publicationExecutor } }),
+      runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies }),
+      runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies }),
     ])
-    expect(publicationTicks.some(tick => tick.results.some(result => result.outcome === 'delivered'))).toBe(true)
-    expect(publicationExecutor).toHaveBeenCalledTimes(1)
+    expect(publicationTicks.some(tick => tick.results.some(result => result.outcome === 'retry_wait'))).toBe(true)
+    expect(publicationExecutor).toHaveBeenCalledTimes(0)
+    expect(mocked.firstPartyCalls).toHaveBeenCalledTimes(1)
+    expect(mocked.httpCalls).toHaveBeenCalledTimes(2)
     expect(runtime.qwenFetch).toHaveBeenCalledTimes(1)
     expect(runtime.autoGeoProvider).toHaveBeenCalledTimes(1)
     expect(fixture.reviews.size).toBe(0)
+    expect(fixture.entries.find(row => row.id === entry.id)?.status).toBe('ready_to_publish')
+    expect(fixture.machineAuthorizations).toHaveLength(3)
+    expect(fixture.machineAuthorizations.map(row => row.status).sort()).toEqual(['authorized', 'published', 'published'])
+    expect(fixture.machineAuthorizations.every(row => row.policyVersion === 'governed-autopilot-policy-v4')).toBe(true)
+    expect(fixture.attempts).toHaveLength(3)
+    expect(fixture.attempts.filter(row => row.status === 'delivered')).toHaveLength(2)
+    expect(fixture.attempts.every(row => row.authorityReference?.match(/^[a-f0-9]{64}$/u))).toBe(true)
+    const retry = await runContentOperationsExecutionTick({ ownerUserId: 1, now: new Date(NOW.getTime() + 6 * 60 * 1000), repository: fixture.repository, dependencies })
+    expect(retry.results.some(result => result.outcome === 'delivered')).toBe(true)
+    expect(publicationExecutor).toHaveBeenCalledTimes(0)
+    expect(mocked.firstPartyCalls).toHaveBeenCalledTimes(1)
+    expect(mocked.httpCalls).toHaveBeenCalledTimes(3)
+    expect(fixture.attempts).toHaveLength(4)
+    expect(fixture.attempts.filter(row => row.status === 'delivered')).toHaveLength(3)
+    expect(fixture.machineAuthorizations.map(row => row.status).sort()).toEqual(['published', 'published', 'published'])
     expect(fixture.entries.find(row => row.id === entry.id)?.status).toBe('delivered')
-    expect(fixture.machineAuthorizations).toHaveLength(1)
-    expect(fixture.machineAuthorizations[0]?.status).toBe('published')
-    expect(fixture.machineAuthorizations[0]?.policyVersion).toBe('governed-autopilot-policy-v4')
-    expect(fixture.attempts).toHaveLength(1)
-    expect(fixture.attempts[0]?.authorityReference).toMatch(/^[a-f0-9]{64}$/u)
     expect(fixture.events.some(event => event.eventType === 'autopilot_machine_authorized')).toBe(true)
-    expect(fixture.events.some(event => event.eventType === 'publication_delivered')).toBe(true)
-    expect(fixture.budgetReservations.map(row => row.kind).sort()).toEqual(['generation', 'publication'])
+    expect(fixture.events.filter(event => event.eventType === 'publication_route_delivered')).toHaveLength(3)
+    expect(fixture.budgetReservations.map(row => row.kind).sort()).toEqual(['generation', 'generation', 'generation', 'publication', 'publication', 'publication'])
     const exhausted = await fixture.repository.reserveAutopilotBudget({ ownerUserId: 1, policyId: fixture.autopilotPolicies[0]!.policyId, publicationTargetId: target.id, entryId: entry.id, kind: 'publication', units: 1, idempotencyKey: 'publication-overflow', inputFingerprint: hash('publication-overflow') })
     expect(exhausted.reserved).toBe(false)
-    const replayTick = await runContentOperationsExecutionTick({ ownerUserId: 1, now: new Date(NOW.getTime() + 60_000), repository: fixture.repository, dependencies: { productionRuntime: productionRuntime(fixture, runtime), publicationExecutor } })
+    const replayTick = await runContentOperationsExecutionTick({ ownerUserId: 1, now: new Date(NOW.getTime() + 7 * 60 * 1000), repository: fixture.repository, dependencies })
     expect(replayTick.processed).toBe(0)
-    expect(publicationExecutor).toHaveBeenCalledTimes(1)
+    expect(publicationExecutor).toHaveBeenCalledTimes(0)
+    expect(mocked.firstPartyCalls).toHaveBeenCalledTimes(1)
+    expect(mocked.httpCalls).toHaveBeenCalledTimes(3)
     expect(runtime.qwenFetch).toHaveBeenCalledTimes(1)
     expect(runtime.autoGeoProvider).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs scheduler repair once, requeues the exact child, then authorizes and publishes on the next tick', async () => {
+    const fixture = new ContentOperationsFixture()
+    const client = fixture.addClient(1); client.canonicalSiteOrigin = 'https://owner1-repair.com'; client.publicationTransport = 'first_party_signed_api'
+    const calendar = await fixture.addCalendar(1, '2026-08-25', 1)
+    const entry = fixture.entries.find(row => row.calendarId === calendar.id)!
+    const target = (await createOwnerPublicationTarget(1, client.id, { idempotencyKey: 'scheduler-repair-target', framework: 'nuxt', transport: 'first_party_signed_api', targetOrigin: client.canonicalSiteOrigin, contentRoot: 'content', defaultBranch: null, repositoryOwner: null, repositoryName: null, endpointPath: '/api/first-party/content-ingest', credentialReference: 'server-ref-scheduler-repair', allowedContentTypes: ['article'], allowedLanguages: ['en'], maximumPayloadBytes: 1_000_000, executionEnabled: true }, fixture.repository)).target
+    const profile = await saveOwnerEntityStrategyProfile(1, client.id, { targetRowId: target.id, idempotencyKey: 'scheduler-repair-profile', canonicalBrandName: 'Fixture Brand', brandAliases: [], canonicalWebsiteOrigin: client.canonicalSiteOrigin, businessType: 'services', primaryLocale: 'en', secondaryLocales: [], primaryLocations: [], serviceAreas: [], primaryServices: ['content strategy'], secondaryServices: [], targetAudience: ['owners'], primaryQueryClusters: [entry.topicCluster], supportingQueryClusters: [], canonicalPillarPages: ['https://owner1-repair.com/pillar'], servicePageBindings: {}, approvedBrandFacts: ['Fixture Brand provides content strategy.'], approvedDifferentiators: [], prohibitedClaims: ['guaranteed results'], preferredTone: 'clear', requiredDisclosures: [], internalLinkPolicy: 'canonical links only', structuredDataIdentity: { name: 'Fixture Brand' }, evidenceSnapshotHash: entry.evidenceSnapshotHash }, fixture.repository, NOW)
+    await saveOwnerQueryOwnership(1, client.id, { targetRowId: target.id, idempotencyKey: 'scheduler-repair-query', ownerPageId: 'https://owner1-repair.com/pillar', normalizedQuery: entry.topicCluster, queryCluster: entry.topicCluster, supportingArticleIds: [], evidenceSnapshotHash: entry.evidenceSnapshotHash }, fixture.repository, NOW)
+    await enableOwnerAutopilot(1, client.id, { policyVersion: 'governed-autopilot-policy-v4', targetRowId: target.id, entityStrategyProfileId: profile.profile.profileId, mode: 'balanced', expiresAt: '2026-12-31T23:59:59.000Z', allowedContentTypes: ['article'], allowedLanguages: ['en'], allowedDestinations: [target.targetId], allowedCadences: [3], allowedRiskClasses: ['general'], maximumRepairAttempts: 2, maximumTopicSubstitutions: 1, generationBudget: 1, publicationBudget: 1 }, fixture.repository, NOW)
+    await materializeOwnerDueContent(1, { calendarId: calendar.id, expectedPlanFingerprint: calendar.planFingerprint, idempotencyKey: 'scheduler-repair-materialize' }, fixture.repository, { clock: { now: () => NOW, localDate: () => '2026-08-25' }, eligibleEntryIds: [entry.id] })
+    const runtime = createProviderBackedMockRuntime({ lowQuality: true })
+    const publicationExecutor = vi.fn(async ({ publication }: { publication: { productionDeliverableId: string; contentHash: string } }) => ({ status: 'delivered' as const, remoteState: 'created' as const, publicationId: publication.productionDeliverableId, contentHash: publication.contentHash, remoteRevision: 'repair-child-revision', artifactFingerprint: hash('repair-child-artifact'), idempotencyKey: 'repair-child-executor' }))
+    const persistence = fixture.productionPersistence()
+    const repairRunner = vi.fn(async (repair: Parameters<NonNullable<ContentOperationOrchestratorDependencies['repairRunner']>>[0]) => {
+      const title = 'Fixture Brand opportunity-1 repaired guide'
+      const body = '# Fixture Brand opportunity-1 repaired guide\n\nFixture Brand gives owners a bounded opportunity-1 answer using only approved evidence. [cite:1]\n\n## Evidence boundary\n\nThe repaired child preserves the approved source and makes no unsupported performance claim.'
+      const childHash = contentFingerprint(title, body)
+      const child = await persistence.saveContentCandidate({ jobId: repair.jobId, title, body, contentHash: childHash, sourceMode: 'provider_candidate', provenance: { provider: 'autogeo-bailian-qwen', providerVersion: 'mock-repair-v1', providerModel: 'qwen-plus', providerExecution: true, providerProvenance: { providerExecution: true, model: 'qwen-plus' }, stage: 'optimized', generationMode: 'repair_selected_rule_optimization', parentDraftId: repair.originalDraft.id, parentDraftHash: repair.originalDraft.contentHash, repairAttempt: repair.repairAttempt, repairContractFingerprint: repair.repairContractFingerprint, selectedRuleIds: ['direct-answer-first', 'semantic-sections'], appliedRuleIds: ['direct-answer-first', 'semantic-sections'], evidenceSnapshotHash: entry.evidenceSnapshotHash }, evidenceRefs: [{ sourceId: 1, artifactId: 1, reason: 'approved fixture evidence' }], safetyStatus: 'passed', safetyNotes: ['injected repair mock only'] })
+      await persistence.saveRiskGate({ draftId: child.id, result: { gateVersion: 'content-risk-gate-v1', status: 'passed', riskLevel: 'low', findings: [] } as never, evidenceSnapshotHash: entry.evidenceSnapshotHash })
+      return { draft: { id: child.id }, riskGate: { status: 'passed' } }
+    })
+    const dependencies = { productionRuntime: productionRuntime(fixture, runtime), publicationExecutor, repairRunner }
+    await runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies })
+    const parentDraftId = fixture.entries.find(row => row.id === entry.id)!.draftId!
+    const repairTicks = await Promise.all([runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies }), runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: fixture.repository, dependencies })])
+    expect(repairTicks.some(tick => tick.results.some(result => result.outcome === 'awaiting_review'))).toBe(true)
+    expect(repairRunner).toHaveBeenCalledTimes(1); expect(publicationExecutor).toHaveBeenCalledTimes(0)
+    const childEntry = fixture.entries.find(row => row.id === entry.id)!
+    expect(childEntry.draftId).not.toBe(parentDraftId); expect(childEntry.status).toBe('awaiting_review')
+    const child = fixture.generated.get(entry.id)?.draft as { provenance: Record<string, unknown>; contentHash: string }
+    expect(child.provenance).toMatchObject({ parentDraftId, repairAttempt: 1, evidenceSnapshotHash: entry.evidenceSnapshotHash })
+    const delivered = await runContentOperationsExecutionTick({ ownerUserId: 1, now: new Date(NOW.getTime() + 1), repository: fixture.repository, dependencies })
+    expect(delivered.results.some(result => result.outcome === 'delivered')).toBe(true)
+    expect(repairRunner).toHaveBeenCalledTimes(1); expect(publicationExecutor).toHaveBeenCalledTimes(1)
+    expect(fixture.repairAttempts).toHaveLength(1); expect(fixture.repairAttempts[0]).toMatchObject({ status: 'succeeded', originalDraftId: String(parentDraftId), repairedDraftId: String(childEntry.draftId), repairedContentHash: child.contentHash })
   })
 })

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { buildMachineAuthorization, buildRepairContract, decideBalancedAutopilot, detectKeywordStuffing, normalizeEntityStrategyProfile, normalizeQueryOwnership } from '../server/content-operations/balanced-autopilot'
 import type { AutopilotPolicySnapshot } from '../server/content-operations/balanced-autopilot'
 import { evaluateCanonicalGeoContentQuality } from '../server/content-operations/quality-evaluation'
+import { autonomousRiskSnapshotMatches, canonicalAutonomousRiskSnapshot, canonicalBusinessRiskClass, canonicalRiskSeverity } from '../server/content-operations/autonomous-risk'
+import { contentFingerprint } from '../server/seo-geo-core/riskGate'
 
 const NOW = new Date('2026-08-28T12:00:00.000Z')
 const HASH = 'a'.repeat(64)
@@ -77,5 +79,31 @@ describe('balanced autonomous GEO decision engine', () => {
     const evaluation = evaluateCanonicalGeoContentQuality({ content: '# Answer\n\nEvidence-bound content for the canonical owner page and its audience.'.repeat(3), contentHash: HASH, evidenceSnapshotHash: HASH, riskGateStatus: 'passed', riskGateVersion: 'content-risk-gate-v1', riskFindings: [], entityProfileFingerprint: HASH, queryOwnershipFingerprint: HASH })
     expect(evaluation).toMatchObject({ evaluationVersion: 'geo-content-quality-evaluation-v1', status: 'passed', metrics: { evidenceAuthorityBound: true, entityAuthorityBound: true, queryAuthorityBound: true } })
     expect(evaluation.evaluationFingerprint).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('separates canonical risk severity from business class and detects payload tampering', () => {
+    expect(['low', 'moderate', 'high', 'critical'].map(riskLevel => canonicalRiskSeverity({ gateStatus: 'passed', riskLevel }))).toEqual(['low', 'moderate', 'high', 'critical'])
+    expect(canonicalRiskSeverity({ gateStatus: 'passed', riskLevel: 'general' })).toBe('moderate')
+    expect(canonicalRiskSeverity({ gateStatus: 'passed', riskLevel: 'low', findings: [{ severity: 'blocking' }] })).toBe('high')
+    expect(canonicalRiskSeverity({ gateStatus: 'blocked', riskLevel: 'low', findings: [] })).toBe('high')
+    expect(['medical diagnosis', 'legal lawsuit', 'financial investment', 'political election', 'PII personal data', 'ordinary service'].map(id => canonicalBusinessRiskClass([{ id }]))).toEqual(['medical', 'legal', 'financial', 'political', 'sensitive_personal_data', 'general'])
+    const snapshot = canonicalAutonomousRiskSnapshot({ gateId: 9, gateVersion: 'content-risk-gate-v1', gateStatus: 'passed', riskLevel: 'low', findings: [{ id: 'ordinary_service', severity: 'info' }], draftId: 11, contentHash: HASH, evidenceSnapshotHash: HASH })
+    expect(autonomousRiskSnapshotMatches(snapshot, snapshot)).toBe(true)
+    expect(autonomousRiskSnapshotMatches(snapshot, { ...snapshot, severity: 'moderate', fingerprint: 'b'.repeat(64) })).toBe(false)
+    expect(autonomousRiskSnapshotMatches(snapshot, { ...snapshot, businessClass: 'medical', fingerprint: snapshot.fingerprint })).toBe(false)
+    expect(autonomousRiskSnapshotMatches(snapshot, { ...snapshot, reasonCodes: ['TAMPERED'], fingerprint: snapshot.fingerprint })).toBe(false)
+  })
+
+  it('blocks or repairs adversarial autonomous quality while keeping 0/0 metrics not applicable', () => {
+    const title = 'Acme local consulting guide'
+    const body = '# Acme local consulting guide\n\nAcme provides a bounded local consulting answer based only on approved evidence. [cite:source-1]\n\n## Evidence boundary\n\nThe approved source supports this limited explanation without a performance promise.'
+    const base = { strictAutonomous: true, title, content: body, contentHash: contentFingerprint(title, body), evidenceSnapshotHash: HASH, evidenceRefs: [{ sourceId: 'source-1' }], evidenceCurrent: true, riskGateStatus: 'passed', riskGateVersion: 'content-risk-gate-v1', riskFindings: [], entityProfileFingerprint: HASH, entityCanonicalName: 'Acme', queryOwnershipFingerprint: HASH, primaryQuery: 'local consulting', selectedRuleIds: [], appliedRuleIds: [], providerProvenance: { stage: 'optimized', evidenceSnapshotHash: HASH, providerExecution: true, providerProvenance: { providerExecution: true } } }
+    const passed = evaluateCanonicalGeoContentQuality(base)
+    expect(passed).toMatchObject({ status: 'passed', metrics: { selectedRuleCoverage: null, unsupportedClaimCount: 0 } })
+    expect(evaluateCanonicalGeoContentQuality({ ...base, content: 'No heading and no bounded structure.', contentHash: contentFingerprint(title, 'No heading and no bounded structure.') }).reasonCodes).toContain('INVALID_HEADING_HIERARCHY')
+    expect(evaluateCanonicalGeoContentQuality({ ...base, evidenceCurrent: false }).reasonCodes).toContain('STALE_CITATION_EVIDENCE')
+    const stuffed = body.replace('local consulting answer', 'local consulting local consulting local consulting local consulting answer')
+    expect(evaluateCanonicalGeoContentQuality({ ...base, content: stuffed, contentHash: contentFingerprint(title, stuffed) }).reasonCodes).toContain('KEYWORD_STUFFING')
+    expect(evaluateCanonicalGeoContentQuality({ ...base, unsupportedFactualClaim: true }).reasonCodes).toContain('UNSUPPORTED_CLAIM')
   })
 })
