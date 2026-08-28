@@ -11,6 +11,7 @@
 | Private operations | Nuxt pages/layout | `/audit-lab`、`/audit-lab/geo`、`/audit-lab/seo-geo`、`/leads`、`/training-pipeline`、`/ml-lab-preview`；owner session、OAuth、noindex、no-store。 |
 | Governed core | Nuxt server | Evidence、Diagnosis、AutoGEO-compatible strategy、GEOFlow production plan、risk gate、human review、preview/export ledger 與 revision lifecycle。 |
 | Data/ML | Nuxt server/tasks | Drizzle/MySQL、Public Intelligence lineage、consent/revoke、BGE-M3 similarity pilot 與 gated training；不自動部署模型或外部內容。 |
+| System Factory | Nuxt server + private Frappe v16 | Strict SystemSpec、synthetic preview、既有付款權威、隔離 tenant provisioning、health/invitation/upgrade receipts；詳見 `FRAPPE_SYSTEM_FACTORY_V1.md`。 |
 
 ## 本機開發
 
