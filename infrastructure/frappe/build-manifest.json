@@ -4,10 +4,10 @@
   "baseImage": "docker.io/frappe/erpnext:v16.33.0@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd",
   "frappeCommit": "5cba016e86b54b57f34a3864282b92300ef20fb0",
   "erpnextCommit": "b24c9eba551905e256e336ff170a91a92d197a2f",
-  "customAppSha256": "cd13356f4b6eb2b38fd0062b6adb24f8b4309e65970cbd4119b84bd689d48369",
-  "buildRecipeFingerprint": "81534904f4ea8b9321da267b309fb04099cc27c1893d46e5e091b3d720c52dba",
+  "customAppSha256": "5b7ae5fb1d9ff84e8d77c942fa2c143f888f0dae1906c12b724bd85fe3fba7e7",
+  "buildRecipeFingerprint": "dabf5882d47dc5cc1fa7487aa753d589b223d225ec38a6d4434e78d5769c4257",
   "builtImageReference": "discoverystack/frappe-system-factory:v1-local",
-  "imageManifestDigest": "sha256:5d5edb656ed098c0fa8ec733347bef70dc81e33267388ad19a84206874e3337d",
-  "imageConfigDigest": "sha256:bb242fa753dbfb109e2418c09db2739edc3195194bb39f7de21139b912c8bef8",
+  "imageManifestDigest": "sha256:b605100bd1c529f7c3e6ba7c38d184d7d05dfebdc48c102713c4b63d0cd7d7ca",
+  "imageConfigDigest": "sha256:2289518c3c8eb06cfede043d136799b1df58ae74334b3ae170d7d3620ec29ba7",
   "productionApproved": false
 }

@@ -10,7 +10,13 @@ The official ERPNext image tag/digest is base provenance, not proof that its emb
 
 Each paid customer defaults to an isolated Frappe site and database. DiscoveryStack retains owner/client/website/Managed Site/order/payment authority and projects an allowlisted compiled SystemSpec into that site. Customer access is an account and hosted-service right; it does not include this Git repository, server/container credentials, an Administrator secret, or a source archive.
 
-An LLM may only propose a strict structured SystemSpec. Provider output is normalized and validated again. A deterministic compiler emits typed metadata; it never evaluates Python, SQL, JavaScript, shell, Docker instructions, migrations, imports, or expressions supplied by a user or provider.
+An LLM may only propose a strict structured SystemSpec. Provider output is normalized and validated again. A deterministic compiler emits a versioned materialization manifest; it never evaluates Python, SQL, JavaScript, shell, Docker instructions, migrations, imports, or expressions supplied by a user or provider.
+
+The custom app independently validates and atomically materializes that manifest through Frappe metadata APIs. Existing ERPNext DocTypes are read-only bindings. Tenant custom entities become app-namespaced Custom DocTypes with allowlisted field types; exact tenant roles receive Custom DocPerm rows with delete disabled; statuses and transitions become Workflow metadata; reports become safe Report Builder definitions; and views, KPIs, notifications and integrations remain app-owned governed records (notification and integration intents are disabled by default). Every unit stores a server-computed applied fingerprint. Replays are no-op receipts; conflicting definitions, destructive updates, permission escalation, workflow orphaning and cross-tenant lineage are blocked.
+
+Health is a projection check, not an existence check: it reads the materialized Frappe records again and compares unit count and fingerprints with the active compiled plan. Suspension sets the app-owned tenant policy gate and disables only users carrying that tenant's generated roles. Invitation preparation and activation may grant only an exact role already materialized for that plan.
+
+Provisioning workers claim at most 20 distinct tenants and 100 steps per tick, with at most 10 steps for one tenant. Each step renews its durable lease to exceed its server-owned operation timeout plus a safety margin. Success/failure commits require the same unexpired lease, so a stale worker cannot commit after recovery; provider retries retain the exact operation idempotency key.
 
 Twenty is an optional UX research reference only. No Twenty/Odoo dependency, code, asset, trademark, API compatibility claim, or data model is included.
 

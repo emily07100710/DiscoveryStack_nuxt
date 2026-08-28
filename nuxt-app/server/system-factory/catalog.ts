@@ -1,6 +1,7 @@
 export const SYSTEM_SPEC_VERSION = 'system-spec-v1' as const
-export const SYSTEM_COMPILER_VERSION = 'system-spec-compiler-v1' as const
-export const COMPILED_PLAN_VERSION = 'compiled-system-plan-v1' as const
+export const SYSTEM_COMPILER_VERSION = 'system-spec-compiler-v2' as const
+export const COMPILED_PLAN_VERSION = 'compiled-system-plan-v2' as const
+export const MATERIALIZATION_MANIFEST_VERSION = 'system-materialization-manifest-v1' as const
 
 export const SYSTEM_TEMPLATES = ['light_crm', 'appointment_booking', 'membership_course', 'service_project', 'inventory_sales', 'retail_light', 'custom_bounded'] as const
 export type SystemTemplateKey = typeof SYSTEM_TEMPLATES[number]

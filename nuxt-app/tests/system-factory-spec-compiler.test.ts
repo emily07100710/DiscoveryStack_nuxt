@@ -11,7 +11,7 @@ function input(template: any = 'light_crm') {
 describe('SystemSpec strict schema and deterministic compiler', () => {
   it.each(SYSTEM_TEMPLATES)('builds and compiles allowlisted %s template', template => {
     const spec = createGuidedSystemSpec(input(template)); const first = compileSystemSpec(spec); const second = compileSystemSpec(structuredClone(spec))
-    expect(first).toEqual(second); expect(first.planFingerprint).toMatch(/^[a-f0-9]{64}$/u); expect(first.units.map(unit => `${unit.kind}:${unit.key}`)).toEqual([...first.units].map(unit => `${unit.kind}:${unit.key}`))
+    expect(first).toEqual(second); expect(first.planFingerprint).toMatch(/^[a-f0-9]{64}$/u); expect(first.materializationManifest.fingerprint).toMatch(/^[a-f0-9]{64}$/u); expect(first.materializationManifest.units.map(unit => `${unit.kind}:${unit.key}`)).toEqual([...first.materializationManifest.units].map(unit => `${unit.kind}:${unit.key}`))
   })
 
   it.each([null, [], 'text', 3, { schemaVersion: 'system-spec-v1' }])('rejects malformed, null, or incomplete input %#', value => { expect(() => parseSystemSpec(value)).toThrow() })

@@ -44,7 +44,7 @@ def apply_compiled_spec():
         raise PermissionError("Compiled SystemSpec apply is disabled.")
     if payload["compiledPlan"].get("planFingerprint") != payload["compiledPlanFingerprint"] or payload["compiledPlan"].get("specFingerprint") != payload["specFingerprint"]:
         raise PermissionError("Compiled SystemSpec envelope lineage is invalid.")
-    return _apply_response(payload, apply_compiled_plan(payload["compiledPlan"]))
+    return _apply_response(payload, apply_compiled_plan(payload["compiledPlan"], {"ownerId": payload["ownerId"], "clientId": payload["clientId"], "systemTenantId": payload["systemTenantId"]}))
 
 
 @frappe.whitelist(allow_guest=False)
