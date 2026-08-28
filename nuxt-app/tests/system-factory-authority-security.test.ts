@@ -9,6 +9,7 @@ import { fingerprint } from '../server/system-factory/canonical'
 function spec() { return createGuidedSystemSpec({ requirements: '建立受治理的預約服務流程。', businessType: 'service', industry: 'wellness', preferredTemplate: 'appointment_booking', identity: { specId: 'spec-security', ownerId: 'owner:1', clientId: 'client:1', websiteId: 'website:1', managedSiteId: null, systemTenantId: 'tenant:1', locale: 'zh-hant', timezone: 'Asia/Taipei', currency: 'TWD' } }) }
 
 describe('System Factory authority and security boundaries', () => {
+  it('generates bounded nonces that always satisfy the signed identity grammar', () => { for (let index = 0; index < 1_000; index++) expect(signEnvelope({ method: 'POST', path: '/internal/apply', rawBody: '{}', sender: 'nuxt-server', receiver: 'frappe-site', keyId: 'key:1', key: 'x'.repeat(32) }).nonce).toMatch(/^[A-Za-z0-9][A-Za-z0-9:_-]{2,127}$/u) })
   it('verifies raw body hash and HMAC before any nonce lookup/write', async () => {
     const body = JSON.stringify({ tenant: 'tenant:1' }); const key = 'test-only-hmac-key-material'; const headers = signEnvelope({ method: 'POST', path: '/internal/apply', rawBody: body, sender: 'nuxt-server', receiver: 'frappe-site', keyId: 'key:1', key, now: new Date('2030-01-01T00:00:00.000Z'), nonce: 'nonce-00000001' }); let nonceCalls = 0
     const noncePort = { consume: async () => { nonceCalls += 1; return true as const } }

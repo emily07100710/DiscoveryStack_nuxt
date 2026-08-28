@@ -9,7 +9,7 @@ function signingInput(method: string, path: string, headers: Omit<SignedEnvelope
 function validIdentity(value: string): boolean { return /^[A-Za-z0-9][A-Za-z0-9:_-]{2,127}$/u.test(value) }
 
 export function signEnvelope(input: { method: string; path: string; rawBody: string | Uint8Array; sender: string; receiver: string; keyId: string; key: string | Uint8Array; now?: Date; nonce?: string }): SignedEnvelopeHeaders {
-  const timestamp = (input.now || new Date()).toISOString(); const nonce = input.nonce || randomBytes(24).toString('base64url')
+  const timestamp = (input.now || new Date()).toISOString(); const nonce = input.nonce || `n_${randomBytes(24).toString('base64url')}`
   const unsigned = { timestamp, nonce, sender: input.sender, receiver: input.receiver, keyId: input.keyId, bodySha256: digest(input.rawBody) }
   if (![input.sender, input.receiver, input.keyId, nonce].every(validIdentity)) throw new SystemFactoryError('HMAC_IDENTITY', 'Signed-envelope identity is invalid.')
   return { ...unsigned, signature: createHmac('sha256', input.key).update(signingInput(input.method, input.path, unsigned)).digest('hex') }
