@@ -1,0 +1,4 @@
+import { assertEditorSameOrigin, readBoundedEditorBody, requireEditorActor } from '../../../../managed-sites/page-editor/http'
+import { requestBulkMediaUploadIntents, requestMediaUploadIntent } from '../../../../managed-sites/media-vault/service'
+import { resolveEditorRuntime } from '../../../../managed-sites/page-editor/runtime'
+export default defineEventHandler(async event => { assertEditorSameOrigin(event); const { mediaActor } = await requireEditorActor(event, 'content:write'); const body = await readBoundedEditorBody(event); const runtime = await resolveEditorRuntime(mediaActor); return Array.isArray((body as any)?.requests) ? requestBulkMediaUploadIntents({ repository: runtime.mediaRepository, storage: runtime.storage }, mediaActor, (body as any).requests) : requestMediaUploadIntent({ repository: runtime.mediaRepository, storage: runtime.storage }, mediaActor, body as any) })

@@ -1,0 +1,60 @@
+import { createHash } from 'node:crypto'
+import { createError } from 'h3'
+import { parseBlock } from './catalog'
+import { PAGE_DOCUMENT_VERSION, type PageActor, type PageDiff, type PageDocument, type PageMediaBinding } from './types'
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => [key, canonicalValue(child)]))
+  return value
+}
+export function canonicalJson(value: unknown): string { return JSON.stringify(canonicalValue(value)) }
+export function canonicalFingerprint(value: unknown): string { return createHash('sha256').update(canonicalJson(value)).digest('hex') }
+function documentWithoutFingerprint(document: Omit<PageDocument, 'fingerprint'> | PageDocument): Omit<PageDocument, 'fingerprint'> { const { fingerprint: _fingerprint, ...rest } = document as PageDocument; return rest }
+export function pageFingerprint(document: Omit<PageDocument, 'fingerprint'> | PageDocument): string { return canonicalFingerprint(documentWithoutFingerprint(document)) }
+function invalid(message: string): never { throw createError({ statusCode: 422, statusMessage: message }) }
+
+function parseBinding(value: unknown): PageMediaBinding {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('Page media binding must be a plain object.')
+  const input = value as Record<string, unknown>; const allowed = ['bindingId', 'assetId', 'assetVersion', 'assetSha256', 'role', 'alt', 'decorative', 'caption', 'focalPoint', 'provenance']; if (Object.keys(input).some(key => !allowed.includes(key))) invalid('Page media binding contains unknown fields.')
+  if (typeof input.bindingId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/u.test(input.bindingId) || typeof input.assetId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/u.test(input.assetId) || !Number.isSafeInteger(input.assetVersion) || Number(input.assetVersion) < 1 || typeof input.assetSha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(input.assetSha256)) invalid('Page media binding identity is invalid.')
+  if (!['hero', 'content', 'gallery', 'avatar', 'thumbnail', 'background'].includes(String(input.role)) || typeof input.decorative !== 'boolean' || typeof input.alt !== 'string' || input.alt.length > 500 || !input.decorative && !input.alt.trim() || input.decorative && input.alt !== '') invalid('Page media alt and role rules are invalid.')
+  if (input.caption !== undefined && (typeof input.caption !== 'string' || input.caption.length > 1000 || /<[^>]*>/u.test(input.caption))) invalid('Page media caption is invalid.')
+  let focalPoint: { x: number; y: number } | undefined
+  if (input.focalPoint !== undefined) { const point = input.focalPoint as any; if (!point || typeof point !== 'object' || !Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) invalid('Page media focal point is invalid.'); focalPoint = { x: point.x, y: point.y } }
+  if (!['customer', 'platform_owner', 'ai_suggestion_pending', 'ai_suggestion_customer_approved'].includes(String(input.provenance))) invalid('Page media provenance is invalid.')
+  return { bindingId: input.bindingId, assetId: input.assetId, assetVersion: Number(input.assetVersion), assetSha256: input.assetSha256, role: input.role as PageMediaBinding['role'], alt: input.alt, decorative: input.decorative, ...(input.caption !== undefined ? { caption: input.caption } : {}), ...(focalPoint ? { focalPoint } : {}), provenance: input.provenance as PageMediaBinding['provenance'] }
+}
+function bindingIdsInData(value: unknown, key = ''): string[] {
+  if (Array.isArray(value)) return value.flatMap(child => bindingIdsInData(child, key))
+  if (!value || typeof value !== 'object') return key === 'mediaBindingId' && typeof value === 'string' ? [value] : []
+  const result: string[] = []; for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) { if (childKey === 'mediaBindingId' && typeof child === 'string') result.push(child); else if (childKey === 'mediaBindingIds' && Array.isArray(child)) result.push(...child.filter(item => typeof item === 'string') as string[]); else result.push(...bindingIdsInData(child, childKey)) } return result
+}
+
+export function parsePageDocument(input: unknown, options: { requireFingerprint?: boolean } = { requireFingerprint: true }): PageDocument {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) invalid('PageDocument must be a plain object.')
+  const value = input as Record<string, unknown>; const allowed = ['schemaVersion', 'pageId', 'version', 'locale', 'route', 'contentType', 'designThemeId', 'designTokenVersion', 'designTokens', 'sections', 'seo', 'publicationState', 'mediaBindings', 'fingerprint', 'parentVersion', 'actorAuthority', 'createdAt']; if (Object.keys(value).some(key => !allowed.includes(key))) invalid('PageDocument contains unknown fields.')
+  if (value.schemaVersion !== PAGE_DOCUMENT_VERSION || typeof value.pageId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/u.test(value.pageId) || !Number.isSafeInteger(value.version) || Number(value.version) < 1 || !['zh-hant', 'en'].includes(String(value.locale))) invalid('PageDocument identity, version or locale is invalid.')
+  if (typeof value.route !== 'string' || !/^\/(?:[a-z0-9][a-z0-9-]*\/)*[a-z0-9-]*$/u.test(value.route) || value.route.includes('//') || value.route.length > 512 || !['home', 'standard', 'services', 'cases', 'contact', 'articles'].includes(String(value.contentType))) invalid('PageDocument route or content type is invalid.')
+  if (typeof value.designThemeId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{2,79}$/u.test(value.designThemeId) || typeof value.designTokenVersion !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{2,79}$/u.test(value.designTokenVersion)) invalid('PageDocument design identity is invalid.')
+  const tokens = value.designTokens as any; if (!tokens || typeof tokens !== 'object' || Array.isArray(tokens) || Object.keys(tokens).sort().join(',') !== ['contrast', 'maxWidth', 'palette', 'radius', 'spacing', 'typeScale'].sort().join(',') || !['indigo_sand', 'charcoal_ivory', 'forest_mist'].includes(tokens.palette) || !['compact', 'balanced', 'editorial'].includes(tokens.typeScale) || !['compact', 'balanced', 'airy'].includes(tokens.spacing) || !['none', 'soft', 'rounded'].includes(tokens.radius) || !['narrow', 'standard', 'wide'].includes(tokens.maxWidth) || !['aa', 'aaa'].includes(tokens.contrast)) invalid('PageDocument design tokens are outside the controlled catalog.')
+  if (!Array.isArray(value.sections) || value.sections.length > 100) invalid('PageDocument sections are invalid.'); const sections = value.sections.map(parseBlock); const blockIds = sections.map(block => block.blockId); if (new Set(blockIds).size !== blockIds.length) invalid('PageDocument contains duplicate block IDs.'); if (sections.filter(block => block.type === 'hero').length > 1) invalid('PageDocument allows at most one hero block.')
+  if (!Array.isArray(value.mediaBindings) || value.mediaBindings.length > 500) invalid('PageDocument media bindings are invalid.'); const mediaBindings = value.mediaBindings.map(parseBinding); const bindingIds = mediaBindings.map(binding => binding.bindingId); if (new Set(bindingIds).size !== bindingIds.length) invalid('PageDocument contains duplicate media binding IDs.')
+  const bindingSet = new Set(bindingIds); for (const block of sections) { const embedded = bindingIdsInData(block.data); if (new Set([...block.mediaBindingIds, ...embedded]).size !== block.mediaBindingIds.length || embedded.some(id => !block.mediaBindingIds.includes(id)) || block.mediaBindingIds.some(id => !bindingSet.has(id))) invalid('Page block media roles do not match canonical bindings.') }
+  const usedBindingIds = new Set(sections.flatMap(block => block.mediaBindingIds)); const seo = value.seo as any; if (!seo || typeof seo !== 'object' || Array.isArray(seo) || Object.keys(seo).sort().join(',') !== ['canonicalPath', 'description', 'noindex', 'ogBindingId', 'title'].sort().join(',') || typeof seo.title !== 'string' || !seo.title.trim() || seo.title.length > 180 || typeof seo.description !== 'string' || !seo.description.trim() || seo.description.length > 500 || typeof seo.noindex !== 'boolean' || seo.canonicalPath !== value.route || seo.ogBindingId !== null && (typeof seo.ogBindingId !== 'string' || !bindingSet.has(seo.ogBindingId))) invalid('PageDocument SEO is invalid.')
+  if (!['draft', 'preview', 'published', 'superseded', 'rolled_back'].includes(String(value.publicationState)) || value.parentVersion !== null && (!Number.isSafeInteger(value.parentVersion) || Number(value.parentVersion) >= Number(value.version)) || typeof value.actorAuthority !== 'string' || !value.actorAuthority || value.actorAuthority.length > 160 || typeof value.createdAt !== 'string' || !Number.isFinite(Date.parse(value.createdAt))) invalid('PageDocument lifecycle lineage is invalid.')
+  if (mediaBindings.some(binding => !usedBindingIds.has(binding.bindingId) && seo.ogBindingId !== binding.bindingId)) invalid('PageDocument contains an unreferenced media binding.')
+  const document = { ...value, version: Number(value.version), locale: value.locale, contentType: value.contentType, designTokens: tokens, sections, seo, publicationState: value.publicationState, mediaBindings, parentVersion: value.parentVersion === null ? null : Number(value.parentVersion) } as PageDocument
+  const expected = pageFingerprint(document); if (options.requireFingerprint !== false && (typeof value.fingerprint !== 'string' || value.fingerprint !== expected)) invalid('PageDocument fingerprint mismatch.'); return { ...document, fingerprint: expected }
+}
+
+export function finalizePageDocument(input: Omit<PageDocument, 'fingerprint'>): PageDocument { return parsePageDocument({ ...input, fingerprint: pageFingerprint(input) }) }
+export function createInitialPage(actor: PageActor, input: Pick<PageDocument, 'pageId' | 'locale' | 'route' | 'contentType' | 'designThemeId' | 'designTokenVersion' | 'designTokens' | 'sections' | 'seo' | 'mediaBindings'>, now = new Date()): PageDocument {
+  return finalizePageDocument({ schemaVersion: PAGE_DOCUMENT_VERSION, ...input, version: 1, publicationState: 'draft', parentVersion: null, actorAuthority: `${actor.authority}:${actor.actorUserId ?? 'system'}:${actor.role}`, createdAt: now.toISOString() })
+}
+
+export function diffPages(before: PageDocument, after: PageDocument): PageDiff {
+  const beforeBlocks = new Map(before.sections.map(block => [block.blockId, block])); const afterBlocks = new Map(after.sections.map(block => [block.blockId, block])); const addedBlockIds = after.sections.filter(block => !beforeBlocks.has(block.blockId)).map(block => block.blockId); const removedBlockIds = before.sections.filter(block => !afterBlocks.has(block.blockId)).map(block => block.blockId); const changedBlockIds = after.sections.filter(block => beforeBlocks.has(block.blockId) && canonicalFingerprint(beforeBlocks.get(block.blockId)) !== canonicalFingerprint(block)).map(block => block.blockId)
+  const beforeMedia = new Map(before.mediaBindings.map(binding => [binding.bindingId, binding.assetId])); const afterMedia = new Map(after.mediaBindings.map(binding => [binding.bindingId, binding.assetId])); const mediaChanges = [...new Set([...beforeMedia.keys(), ...afterMedia.keys()])].filter(id => beforeMedia.get(id) !== afterMedia.get(id)).map(bindingId => ({ bindingId, beforeAssetId: beforeMedia.get(bindingId) || null, afterAssetId: afterMedia.get(bindingId) || null }))
+  const base = { fromVersion: before.version, toVersion: after.version, changedBlockIds, addedBlockIds, removedBlockIds, mediaChanges, seoChanged: canonicalFingerprint(before.seo) !== canonicalFingerprint(after.seo), beforeFingerprint: before.fingerprint, afterFingerprint: after.fingerprint }; return { ...base, diffFingerprint: canonicalFingerprint(base) }
+}

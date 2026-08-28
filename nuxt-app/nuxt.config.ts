@@ -1,6 +1,7 @@
 const faviconLink = [{ rel: 'icon' as const, type: 'image/svg+xml', href: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%234d5dad%22/%3E%3Cpath d=%22M8 23V16h4v7H8Zm6 0V10h4v13h-4Zm6 0V6h4v17h-4Z%22 fill=%22%23f5f2eb%22/%3E%3C/svg%3E' }]
 const modelImprovementCron = process.env.MODEL_IMPROVEMENT_CRON || '0 18 * * *'
 const geoModelOpsCron = process.env.GEO_MODELOPS_CRON || '*/15 * * * *'
+const managedSiteEditorCron = process.env.MANAGED_SITE_EDITOR_CRON || '*/5 * * * *'
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-16',
@@ -26,7 +27,7 @@ export default defineNuxtConfig({
   },
   nitro: {
     experimental: { tasks: true },
-    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'], [geoModelOpsCron]: ['content-operations:geo-modelops-tick'] },
+    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'], [geoModelOpsCron]: ['content-operations:geo-modelops-tick'], [managedSiteEditorCron]: ['managed-sites:editor-tick'] },
   },
   routeRules: {
     '/': { redirect: { to: '/audit-lab', statusCode: 302 } },
@@ -35,6 +36,7 @@ export default defineNuxtConfig({
     '/ml-lab-preview': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/leads': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
     '/training-pipeline': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
+    '/customer/managed-sites/editor': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
     '/en/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/zh-hant/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/api/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
@@ -61,6 +63,7 @@ export default defineNuxtConfig({
     autoGeoBailianEndpoint: process.env.NUXT_AUTOGEO_BAILIAN_ENDPOINT || '',
     autoGeoBailianModel: process.env.NUXT_AUTOGEO_BAILIAN_MODEL || 'qwen-plus',
     modelImprovementAutoTrain: process.env.NUXT_MODEL_IMPROVEMENT_AUTO_TRAIN || 'false',
+    pageEditorPreviewSecret: process.env.NUXT_PAGE_EDITOR_PREVIEW_SECRET || '',
     public: {
       discoveryStackPublicSiteOrigin: process.env.DISCOVERYSTACK_PUBLIC_SITE_ORIGIN || 'https://www.example.com',
     },

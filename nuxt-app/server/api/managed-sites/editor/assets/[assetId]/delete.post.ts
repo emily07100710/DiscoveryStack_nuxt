@@ -1,0 +1,4 @@
+import { assertEditorSameOrigin, readBoundedEditorBody, requireEditorActor } from '../../../../../managed-sites/page-editor/http'
+import { permanentlyDeleteMediaAsset } from '../../../../../managed-sites/media-vault/service'
+import { resolveEditorRuntime } from '../../../../../managed-sites/page-editor/runtime'
+export default defineEventHandler(async event => { assertEditorSameOrigin(event); const { mediaActor } = await requireEditorActor(event, 'content:publish'); const runtime = await resolveEditorRuntime(mediaActor); const body = await readBoundedEditorBody(event); return permanentlyDeleteMediaAsset({ repository: runtime.mediaRepository, storage: runtime.storage }, mediaActor, { assetId: getRouterParam(event, 'assetId') || '', confirmation: String((body as any)?.confirmation || '') }) })
