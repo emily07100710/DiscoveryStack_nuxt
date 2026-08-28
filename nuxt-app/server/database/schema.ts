@@ -2488,3 +2488,190 @@ export type GeoOutcomeModelopsCycle = typeof geoOutcomeModelopsCycles.$inferSele
 export type GeoOutcomeModelopsEvent = typeof geoOutcomeModelopsEvents.$inferSelect
 export type GeoOutcomeModelopsShadowEvaluation = typeof geoOutcomeModelopsShadowEvaluations.$inferSelect
 export type GeoOutcomeModelopsRollbackDecision = typeof geoOutcomeModelopsRollbackDecisions.$inferSelect
+
+/** Canonical owner/client/site identity for one governed system. Commerce authority stays in Managed Site tables. */
+export const systemSpecs = mysqlTable('systemSpecs', {
+  id: int('id').autoincrement().primaryKey(),
+  specId: varchar('specId', { length: 128 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  websiteId: varchar('websiteId', { length: 128 }),
+  managedSiteProjectId: int('managedSiteProjectId').references(() => managedSiteProjects.id),
+  activeVersionId: int('activeVersionId'),
+  status: mysqlEnum('status', ['draft', 'preview_ready', 'quote_ready', 'awaiting_payment', 'payment_verified', 'provisioning_planned', 'provisioning', 'health_checking', 'invitation_pending', 'active', 'failed', 'retry_wait', 'suspended', 'deprovision_pending', 'deprovisioned']).default('draft').notNull(),
+  identityFingerprint: varchar('identityFingerprint', { length: 64 }).notNull(),
+  creationIdempotencyKey: varchar('creationIdempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('system_specs_owner_spec_unique').on(table.ownerUserId, table.specId),
+  uniqueIndex('system_specs_owner_identity_unique').on(table.ownerUserId, table.identityFingerprint),
+  uniqueIndex('system_specs_owner_creation_key_unique').on(table.ownerUserId, table.creationIdempotencyKey),
+  index('system_specs_owner_client_status_idx').on(table.ownerUserId, table.clientId, table.status),
+])
+
+/** Immutable normalized SystemSpec versions and exact compiler lineage. */
+export const systemSpecVersions = mysqlTable('systemSpecVersions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  systemSpecId: int('systemSpecId').notNull().references(() => systemSpecs.id),
+  version: int('version').notNull(),
+  parentVersionId: int('parentVersionId'),
+  parentFingerprint: varchar('parentFingerprint', { length: 64 }),
+  schemaVersion: varchar('schemaVersion', { length: 64 }).notNull(),
+  compilerVersion: varchar('compilerVersion', { length: 64 }).notNull(),
+  normalizedSpec: json('normalizedSpec').notNull(),
+  compiledPlan: json('compiledPlan').notNull(),
+  specFingerprint: varchar('specFingerprint', { length: 64 }).notNull(),
+  compiledPlanFingerprint: varchar('compiledPlanFingerprint', { length: 64 }).notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdByAuthority: varchar('createdByAuthority', { length: 96 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('system_spec_versions_spec_version_unique').on(table.systemSpecId, table.version),
+  uniqueIndex('system_spec_versions_spec_fingerprint_unique').on(table.systemSpecId, table.specFingerprint),
+  uniqueIndex('system_spec_versions_owner_key_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('system_spec_versions_owner_spec_idx').on(table.ownerUserId, table.systemSpecId, table.createdAt),
+])
+
+/** Append-only synthetic interactive previews; Managed Site preview/order lineage remains canonical commerce authority. */
+export const systemPreviews = mysqlTable('systemPreviews', {
+  id: int('id').autoincrement().primaryKey(),
+  previewId: varchar('previewId', { length: 128 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  systemSpecId: int('systemSpecId').notNull().references(() => systemSpecs.id),
+  systemSpecVersionId: int('systemSpecVersionId').notNull().references(() => systemSpecVersions.id),
+  managedSitePreviewId: int('managedSitePreviewId').references(() => managedSitePreviews.id),
+  version: int('version').notNull(),
+  parentPreviewId: int('parentPreviewId'),
+  specFingerprint: varchar('specFingerprint', { length: 64 }).notNull(),
+  fixtureFingerprint: varchar('fixtureFingerprint', { length: 64 }).notNull(),
+  compiledPlanFingerprint: varchar('compiledPlanFingerprint', { length: 64 }).notNull(),
+  fixtureProjection: json('fixtureProjection').notNull(),
+  status: mysqlEnum('status', ['preview_ready', 'superseded', 'expired']).default('preview_ready').notNull(),
+  noProductionData: boolean('noProductionData').default(true).notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('system_previews_public_id_unique').on(table.previewId),
+  uniqueIndex('system_previews_spec_version_unique').on(table.systemSpecId, table.version),
+  uniqueIndex('system_previews_spec_fixture_unique').on(table.systemSpecVersionId, table.fixtureFingerprint),
+  index('system_previews_owner_status_idx').on(table.ownerUserId, table.status, table.expiresAt),
+])
+
+/** Isolated Frappe site projection. No Administrator secret, host credential, or connection URL is stored. */
+export const systemTenants = mysqlTable('systemTenants', {
+  id: int('id').autoincrement().primaryKey(),
+  systemTenantId: varchar('systemTenantId', { length: 128 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  systemSpecId: int('systemSpecId').notNull().references(() => systemSpecs.id),
+  systemSpecVersionId: int('systemSpecVersionId').notNull().references(() => systemSpecVersions.id),
+  siteNameHash: varchar('siteNameHash', { length: 64 }).notNull(),
+  state: mysqlEnum('state', ['draft', 'preview_ready', 'quote_ready', 'awaiting_payment', 'payment_verified', 'provisioning_planned', 'provisioning', 'health_checking', 'invitation_pending', 'active', 'failed', 'retry_wait', 'suspended', 'deprovision_pending', 'deprovisioned']).default('draft').notNull(),
+  stateVersion: int('stateVersion').default(1).notNull(),
+  specFingerprint: varchar('specFingerprint', { length: 64 }).notNull(),
+  compiledPlanFingerprint: varchar('compiledPlanFingerprint', { length: 64 }).notNull(),
+  verifiedPaymentReceiptFingerprint: varchar('verifiedPaymentReceiptFingerprint', { length: 64 }),
+  healthyReceiptFingerprint: varchar('healthyReceiptFingerprint', { length: 64 }),
+  invitationReceiptFingerprint: varchar('invitationReceiptFingerprint', { length: 64 }),
+  projectionFingerprint: varchar('projectionFingerprint', { length: 64 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+  deprovisionedAt: timestamp('deprovisionedAt'),
+}, table => [
+  uniqueIndex('system_tenants_public_id_unique').on(table.systemTenantId),
+  uniqueIndex('system_tenants_spec_unique').on(table.systemSpecId),
+  uniqueIndex('system_tenants_owner_site_hash_unique').on(table.ownerUserId, table.siteNameHash),
+  index('system_tenants_owner_client_state_idx').on(table.ownerUserId, table.clientId, table.state),
+])
+
+/** Non-forgeable lineage binding to existing website, Managed Site, order and payment authorities. */
+export const systemTenantBindings = mysqlTable('systemTenantBindings', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  websiteId: varchar('websiteId', { length: 128 }),
+  managedSiteProjectId: int('managedSiteProjectId').references(() => managedSiteProjects.id),
+  managedSitePreviewId: int('managedSitePreviewId').references(() => managedSitePreviews.id),
+  managedSiteQuoteId: int('managedSiteQuoteId').references(() => managedSiteQuotes.id),
+  managedSiteDraftOrderId: int('managedSiteDraftOrderId').references(() => managedSiteDraftOrders.id),
+  managedSitePaymentEventId: int('managedSitePaymentEventId').references(() => managedSitePaymentEvents.id),
+  bindingFingerprint: varchar('bindingFingerprint', { length: 64 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('system_tenant_bindings_tenant_unique').on(table.systemTenantId),
+  uniqueIndex('system_tenant_bindings_owner_fingerprint_unique').on(table.ownerUserId, table.bindingFingerprint),
+  index('system_tenant_bindings_commerce_idx').on(table.managedSiteDraftOrderId, table.managedSitePaymentEventId),
+])
+
+/** Reviewed immutable plan. A dry-run receipt is never treated as provisioning success. */
+export const systemProvisioningPlans = mysqlTable('systemProvisioningPlans', {
+  id: int('id').autoincrement().primaryKey(),
+  planId: varchar('planId', { length: 128 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id),
+  systemSpecVersionId: int('systemSpecVersionId').notNull().references(() => systemSpecVersions.id),
+  planFingerprint: varchar('planFingerprint', { length: 64 }).notNull(),
+  steps: json('steps').notNull(),
+  status: mysqlEnum('status', ['planned', 'running', 'retry_wait', 'failed', 'health_checking', 'invitation_pending', 'completed', 'cancelled']).default('planned').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex('system_provisioning_plans_public_id_unique').on(table.planId), uniqueIndex('system_provisioning_plans_owner_key_unique').on(table.ownerUserId, table.idempotencyKey), uniqueIndex('system_provisioning_plans_tenant_fingerprint_unique').on(table.systemTenantId, table.planFingerprint), index('system_provisioning_plans_owner_status_idx').on(table.ownerUserId, table.status)])
+
+/** Leased workflow run with bounded attempts and stale-lease recovery. */
+export const systemProvisioningRuns = mysqlTable('systemProvisioningRuns', {
+  id: int('id').autoincrement().primaryKey(), runId: varchar('runId', { length: 128 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), planId: int('planId').notNull().references(() => systemProvisioningPlans.id), status: mysqlEnum('status', ['queued', 'processing', 'retry_wait', 'failed', 'blocked', 'completed']).default('queued').notNull(), attempt: int('attempt').default(0).notNull(), maxAttempts: int('maxAttempts').default(3).notNull(), leaseOwner: varchar('leaseOwner', { length: 128 }), leaseExpiresAt: timestamp('leaseExpiresAt'), retryEligibleAt: timestamp('retryEligibleAt'), inputFingerprint: varchar('inputFingerprint', { length: 64 }).notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(), completedAt: timestamp('completedAt'),
+}, table => [uniqueIndex('system_provisioning_runs_public_id_unique').on(table.runId), uniqueIndex('system_provisioning_runs_owner_key_unique').on(table.ownerUserId, table.idempotencyKey), index('system_provisioning_runs_lease_idx').on(table.status, table.leaseExpiresAt, table.retryEligibleAt)])
+
+/** One bounded fixed-operation attempt. User-controlled command text is deliberately absent. */
+export const systemProvisioningAttempts = mysqlTable('systemProvisioningAttempts', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), runId: int('runId').notNull().references(() => systemProvisioningRuns.id), operation: mysqlEnum('operation', ['create_site', 'install_app', 'apply_compiled_spec', 'create_roles_permissions', 'configure_modules', 'health_check', 'create_admin_invitation', 'suspend_site', 'reactivate_site', 'deprovision_site']).notNull(), attemptNumber: int('attemptNumber').notNull(), status: mysqlEnum('status', ['processing', 'succeeded', 'retry_wait', 'failed', 'blocked']).notNull(), timeoutMs: int('timeoutMs').notNull(), requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(), responseFingerprint: varchar('responseFingerprint', { length: 64 }), exactResponseIdentity: varchar('exactResponseIdentity', { length: 256 }), errorCode: varchar('errorCode', { length: 96 }), errorSummary: varchar('errorSummary', { length: 500 }), createdAt: timestamp('createdAt').defaultNow().notNull(), completedAt: timestamp('completedAt'),
+}, table => [uniqueIndex('system_provisioning_attempt_run_operation_unique').on(table.runId, table.operation, table.attemptNumber), index('system_provisioning_attempt_tenant_status_idx').on(table.ownerUserId, table.systemTenantId, table.status)])
+
+/** Append-only verified state event ledger. */
+export const systemEvents = mysqlTable('systemEvents', {
+  id: int('id').autoincrement().primaryKey(), eventId: varchar('eventId', { length: 160 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), previousState: varchar('previousState', { length: 48 }).notNull(), nextState: varchar('nextState', { length: 48 }).notNull(), eventType: varchar('eventType', { length: 96 }).notNull(), authorityFingerprint: varchar('authorityFingerprint', { length: 64 }).notNull(), payloadFingerprint: varchar('payloadFingerprint', { length: 64 }).notNull(), eventFingerprint: varchar('eventFingerprint', { length: 64 }).notNull(), occurredAt: timestamp('occurredAt').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('system_events_public_id_unique').on(table.eventId), uniqueIndex('system_events_fingerprint_unique').on(table.eventFingerprint), index('system_events_tenant_created_idx').on(table.ownerUserId, table.systemTenantId, table.createdAt)])
+
+/** Append-only, secret-free exact operation receipts. */
+export const systemReceipts = mysqlTable('systemReceipts', {
+  id: int('id').autoincrement().primaryKey(), receiptId: varchar('receiptId', { length: 160 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), runId: int('runId').references(() => systemProvisioningRuns.id), receiptType: varchar('receiptType', { length: 96 }).notNull(), status: mysqlEnum('status', ['verified', 'failed', 'blocked', 'rolled_back', 'replayed']).notNull(), requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(), responseFingerprint: varchar('responseFingerprint', { length: 64 }), exactResponseIdentity: varchar('exactResponseIdentity', { length: 256 }), metadata: json('metadata').notNull(), receiptFingerprint: varchar('receiptFingerprint', { length: 64 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('system_receipts_public_id_unique').on(table.receiptId), uniqueIndex('system_receipts_fingerprint_unique').on(table.ownerUserId, table.receiptFingerprint), index('system_receipts_tenant_created_idx').on(table.ownerUserId, table.systemTenantId, table.createdAt)])
+
+/** One-time tenant admin invitation. Only token hashes are persisted. */
+export const systemAdminInvitations = mysqlTable('systemAdminInvitations', {
+  id: int('id').autoincrement().primaryKey(), invitationId: varchar('invitationId', { length: 128 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), principalEmailHash: varchar('principalEmailHash', { length: 64 }).notNull(), tokenHash: varchar('tokenHash', { length: 64 }).notNull(), roleKey: varchar('roleKey', { length: 64 }).notNull(), status: mysqlEnum('status', ['pending', 'accepted', 'expired', 'revoked']).default('pending').notNull(), expiresAt: timestamp('expiresAt').notNull(), acceptedAt: timestamp('acceptedAt'), revokedAt: timestamp('revokedAt'), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('system_admin_invitations_public_id_unique').on(table.invitationId), uniqueIndex('system_admin_invitations_token_hash_unique').on(table.tokenHash), index('system_admin_invitations_tenant_status_idx').on(table.ownerUserId, table.systemTenantId, table.status, table.expiresAt)])
+
+/** Opaque server-side connection references; secret values and Administrator credentials are excluded. */
+export const systemConnectionRefs = mysqlTable('systemConnectionRefs', {
+  id: int('id').autoincrement().primaryKey(), connectionRefId: varchar('connectionRefId', { length: 128 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), purpose: mysqlEnum('purpose', ['frappe_internal_hmac', 'frappe_site_admin', 'backup_storage', 'email', 'calendar', 'content_projection']).notNull(), opaqueReference: varchar('opaqueReference', { length: 192 }).notNull(), status: mysqlEnum('status', ['active', 'revoked', 'unavailable']).default('active').notNull(), referenceFingerprint: varchar('referenceFingerprint', { length: 64 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(), revokedAt: timestamp('revokedAt'),
+}, table => [uniqueIndex('system_connection_refs_public_id_unique').on(table.connectionRefId), uniqueIndex('system_connection_refs_tenant_purpose_unique').on(table.systemTenantId, table.purpose), uniqueIndex('system_connection_refs_owner_fingerprint_unique').on(table.ownerUserId, table.referenceFingerprint)])
+
+/** Reviewed upgrade intent; never a remote self-updater. */
+export const systemUpgradeIntents = mysqlTable('systemUpgradeIntents', {
+  id: int('id').autoincrement().primaryKey(), upgradeIntentId: varchar('upgradeIntentId', { length: 128 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), fromVersionLockHash: varchar('fromVersionLockHash', { length: 64 }).notNull(), toVersionLockHash: varchar('toVersionLockHash', { length: 64 }).notNull(), reviewedByUserId: int('reviewedByUserId').notNull().references(() => users.id), status: mysqlEnum('status', ['draft', 'reviewed', 'planned', 'running', 'completed', 'failed', 'rolled_back', 'cancelled']).default('draft').notNull(), intentFingerprint: varchar('intentFingerprint', { length: 64 }).notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex('system_upgrade_intents_public_id_unique').on(table.upgradeIntentId), uniqueIndex('system_upgrade_intents_owner_key_unique').on(table.ownerUserId, table.idempotencyKey), uniqueIndex('system_upgrade_intents_tenant_fingerprint_unique').on(table.systemTenantId, table.intentFingerprint)])
+
+export const systemUpgradeRuns = mysqlTable('systemUpgradeRuns', {
+  id: int('id').autoincrement().primaryKey(), upgradeRunId: varchar('upgradeRunId', { length: 128 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), upgradeIntentId: int('upgradeIntentId').notNull().references(() => systemUpgradeIntents.id), status: mysqlEnum('status', ['queued', 'backing_up', 'applying', 'verifying', 'completed', 'failed', 'rolling_back', 'rolled_back']).default('queued').notNull(), attempt: int('attempt').default(0).notNull(), leaseOwner: varchar('leaseOwner', { length: 128 }), leaseExpiresAt: timestamp('leaseExpiresAt'), backupReceiptFingerprint: varchar('backupReceiptFingerprint', { length: 64 }), rollbackReceiptFingerprint: varchar('rollbackReceiptFingerprint', { length: 64 }), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(), completedAt: timestamp('completedAt'),
+}, table => [uniqueIndex('system_upgrade_runs_public_id_unique').on(table.upgradeRunId), index('system_upgrade_runs_tenant_status_idx').on(table.ownerUserId, table.systemTenantId, table.status), index('system_upgrade_runs_lease_idx').on(table.status, table.leaseExpiresAt)])
+
+export const systemUpgradeReceipts = mysqlTable('systemUpgradeReceipts', {
+  id: int('id').autoincrement().primaryKey(), receiptId: varchar('receiptId', { length: 160 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), upgradeRunId: int('upgradeRunId').notNull().references(() => systemUpgradeRuns.id), step: mysqlEnum('step', ['plan', 'backup', 'apply', 'verify', 'rollback']).notNull(), status: mysqlEnum('status', ['verified', 'failed', 'rolled_back']).notNull(), artifactFingerprint: varchar('artifactFingerprint', { length: 64 }), receiptFingerprint: varchar('receiptFingerprint', { length: 64 }).notNull(), exactResponseIdentity: varchar('exactResponseIdentity', { length: 256 }), metadata: json('metadata').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('system_upgrade_receipts_public_id_unique').on(table.receiptId), uniqueIndex('system_upgrade_receipts_fingerprint_unique').on(table.ownerUserId, table.receiptFingerprint), index('system_upgrade_receipts_run_step_idx').on(table.upgradeRunId, table.step, table.createdAt)])
+
+export type SystemSpecRecord = typeof systemSpecs.$inferSelect
+export type SystemSpecVersionRecord = typeof systemSpecVersions.$inferSelect
+export type SystemPreviewRecord = typeof systemPreviews.$inferSelect
+export type SystemTenantRecord = typeof systemTenants.$inferSelect
+export type SystemTenantBindingRecord = typeof systemTenantBindings.$inferSelect
+export type SystemProvisioningPlanRecord = typeof systemProvisioningPlans.$inferSelect
+export type SystemProvisioningRunRecord = typeof systemProvisioningRuns.$inferSelect
+export type SystemReceiptRecord = typeof systemReceipts.$inferSelect
+export type SystemAdminInvitationRecord = typeof systemAdminInvitations.$inferSelect
+export type SystemConnectionRefRecord = typeof systemConnectionRefs.$inferSelect

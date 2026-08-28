@@ -218,6 +218,13 @@
       "when": 1787858218663,
       "tag": "0030_quick_sphinx",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "5",
+      "when": 1787934866555,
+      "tag": "0031_pale_the_fury",
+      "breakpoints": true
     }
   ]
 }
