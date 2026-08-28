@@ -50,6 +50,7 @@ onMounted(loadCustomerSite)
         <p class="lede">這裡只顯示你所屬網站專案的內容、版本、素材與訂閱狀態。平台原始碼與其他客戶資料不在此入口提供。</p>
       </div>
       <button v-if="projection" type="button" class="button" @click="exportData">匯出我的資料</button>
+      <NuxtLink v-if="projection && ['owner', 'administrator', 'editor'].includes(projection.membership.role)" class="button button--editor" to="/customer/managed-sites/editor">開啟網站編輯器</NuxtLink>
     </header>
 
     <p v-if="loading" class="state" role="status">正在載入專案資料…</p>
@@ -107,6 +108,7 @@ h1 { margin: 0; font: 900 clamp(2.2rem, 6vw, 4.6rem)/1.02 Georgia, serif; }
 h2 { margin: 0 0 .6rem; font: 700 1.35rem/1.15 Georgia, serif; }
 .lede { max-width: 52rem; color: #5e6575; line-height: 1.7; }
 .button { border: 0; border-radius: .6rem; padding: .8rem 1.1rem; background: #4d5dad; color: white; cursor: pointer; font-weight: 700; }
+.button--editor { display: inline-flex; text-decoration: none; background: #17233b; }
 .state { max-width: 72rem; margin: 0 auto; padding: 1rem; border-radius: .7rem; background: white; }
 .state--error { color: #8a2b24; border: 1px solid #edb3ab; }
 .managed-site-portal__grid { max-width: 72rem; margin: 0 auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
