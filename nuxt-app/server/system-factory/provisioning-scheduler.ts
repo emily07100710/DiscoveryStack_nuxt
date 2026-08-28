@@ -8,12 +8,14 @@ export const PROVISIONING_OPERATIONS = ['create_site', 'install_app', 'apply_com
 export type ProvisioningOperation = typeof PROVISIONING_OPERATIONS[number]
 export type ProvisioningRunContext = ProvisionContext & { runRowId: number; runPublicId: string; planRowId: number; ownerUserRowId: number; tenantRowId: number; systemSpecRowId: number; runAttempt: number; maxAttempts: number; planFingerprint: string }
 export type ProvisioningClaim = { runRowId: number; leaseOwner: string; leaseExpiresAt: Date }
-export type ProvisioningAttempt = { operation: ProvisioningOperation; attemptNumber: number; requestFingerprint: string; startedAt: Date }
+export type ProvisioningAttempt = { operation: ProvisioningOperation; attemptNumber: number; requestFingerprint: string; startedAt: Date; status?: 'processing' | 'succeeded' | 'retry_wait' | 'blocked' }
 export type ProvisioningFailure = { code: string; summary: string; retryable: boolean; retryAt: Date | null; blocked: boolean }
+export type EligibleProvisioningRun = { runRowId: number; tenantRowId: number }
 
 export interface DurableProvisioningRepositoryPort {
-  listEligible(now: Date, limit: number): Promise<number[]>
+  listEligible(now: Date, distinctTenantLimit: number): Promise<EligibleProvisioningRun[]>
   claim(runRowId: number, leaseOwner: string, now: Date, leaseExpiresAt: Date): Promise<ProvisioningClaim | null>
+  renewLease(claim: ProvisioningClaim, now: Date, leaseExpiresAt: Date): Promise<ProvisioningClaim | null>
   loadContext(claim: ProvisioningClaim): Promise<ProvisioningRunContext>
   completedOperations(claim: ProvisioningClaim): Promise<ProvisioningOperation[]>
   beginAttempt(claim: ProvisioningClaim, operation: ProvisioningOperation, requestFingerprint: string, now: Date, timeoutMs: number): Promise<ProvisioningAttempt>
@@ -25,6 +27,9 @@ export interface DurableProvisioningRepositoryPort {
 const METHODS: Record<ProvisioningOperation, keyof Pick<SystemFactoryProvisionerPort, 'createSite' | 'installApp' | 'applyCompiledSpec' | 'createRolesAndPermissions' | 'configureModules' | 'healthCheck' | 'createAdminInvitation'>> = {
   create_site: 'createSite', install_app: 'installApp', apply_compiled_spec: 'applyCompiledSpec', create_roles_permissions: 'createRolesAndPermissions', configure_modules: 'configureModules', health_check: 'healthCheck', create_admin_invitation: 'createAdminInvitation',
 }
+export const OPERATION_TIMEOUT_MS: Record<ProvisioningOperation, number> = { create_site: 300_000, install_app: 300_000, apply_compiled_spec: 30_000, create_roles_permissions: 30_000, configure_modules: 30_000, health_check: 30_000, create_admin_invitation: 30_000 }
+export const LEASE_SAFETY_MARGIN_MS = 60_000
+const LEASE_EXPIRY_GUARD_MS = 1
 
 function classify(error: unknown, attemptNumber: number, maxAttempts: number, now: Date): ProvisioningFailure {
   const code = error instanceof SystemFactoryError ? error.code : 'UNEXPECTED_EXECUTOR_FAILURE'
@@ -40,27 +45,32 @@ function assertReceipt(context: ProvisioningRunContext, operation: ProvisioningO
   if (operation === 'health_check' && !('healthy' in receipt && receipt.healthy === true)) throw new SystemFactoryError('PROVISIONING_HEALTH_FAILED', 'Tenant health did not verify.', 409)
 }
 
-export async function runProvisioningTick(input: { repository: DurableProvisioningRepositoryPort; provisioner: SystemFactoryProvisionerPort; workerId: string; now?: Date; maxTenants?: number; maxStepsPerTenant?: number; maxTotalSteps?: number; leaseMs?: number; timeoutMs?: number }) {
-  const now = input.now || new Date(); const maxTenants = Math.min(Math.max(input.maxTenants || 20, 1), 20); const maxStepsPerTenant = Math.min(Math.max(input.maxStepsPerTenant || 10, 1), 10); const maxTotalSteps = Math.min(Math.max(input.maxTotalSteps || 100, 1), 200); const leaseMs = Math.min(Math.max(input.leaseMs || 120_000, 10_000), 600_000); const timeoutMs = Math.min(Math.max(input.timeoutMs || 30_000, 1_000), 120_000)
-  const candidates = await input.repository.listEligible(now, maxTenants); let claimed = 0; let executed = 0; let completed = 0; let retryWait = 0; let blocked = 0
-  for (const runRowId of candidates) {
+export async function runProvisioningTick(input: { repository: DurableProvisioningRepositoryPort; provisioner: SystemFactoryProvisionerPort; workerId: string; now?: Date; clock?: () => Date; maxTenants?: number; maxStepsPerTenant?: number; maxTotalSteps?: number }) {
+  const clock = input.clock || (() => input.now || new Date()); const tickNow = input.now || clock(); const maxTenants = Math.min(Math.max(input.maxTenants || 20, 1), 20); const maxStepsPerTenant = Math.min(Math.max(input.maxStepsPerTenant || 10, 1), 10); const maxTotalSteps = Math.min(Math.max(input.maxTotalSteps || 100, 1), 100)
+  const candidates = await input.repository.listEligible(tickNow, maxTenants); let claimed = 0; let executed = 0; let completed = 0; let retryWait = 0; let blocked = 0
+  const tenants = new Set<number>(); const stepsByTenant = new Map<number, number>()
+  for (const candidate of candidates) {
     if (executed >= maxTotalSteps) break
-    const claim = await input.repository.claim(runRowId, input.workerId, now, new Date(now.getTime() + leaseMs)); if (!claim) continue
+    if (tenants.has(candidate.tenantRowId) || tenants.size >= maxTenants) continue
+    const initialLeaseMs = Math.max(...Object.values(OPERATION_TIMEOUT_MS)) + LEASE_SAFETY_MARGIN_MS + LEASE_EXPIRY_GUARD_MS
+    let claim = await input.repository.claim(candidate.runRowId, input.workerId, tickNow, new Date(tickNow.getTime() + initialLeaseMs)); if (!claim) continue
+    tenants.add(candidate.tenantRowId); stepsByTenant.set(candidate.tenantRowId, 0)
     claimed++
     let context: ProvisioningRunContext
-    try { context = await input.repository.loadContext(claim) } catch (error) { await input.repository.blockClaim(claim, error instanceof SystemFactoryError ? error.code : 'CONTEXT_LOAD_FAILED', now); blocked++; continue }
-    for (let ordinal = 0; ordinal < maxStepsPerTenant && executed < maxTotalSteps; ordinal++) {
+    try { context = await input.repository.loadContext(claim) } catch (error) { await input.repository.blockClaim(claim, error instanceof SystemFactoryError ? error.code : 'CONTEXT_LOAD_FAILED', clock()); blocked++; continue }
+    for (let ordinal = 0; (stepsByTenant.get(candidate.tenantRowId) || 0) < maxStepsPerTenant && executed < maxTotalSteps; ordinal++) {
       const done = await input.repository.completedOperations(claim); const operation = PROVISIONING_OPERATIONS.find(item => !done.includes(item)); if (!operation) break
+      const operationStartedAt = clock(); const timeoutMs = OPERATION_TIMEOUT_MS[operation]; const renewed = await input.repository.renewLease(claim, operationStartedAt, new Date(operationStartedAt.getTime() + timeoutMs + LEASE_SAFETY_MARGIN_MS + LEASE_EXPIRY_GUARD_MS)); if (!renewed) { blocked++; break }; claim = renewed
       const requestFingerprint = fingerprint({ schemaVersion: 'provisioning-step-request-v1', operation, runId: context.runPublicId, tenant: context.systemTenantId, plan: context.planFingerprint, compiledPlan: context.compiledPlan.planFingerprint, authority: context.runtimeAuthority.authorityFingerprint })
       let attempt: ProvisioningAttempt
-      try { attempt = await input.repository.beginAttempt(claim, operation, requestFingerprint, now, timeoutMs) } catch (error) { await input.repository.blockClaim(claim, error instanceof SystemFactoryError ? error.code : 'ATTEMPT_CLAIM_FAILED', now); blocked++; break }
-      executed++
+      try { attempt = await input.repository.beginAttempt(claim, operation, requestFingerprint, operationStartedAt, timeoutMs) } catch (error) { await input.repository.blockClaim(claim, error instanceof SystemFactoryError ? error.code : 'ATTEMPT_CLAIM_FAILED', clock()); blocked++; break }
+      executed++; stepsByTenant.set(candidate.tenantRowId, (stepsByTenant.get(candidate.tenantRowId) || 0) + 1)
       try {
         const method = METHODS[operation]; const receipt = await (input.provisioner[method] as (value: ProvisionContext) => Promise<OperationReceipt>)({ ...context, idempotencyKey: `${context.runPublicId}:${operation}` }); assertReceipt(context, operation, receipt)
-        const terminal = operation === PROVISIONING_OPERATIONS.at(-1); await input.repository.commitSuccess(claim, context, attempt, receipt, new Date(), terminal)
+        const terminal = operation === PROVISIONING_OPERATIONS.at(-1); await input.repository.commitSuccess(claim, context, attempt, receipt, clock(), terminal)
         if (terminal) { completed++; break }
       } catch (error) {
-        const failure = classify(error, attempt.attemptNumber, context.maxAttempts, now); await input.repository.commitFailure(claim, context, attempt, failure, new Date()); if (failure.retryable) retryWait++; else blocked++; break
+        const failedAt = clock(); const failure = classify(error, attempt.attemptNumber, context.maxAttempts, failedAt); await input.repository.commitFailure(claim, context, attempt, failure, failedAt); if (failure.retryable) retryWait++; else blocked++; break
       }
     }
   }
@@ -71,15 +81,16 @@ type MemoryRun = { context: ProvisioningRunContext; status: 'queued' | 'processi
 export class MemoryProvisioningRepository implements DurableProvisioningRepositoryPort {
   readonly runs = new Map<number, MemoryRun>(); failCommitOnce = false
   constructor(contexts: ProvisioningRunContext[] = []) { for (const context of contexts) this.runs.set(context.runRowId, { context, status: 'queued', leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, completed: [], attempts: [], receipts: [] }) }
-  async listEligible(now: Date, limit: number) { return [...this.runs.entries()].filter(([, run]) => run.status === 'queued' || run.status === 'retry_wait' && Boolean(run.retryEligibleAt && run.retryEligibleAt <= now) || run.status === 'processing' && Boolean(run.leaseExpiresAt && run.leaseExpiresAt <= now)).slice(0, limit).map(([id]) => id) }
-  async claim(runRowId: number, leaseOwner: string, now: Date, leaseExpiresAt: Date) { const run = this.runs.get(runRowId); if (!run || !(run.status === 'queued' || run.status === 'retry_wait' && Boolean(run.retryEligibleAt && run.retryEligibleAt <= now) || run.status === 'processing' && Boolean(run.leaseExpiresAt && run.leaseExpiresAt <= now))) return null; run.status = 'processing'; run.leaseOwner = leaseOwner; run.leaseExpiresAt = leaseExpiresAt; return { runRowId, leaseOwner, leaseExpiresAt } }
-  private owned(claim: ProvisioningClaim) { const run = this.runs.get(claim.runRowId); if (!run || run.status !== 'processing' || run.leaseOwner !== claim.leaseOwner) throw new SystemFactoryError('LEASE_LOST', 'Provisioning lease is no longer owned.', 409); return run }
+  async listEligible(now: Date, limit: number) { const tenants = new Set<number>(); const result: EligibleProvisioningRun[] = []; for (const [id, run] of this.runs) { if (!(run.status === 'queued' || run.status === 'retry_wait' && Boolean(run.retryEligibleAt && run.retryEligibleAt <= now) || run.status === 'processing' && Boolean(run.leaseExpiresAt && run.leaseExpiresAt <= now)) || tenants.has(run.context.tenantRowId)) continue; tenants.add(run.context.tenantRowId); result.push({ runRowId: id, tenantRowId: run.context.tenantRowId }); if (result.length >= limit) break }; return result }
+  async claim(runRowId: number, leaseOwner: string, now: Date, leaseExpiresAt: Date) { const run = this.runs.get(runRowId); const stale = Boolean(run?.status === 'processing' && run.leaseExpiresAt && run.leaseExpiresAt <= now); if (!run || !(run.status === 'queued' || run.status === 'retry_wait' && Boolean(run.retryEligibleAt && run.retryEligibleAt <= now) || stale)) return null; if (stale) for (const attempt of run.attempts) if (attempt.status === 'processing') attempt.status = 'retry_wait'; run.status = 'processing'; run.leaseOwner = leaseOwner; run.leaseExpiresAt = leaseExpiresAt; return { runRowId, leaseOwner, leaseExpiresAt } }
+  async renewLease(claim: ProvisioningClaim, now: Date, leaseExpiresAt: Date) { const run = this.runs.get(claim.runRowId); if (!run || run.status !== 'processing' || run.leaseOwner !== claim.leaseOwner || run.leaseExpiresAt?.getTime() !== claim.leaseExpiresAt.getTime() || run.leaseExpiresAt <= now) return null; run.leaseExpiresAt = leaseExpiresAt; return { ...claim, leaseExpiresAt } }
+  private owned(claim: ProvisioningClaim, now?: Date) { const run = this.runs.get(claim.runRowId); if (!run || run.status !== 'processing' || run.leaseOwner !== claim.leaseOwner || run.leaseExpiresAt?.getTime() !== claim.leaseExpiresAt.getTime() || now && run.leaseExpiresAt <= now) throw new SystemFactoryError('LEASE_LOST', 'Provisioning lease is no longer owned.', 409); return run }
   async loadContext(claim: ProvisioningClaim) { return this.owned(claim).context }
   async completedOperations(claim: ProvisioningClaim) { return [...this.owned(claim).completed] }
-  async beginAttempt(claim: ProvisioningClaim, operation: ProvisioningOperation, requestFingerprint: string, now: Date) { const run = this.owned(claim); const prior = run.attempts.filter(item => item.operation === operation); const collision = prior.find(item => item.requestFingerprint !== requestFingerprint); if (collision) throw new SystemFactoryError('IDEMPOTENCY_COLLISION', 'Provisioning operation payload changed.', 409); const attempt = { operation, attemptNumber: prior.length + 1, requestFingerprint, startedAt: now }; run.attempts.push(attempt); return attempt }
+  async beginAttempt(claim: ProvisioningClaim, operation: ProvisioningOperation, requestFingerprint: string, now: Date) { const run = this.owned(claim, now); const prior = run.attempts.filter(item => item.operation === operation); const collision = prior.find(item => item.requestFingerprint !== requestFingerprint); if (collision) throw new SystemFactoryError('IDEMPOTENCY_COLLISION', 'Provisioning operation payload changed.', 409); if (prior.some(item => item.status === 'processing')) throw new SystemFactoryError('ATTEMPT_BUSY', 'Provisioning operation already has a processing attempt.', 409); const attempt: ProvisioningAttempt = { operation, attemptNumber: prior.length + 1, requestFingerprint, startedAt: now, status: 'processing' }; run.attempts.push(attempt); return attempt }
   async blockClaim(claim: ProvisioningClaim) { const run = this.owned(claim); run.status = 'blocked'; run.leaseOwner = null; run.leaseExpiresAt = null }
-  async commitSuccess(claim: ProvisioningClaim, _context: ProvisioningRunContext, attempt: ProvisioningAttempt, receipt: OperationReceipt, _now: Date, terminal: boolean) { const run = this.owned(claim); if (this.failCommitOnce) { this.failCommitOnce = false; throw new SystemFactoryError('TRANSACTION_ROLLBACK', 'Injected transaction rollback.', 500) }; if (!run.completed.includes(attempt.operation)) run.completed.push(attempt.operation); run.receipts.push(receipt); if (terminal) { run.status = 'completed'; run.leaseOwner = null; run.leaseExpiresAt = null } }
-  async commitFailure(claim: ProvisioningClaim, _context: ProvisioningRunContext, _attempt: ProvisioningAttempt, failure: ProvisioningFailure) { const run = this.owned(claim); run.status = failure.retryable ? 'retry_wait' : 'blocked'; run.retryEligibleAt = failure.retryAt; run.leaseOwner = null; run.leaseExpiresAt = null }
+  async commitSuccess(claim: ProvisioningClaim, _context: ProvisioningRunContext, attempt: ProvisioningAttempt, receipt: OperationReceipt, now: Date, terminal: boolean) { const run = this.owned(claim, now); if (this.failCommitOnce) { this.failCommitOnce = false; throw new SystemFactoryError('TRANSACTION_ROLLBACK', 'Injected transaction rollback.', 500) }; attempt.status = 'succeeded'; if (!run.completed.includes(attempt.operation)) run.completed.push(attempt.operation); run.receipts.push(receipt); if (terminal) { run.status = 'completed'; run.leaseOwner = null; run.leaseExpiresAt = null } }
+  async commitFailure(claim: ProvisioningClaim, _context: ProvisioningRunContext, attempt: ProvisioningAttempt, failure: ProvisioningFailure, now: Date) { const run = this.owned(claim, now); attempt.status = failure.retryable ? 'retry_wait' : 'blocked'; run.status = failure.retryable ? 'retry_wait' : 'blocked'; run.retryEligibleAt = failure.retryAt; run.leaseOwner = null; run.leaseExpiresAt = null }
 }
 
-export function mockedProvisioningContext(input: { runRowId?: number; compiledPlan: CompiledSystemPlan; authority: SystemFactoryRuntimeAuthority }): ProvisioningRunContext { const id = input.runRowId || 1; return { runRowId: id, runPublicId: `system-run-${id}`, planRowId: id, ownerUserRowId: 1, tenantRowId: id, systemSpecRowId: id, runAttempt: 0, maxAttempts: 3, planFingerprint: fingerprint({ id }), ownerId: 'owner:1', clientId: 'client:1', websiteId: 'site:1', managedSiteId: 'managed-site:1', systemTenantId: `system-tenant-${id}`, siteName: `tenant-${id}.factory.invalid`, controlPlaneCredentialReference: 'opaque:control', tenantAppCredentialReference: 'opaque:hmac', idempotencyKey: `system-run-${id}`, compiledPlan: input.compiledPlan, executionMode: 'mocked', runtimeAuthority: input.authority } }
+export function mockedProvisioningContext(input: { runRowId?: number; tenantRowId?: number; compiledPlan: CompiledSystemPlan; authority: SystemFactoryRuntimeAuthority }): ProvisioningRunContext { const id = input.runRowId || 1; const tenantRowId = input.tenantRowId || id; return { runRowId: id, runPublicId: `system-run-${id}`, planRowId: id, ownerUserRowId: 1, tenantRowId, systemSpecRowId: id, runAttempt: 0, maxAttempts: 3, planFingerprint: fingerprint({ id }), ownerId: 'owner:1', clientId: 'client:1', websiteId: 'site:1', managedSiteId: 'managed-site:1', systemTenantId: `system-tenant-${tenantRowId}`, siteName: `tenant-${tenantRowId}.factory.invalid`, controlPlaneCredentialReference: 'opaque:control', tenantAppCredentialReference: 'opaque:hmac', idempotencyKey: `system-run-${id}`, compiledPlan: input.compiledPlan, executionMode: 'mocked', runtimeAuthority: input.authority } }
