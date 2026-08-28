@@ -1,0 +1,429 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://discoverystack.invalid/private/page-evidence-v1.schema.json",
+  "title": "DiscoveryStack private page evidence V1",
+  "description": "Development-only private evidence. Raw URLs, text, screenshots, queries, and sensitive evidence are excluded from model projections and Git.",
+  "type": "object",
+  "required": [
+    "contractVersion",
+    "collectionRunId",
+    "collectedAt",
+    "rowId",
+    "split",
+    "parentLineage",
+    "mapping",
+    "collectionStatus",
+    "page",
+    "responsive",
+    "lighthouse",
+    "interactionTrace",
+    "queryContexts",
+    "governance",
+    "requestAudit",
+    "artifacts",
+    "replay"
+  ],
+  "properties": {
+    "contractVersion": { "const": "page-evidence-v1" },
+    "collectionRunId": { "$ref": "#/$defs/runId" },
+    "collectedAt": { "type": "string", "format": "date-time" },
+    "rowId": { "type": "integer" },
+    "split": { "enum": ["train", "validation", "test"] },
+    "parentLineage": { "$ref": "#/$defs/parentLineage" },
+    "mapping": { "$ref": "#/$defs/mapping" },
+    "collectionStatus": {
+      "enum": [
+        "complete",
+        "partial",
+        "failed",
+        "blocked_policy",
+        "blocked_missing_mapping",
+        "sandbox_required",
+        "quarantined_sensitive"
+      ]
+    },
+    "page": {
+      "type": "object",
+      "required": ["status", "sensitiveReasons", "observationsIncluded"],
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "failed",
+            "blocked_policy",
+            "blocked_missing_mapping",
+            "sandbox_required",
+            "quarantined_sensitive"
+          ]
+        },
+        "sensitiveReasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["email", "phone", "credit_card", "ssn_like", "api_key_like", "credential_form"]
+          }
+        },
+        "observationsIncluded": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "responsive": {
+      "type": "object",
+      "required": ["desktop", "mobile"],
+      "properties": {
+        "desktop": { "$ref": "#/$defs/viewport" },
+        "mobile": { "$ref": "#/$defs/viewport" }
+      },
+      "additionalProperties": false
+    },
+    "lighthouse": {
+      "type": "object",
+      "required": ["desktop", "mobile"],
+      "properties": {
+        "desktop": { "$ref": "#/$defs/lighthouse" },
+        "mobile": { "$ref": "#/$defs/lighthouse" }
+      },
+      "additionalProperties": false
+    },
+    "interactionTrace": {
+      "type": "object",
+      "required": [
+        "allowedActions",
+        "dispatchedClicks",
+        "formsSubmitted",
+        "bookingStatus",
+        "checkoutStatus"
+      ],
+      "properties": {
+        "allowedActions": {
+          "type": "array",
+          "const": ["dom_inspect", "scroll", "screenshot", "native_details_text_read"]
+        },
+        "dispatchedClicks": { "const": 0 },
+        "formsSubmitted": { "const": 0 },
+        "bookingStatus": { "const": "unknown" },
+        "checkoutStatus": { "const": "unknown" }
+      },
+      "additionalProperties": false
+    },
+    "queryContexts": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/queryContext" }
+    },
+    "governance": {
+      "type": "object",
+      "required": [
+        "privateOnly",
+        "developmentOnly",
+        "containsPii",
+        "containsCredentials",
+        "quarantineStatus",
+        "modelArtifactRawEvidenceExcluded"
+      ],
+      "properties": {
+        "privateOnly": { "const": true },
+        "developmentOnly": { "const": true },
+        "containsPii": { "type": ["boolean", "null"] },
+        "containsCredentials": { "type": ["boolean", "null"] },
+        "quarantineStatus": {
+          "enum": ["clear", "not_applicable", "quarantined_sensitive_evidence"]
+        },
+        "modelArtifactRawEvidenceExcluded": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "requestAudit": {
+      "type": "object",
+      "required": [
+        "count",
+        "maxCount",
+        "blockedCount",
+        "allRequestsGuarded",
+        "serviceWorkersBlocked",
+        "websocketPolicy",
+        "entries"
+      ],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "maxCount": { "type": "integer", "minimum": 1, "maximum": 360 },
+        "blockedCount": { "type": "integer", "minimum": 0 },
+        "allRequestsGuarded": { "const": true },
+        "serviceWorkersBlocked": { "const": true },
+        "websocketPolicy": { "const": "sandbox_hard_blocker" },
+        "entries": {
+          "type": "array",
+          "maxItems": 360,
+          "items": { "$ref": "#/$defs/requestAuditEntry" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "replay": { "$ref": "#/$defs/replay" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+    },
+    "parentLineage": {
+      "type": "object",
+      "required": ["parentManifestHash", "parentDatasetDigest", "parentRowCount"],
+      "properties": {
+        "parentManifestHash": { "$ref": "#/$defs/sha256" },
+        "parentDatasetDigest": { "$ref": "#/$defs/sha256" },
+        "parentRowCount": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "mapping": {
+      "type": "object",
+      "required": [
+        "urlHash",
+        "method",
+        "evidenceRefHash",
+        "mappedByHash",
+        "mappedAt",
+        "authorizationScopeId"
+      ],
+      "properties": {
+        "urlHash": { "$ref": "#/$defs/sha256" },
+        "method": { "const": "owner_supplied_exact_url" },
+        "evidenceRefHash": { "$ref": "#/$defs/sha256" },
+        "mappedByHash": { "$ref": "#/$defs/sha256" },
+        "mappedAt": { "type": "string", "format": "date-time" },
+        "authorizationScopeId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["kind", "path", "sha256", "bytes", "quarantined"],
+      "properties": {
+        "kind": { "enum": ["raw_text", "screenshot", "private_query_sidecar", "lighthouse"] },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?:evidence|quarantined_sensitive_evidence)/"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 0, "maximum": 26214400 },
+        "quarantined": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "observations": {
+      "type": "object",
+      "required": [
+        "title",
+        "metaDescription",
+        "headings",
+        "detailsText",
+        "formsObservedWithoutInput"
+      ],
+      "properties": {
+        "title": { "type": ["string", "null"], "maxLength": 500 },
+        "metaDescription": { "type": ["string", "null"], "maxLength": 1000 },
+        "headings": {
+          "type": "array",
+          "maxItems": 120,
+          "items": {
+            "type": "object",
+            "required": ["level", "text"],
+            "properties": {
+              "level": { "type": "integer", "minimum": 1, "maximum": 3 },
+              "text": { "type": "string", "maxLength": 500 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "detailsText": {
+          "type": "array",
+          "maxItems": 50,
+          "items": { "type": "string", "maxLength": 4000 }
+        },
+        "formsObservedWithoutInput": { "type": "integer", "minimum": 0, "maximum": 50 }
+      },
+      "additionalProperties": false
+    },
+    "viewport": {
+      "type": "object",
+      "required": [
+        "viewport",
+        "status",
+        "reason",
+        "httpStatus",
+        "finalUrlHash",
+        "viewportWidth",
+        "bodyScrollWidth",
+        "horizontalOverflow",
+        "visibleInteractiveCount",
+        "artifacts"
+      ],
+      "properties": {
+        "viewport": { "enum": ["desktop", "mobile"] },
+        "status": {
+          "enum": [
+            "complete",
+            "failed",
+            "blocked_policy",
+            "blocked_missing_mapping",
+            "sandbox_required",
+            "quarantined_sensitive"
+          ]
+        },
+        "reason": { "type": ["string", "null"], "maxLength": 256 },
+        "httpStatus": { "type": ["integer", "null"], "minimum": 100, "maximum": 599 },
+        "finalUrlHash": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "viewportWidth": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "bodyScrollWidth": { "type": ["integer", "null"], "minimum": 0 },
+        "horizontalOverflow": { "type": ["boolean", "null"] },
+        "visibleInteractiveCount": { "type": "integer", "minimum": 0 },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "observations": { "$ref": "#/$defs/observations" }
+      },
+      "additionalProperties": false
+    },
+    "lighthouse": {
+      "type": "object",
+      "required": ["status", "reason", "version", "artifact"],
+      "properties": {
+        "status": { "enum": ["complete", "failed", "not_run", "runtime_unavailable"] },
+        "reason": { "type": ["string", "null"], "maxLength": 256 },
+        "version": { "const": "12.8.2" },
+        "performanceScore": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "artifact": {
+          "anyOf": [
+            { "$ref": "#/$defs/artifact" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "queryContext": {
+      "type": "object",
+      "required": ["queryId", "queryHash", "status"],
+      "properties": {
+        "queryId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "queryHash": { "$ref": "#/$defs/sha256" },
+        "status": { "const": "provided" }
+      },
+      "additionalProperties": false
+    },
+    "requestAuditEntry": {
+      "type": "object",
+      "required": ["sequence", "method", "urlHash", "host", "addressHashes", "decision"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1 },
+        "method": { "type": "string", "pattern": "^[A-Z]{1,20}$" },
+        "urlHash": { "$ref": "#/$defs/sha256" },
+        "host": { "type": ["string", "null"], "maxLength": 253 },
+        "addressHashes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sha256" }
+        },
+        "decision": { "enum": ["allowed", "blocked"] },
+        "reason": { "type": "string", "maxLength": 128 }
+      },
+      "additionalProperties": false
+    },
+    "replay": {
+      "type": "object",
+      "required": ["replayOf", "exactReplay", "sourceRunMetadataHash"],
+      "properties": {
+        "replayOf": {
+          "anyOf": [
+            { "$ref": "#/$defs/runId" },
+            { "type": "null" }
+          ]
+        },
+        "exactReplay": { "type": "boolean" },
+        "sourceRunMetadataHash": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "modelProjection": {
+      "type": "object",
+      "required": [
+        "contractVersion",
+        "rowId",
+        "split",
+        "parentLineage",
+        "evidenceStatus",
+        "frictionReasonSignals",
+        "sourceEvidenceRecordHash",
+        "rawEvidenceIncluded"
+      ],
+      "properties": {
+        "contractVersion": { "const": "page-evidence-model-projection-v1" },
+        "rowId": { "type": "integer" },
+        "split": { "enum": ["train", "validation", "test"] },
+        "parentLineage": { "$ref": "#/$defs/parentLineage" },
+        "evidenceStatus": {
+          "enum": [
+            "complete",
+            "partial",
+            "failed",
+            "blocked_policy",
+            "blocked_missing_mapping",
+            "sandbox_required",
+            "quarantined_sensitive"
+          ]
+        },
+        "frictionReasonSignals": {
+          "type": "object",
+          "required": [
+            "search_intent_mismatch",
+            "page_speed_gap",
+            "mobile_experience_gap",
+            "booking_friction",
+            "checkout_friction"
+          ],
+          "properties": {
+            "search_intent_mismatch": { "const": "unknown" },
+            "page_speed_gap": { "const": "unknown" },
+            "mobile_experience_gap": { "const": "unknown" },
+            "booking_friction": { "const": "unknown" },
+            "checkout_friction": { "const": "unknown" }
+          },
+          "additionalProperties": false
+        },
+        "sourceEvidenceRecordHash": { "$ref": "#/$defs/sha256" },
+        "rawEvidenceIncluded": { "const": false }
+      },
+      "additionalProperties": false
+    }
+  }
+}
