@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DiscoveryStack Private Page Evidence Contract",
+  "description": "Private development-only evidence contract. Evidence is collected from user-supplied public page targets without login, payment, final form submission, or credential handling.",
+  "type": "object",
+  "required": ["contractVersion", "rowId", "collectionStatus", "target", "page", "conversionSignals", "responsive", "lighthouse", "lighthouseMobile", "interactionTrace", "queryContexts", "governance"],
+  "properties": {
+    "contractVersion": {"const": "page-evidence-v1"},
+    "rowId": {"type": "integer"},
+    "collectionRunId": {"type": "string"},
+    "collectedAt": {"type": ["string", "null"], "format": "date-time"},
+    "collectionStatus": {"type": "string", "enum": ["complete", "partial", "blocked_missing_url", "blocked_policy", "failed"]},
+    "target": {
+      "type": "object",
+      "required": ["url", "urlHash", "split"],
+      "properties": {
+        "url": {"type": ["string", "null"]},
+        "urlHash": {"type": ["string", "null"]},
+        "split": {"type": "string"},
+        "pagePurpose": {"type": ["string", "null"]},
+        "pagePurposeSource": {"type": "string", "enum": ["user_supplied", "observed_heading", "inferred", "missing"]},
+        "queryContextIds": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "page": {
+      "type": "object",
+      "required": ["finalUrlHash", "httpStatus", "title", "metaDescription", "headings", "fullTextPath", "textSha256", "cookieBannerDetected"],
+      "properties": {
+        "finalUrlHash": {"type": ["string", "null"]},
+        "httpStatus": {"type": ["integer", "null"]},
+        "title": {"type": ["string", "null"]},
+        "metaDescription": {"type": ["string", "null"]},
+        "headings": {"type": "array", "items": {"type": "object", "required": ["level", "text"], "properties": {"level": {"type": "integer"}, "text": {"type": "string"}}, "additionalProperties": false}},
+        "fullTextPath": {"type": ["string", "null"]},
+        "textSha256": {"type": ["string", "null"]},
+        "pagePurposeSignals": {"type": "array", "items": {"type": "object", "required": ["source", "text"], "properties": {"source": {"type": "string"}, "text": {"type": "string"}}, "additionalProperties": false}},
+        "cookieBannerDetected": {"type": "boolean"},
+        "consoleErrorCount": {"type": "integer"},
+        "networkFailureCount": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "conversionSignals": {
+      "type": "object",
+      "required": ["cta", "pricing", "proofOrCase", "trust"],
+      "properties": {
+        "cta": {"type": "array", "items": {"type": "object", "required": ["text", "element", "visible", "locator"], "properties": {"text": {"type": "string"}, "element": {"type": "string"}, "visible": {"type": "boolean"}, "locator": {"type": "string"}, "hrefHash": {"type": ["string", "null"]}}, "additionalProperties": false}},
+        "pricing": {"type": "array", "items": {"type": "object", "required": ["text", "locator"], "properties": {"text": {"type": "string"}, "locator": {"type": "string"}, "evidenceType": {"type": "string", "enum": ["text_span", "structural_observation"]}}, "additionalProperties": false}},
+        "proofOrCase": {"type": "array", "items": {"type": "object", "required": ["text", "locator"], "properties": {"text": {"type": "string"}, "locator": {"type": "string"}, "evidenceType": {"type": "string", "enum": ["text_span", "structural_observation"]}}, "additionalProperties": false}},
+        "trust": {"type": "array", "items": {"type": "object", "required": ["text", "locator"], "properties": {"text": {"type": "string"}, "locator": {"type": "string"}, "evidenceType": {"type": "string", "enum": ["text_span", "structural_observation"]}}, "additionalProperties": false}}
+      },
+      "additionalProperties": false
+    },
+    "responsive": {
+      "type": "object",
+      "required": ["desktop", "mobile"],
+      "properties": {
+        "desktop": {"$ref": "#/$defs/viewportEvidence"},
+        "mobile": {"$ref": "#/$defs/viewportEvidence"}
+      },
+      "additionalProperties": false
+    },
+    "lighthouse": {"$ref": "#/$defs/lighthouseEvidence"},
+    "lighthouseMobile": {"$ref": "#/$defs/lighthouseEvidence"},
+    "interactionTrace": {
+      "type": "object",
+      "required": ["status", "actions", "stoppedBeforeSensitiveAction"],
+      "properties": {
+        "status": {"type": "string", "enum": ["complete_non_destructive", "partial", "blocked_missing_url", "failed"]},
+        "actions": {"type": "array", "items": {"type": "object", "required": ["viewport", "action", "outcome", "timestamp"], "properties": {"viewport": {"type": "string", "enum": ["desktop", "mobile"]}, "action": {"type": "string"}, "outcome": {"type": "string"}, "locator": {"type": ["string", "null"]}, "timestamp": {"type": "string", "format": "date-time"}}, "additionalProperties": false}},
+        "forms": {"type": "array", "items": {"type": "object", "required": ["locator", "fieldCount", "submitControls", "stoppedBeforeSubmit"], "properties": {"locator": {"type": "string"}, "fieldCount": {"type": "integer"}, "submitControls": {"type": "array", "items": {"type": "string"}}, "stoppedBeforeSubmit": {"const": true}}, "additionalProperties": false}},
+        "stoppedBeforeSensitiveAction": {"const": true},
+        "unknownReasons": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "queryContexts": {
+      "type": "array",
+      "items": {"type": "object", "required": ["queryId", "queryHash", "intent", "status"], "properties": {"queryId": {"type": "string"}, "queryHash": {"type": "string"}, "intent": {"type": ["string", "null"]}, "status": {"type": "string", "enum": ["provided", "missing", "invalid"]}, "relevanceEvidencePath": {"type": ["string", "null"]}}, "additionalProperties": false}
+    },
+    "governance": {
+      "type": "object",
+      "required": ["privateOnly", "developmentOnly", "containsCredentials", "containsPii", "artifactExclusion"],
+      "properties": {
+        "privateOnly": {"const": true},
+        "developmentOnly": {"const": true},
+        "containsCredentials": {"const": false},
+        "containsPii": {"type": "boolean"},
+        "artifactExclusion": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "lighthouseEvidence": {
+      "type": "object",
+      "required": ["status", "jsonPath"],
+      "properties": {
+        "status": {"type": "string", "enum": ["complete", "failed", "not_run", "blocked_missing_url", "runtime_unavailable"]},
+        "jsonPath": {"type": ["string", "null"]},
+        "config": {"type": ["object", "null"]},
+        "performanceScore": {"type": ["number", "null"]},
+        "metrics": {"type": "object"},
+        "error": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "viewportEvidence": {
+      "type": "object",
+      "required": ["viewport", "screenshotPath", "screenshotSha256", "bodyScrollWidth", "viewportWidth", "horizontalOverflow", "status"],
+      "properties": {
+        "viewport": {"type": "string"},
+        "screenshotPath": {"type": ["string", "null"]},
+        "screenshotSha256": {"type": ["string", "null"]},
+        "afterInteractionScreenshotPath": {"type": ["string", "null"]},
+        "afterInteractionScreenshotSha256": {"type": ["string", "null"]},
+        "viewportWidth": {"type": "integer"},
+        "bodyScrollWidth": {"type": ["integer", "null"]},
+        "horizontalOverflow": {"type": ["boolean", "null"]},
+        "visibleInteractiveCount": {"type": "integer"},
+        "status": {"type": "string", "enum": ["complete", "failed", "blocked_missing_url"]},
+        "finalUrlHash": {"type": ["string", "null"]},
+        "httpStatus": {"type": ["integer", "null"]},
+        "title": {"type": ["string", "null"]},
+        "metaDescription": {"type": ["string", "null"]},
+        "headings": {"type": "array"},
+        "fullTextPath": {"type": ["string", "null"]},
+        "textSha256": {"type": ["string", "null"]},
+        "cookieBannerDetected": {"type": "boolean"},
+        "consoleErrorCount": {"type": "integer"},
+        "networkFailureCount": {"type": "integer"},
+        "error": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
