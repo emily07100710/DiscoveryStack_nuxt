@@ -83,13 +83,15 @@ def make_bundle(**overrides):
 
 
 def validate_bundle(bundle=None, parent_rows=None):
-    return collector.validate_target_bundle(
-        bundle or make_bundle(),
-        parent_rows=parent_rows or [{"rowId": 1, "split": "train"}],
-        actual_parent_manifest_hash="a" * 64,
-        actual_parent_dataset_digest="b" * 64,
-        policy=collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4)),
-        now=datetime(2026, 8, 28, tzinfo=timezone.utc),
+    return asyncio.run(
+        collector.validate_target_bundle(
+            bundle or make_bundle(),
+            parent_rows=parent_rows or [{"rowId": 1, "split": "train"}],
+            actual_parent_manifest_hash="a" * 64,
+            actual_parent_dataset_digest="b" * 64,
+            policy=collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4)),
+            now=datetime(2026, 8, 28, tzinfo=timezone.utc),
+        )
     )
 
 
@@ -103,6 +105,123 @@ class FakeRoute:
 
     async def abort(self, _reason):
         self.aborted = True
+
+
+class FakePage:
+    def __init__(self, context, requests, *, websocket=False, final_url=None):
+        self.context = context
+        self.requests = requests
+        self.emit_websocket = websocket
+        self.url = final_url or "https://example.com/page"
+        self.listeners = {}
+
+    def on(self, event, callback):
+        self.listeners[event] = callback
+
+    async def goto(self, _url, **_kwargs):
+        for method, url in self.requests:
+            await self.context.route_handler(
+                FakeRoute(), SimpleNamespace(method=method, url=url)
+            )
+        if self.emit_websocket:
+            self.listeners["websocket"](object())
+        response = SimpleNamespace(status=200, headers={})
+        for callback in self.context.listeners.get("response", []):
+            callback(response)
+        return response
+
+    async def wait_for_timeout(self, _milliseconds):
+        return None
+
+    async def evaluate(self, script):
+        if script == collector.DOM_INSPECTION_SCRIPT:
+            return {
+                "title": "Public page",
+                "metaDescription": "Safe",
+                "headings": [],
+                "bodyText": "public product documentation",
+                "detailsText": [],
+                "forms": [],
+                "bodyScrollWidth": 1000,
+                "visibleInteractiveCount": 0,
+            }
+        return None
+
+    async def screenshot(self, **_kwargs):
+        return b"fake-png"
+
+
+class FakeContext:
+    def __init__(self, requests, *, websocket=False, final_url=None):
+        self.requests = requests
+        self.websocket = websocket
+        self.final_url = final_url
+        self.listeners = {}
+        self.route_handler = None
+        self.page = None
+        self.closed = False
+
+    async def add_init_script(self, _script):
+        return None
+
+    async def route(self, _pattern, callback):
+        self.route_handler = callback
+
+    def on(self, event, callback):
+        self.listeners.setdefault(event, []).append(callback)
+
+    async def new_page(self):
+        self.page = FakePage(
+            self,
+            self.requests,
+            websocket=self.websocket,
+            final_url=self.final_url,
+        )
+        return self.page
+
+    async def close(self):
+        self.closed = True
+
+
+class FakeBrowser:
+    def __init__(self, requests, *, websocket=False, final_url=None):
+        self.requests = requests
+        self.websocket = websocket
+        self.final_url = final_url
+        self.contexts = []
+        self.context = None
+        self.closed = False
+
+    async def new_context(self, **_kwargs):
+        self.context = FakeContext(
+            self.requests,
+            websocket=self.websocket,
+            final_url=self.final_url,
+        )
+        self.contexts.append(self.context)
+        return self.context
+
+    async def close(self):
+        self.closed = True
+
+
+def assert_projection_unknown(test_case, status):
+    projection = collector.unknown_projection(
+        {
+            "rowId": 1,
+            "split": "train",
+            "parentLineage": {
+                "parentManifestHash": "a" * 64,
+                "parentDatasetDigest": "b" * 64,
+                "parentRowCount": 1,
+            },
+            "collectionStatus": status,
+        },
+        "c" * 64,
+    )
+    test_case.assertEqual(
+        set(projection["frictionReasonSignals"].values()), {"unknown"}
+    )
 
 
 class URLPolicyTests(unittest.TestCase):
@@ -217,6 +336,46 @@ class URLPolicyTests(unittest.TestCase):
     def test_23b_invalid_hostname_characters_are_rejected(self):
         with self.assertRaisesRegex(collector.PolicyError, "invalid_idna_host"):
             self.policy().validate("https://bad_name.example.org")
+
+    def test_23c_async_dns_timeout_is_fail_closed(self):
+        async def slow_resolver(_host, _port):
+            await asyncio.sleep(0.05)
+            return [PUBLIC_V4]
+
+        policy = collector.PublicURLPolicy(
+            async_resolver=slow_resolver,
+            dns_timeout_seconds=0.001,
+        )
+        with self.assertRaisesRegex(collector.PolicyError, "dns_resolution_timeout"):
+            asyncio.run(policy.validate_async("https://example.com"))
+
+    def test_23d_async_dns_exception_is_redacted_and_fail_closed(self):
+        secret = "Bearer " + ("a" * 26)
+
+        async def broken_resolver(_host, _port):
+            raise RuntimeError(secret)
+
+        policy = collector.PublicURLPolicy(async_resolver=broken_resolver)
+        with self.assertRaises(collector.PolicyError) as caught:
+            asyncio.run(policy.validate_async("https://example.com"))
+        self.assertEqual(str(caught.exception), "dns_resolution_failed")
+        self.assertNotIn(secret, str(caught.exception))
+
+    def test_23e_async_dns_empty_answer_is_fail_closed(self):
+        async def empty_resolver(_host, _port):
+            return []
+
+        policy = collector.PublicURLPolicy(async_resolver=empty_resolver)
+        with self.assertRaisesRegex(collector.PolicyError, "dns_no_answers"):
+            asyncio.run(policy.validate_async("https://example.com"))
+
+    def test_23f_async_dns_mixed_public_private_is_fail_closed(self):
+        async def mixed_resolver(_host, _port):
+            return [PUBLIC_V4, "10.0.0.1"]
+
+        policy = collector.PublicURLPolicy(async_resolver=mixed_resolver)
+        with self.assertRaisesRegex(collector.PolicyError, "non_public"):
+            asyncio.run(policy.validate_async("https://example.com"))
 
 
 class MappingTests(unittest.TestCase):
@@ -333,6 +492,53 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(manifest[0]["queryHash"], decoded[0]["queryHash"])
         self.assertNotIn("queryText", manifest[0])
 
+    def assert_sensitive_sidecar_rejected_without_leak(self, bundle, secret):
+        with self.assertRaises(collector.MappingError) as caught:
+            validate_bundle(bundle)
+        self.assertEqual(str(caught.exception), "sensitive_sidecar_blocked")
+        self.assertNotIn(secret, str(caught.exception))
+
+    def test_39b_query_email_is_rejected_without_leak(self):
+        bundle = make_bundle()
+        secret = "person@example.com"
+        bundle["targets"][0]["queryContexts"][0]["queryText"] = secret
+        self.assert_sensitive_sidecar_rejected_without_leak(bundle, secret)
+
+    def test_39c_intent_phone_is_rejected_without_leak(self):
+        bundle = make_bundle()
+        secret = "+1 (415) 555-1212"
+        bundle["targets"][0]["queryContexts"][0]["intent"] = secret
+        self.assert_sensitive_sidecar_rejected_without_leak(bundle, secret)
+
+    def test_39d_query_bearer_token_is_rejected_without_leak(self):
+        bundle = make_bundle()
+        secret = "Bearer " + ("a" * 26)
+        bundle["targets"][0]["queryContexts"][0]["queryText"] = secret
+        self.assert_sensitive_sidecar_rejected_without_leak(bundle, secret)
+
+    def test_39e_page_purpose_api_key_is_rejected_without_leak(self):
+        bundle = make_bundle()
+        secret = "api_key=" + ("a" * 26)
+        bundle["targets"][0]["pagePurpose"] = secret
+        self.assert_sensitive_sidecar_rejected_without_leak(bundle, secret)
+
+    def test_39f_sidecar_malformed_type_is_rejected_without_value_leak(self):
+        bundle = make_bundle()
+        bundle["targets"][0]["queryContexts"][0]["intent"] = {"secret": "value"}
+        with self.assertRaises(collector.MappingError) as caught:
+            validate_bundle(bundle)
+        self.assertEqual(str(caught.exception), "sidecar_invalid_type")
+        self.assertNotIn("secret", str(caught.exception))
+
+    def test_39g_sidecar_oversized_value_is_rejected_without_value_leak(self):
+        bundle = make_bundle()
+        oversized = "x" * (collector.MAX_PAGE_PURPOSE_BYTES + 1)
+        bundle["targets"][0]["pagePurpose"] = oversized
+        with self.assertRaises(collector.MappingError) as caught:
+            validate_bundle(bundle)
+        self.assertEqual(str(caught.exception), "sidecar_value_too_large")
+        self.assertNotIn(oversized, str(caught.exception))
+
 
 class FilesystemAndRuntimeTests(unittest.TestCase):
     def test_40_run_id_rejects_traversal(self):
@@ -448,6 +654,47 @@ class FilesystemAndRuntimeTests(unittest.TestCase):
 
 
 class EgressAndSensitiveTests(unittest.TestCase):
+    def collect_fake_viewport(
+        self,
+        requests,
+        *,
+        resolver=None,
+        websocket=False,
+        max_requests=10,
+    ):
+        policy = collector.PublicURLPolicy(
+            resolver=resolver or resolver_with(PUBLIC_V4)
+        )
+        validated = asyncio.run(policy.validate_async("https://example.com/page"))
+        browser = FakeBrowser(requests, websocket=websocket)
+        with tempfile.TemporaryDirectory() as directory:
+            store = collector.PrivateRunStore(Path(directory), "runtime-test")
+            result, sensitive, guard = asyncio.run(
+                collector.collect_viewport(
+                    browser,
+                    validated_url=validated,
+                    viewport="desktop",
+                    width=1440,
+                    height=900,
+                    store=store,
+                    row_prefix="row-1",
+                    max_requests=max_requests,
+                    policy=policy,
+                )
+            )
+        return result, sensitive, guard, browser
+
+    def assert_policy_blocked_and_unknown(self, result):
+        self.assertEqual(result["status"], "blocked_policy")
+        self.assertEqual(result["artifacts"], [])
+        overall_status = collector.derive_collection_status(
+            (result, {"status": "complete"}),
+            sensitive_reasons=[],
+            policy_reason_codes=[result["reason"]],
+        )
+        self.assertEqual(overall_status, "blocked_policy")
+        assert_projection_unknown(self, overall_status)
+
     def test_55_sensitive_email_is_detected(self):
         self.assertEqual(
             collector.detect_sensitive_content("write me at user@example.com", []),
@@ -617,6 +864,96 @@ class EgressAndSensitiveTests(unittest.TestCase):
                 config_digest="d" * 64,
             )
 
+    def test_68b_runtime_post_violation_cannot_complete_or_project(self):
+        result, _sensitive, guard, _browser = self.collect_fake_viewport(
+            [
+                ("GET", "https://example.com/page"),
+                ("POST", "https://example.com/api"),
+            ]
+        )
+        self.assert_policy_blocked_and_unknown(result)
+        self.assertIn("method_blocked", guard.policy_reason_codes)
+        self.assertEqual(guard.blocked_count, 1)
+
+    def test_68c_runtime_private_subrequest_cannot_complete_or_project(self):
+        def host_resolver(host, _port):
+            return ["10.0.0.1"] if host == "assets.example.com" else [PUBLIC_V4]
+
+        result, _sensitive, guard, _browser = self.collect_fake_viewport(
+            [
+                ("GET", "https://example.com/page"),
+                ("GET", "https://assets.example.com/app.js"),
+            ],
+            resolver=host_resolver,
+        )
+        self.assert_policy_blocked_and_unknown(result)
+        self.assertIn("non_public_address_blocked", guard.policy_reason_codes)
+
+    def test_68d_runtime_special_use_cross_origin_cannot_complete_or_project(self):
+        result, _sensitive, guard, _browser = self.collect_fake_viewport(
+            [
+                ("GET", "https://example.com/page"),
+                ("GET", "https://metadata.local/latest"),
+            ]
+        )
+        self.assert_policy_blocked_and_unknown(result)
+        self.assertIn("special_use_host_blocked", guard.policy_reason_codes)
+
+    def test_68e_runtime_budget_violation_cannot_complete_or_project(self):
+        result, _sensitive, guard, _browser = self.collect_fake_viewport(
+            [
+                ("GET", "https://example.com/page"),
+                ("GET", "https://example.com/app.js"),
+            ],
+            max_requests=1,
+        )
+        self.assert_policy_blocked_and_unknown(result)
+        self.assertIn("request_budget_exceeded", guard.policy_reason_codes)
+
+    def test_68f_websocket_listener_is_on_page_and_fails_closed(self):
+        result, _sensitive, guard, browser = self.collect_fake_viewport(
+            [("GET", "https://example.com/page")],
+            websocket=True,
+        )
+        self.assertIn("websocket", browser.context.page.listeners)
+        self.assertNotIn("websocket", browser.context.listeners)
+        self.assertTrue(guard.websocket_seen)
+        self.assertIn(
+            "websocket_observed_sandbox_hard_blocker",
+            guard.policy_reason_codes,
+        )
+        self.assert_policy_blocked_and_unknown(result)
+
+    def test_68g_runtime_redirect_dns_rebinding_is_revalidated_and_blocked(self):
+        answers = iter([[PUBLIC_V4], [PUBLIC_V4], ["127.0.0.1"]])
+
+        def rebinding_resolver(_host, _port):
+            return next(answers)
+
+        result, _sensitive, guard, _browser = self.collect_fake_viewport(
+            [
+                ("GET", "https://example.com/start"),
+                ("GET", "https://example.com/redirect"),
+            ],
+            resolver=rebinding_resolver,
+        )
+        self.assert_policy_blocked_and_unknown(result)
+        self.assertEqual(guard.blocked_count, 1)
+
+    def test_68h_clear_page_screenshot_is_still_private_quarantine(self):
+        result, _sensitive, guard, _browser = self.collect_fake_viewport(
+            [("GET", "https://example.com/page")]
+        )
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(guard.policy_reason_codes, [])
+        screenshot = next(
+            artifact
+            for artifact in result["artifacts"]
+            if artifact["kind"] == "screenshot"
+        )
+        self.assertTrue(screenshot["quarantined"])
+        self.assertTrue(screenshot["path"].startswith("quarantined_visual_evidence/"))
+
 
 class ValidatorTests(unittest.TestCase):
     def setUp(self):
@@ -643,6 +980,7 @@ class ValidatorTests(unittest.TestCase):
                 "mappedByHash": "e" * 64,
                 "mappedAt": "2026-08-28T00:00:00+00:00",
                 "authorizationScopeId": "scope-1",
+                "pagePurposeHash": None,
             },
             queries=[],
             status=status,
@@ -917,6 +1255,28 @@ class ValidatorTests(unittest.TestCase):
         del record["mapping"]["authorizationScopeId"]
         store = self.write_run(record)
         with self.assertRaisesRegex(validator.ValidationError, "missing required"):
+            validator.validate_run(store.run_dir, SCHEMA)
+
+    def test_79_valid_policy_blocked_run_is_ineligible_and_validates(self):
+        record = self.make_record(status="blocked_policy")
+        record["governance"]["quarantineStatus"] = "quarantined_policy_evidence"
+        store = self.write_run(record)
+        result = validator.validate_run(store.run_dir, SCHEMA)
+        self.assertTrue(result["valid"])
+        projection = json.loads(
+            (store.run_dir / "model_projection.jsonl").read_text(encoding="utf-8")
+        )
+        self.assertEqual(projection["evidenceStatus"], "blocked_policy")
+        self.assertEqual(set(projection["frictionReasonSignals"].values()), {"unknown"})
+
+    def test_80_policy_blocked_observations_cannot_be_general_eligible(self):
+        record = self.make_record(status="blocked_policy")
+        record["governance"]["quarantineStatus"] = "quarantined_policy_evidence"
+        record["page"]["observationsIncluded"] = True
+        store = self.write_run(record)
+        with self.assertRaisesRegex(
+            validator.ValidationError, "cannot enter general evidence"
+        ):
             validator.validate_run(store.run_dir, SCHEMA)
 
 

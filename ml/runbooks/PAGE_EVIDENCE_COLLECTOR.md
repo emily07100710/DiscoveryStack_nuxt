@@ -11,7 +11,7 @@ Live browser collection is blocked unless both of these are explicit:
 1. `DISCOVERYSTACK_PRIVATE_EVIDENCE_DEV=1` and `--development-only`;
 2. `--network-sandbox-attested`, meaning the process is inside a container or namespace with no route to private, loopback, link-local, metadata, or other internal networks, and outbound traffic is independently enforced by an egress proxy or equivalent control.
 
-Playwright routing re-resolves and validates every document, redirect, and subresource request, and allows only GET/HEAD. Service workers are disabled. An init script disables WebSocket, EventSource, and `sendBeacon`, and any observed WebSocket fails the viewport. That browser-level interception is still not a complete defense against DNS rebinding or unroutable-channel races. Therefore the no-internal-route sandbox is a hard blocker, not an optional recommendation. Without attestation, records are written only as `sandbox_required` and no browser starts.
+Playwright routing re-resolves and validates every document, redirect, and subresource request, and allows only GET/HEAD. Service workers are disabled. An init script disables WebSocket, EventSource, and `sendBeacon`; a listener on each actual Playwright `Page` also treats every observed WebSocket as a hard policy violation. Any blocked request or WebSocket makes that viewport and the whole record `blocked_policy`, keeps every projected signal `unknown`, and prevents general evidence/adjudication eligibility. Any already-collected artifacts are private policy quarantine only. Bounded reason codes and blocked-request counts never include raw URLs, query strings, bodies, stack traces, or exception messages. Browser interception is still not a complete defense against DNS rebinding or unroutable-channel races. Therefore the no-internal-route sandbox is a hard blocker, not an optional recommendation. Without attestation, records are written only as `sandbox_required` and no browser starts.
 
 Lighthouse cannot use Playwright request routing. It is therefore allowed only behind the same independently enforced network sandbox. The collector never invokes `npx`, downloads packages, or searches `PATH` for an arbitrary version. `--lighthouse-binary` must be an absolute, non-symlink, preinstalled executable whose `--version` output is exactly `12.8.2`; missing or mismatched runtime produces `runtime_unavailable`. Lighthouse is opt-in with `--run-lighthouse` and is not run by default.
 
@@ -23,7 +23,9 @@ The target bundle is one private JSON document, stored outside every Git worktre
 - an unexpired owner authorization scope, explicit allowed hosts, rights basis, `robotsPolicy: respect`, retention of 1–30 days, and `allowAuthenticatedAccess: false`;
 - unique exact `rowId + split` mappings that must exist in the supplied parent JSONL;
 - `mappingProvenance.method: owner_supplied_exact_url`, mapped-by/time/evidence reference, and `robotsDecision: allowed`;
-- optional private query contexts with unique IDs.
+- optional private query contexts with unique IDs and optional `pagePurpose`.
+
+`robotsDecision` is an owner/caller attestation supplied with the exact mapping. The collector does **not** fetch `robots.txt` in real time and does not independently verify that attestation.
 
 Unknown or extra fields fail closed. Domain hashes, semantic search, artifact strings, source-family fields, and candidate labels cannot supply or guess a URL. A missing exact mapping cannot bind evidence back to an old row. Login, cookie/session reuse, CAPTCHA/WAF bypass, robots bypass, payment, checkout, booking, and form submission are outside V1.
 
@@ -71,7 +73,7 @@ Example shape (illustrative only; do not commit a populated copy):
 - Missing schemes canonicalize to HTTPS. HTTP is off by default and requires the explicit development-only `--allow-http` flag.
 - Userinfo, malformed/nonstandard ports, fragments, localhost, single-label and special-use names are rejected.
 - Hostnames are NFC/IDNA canonicalized before authorization and DNS checks.
-- DNS failure or an empty answer is blocked. Every A/AAAA answer must be globally routable. A mixed public/private answer fails the whole request.
+- DNS runs through a bounded asynchronous resolver with a fixed short timeout. Timeout, resolver exception, failure, or an empty answer is blocked. Every A/AAAA answer must be globally routable. A mixed public/private answer fails the whole request.
 - Private, loopback, link-local, reserved, multicast, unspecified, and IPv4-mapped IPv6 addresses are rejected.
 - The guard runs for every Playwright request; redirects and subresources do not inherit trust from the first URL.
 - Collection is sequential. A per-host delay of at least one second, a maximum request count, and bounded `Retry-After` handling are mandatory.
@@ -86,7 +88,11 @@ V1 permits only DOM inspection, scrolling, screenshots, and reading native `<det
 
 The collector sets umask `077`. Run directories are `0700`; files are `0600`. Run IDs are strict lowercase tokens. Output must be an absolute path outside every Git worktree. Traversal, absolute artifact paths, symlinks, overwrite, pre-existing run collisions, excessive inputs/artifacts, and total run-budget overflow fail closed. Writes are same-directory atomic replaces; JSONL appends use `O_NOFOLLOW` where available.
 
+Before browser launch, output creation, or output digesting, private `queryText`, `intent`, and `pagePurpose` values must be bounded strings and are screened for email, phone, Bearer/token/API-key-like, and credential-assignment patterns. Suspected sidecar PII/secrets fail closed with a redacted code; the raw value is never placed in manifests, logs, reasons, or projections. Only canonical hashes/redacted metadata permitted by the contract may be persisted.
+
 Raw URLs remain only in the external private target bundle. Raw page text, screenshots, query sidecars, and Lighthouse reports remain in the private run directory and are excluded from Git and model artifacts. Email, phone, credit-card/SSN-like text, API-key-like values, or credential forms cause every page artifact to move to `quarantined_sensitive_evidence/`. Sensitive title/headings/details are omitted from the evidence manifest. Quarantined evidence cannot enter general adjudication or model projection.
+
+Text regexes cannot guarantee detection of visual PII rendered only inside a screenshot. Screenshots are therefore always written as private quarantine evidence (including otherwise-clear pages), never general evidence, Git content, or model-projection content. Sensitive and policy-blocked runs move them into the corresponding stricter quarantine. Formal use still requires the controlled no-internal-route environment, retention enforcement, and human privacy governance.
 
 Retention is recorded in `run_metadata.json` with `retentionDays` and `deleteAfter`. The owner/operator is responsible for deletion at that deadline; this V1 collector deliberately does not run a background deletion service.
 

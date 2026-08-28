@@ -33,6 +33,19 @@ ARTIFACT_LIMITS = {
     "private_query_sidecar": 256 * 1024,
     "lighthouse": 25 * 1024 * 1024,
 }
+POLICY_REASON_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+SENSITIVE_SIDECAR_PATTERNS = (
+    re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I),
+    re.compile(r"(?<!\w)(?:\+?\d[\d .()\-]{7,}\d)(?!\w)"),
+    re.compile(
+        r"\b(?:sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|Bearer\s+[A-Za-z0-9._~+/-]{16,})\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|secret|password)\b\s*[:=]\s*[^\s]{8,}",
+        re.I,
+    ),
+)
 
 
 class ValidationError(AssertionError):
@@ -300,6 +313,29 @@ def _validate_query_sidecar(
         if query_id in sidecar_ids or query_id not in manifest_by_id:
             fail("query sidecar ID mismatch")
         sidecar_ids.add(query_id)
+        query_text = query["queryText"]
+        intent = query["intent"]
+        if not isinstance(query_text, str) or not query_text.strip():
+            fail("query sidecar queryText must be a non-empty string")
+        try:
+            query_text_bytes = query_text.encode("utf-8")
+            intent_bytes = intent.encode("utf-8") if isinstance(intent, str) else None
+        except UnicodeError:
+            fail("query sidecar contains invalid Unicode")
+        if len(query_text_bytes) > 8192:
+            fail("query sidecar queryText exceeds private limit")
+        if intent is not None and (
+            not isinstance(intent, str)
+            or not intent.strip()
+            or intent_bytes is None
+            or len(intent_bytes) > 1024
+        ):
+            fail("query sidecar intent violates private limit")
+        for value in (query_text, intent):
+            if isinstance(value, str) and any(
+                pattern.search(value) for pattern in SENSITIVE_SIDECAR_PATTERNS
+            ):
+                fail("sensitive query sidecar content is forbidden")
         expected = sha256_bytes(
             canonical_json_bytes(
                 {"queryText": query["queryText"], "intent": query["intent"]}
@@ -332,7 +368,7 @@ def validate_record_semantics(record: Mapping[str, Any], run_dir: Path) -> None:
         ]["count"] != 0:
             fail("sandbox_required must not collect or request")
     if (
-        status in {"sandbox_required", "blocked_policy", "blocked_missing_mapping"}
+        status in {"sandbox_required", "blocked_missing_mapping"}
         and record["artifacts"]
     ):
         fail("blocked records cannot contain artifacts")
@@ -353,6 +389,7 @@ def validate_record_semantics(record: Mapping[str, Any], run_dir: Path) -> None:
     if audit["count"] != len(audit["entries"]) or audit["count"] > audit["maxCount"]:
         fail("request audit count mismatch or budget exceeded")
     blocked = 0
+    blocked_reasons: set[str] = set()
     for expected_sequence, entry in enumerate(audit["entries"], start=1):
         if entry["sequence"] != expected_sequence:
             fail("request audit sequence must be contiguous")
@@ -362,8 +399,18 @@ def validate_record_semantics(record: Mapping[str, Any], run_dir: Path) -> None:
             blocked += 1
             if "reason" not in entry:
                 fail("blocked request must have reason")
+            blocked_reasons.add(entry["reason"])
     if blocked != audit["blockedCount"]:
         fail("blocked request count mismatch")
+    policy_reasons = audit["policyReasonCodes"]
+    if any(not POLICY_REASON_CODE_RE.fullmatch(reason) for reason in policy_reasons):
+        fail("invalid policy reason code")
+    if not blocked_reasons.issubset(set(policy_reasons)):
+        fail("blocked request reason missing from policy reason codes")
+    if status == "blocked_policy" and not policy_reasons:
+        fail("blocked_policy requires a bounded policy reason code")
+    if status != "blocked_policy" and policy_reasons:
+        fail("non-policy status cannot carry policy reason codes")
     artifacts = _artifact_index(record)
     referenced_paths: list[str] = []
     for viewport in (desktop, mobile):
@@ -401,14 +448,55 @@ def validate_record_semantics(record: Mapping[str, Any], run_dir: Path) -> None:
             fail("artifact exceeds kind limit", relative)
         if sha256_file(artifact_path) != artifact["sha256"]:
             fail("artifact sha256 mismatch", relative)
-        under_quarantine = relative.startswith("quarantined_sensitive_evidence/")
+        under_quarantine = relative.startswith(
+            (
+                "quarantined_sensitive_evidence/",
+                "quarantined_policy_evidence/",
+                "quarantined_visual_evidence/",
+            )
+        )
         if artifact["quarantined"] != under_quarantine:
             fail("artifact quarantine flag/path mismatch", relative)
+        if artifact["kind"] == "screenshot" and (
+            not artifact["quarantined"]
+            or not relative.startswith(
+                (
+                    "quarantined_sensitive_evidence/",
+                    "quarantined_policy_evidence/",
+                    "quarantined_visual_evidence/",
+                )
+            )
+        ):
+            fail("screenshots must always remain private quarantine", relative)
     sensitive_reasons = record["page"]["sensitiveReasons"]
     governance = record["governance"]
+    if status == "blocked_policy":
+        if record["page"]["observationsIncluded"] is not False:
+            fail("policy-blocked observations cannot enter general evidence")
+        if governance["quarantineStatus"] not in {
+            "quarantined_sensitive_evidence",
+            "quarantined_policy_evidence",
+        }:
+            fail("policy-blocked evidence must be quarantined")
+        if any(not artifact["quarantined"] for artifact in artifacts.values()):
+            fail("all policy-blocked artifacts must be quarantined")
+        if any(
+            record["lighthouse"][preset]["status"] == "complete"
+            for preset in ("desktop", "mobile")
+        ):
+            fail("policy-blocked evidence cannot include Lighthouse results")
+        for viewport in (desktop, mobile):
+            observations = viewport.get("observations")
+            if observations and (
+                observations["title"] is not None
+                or observations["metaDescription"] is not None
+                or observations["headings"]
+                or observations["detailsText"]
+            ):
+                fail("policy-blocked raw observations leaked into manifest")
     if sensitive_reasons:
         if (
-            status != "quarantined_sensitive"
+            status not in {"quarantined_sensitive", "blocked_policy"}
             or governance["quarantineStatus"] != "quarantined_sensitive_evidence"
         ):
             fail("sensitive evidence must be quarantined")
@@ -416,7 +504,10 @@ def validate_record_semantics(record: Mapping[str, Any], run_dir: Path) -> None:
             fail("sensitive observations cannot enter general evidence")
         if any(not artifact["quarantined"] for artifact in artifacts.values()):
             fail("all sensitive-page artifacts must be quarantined")
-        if "quarantined_sensitive" not in {desktop["status"], mobile["status"]}:
+        if status == "quarantined_sensitive" and "quarantined_sensitive" not in {
+            desktop["status"],
+            mobile["status"],
+        }:
             fail("sensitive page requires a quarantined viewport")
         for viewport in (desktop, mobile):
             observations = viewport.get("observations")
@@ -439,6 +530,7 @@ def validate_record_semantics(record: Mapping[str, Any], run_dir: Path) -> None:
         fail("containsPii lacks detection provenance")
     if governance["containsCredentials"] and not set(sensitive_reasons) & {
         "api_key_like",
+        "credential_assignment",
         "credential_form",
     }:
         fail("containsCredentials lacks detection provenance")

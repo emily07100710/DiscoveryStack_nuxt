@@ -61,7 +61,7 @@
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "enum": ["email", "phone", "credit_card", "ssn_like", "api_key_like", "credential_form"]
+            "enum": ["email", "phone", "credit_card", "ssn_like", "api_key_like", "credential_assignment", "credential_form"]
           }
         },
         "observationsIncluded": { "type": "boolean" }
@@ -128,7 +128,7 @@
         "containsPii": { "type": ["boolean", "null"] },
         "containsCredentials": { "type": ["boolean", "null"] },
         "quarantineStatus": {
-          "enum": ["clear", "not_applicable", "quarantined_sensitive_evidence"]
+          "enum": ["clear", "not_applicable", "quarantined_sensitive_evidence", "quarantined_policy_evidence"]
         },
         "modelArtifactRawEvidenceExcluded": { "const": true }
       },
@@ -140,6 +140,7 @@
         "count",
         "maxCount",
         "blockedCount",
+        "policyReasonCodes",
         "allRequestsGuarded",
         "serviceWorkersBlocked",
         "websocketPolicy",
@@ -147,14 +148,23 @@
       ],
       "properties": {
         "count": { "type": "integer", "minimum": 0 },
-        "maxCount": { "type": "integer", "minimum": 1, "maximum": 360 },
+        "maxCount": { "type": "integer", "minimum": 1, "maximum": 362 },
         "blockedCount": { "type": "integer", "minimum": 0 },
+        "policyReasonCodes": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          }
+        },
         "allRequestsGuarded": { "const": true },
         "serviceWorkersBlocked": { "const": true },
         "websocketPolicy": { "const": "sandbox_hard_blocker" },
         "entries": {
           "type": "array",
-          "maxItems": 360,
+          "maxItems": 362,
           "items": { "$ref": "#/$defs/requestAuditEntry" }
         }
       },
@@ -195,7 +205,8 @@
         "evidenceRefHash",
         "mappedByHash",
         "mappedAt",
-        "authorizationScopeId"
+        "authorizationScopeId",
+        "pagePurposeHash"
       ],
       "properties": {
         "urlHash": { "$ref": "#/$defs/sha256" },
@@ -206,6 +217,12 @@
         "authorizationScopeId": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "pagePurposeHash": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
         }
       },
       "additionalProperties": false
@@ -218,7 +235,7 @@
         "path": {
           "type": "string",
           "minLength": 1,
-          "pattern": "^(?:evidence|quarantined_sensitive_evidence)/"
+          "pattern": "^(?:evidence|quarantined_sensitive_evidence|quarantined_policy_evidence|quarantined_visual_evidence)/"
         },
         "sha256": { "$ref": "#/$defs/sha256" },
         "bytes": { "type": "integer", "minimum": 0, "maximum": 26214400 },

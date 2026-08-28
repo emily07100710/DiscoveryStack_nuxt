@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 CONTRACT_VERSION = "page-evidence-v1"
@@ -73,6 +73,10 @@ SENSITIVE_TEXT_PATTERNS = {
         r"\b(?:sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|Bearer\s+[A-Za-z0-9._~+/-]{16,})\b",
         re.I,
     ),
+    "credential_assignment": re.compile(
+        r"\b(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|secret|password)\b\s*[:=]\s*[^\s]{8,}",
+        re.I,
+    ),
 }
 PASSWORD_FIELD_RE = re.compile(r"(?:password|current-password|new-password)", re.I)
 WAF_CHALLENGE_RE = re.compile(
@@ -89,6 +93,12 @@ MAX_QUERY_SIDECAR_BYTES = 256 * 1024
 MAX_MANIFEST_LINE_BYTES = 512 * 1024
 DEFAULT_MAX_REQUESTS = 180
 DEFAULT_RETENTION_DAYS_MAX = 30
+DNS_RESOLUTION_TIMEOUT_SECONDS = 1.5
+MAX_POLICY_REASON_CODES = 16
+POLICY_REASON_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+MAX_QUERY_TEXT_BYTES = 8192
+MAX_QUERY_INTENT_BYTES = 1024
+MAX_PAGE_PURPOSE_BYTES = 4096
 
 
 class PolicyError(ValueError):
@@ -243,6 +253,7 @@ def public_ip_or_error(raw: str) -> str:
 
 
 Resolver = Callable[[str, int], Sequence[str]]
+AsyncResolver = Callable[[str, int], Awaitable[Sequence[str]]]
 
 
 def system_resolver(host: str, port: int) -> Sequence[str]:
@@ -251,6 +262,10 @@ def system_resolver(host: str, port: int) -> Sequence[str]:
     except socket.gaierror as exc:
         raise PolicyError("dns_resolution_failed") from exc
     return sorted({str(answer[4][0]) for answer in answers})
+
+
+async def async_system_resolver(host: str, port: int) -> Sequence[str]:
+    return await asyncio.to_thread(system_resolver, host, port)
 
 
 @dataclass(frozen=True)
@@ -267,12 +282,14 @@ class ValidatedURL:
 
 @dataclass
 class PublicURLPolicy:
-    resolver: Resolver = system_resolver
+    resolver: Resolver | None = None
+    async_resolver: AsyncResolver | None = None
+    dns_timeout_seconds: float = DNS_RESOLUTION_TIMEOUT_SECONDS
     allow_http: bool = False
     allowed_https_ports: frozenset[int] = frozenset({443})
     allowed_http_ports: frozenset[int] = frozenset({80})
 
-    def validate(self, raw: Any) -> ValidatedURL:
+    def _prepare(self, raw: Any) -> tuple[str, str, int, SplitResult, Any]:
         if not isinstance(raw, str) or not raw.strip():
             raise PolicyError("missing_url")
         value = raw.strip()
@@ -305,9 +322,17 @@ class PublicURLPolicy:
             literal = None
         if literal is None and is_special_use_hostname(host):
             raise PolicyError("special_use_host_blocked")
-        raw_addresses = (
-            [host] if literal is not None else list(self.resolver(host, port))
-        )
+        return scheme, host, port, parsed, literal
+
+    def _finish(
+        self,
+        *,
+        scheme: str,
+        host: str,
+        port: int,
+        parsed: SplitResult,
+        raw_addresses: Sequence[str],
+    ) -> ValidatedURL:
         if not raw_addresses:
             raise PolicyError("dns_no_answers")
         addresses = tuple(
@@ -321,6 +346,59 @@ class PublicURLPolicy:
         path = parsed.path or "/"
         canonical = urlunsplit(SplitResult(scheme, netloc, path, parsed.query, ""))
         return ValidatedURL(canonical, host, port, addresses)
+
+    def validate(self, raw: Any) -> ValidatedURL:
+        scheme, host, port, parsed, literal = self._prepare(raw)
+        if literal is not None:
+            raw_addresses = [host]
+        elif self.resolver is None:
+            raise PolicyError("sync_resolver_not_injected")
+        else:
+            try:
+                raw_addresses = list(self.resolver(host, port))
+            except PolicyError:
+                raise
+            except Exception as exc:
+                raise PolicyError("dns_resolution_failed") from exc
+        return self._finish(
+            scheme=scheme,
+            host=host,
+            port=port,
+            parsed=parsed,
+            raw_addresses=raw_addresses,
+        )
+
+    async def validate_async(self, raw: Any) -> ValidatedURL:
+        scheme, host, port, parsed, literal = self._prepare(raw)
+        if literal is not None:
+            raw_addresses = [host]
+        else:
+            try:
+                if self.async_resolver is not None:
+                    pending = self.async_resolver(host, port)
+                elif self.resolver is not None:
+                    pending = asyncio.to_thread(self.resolver, host, port)
+                else:
+                    raise PolicyError("async_resolver_not_injected")
+                raw_addresses = list(
+                    await asyncio.wait_for(
+                        pending,
+                        timeout=self.dns_timeout_seconds,
+                    )
+                )
+            except TimeoutError as exc:
+                raise PolicyError("dns_resolution_timeout") from exc
+            except PolicyError:
+                raise
+            except Exception as exc:
+                raise PolicyError("dns_resolution_failed") from exc
+        return self._finish(
+            scheme=scheme,
+            host=host,
+            port=port,
+            parsed=parsed,
+            raw_addresses=raw_addresses,
+        )
 
 
 def validate_run_id(run_id: str) -> str:
@@ -403,6 +481,8 @@ class PrivateRunStore:
         os.chmod(self.run_dir, 0o700)
         self.mkdir("evidence")
         self.mkdir("quarantined_sensitive_evidence")
+        self.mkdir("quarantined_policy_evidence")
+        self.mkdir("quarantined_visual_evidence")
 
     def resolve(self, relative: str) -> Path:
         rel = validate_relative_path(relative)
@@ -482,15 +562,31 @@ class PrivateRunStore:
             os.close(descriptor)
         self.bytes_written += len(line)
 
-    def quarantine_artifact(self, artifact: dict[str, Any]) -> None:
-        if artifact.get("quarantined") is True:
-            return
+    def quarantine_artifact(
+        self,
+        artifact: dict[str, Any],
+        *,
+        destination_root: str = "quarantined_sensitive_evidence",
+    ) -> None:
+        if destination_root not in {
+            "quarantined_sensitive_evidence",
+            "quarantined_policy_evidence",
+        }:
+            raise FilesystemPolicyError("invalid quarantine destination")
         source_relative = str(artifact.get("path") or "")
         source_path = validate_relative_path(source_relative)
-        if not source_path.parts or source_path.parts[0] != "evidence":
+        if source_path.parts and source_path.parts[0] == destination_root:
+            artifact["quarantined"] = True
+            return
+        if not source_path.parts or source_path.parts[0] not in {
+            "evidence",
+            "quarantined_sensitive_evidence",
+            "quarantined_policy_evidence",
+            "quarantined_visual_evidence",
+        }:
             raise FilesystemPolicyError("only evidence artifacts can be quarantined")
         destination_relative = str(
-            PurePosixPath("quarantined_sensitive_evidence", *source_path.parts[1:])
+            PurePosixPath(destination_root, *source_path.parts[1:])
         )
         source = self.resolve(source_relative)
         destination = self.resolve(destination_relative)
@@ -526,6 +622,43 @@ def detect_sensitive_content(
             reasons.append("credential_form")
             break
     return sorted(set(reasons))
+
+
+def validate_private_sidecar_text(
+    value: Any,
+    *,
+    max_bytes: int,
+    allow_none: bool,
+) -> str | None:
+    if value is None and allow_none:
+        return None
+    if not isinstance(value, str):
+        raise MappingError("sidecar_invalid_type")
+    normalized = value.strip()
+    if not normalized:
+        raise MappingError("sidecar_empty_value")
+    try:
+        encoded = normalized.encode("utf-8")
+    except UnicodeError as exc:
+        raise MappingError("sidecar_invalid_encoding") from exc
+    if len(encoded) > max_bytes:
+        raise MappingError("sidecar_value_too_large")
+    if detect_sensitive_content(normalized, []):
+        raise MappingError("sensitive_sidecar_blocked")
+    return normalized
+
+
+def bounded_policy_reason_codes(reasons: Iterable[str]) -> list[str]:
+    bounded: list[str] = []
+    for reason in reasons:
+        code = reason if POLICY_REASON_CODE_RE.fullmatch(reason) else "policy_violation"
+        if code in bounded:
+            continue
+        if len(bounded) < MAX_POLICY_REASON_CODES - 1:
+            bounded.append(code)
+        elif "policy_violation" not in bounded:
+            bounded.append("policy_violation")
+    return bounded
 
 
 def parse_retry_after(
@@ -585,8 +718,28 @@ class EgressGuard:
     websocket_seen: bool = False
     retry_after_seconds: float = 0.0
     audit: list[dict[str, Any]] = field(default_factory=list)
+    policy_reason_codes: list[str] = field(default_factory=list)
+
+    def _record_violation(self, reason: str) -> str:
+        code = reason if POLICY_REASON_CODE_RE.fullmatch(reason) else "policy_violation"
+        if code in self.policy_reason_codes:
+            return code
+        if len(self.policy_reason_codes) < MAX_POLICY_REASON_CODES - 1:
+            self.policy_reason_codes.append(code)
+            return code
+        if "policy_violation" not in self.policy_reason_codes:
+            self.policy_reason_codes.append("policy_violation")
+        return "policy_violation"
+
+    def raise_if_violated(self) -> None:
+        if self.policy_reason_codes:
+            raise PolicyError(self.policy_reason_codes[0])
 
     async def route(self, route: Any, request: Any) -> None:
+        if self.request_count >= self.max_requests + 1:
+            self._record_violation("request_budget_exceeded")
+            await route.abort("blockedbyclient")
+            return
         self.request_count += 1
         method = str(request.method).upper()
         url = str(request.url)
@@ -597,7 +750,7 @@ class EgressGuard:
             reason = "method_blocked"
         else:
             try:
-                validated = self.policy.validate(url)
+                validated = await self.policy.validate_async(url)
             except PolicyError as exc:
                 reason = str(exc)
             else:
@@ -615,6 +768,7 @@ class EgressGuard:
                 )
         if reason is not None:
             self.blocked_count += 1
+            reason = self._record_violation(reason)
             self.audit.append(
                 {
                     "sequence": self.request_count,
@@ -632,6 +786,7 @@ class EgressGuard:
 
     def on_websocket(self, _websocket: Any) -> None:
         self.websocket_seen = True
+        self._record_violation("websocket_observed_sandbox_hard_blocker")
 
     def on_response(self, response: Any) -> None:
         if getattr(response, "status", None) not in {429, 503}:
@@ -768,9 +923,9 @@ def run_lighthouse(
                 "status": "complete",
                 "reason": None,
                 "version": runtime.version,
-                "performanceScore": score * 100
-                if isinstance(score, (int, float))
-                else None,
+                "performanceScore": (
+                    score * 100 if isinstance(score, (int, float)) else None
+                ),
             },
             report_bytes,
         )
@@ -809,7 +964,7 @@ def parent_index(rows: Sequence[Mapping[str, Any]]) -> dict[int, str]:
     return index
 
 
-def validate_target_bundle(
+async def validate_target_bundle(
     bundle: Any,
     *,
     parent_rows: Sequence[Mapping[str, Any]],
@@ -907,7 +1062,12 @@ def validate_target_bundle(
             "mappingProvenance",
             "queryContexts",
         }
-        if not isinstance(target, dict) or set(target) != required_target:
+        allowed_target = required_target | {"pagePurpose"}
+        if (
+            not isinstance(target, dict)
+            or not required_target.issubset(target)
+            or not set(target).issubset(allowed_target)
+        ):
             raise MappingError("target has missing or unknown fields")
         if FORBIDDEN_MAPPING_KEYS & set(target):
             raise MappingError("guess-derived mapping fields are forbidden")
@@ -942,9 +1102,11 @@ def validate_target_bundle(
         _parse_timestamp(provenance.get("mappedAt"), "mappedAt")
         if provenance.get("robotsDecision") != "allowed":
             raise MappingError("robots-disallowed or unreviewed target blocked")
-        validated_url = policy.validate(target.get("url"))
-        if validated_url.hostname not in allowed_hosts:
-            raise MappingError("target host outside owner authorization scope")
+        page_purpose = validate_private_sidecar_text(
+            target.get("pagePurpose"),
+            max_bytes=MAX_PAGE_PURPOSE_BYTES,
+            allow_none=True,
+        )
         query_contexts = target.get("queryContexts")
         if not isinstance(query_contexts, list):
             raise MappingError("queryContexts must be a list")
@@ -966,20 +1128,27 @@ def validate_target_bundle(
                 or query_id in seen_query_ids
             ):
                 raise MappingError("queryId must be valid and unique within target")
-            if (
-                not isinstance(query_text, str)
-                or not query_text.strip()
-                or len(query_text.encode("utf-8")) > 8192
-            ):
-                raise MappingError("queryText is missing or too large")
-            if intent is not None and (
-                not isinstance(intent, str) or len(intent) > 256
-            ):
-                raise MappingError("query intent is invalid")
+            normalized_query_text = validate_private_sidecar_text(
+                query_text,
+                max_bytes=MAX_QUERY_TEXT_BYTES,
+                allow_none=False,
+            )
+            normalized_intent = validate_private_sidecar_text(
+                intent,
+                max_bytes=MAX_QUERY_INTENT_BYTES,
+                allow_none=True,
+            )
             seen_query_ids.add(query_id)
             normalized_queries.append(
-                {"queryId": query_id, "queryText": query_text.strip(), "intent": intent}
+                {
+                    "queryId": query_id,
+                    "queryText": normalized_query_text,
+                    "intent": normalized_intent,
+                }
             )
+        validated_url = await policy.validate_async(target.get("url"))
+        if validated_url.hostname not in allowed_hosts:
+            raise MappingError("target host outside owner authorization scope")
         validated.append(
             {
                 "rowId": row_id,
@@ -987,6 +1156,7 @@ def validate_target_bundle(
                 "validatedUrl": validated_url,
                 "mappingProvenance": provenance,
                 "queryContexts": normalized_queries,
+                "pagePurpose": page_purpose,
                 "authorizationScopeId": scope_id,
             }
         )
@@ -1021,6 +1191,24 @@ def empty_viewport(viewport: str, status: str, reason: str) -> dict[str, Any]:
         "visibleInteractiveCount": 0,
         "artifacts": [],
     }
+
+
+def derive_collection_status(
+    viewports: Sequence[Mapping[str, Any]],
+    *,
+    sensitive_reasons: Sequence[str],
+    policy_reason_codes: Sequence[str],
+) -> str:
+    if policy_reason_codes:
+        return "blocked_policy"
+    if sensitive_reasons:
+        return "quarantined_sensitive"
+    statuses = {str(viewport.get("status")) for viewport in viewports}
+    if statuses == {"complete"}:
+        return "complete"
+    if "complete" in statuses:
+        return "partial"
+    return "failed"
 
 
 def unknown_projection(record: Mapping[str, Any], record_hash: str) -> dict[str, Any]:
@@ -1100,10 +1288,11 @@ async def collect_viewport(
     guard = EgressGuard(policy, max_requests=max_requests)
     await context.add_init_script(DISABLE_UNROUTABLE_CHANNELS_SCRIPT)
     await context.route("**/*", guard.route)
-    context.on("websocket", guard.on_websocket)
     context.on("response", guard.on_response)
     page = await context.new_page()
+    page.on("websocket", guard.on_websocket)
     sensitive_reasons: list[str] = []
+    context_closed = False
     try:
         response = await page.goto(
             validated_url.canonical_url, wait_until="domcontentloaded", timeout=60_000
@@ -1112,34 +1301,46 @@ async def collect_viewport(
         if status_code in {401, 403, 407, 429, 503}:
             raise PolicyError("authentication_or_waf_challenge_blocked")
         await page.wait_for_timeout(100)
-        if guard.websocket_seen:
-            raise PolicyError("websocket_observed_sandbox_hard_blocker")
+        guard.raise_if_violated()
         snapshot = await page.evaluate(DOM_INSPECTION_SCRIPT)
+        guard.raise_if_violated()
         text = str(snapshot.get("bodyText") or "")
         if WAF_CHALLENGE_RE.search(text[:20_000]):
             raise PolicyError("waf_or_human_challenge_blocked")
         forms = snapshot.get("forms") if isinstance(snapshot.get("forms"), list) else []
         sensitive_reasons = detect_sensitive_content(text, forms)
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        guard.raise_if_violated()
+        screenshot = await page.screenshot(full_page=True, type="png")
+        guard.raise_if_violated()
+        final_validated = await policy.validate_async(page.url)
+        guard.raise_if_violated()
+        await context.close()
+        context_closed = True
+        guard.raise_if_violated()
         quarantine = bool(sensitive_reasons)
         storage_prefix = (
             f"quarantined_sensitive_evidence/{row_prefix}"
             if quarantine
             else f"evidence/{row_prefix}"
         )
+        screenshot_prefix = (
+            storage_prefix
+            if quarantine
+            else f"quarantined_visual_evidence/{row_prefix}"
+        )
         store.mkdir(storage_prefix)
+        store.mkdir(screenshot_prefix)
         text_artifact = store.write_bytes(
             f"{storage_prefix}/page-text-{viewport}.txt",
             text.encode("utf-8"),
             max_bytes=MAX_TEXT_BYTES,
         )
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        screenshot = await page.screenshot(full_page=True, type="png")
         screenshot_artifact = store.write_bytes(
-            f"{storage_prefix}/screenshot-{viewport}.png",
+            f"{screenshot_prefix}/screenshot-{viewport}.png",
             screenshot,
             max_bytes=MAX_SCREENSHOT_BYTES,
         )
-        final_validated = policy.validate(page.url)
         result = {
             "viewport": viewport,
             "status": "quarantined_sensitive" if quarantine else "complete",
@@ -1147,12 +1348,16 @@ async def collect_viewport(
             "httpStatus": status_code,
             "finalUrlHash": final_validated.url_hash,
             "viewportWidth": width,
-            "bodyScrollWidth": snapshot.get("bodyScrollWidth")
-            if isinstance(snapshot.get("bodyScrollWidth"), int)
-            else None,
-            "horizontalOverflow": snapshot.get("bodyScrollWidth", 0) > width + 2
-            if isinstance(snapshot.get("bodyScrollWidth"), int)
-            else None,
+            "bodyScrollWidth": (
+                snapshot.get("bodyScrollWidth")
+                if isinstance(snapshot.get("bodyScrollWidth"), int)
+                else None
+            ),
+            "horizontalOverflow": (
+                snapshot.get("bodyScrollWidth", 0) > width + 2
+                if isinstance(snapshot.get("bodyScrollWidth"), int)
+                else None
+            ),
             "visibleInteractiveCount": int(
                 snapshot.get("visibleInteractiveCount") or 0
             ),
@@ -1161,28 +1366,46 @@ async def collect_viewport(
                 {
                     "kind": "screenshot",
                     **screenshot_artifact,
-                    "quarantined": quarantine,
+                    "quarantined": True,
                 },
             ],
             "observations": {
                 "title": None if quarantine else snapshot.get("title"),
-                "metaDescription": None
-                if quarantine
-                else snapshot.get("metaDescription"),
+                "metaDescription": (
+                    None if quarantine else snapshot.get("metaDescription")
+                ),
                 "headings": [] if quarantine else snapshot.get("headings", []),
                 "detailsText": [] if quarantine else snapshot.get("detailsText", []),
                 "formsObservedWithoutInput": len(forms),
             },
         }
         return result, sensitive_reasons, guard
-    except Exception as exc:
+    except PolicyError as exc:
+        reason = guard._record_violation(str(exc))
         return (
-            empty_viewport(viewport, "failed", str(exc) or type(exc).__name__),
+            empty_viewport(viewport, "blocked_policy", reason),
+            sensitive_reasons,
+            guard,
+        )
+    except Exception:
+        if guard.policy_reason_codes:
+            return (
+                empty_viewport(
+                    viewport,
+                    "blocked_policy",
+                    guard.policy_reason_codes[0],
+                ),
+                sensitive_reasons,
+                guard,
+            )
+        return (
+            empty_viewport(viewport, "failed", "browser_runtime_failed"),
             sensitive_reasons,
             guard,
         )
     finally:
-        await context.close()
+        if not context_closed:
+            await context.close()
 
 
 def make_blocked_record(
@@ -1255,6 +1478,12 @@ def make_blocked_record(
             "count": 0,
             "maxCount": max_requests,
             "blockedCount": 0,
+            "policyReasonCodes": (
+                [reason]
+                if status == "blocked_policy"
+                and POLICY_REASON_CODE_RE.fullmatch(reason)
+                else ["policy_violation"] if status == "blocked_policy" else []
+            ),
             "allRequestsGuarded": True,
             "serviceWorkersBlocked": True,
             "websocketPolicy": "sandbox_hard_blocker",
@@ -1322,8 +1551,12 @@ async def run_collection(args: argparse.Namespace) -> None:
         parent_dataset_digest = sha256_file(
             parent_dataset_path, max_bytes=MAX_PARENT_DATASET_BYTES
         )
-        policy = PublicURLPolicy(allow_http=args.allow_http)
-        targets = validate_target_bundle(
+        policy = PublicURLPolicy(
+            async_resolver=async_system_resolver,
+            dns_timeout_seconds=DNS_RESOLUTION_TIMEOUT_SECONDS,
+            allow_http=args.allow_http,
+        )
+        targets = await validate_target_bundle(
             bundle,
             parent_rows=parent_rows,
             actual_parent_manifest_hash=parent_manifest_hash,
@@ -1434,6 +1667,11 @@ async def run_collection(args: argparse.Namespace) -> None:
                     ),
                     "mappedAt": target["mappingProvenance"]["mappedAt"],
                     "authorizationScopeId": target["authorizationScopeId"],
+                    "pagePurposeHash": (
+                        sha256_text(target["pagePurpose"])
+                        if target["pagePurpose"] is not None
+                        else None
+                    ),
                 }
                 row_prefix = f"row-{target['rowId']}"
                 if not args.network_sandbox_attested:
@@ -1482,29 +1720,45 @@ async def run_collection(args: argparse.Namespace) -> None:
                     sensitive_reasons = sorted(
                         set(desktop_sensitive + mobile_sensitive)
                     )
-                    if sensitive_reasons:
+                    policy_reason_codes = bounded_policy_reason_codes(
+                        desktop_guard.policy_reason_codes
+                        + mobile_guard.policy_reason_codes
+                    )
+                    policy_blocked = bool(policy_reason_codes)
+                    if sensitive_reasons or policy_blocked:
+                        destination_root = (
+                            "quarantined_sensitive_evidence"
+                            if sensitive_reasons
+                            else "quarantined_policy_evidence"
+                        )
                         for viewport_result in (desktop, mobile):
                             for artifact in viewport_result.get("artifacts", []):
-                                store.quarantine_artifact(artifact)
-                    statuses = {desktop["status"], mobile["status"]}
-                    if sensitive_reasons:
-                        collection_status = "quarantined_sensitive"
-                    elif statuses == {"complete"}:
-                        collection_status = "complete"
-                    elif "complete" in statuses:
-                        collection_status = "partial"
-                    else:
-                        collection_status = "failed"
+                                store.quarantine_artifact(
+                                    artifact,
+                                    destination_root=destination_root,
+                                )
+                            observations = viewport_result.get("observations")
+                            if observations:
+                                observations["title"] = None
+                                observations["metaDescription"] = None
+                                observations["headings"] = []
+                                observations["detailsText"] = []
+                    collection_status = derive_collection_status(
+                        (desktop, mobile),
+                        sensitive_reasons=sensitive_reasons,
+                        policy_reason_codes=policy_reason_codes,
+                    )
                     artifacts = list(desktop.get("artifacts", [])) + list(
                         mobile.get("artifacts", [])
                     )
                     if query_sidecar is not None:
-                        quarantine = bool(sensitive_reasons)
-                        query_prefix = (
-                            "quarantined_sensitive_evidence"
-                            if quarantine
-                            else "evidence"
-                        )
+                        quarantine = bool(sensitive_reasons or policy_blocked)
+                        if sensitive_reasons:
+                            query_prefix = "quarantined_sensitive_evidence"
+                        elif policy_blocked:
+                            query_prefix = "quarantined_policy_evidence"
+                        else:
+                            query_prefix = "evidence"
                         query_artifact = store.write_bytes(
                             f"{query_prefix}/{row_prefix}/private-query-contexts.json",
                             query_sidecar,
@@ -1519,10 +1773,14 @@ async def run_collection(args: argparse.Namespace) -> None:
                         )
                     lighthouse: dict[str, Any] = {}
                     for preset in ("desktop", "mobile"):
-                        if sensitive_reasons:
+                        if policy_blocked or sensitive_reasons:
                             lighthouse[preset] = {
                                 "status": "not_run",
-                                "reason": "sensitive_evidence_quarantined",
+                                "reason": (
+                                    "policy_blocked"
+                                    if policy_blocked
+                                    else "sensitive_evidence_quarantined"
+                                ),
                                 "version": LIGHTHOUSE_VERSION,
                                 "artifact": None,
                             }
@@ -1570,6 +1828,11 @@ async def run_collection(args: argparse.Namespace) -> None:
                     request_entries = desktop_guard.audit + mobile_guard.audit
                     for sequence, entry in enumerate(request_entries, start=1):
                         entry["sequence"] = sequence
+                        if (
+                            entry.get("decision") == "blocked"
+                            and entry.get("reason") not in policy_reason_codes
+                        ):
+                            entry["reason"] = "policy_violation"
                     record = {
                         "contractVersion": CONTRACT_VERSION,
                         "collectionRunId": args.run_id,
@@ -1582,7 +1845,9 @@ async def run_collection(args: argparse.Namespace) -> None:
                         "page": {
                             "status": collection_status,
                             "sensitiveReasons": sensitive_reasons,
-                            "observationsIncluded": not bool(sensitive_reasons),
+                            "observationsIncluded": not bool(
+                                sensitive_reasons or policy_blocked
+                            ),
                         },
                         "responsive": {"desktop": desktop, "mobile": mobile},
                         "lighthouse": lighthouse,
@@ -1607,20 +1872,32 @@ async def run_collection(args: argparse.Namespace) -> None:
                                 for reason in sensitive_reasons
                             ),
                             "containsCredentials": any(
-                                reason in {"api_key_like", "credential_form"}
+                                reason
+                                in {
+                                    "api_key_like",
+                                    "credential_assignment",
+                                    "credential_form",
+                                }
                                 for reason in sensitive_reasons
                             ),
-                            "quarantineStatus": "quarantined_sensitive_evidence"
-                            if sensitive_reasons
-                            else "clear",
+                            "quarantineStatus": (
+                                "quarantined_sensitive_evidence"
+                                if sensitive_reasons
+                                else (
+                                    "quarantined_policy_evidence"
+                                    if policy_blocked
+                                    else "clear"
+                                )
+                            ),
                             "modelArtifactRawEvidenceExcluded": True,
                         },
                         "requestAudit": {
                             "count": desktop_guard.request_count
                             + mobile_guard.request_count,
-                            "maxCount": args.max_requests * 2,
+                            "maxCount": (args.max_requests + 1) * 2,
                             "blockedCount": desktop_guard.blocked_count
                             + mobile_guard.blocked_count,
+                            "policyReasonCodes": policy_reason_codes,
                             "allRequestsGuarded": True,
                             "serviceWorkersBlocked": True,
                             "websocketPolicy": "sandbox_hard_blocker",
