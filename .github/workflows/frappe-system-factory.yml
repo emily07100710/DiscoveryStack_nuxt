@@ -1,0 +1,36 @@
+name: Frappe System Factory V1
+on:
+  pull_request:
+    paths: ['nuxt-app/server/system-factory/**', 'nuxt-app/server/api/system-factory/**', 'nuxt-app/tests/system-factory-*.test.ts', 'services/frappe/discovery_stack/**', 'infrastructure/frappe/**']
+  workflow_dispatch:
+    inputs:
+      run_disposable_smoke:
+        description: Run the isolated Docker create/install/apply/health smoke
+        required: false
+        default: false
+        type: boolean
+jobs:
+  safe-contracts:
+    runs-on: ubuntu-latest
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.24.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.23.1, cache: pnpm, cache-dependency-path: nuxt-app/pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+        working-directory: nuxt-app
+      - run: pnpm typecheck
+        working-directory: nuxt-app
+      - run: pnpm exec vitest run tests/system-factory-*.test.ts
+        working-directory: nuxt-app
+      - run: node scripts/verify-frappe-system-factory.mjs
+      - run: FRAPPE_DB_ROOT_PASSWORD=ci-compose-validation-only docker compose --env-file infrastructure/frappe/.env.example -f infrastructure/frappe/compose.yaml config --quiet
+  disposable-smoke:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_disposable_smoke
+    runs-on: ubuntu-latest
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - run: infrastructure/frappe/disposable-smoke.sh

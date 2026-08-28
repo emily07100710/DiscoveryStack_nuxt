@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "discoverystack-frappe-upstream-lock-v1",
+  "retrievedAt": "2026-08-29T00:00:00.000Z",
+  "supportBranch": "version-16",
+  "frappe": {
+    "repository": "https://github.com/frappe/frappe.git",
+    "tag": "v16.32.0",
+    "commit": "5cba016e86b54b57f34a3864282b92300ef20fb0",
+    "license": "MIT",
+    "licenseUrl": "https://raw.githubusercontent.com/frappe/frappe/v16.32.0/LICENSE",
+    "licenseSha256": "bc6001a54ffcc4ab520424d7dbb85b293578efcdcb7d8f8055e00dddf942e5d7",
+    "attributionsUrl": "https://raw.githubusercontent.com/frappe/frappe/v16.32.0/attributions.md",
+    "attributionsSha256": "9646f3649007a8ddd3f7bdae744985214c8cd1bf9a0cd36e58417c61428361e9"
+  },
+  "erpnext": {
+    "repository": "https://github.com/frappe/erpnext.git",
+    "tag": "v16.33.0",
+    "commit": "b24c9eba551905e256e336ff170a91a92d197a2f",
+    "license": "GPL-3.0-only",
+    "licenseUrl": "https://raw.githubusercontent.com/frappe/erpnext/v16.33.0/license.txt",
+    "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "attributionsUrl": "https://raw.githubusercontent.com/frappe/erpnext/v16.33.0/attributions.md",
+    "attributionsSha256": "7e4843b6db5c2804cb1f5c3459c6942b86959d9b914ccd1707a33f3bf479ce26",
+    "trademarkPolicyUrl": "https://raw.githubusercontent.com/frappe/erpnext/v16.33.0/TRADEMARK_POLICY.md",
+    "trademarkPolicySha256": "fe34b15d9302c2019f8872c43a536ca49ae7b70bf15e109842d27544299c11b3"
+  },
+  "image": {
+    "reference": "docker.io/frappe/erpnext:v16.33.0",
+    "indexDigest": "sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd",
+    "linuxAmd64Digest": "sha256:6ca471e9a9220f556ab162bf41a90a3a5de001a3f05ffe5f6d85627025578e29",
+    "linuxArm64Digest": "sha256:269af8fd45cc3b75d6ff18e03f1adb9b3d4dd0f7292545b9cc8dddd65007cc51",
+    "embeddedApps": {
+      "frappe": {
+        "version": "16.31.0",
+        "commit": null,
+        "commitVerifiedInImage": false
+      },
+      "erpnext": {
+        "version": "16.33.0",
+        "commit": "b24c9eba551905e256e336ff170a91a92d197a2f",
+        "commitVerifiedInImage": true
+      }
+    }
+  },
+  "runtimeImages": {
+    "mariadb": "docker.io/library/mariadb:11.8@sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3",
+    "redis": "docker.io/library/redis:7.4-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf"
+  },
+  "discoveryStackCompatibility": {
+    "schema": "system-spec-v1",
+    "compiler": "system-spec-compiler-v1",
+    "frappeApp": "discovery_stack 0.1.0",
+    "nuxtAdapter": "frappe-system-factory-v1"
+  }
+}

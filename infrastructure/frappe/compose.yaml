@@ -1,0 +1,109 @@
+name: discoverystack-frappe-factory
+
+x-frappe-image: &frappe-image docker.io/frappe/erpnext:v16.33.0@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+x-frappe-common: &frappe-common
+  image: *frappe-image
+  restart: "no"
+  networks: [frappe_private]
+  volumes:
+    - sites:/home/frappe/frappe-bench/sites
+    - ../../services/frappe/discovery_stack:/workspace/discovery_stack:ro
+  environment:
+    DB_HOST: mariadb
+    DB_PORT: "3306"
+    REDIS_CACHE: redis-cache:6379
+    REDIS_QUEUE: redis-queue:6379
+    SOCKETIO_PORT: "9000"
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+
+services:
+  mariadb:
+    image: docker.io/library/mariadb:11.8@sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3
+    restart: "no"
+    networks: [frappe_private]
+    environment:
+      MARIADB_ROOT_PASSWORD: ${FRAPPE_DB_ROOT_PASSWORD:?inject FRAPPE_DB_ROOT_PASSWORD}
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--skip-name-resolve"]
+    volumes: [mariadb_data:/var/lib/mysql]
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+
+  redis-cache:
+    image: docker.io/library/redis:7.4-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    restart: "no"
+    networks: [frappe_private]
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s, timeout: 3s, retries: 20 }
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [SETGID, SETUID]
+
+  redis-queue:
+    image: docker.io/library/redis:7.4-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    restart: "no"
+    networks: [frappe_private]
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s, timeout: 3s, retries: 20 }
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [SETGID, SETUID]
+
+  configurator:
+    <<: *frappe-common
+    depends_on:
+      mariadb: { condition: service_healthy }
+      redis-cache: { condition: service_healthy }
+      redis-queue: { condition: service_healthy }
+    entrypoint: ["bash", "-lc"]
+    command:
+      - >-
+        bench set-config -g db_host mariadb &&
+        bench set-config -g redis_cache redis://redis-cache:6379 &&
+        bench set-config -g redis_queue redis://redis-queue:6379 &&
+        bench set-config -g redis_socketio redis://redis-queue:6379 &&
+        bench set-config -g socketio_port 9000
+
+  backend:
+    <<: *frappe-common
+    depends_on: { configurator: { condition: service_completed_successfully } }
+    command: ["bench", "serve", "--port", "8000"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/method/ping', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  queue-short:
+    <<: *frappe-common
+    depends_on: { configurator: { condition: service_completed_successfully } }
+    command: ["bench", "worker", "--queue", "short,default"]
+
+  queue-long:
+    <<: *frappe-common
+    depends_on: { configurator: { condition: service_completed_successfully } }
+    command: ["bench", "worker", "--queue", "long"]
+
+  scheduler:
+    <<: *frappe-common
+    depends_on: { configurator: { condition: service_completed_successfully } }
+    command: ["bench", "schedule"]
+
+  websocket:
+    <<: *frappe-common
+    depends_on: { configurator: { condition: service_completed_successfully } }
+    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
+
+networks:
+  frappe_private:
+    internal: true
+
+volumes:
+  sites:
+  mariadb_data:
