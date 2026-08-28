@@ -993,8 +993,8 @@ class ValidatorTests(unittest.TestCase):
             max_requests=180,
         )
 
-    def write_run(self, record, projection=None):
-        store = collector.PrivateRunStore(self.root, "test-run")
+    def write_run(self, record, projection=None, store=None):
+        store = store or collector.PrivateRunStore(self.root, "test-run")
         metadata = {
             "runId": "test-run",
             "targetBundleDigest": "f" * 64,
@@ -1018,6 +1018,119 @@ class ValidatorTests(unittest.TestCase):
         )
         store.append_jsonl("model_projection.jsonl", projection)
         return store
+
+    def collect_complete_record(self):
+        store = collector.PrivateRunStore(self.root, "test-run")
+        policy = collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4))
+        validated_url = asyncio.run(policy.validate_async("https://example.com/page"))
+        browser = FakeBrowser([("GET", "https://example.com/page")])
+        desktop, desktop_sensitive, desktop_guard = asyncio.run(
+            collector.collect_viewport(
+                browser,
+                validated_url=validated_url,
+                viewport="desktop",
+                width=1440,
+                height=900,
+                store=store,
+                row_prefix="row-1",
+                max_requests=10,
+                policy=policy,
+            )
+        )
+        mobile, mobile_sensitive, mobile_guard = asyncio.run(
+            collector.collect_viewport(
+                browser,
+                validated_url=validated_url,
+                viewport="mobile",
+                width=390,
+                height=844,
+                store=store,
+                row_prefix="row-1",
+                max_requests=10,
+                policy=policy,
+            )
+        )
+        self.assertEqual(desktop_sensitive + mobile_sensitive, [])
+        request_entries = desktop_guard.audit + mobile_guard.audit
+        for sequence, entry in enumerate(request_entries, start=1):
+            entry["sequence"] = sequence
+        lineage = {
+            "parentManifestHash": "a" * 64,
+            "parentDatasetDigest": "b" * 64,
+            "parentRowCount": 1,
+        }
+        artifacts = desktop["artifacts"] + mobile["artifacts"]
+        record = {
+            "contractVersion": collector.CONTRACT_VERSION,
+            "collectionRunId": "test-run",
+            "collectedAt": "2026-08-28T00:00:00+00:00",
+            "rowId": 1,
+            "split": "train",
+            "parentLineage": lineage,
+            "mapping": {
+                "urlHash": validated_url.url_hash,
+                "method": collector.ALLOWED_MAPPING_METHOD,
+                "evidenceRefHash": "d" * 64,
+                "mappedByHash": "e" * 64,
+                "mappedAt": "2026-08-28T00:00:00+00:00",
+                "authorizationScopeId": "scope-1",
+                "pagePurposeHash": None,
+            },
+            "collectionStatus": "complete",
+            "page": {
+                "status": "complete",
+                "sensitiveReasons": [],
+                "observationsIncluded": True,
+            },
+            "responsive": {"desktop": desktop, "mobile": mobile},
+            "lighthouse": {
+                preset: {
+                    "status": "not_run",
+                    "reason": "not_requested",
+                    "version": collector.LIGHTHOUSE_VERSION,
+                    "artifact": None,
+                }
+                for preset in ("desktop", "mobile")
+            },
+            "interactionTrace": {
+                "allowedActions": [
+                    "dom_inspect",
+                    "scroll",
+                    "screenshot",
+                    "native_details_text_read",
+                ],
+                "dispatchedClicks": 0,
+                "formsSubmitted": 0,
+                "bookingStatus": "unknown",
+                "checkoutStatus": "unknown",
+            },
+            "queryContexts": [],
+            "governance": {
+                "privateOnly": True,
+                "developmentOnly": True,
+                "containsPii": False,
+                "containsCredentials": False,
+                "quarantineStatus": "clear",
+                "modelArtifactRawEvidenceExcluded": True,
+            },
+            "requestAudit": {
+                "count": desktop_guard.request_count + mobile_guard.request_count,
+                "maxCount": 22,
+                "blockedCount": 0,
+                "policyReasonCodes": [],
+                "allRequestsGuarded": True,
+                "serviceWorkersBlocked": True,
+                "websocketPolicy": "sandbox_hard_blocker",
+                "entries": request_entries,
+            },
+            "artifacts": artifacts,
+            "replay": {
+                "replayOf": None,
+                "exactReplay": False,
+                "sourceRunMetadataHash": None,
+            },
+        }
+        return store, record
 
     def test_69_valid_blocked_run_passes(self):
         store = self.write_run(self.make_record())
@@ -1276,6 +1389,51 @@ class ValidatorTests(unittest.TestCase):
         store = self.write_run(record)
         with self.assertRaisesRegex(
             validator.ValidationError, "cannot enter general evidence"
+        ):
+            validator.validate_run(store.run_dir, SCHEMA)
+
+    def test_81_clean_collection_round_trips_through_validator(self):
+        store, record = self.collect_complete_record()
+        paths = [artifact["path"] for artifact in record["artifacts"]]
+        viewport_paths = [
+            artifact["path"]
+            for viewport in record["responsive"].values()
+            for artifact in viewport["artifacts"]
+        ]
+        self.assertEqual(len(paths), len(set(paths)))
+        self.assertCountEqual(paths, viewport_paths)
+        for viewport in record["responsive"].values():
+            self.assertEqual(
+                [artifact["kind"] for artifact in viewport["artifacts"]],
+                ["raw_text", "screenshot"],
+            )
+        screenshot_paths = [
+            artifact["path"]
+            for artifact in record["artifacts"]
+            if artifact["kind"] == "screenshot"
+        ]
+        self.assertTrue(screenshot_paths)
+        self.assertTrue(
+            all(
+                path.startswith("quarantined_visual_evidence/")
+                for path in screenshot_paths
+            )
+        )
+        self.write_run(record, store=store)
+        result = validator.validate_run(store.run_dir, SCHEMA)
+        self.assertTrue(result["valid"])
+        projection = json.loads(
+            (store.run_dir / "model_projection.jsonl").read_text(encoding="utf-8")
+        )
+        self.assertEqual(projection["evidenceStatus"], "complete")
+        self.assertEqual(set(projection["frictionReasonSignals"].values()), {"unknown"})
+
+    def test_82_validator_rejects_duplicate_artifact_path(self):
+        store, record = self.collect_complete_record()
+        record["artifacts"].append(copy.deepcopy(record["artifacts"][0]))
+        self.write_run(record, store=store)
+        with self.assertRaisesRegex(
+            validator.ValidationError, "duplicate artifact path"
         ):
             validator.validate_run(store.run_dir, SCHEMA)
 

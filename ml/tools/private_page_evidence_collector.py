@@ -1341,6 +1341,16 @@ async def collect_viewport(
             screenshot,
             max_bytes=MAX_SCREENSHOT_BYTES,
         )
+        artifacts = [
+            {"kind": "raw_text", **text_artifact, "quarantined": quarantine},
+            {
+                "kind": "screenshot",
+                **screenshot_artifact,
+                "quarantined": True,
+            },
+        ]
+        if len({artifact["path"] for artifact in artifacts}) != len(artifacts):
+            raise FilesystemPolicyError("duplicate viewport artifact path")
         result = {
             "viewport": viewport,
             "status": "quarantined_sensitive" if quarantine else "complete",
@@ -1361,14 +1371,7 @@ async def collect_viewport(
             "visibleInteractiveCount": int(
                 snapshot.get("visibleInteractiveCount") or 0
             ),
-            "artifacts": [
-                {"kind": "raw_text", **text_artifact, "quarantined": quarantine},
-                {
-                    "kind": "screenshot",
-                    **screenshot_artifact,
-                    "quarantined": True,
-                },
-            ],
+            "artifacts": artifacts,
             "observations": {
                 "title": None if quarantine else snapshot.get("title"),
                 "metaDescription": (
