@@ -84,10 +84,17 @@ export async function completeMediaUpload(dependencies: { repository: MediaVault
   const claimed = await dependencies.repository.transaction(async repository => {
     const session = await repository.findUploadById(scope, input.uploadId); if (!session) throw createError({ statusCode: 404, statusMessage: 'Media upload session was not found.' })
     if (session.status === 'completed') return { session, replayed: true, expired: false as const }
-    if (session.status === 'completing') conflict('Media upload completion is already in progress.')
     if (session.status !== 'issued') conflict('Media upload session cannot be completed from its current state.')
-    if (new Date(session.expiresAt).getTime() <= now.getTime()) { const expired = await repository.updateUpload(scope, session.uploadId, { status: 'expired' }); return { session: expired || session, replayed: false, expired: true as const } }
-    const updated = await repository.updateUpload(scope, session.uploadId, { status: 'completing' }); if (!updated) conflict('Media upload session could not be claimed.')
+    const targetStatus = new Date(session.expiresAt).getTime() <= now.getTime() ? 'expired' : 'completing'
+    const won = await repository.claimUploadStatus(scope, session.uploadId, ['issued'], targetStatus)
+    if (!won) {
+      const durable = await repository.findUploadById(scope, session.uploadId)
+      if (durable?.status === 'completed') return { session: durable, replayed: true, expired: false as const }
+      if (durable?.status === 'completing') conflict('Media upload completion is already in progress.')
+      conflict('Media upload session changed concurrently and was not claimed.')
+    }
+    const updated = await repository.findUploadById(scope, session.uploadId); if (!updated) conflict('Claimed media upload session could not be reloaded.')
+    if (targetStatus === 'expired') return { session: updated, replayed: false, expired: true as const }
     return { session: updated, replayed: false, expired: false as const }
   })
   if (claimed.expired) { const deletion = await dependencies.storage.deleteObject({ ...scope, objectKey: claimed.session.objectKey }); await dependencies.repository.transaction(async repository => { await repository.releaseQuota(scope, { idempotencyKey: claimed.session.idempotencyKey, requestFingerprint: claimed.session.requestFingerprint }); await repository.appendEvent(scope, event({ type: 'expired_upload_deleted', assetId: claimed.session.assetId, uploadId: claimed.session.uploadId, actor, metadata: { deletionReceiptReference: deletion.receiptReference } })) }); conflict('Media upload session has expired.') }
@@ -132,7 +139,7 @@ export async function completeMediaUpload(dependencies: { repository: MediaVault
     return { asset, replayed: false, deduplicated: false }
   } catch (error) {
     const current = await dependencies.repository.findAsset(scope, session.assetId); const preserveReadyReplacement = current?.status === 'ready'
-    await dependencies.repository.transaction(async repository => { await repository.updateUpload(scope, session.uploadId, { status: 'rejected' }); await repository.releaseQuota(scope, { idempotencyKey: session.idempotencyKey, requestFingerprint: session.requestFingerprint }); if (!preserveReadyReplacement) await repository.updateAsset(scope, session.assetId, { status: 'quarantined' }); await repository.appendEvent(scope, event({ type: preserveReadyReplacement ? 'media_replacement_rejected' : 'media_processing_rejected', assetId: session.assetId, uploadId: session.uploadId, actor, metadata: { retainedVersion: preserveReadyReplacement ? current?.version : null, reasonCode: 'MEDIA_VALIDATION_OR_PROCESSING_FAILED', publicUse: false } })) })
+    await dependencies.repository.transaction(async repository => { const rejected = await repository.claimUploadStatus(scope, session.uploadId, ['completing'], 'rejected'); if (!rejected) conflict('Media upload failure finalization lost its completion claim.'); await repository.releaseQuota(scope, { idempotencyKey: session.idempotencyKey, requestFingerprint: session.requestFingerprint }); if (!preserveReadyReplacement) await repository.updateAsset(scope, session.assetId, { status: 'quarantined' }); await repository.appendEvent(scope, event({ type: preserveReadyReplacement ? 'media_replacement_rejected' : 'media_processing_rejected', assetId: session.assetId, uploadId: session.uploadId, actor, metadata: { retainedVersion: preserveReadyReplacement ? current?.version : null, reasonCode: 'MEDIA_VALIDATION_OR_PROCESSING_FAILED', publicUse: false } })) })
     throw error
   }
 }

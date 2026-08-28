@@ -89,6 +89,7 @@ export interface MediaVaultRepository {
   findUploadByIdempotency(scope: MediaTenantScope, idempotencyKey: string): Promise<MediaUploadSession | null>
   insertUpload(upload: MediaUploadSession): Promise<void>
   updateUpload(scope: MediaTenantScope, uploadId: string, patch: Partial<MediaUploadSession>): Promise<MediaUploadSession | null>
+  claimUploadStatus(scope: MediaTenantScope, uploadId: string, from: MediaUploadSession['status'][], to: MediaUploadSession['status']): Promise<boolean>
   findAsset(scope: MediaTenantScope, assetId: string): Promise<MediaAssetProjection | null>
   findReadyAssetByHash(scope: MediaTenantScope, sha256: string): Promise<MediaAssetProjection | null>
   listAssets(scope: MediaTenantScope): Promise<MediaAssetProjection[]>
