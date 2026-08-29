@@ -12,6 +12,8 @@ const enabled = process.env.DS_RUN_SYSTEM_FACTORY_FULL_MIGRATION_DB_INTEGRATION 
 const databaseUrl = process.env.DATABASE_URL || ''
 const suite = enabled ? describe : describe.skip
 const migrationDirectory = new URL('../server/database/migrations', import.meta.url).pathname
+const migrationJournal = JSON.parse(readFileSync(new URL('../server/database/migrations/meta/_journal.json', import.meta.url), 'utf8')) as { entries: unknown[] }
+const expectedMigrationCount = migrationJournal.entries.length
 const mapping = JSON.parse(readFileSync(new URL('../server/database/migrations/mysql-identifier-map.json', import.meta.url), 'utf8')) as {
   corrections: Array<{ corrected: string, table: string, column: string, targetTable: string, targetColumn: string }>
 }
@@ -30,10 +32,10 @@ suite('full-chain disposable MariaDB bootstrap', () => {
 
   afterAll(async () => { await connection?.end() })
 
-  it('applies the official 0000-0032 chain to a truly empty database', async () => {
+  it('applies the complete official migration chain to a truly empty database', async () => {
     await migrate(drizzle(databaseUrl), { migrationsFolder: migrationDirectory })
     const [ledger] = await connection.query<mysql.RowDataPacket[]>('SELECT COUNT(*) AS count FROM `__drizzle_migrations`')
-    expect(Number(ledger[0]?.count)).toBe(33)
+    expect(Number(ledger[0]?.count)).toBe(expectedMigrationCount)
 
     const representativeTables = [
       'users',
@@ -48,6 +50,11 @@ suite('full-chain disposable MariaDB bootstrap', () => {
       'systemReceipts',
       'geoOutcomeModelopsPolicies',
       'geoOutcomeModelopsCycles',
+      'managedSiteMediaAssets',
+      'managedSiteMediaAssetVersions',
+      'managedSiteMediaObjects',
+      'managedSitePages',
+      'managedSitePageVersions',
     ]
     const [tables] = await connection.query<mysql.RowDataPacket[]>(
       'SELECT TABLE_NAME AS tableName FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?)',
@@ -85,7 +92,7 @@ suite('full-chain disposable MariaDB bootstrap', () => {
     await migrate(drizzle(databaseUrl), { migrationsFolder: migrationDirectory })
     const [after] = await connection.query<mysql.RowDataPacket[]>('SELECT COUNT(*) AS count, MAX(created_at) AS latest FROM `__drizzle_migrations`')
     expect(after[0]).toEqual(before[0])
-    expect(Number(after[0]?.count)).toBe(33)
+    expect(Number(after[0]?.count)).toBe(expectedMigrationCount)
   }, 30_000)
 
   it('enforces durable ModelOps lease fencing under concurrent MariaDB takeover', async () => {

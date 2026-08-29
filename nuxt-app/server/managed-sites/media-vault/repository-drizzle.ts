@@ -1023,6 +1023,7 @@ export function makeDrizzleMediaVaultRepository(
           and(
             eq(managedSiteMediaAssets.ownerUserId, scope.ownerUserId),
             eq(managedSiteMediaAssets.projectId, scope.projectId),
+            isNull(managedSiteMediaAssets.deletedAt),
             ne(managedSiteMediaAssets.status, "deleted"),
             ...(before
               ? [

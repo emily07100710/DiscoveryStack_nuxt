@@ -1,4 +1,5 @@
 import { drizzle } from 'drizzle-orm/mysql2'
+import { migrate } from 'drizzle-orm/mysql2/migrator'
 import mysql from 'mysql2/promise'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as schema from '../server/database/schema'
@@ -10,6 +11,7 @@ const enabled = process.env.DS_RUN_MANAGED_EDITOR_DB_INTEGRATION === '1'
 const databaseUrl = process.env.DATABASE_URL || ''
 const suite = enabled ? describe : describe.skip
 let connection: mysql.Connection
+const migrationDirectory = new URL('../server/database/migrations', import.meta.url).pathname
 
 function sha(value: number) { return value.toString(16).padStart(64, '0').slice(-64) }
 function tableNodes(value: unknown, output: Array<Record<string, unknown>> = []): Array<Record<string, unknown>> {
@@ -30,7 +32,7 @@ function pageDocument(index: number) {
     designThemeId: 'integration',
     designTokenVersion: 'tokens-v1',
     designTokens: { palette: 'indigo_sand', typeScale: 'balanced', spacing: 'balanced', radius: 'soft', maxWidth: 'standard', contrast: 'aa' },
-    sections: [{ blockId: `block-${String(index).padStart(4, '0')}`, type: 'rich_text', visible: true, layoutVariant: 'default', data: { title: `Page ${index}`, content: [{ type: 'paragraph', text: `Body ${index}` }] }, mediaBindingIds: [], schedule: null }],
+    sections: [{ blockId: `block-${String(index).padStart(4, '0')}`, type: 'rich_text', visible: true, layoutVariant: 'prose', data: { nodes: [{ type: 'paragraph', text: `Body ${index}` }] }, mediaBindingIds: [], schedule: null }],
     seo: { title: `Page ${index}`, description: `Integration page ${index} description.`, canonicalPath: route, noindex: false, ogBindingId: null },
     mediaBindings: [],
   }, new Date('2030-01-01T00:00:00.000Z'))
@@ -42,7 +44,8 @@ suite('Managed media and page repository disposable MariaDB integration', () => 
     if (parsed.pathname !== '/discoverystack_managed_editor_test') throw new Error('Dedicated disposable managed-editor database is required.')
     connection = await mysql.createConnection(databaseUrl)
     const [tables] = await connection.query<mysql.RowDataPacket[]>('SHOW TABLES')
-    if (!tables.some(row => Object.values(row).includes('managedSiteMediaAssets'))) throw new Error('Official full migration chain must be applied before the managed-editor integration suite.')
+    if (tables.length) throw new Error('Disposable managed-editor database must start empty.')
+    await migrate(drizzle(databaseUrl), { migrationsFolder: migrationDirectory })
     await connection.query("INSERT INTO users (id,openId,role) VALUES (1,'managed-editor-owner-1','admin'),(2,'managed-editor-owner-2','admin')")
     await connection.query("INSERT INTO managedSiteProjects (id,ownerUserId,canonicalClientIdentity,canonicalWebsiteIdentity,status,siteType,catalogVersion,projectFingerprint,creationIdempotencyKey) VALUES (10,1,'client-10','https://site-10.example.dev','active','brand_blog','catalog-v1',?, 'project-10'),(20,2,'client-20','https://site-20.example.dev','active','brand_blog','catalog-v1',?, 'project-20')", [sha(10), sha(20)])
     await connection.query("INSERT INTO managedSiteStorageConnections (id,ownerUserId,projectId,providerKey,configuration,configurationFingerprint,status) VALUES (101,1,10,'memory_test','{}',?,'mock'),(102,2,20,'memory_test','{}',?,'mock')", [sha(101), sha(102)])
@@ -105,7 +108,7 @@ suite('Managed media and page repository disposable MariaDB integration', () => 
         FROM managedSiteMediaAssets a
         JOIN managedSiteMediaAssetVersions v ON v.id=a.currentVersionId AND v.ownerUserId=? AND v.projectId=?
         LEFT JOIN managedSiteMediaObjects o ON o.assetVersionId=v.id AND o.ownerUserId=? AND o.projectId=? AND o.objectKind='original' AND o.deletedAt IS NULL
-       WHERE a.ownerUserId=? AND a.projectId=? AND a.status<>'deleted'
+       WHERE a.ownerUserId=? AND a.projectId=? AND a.deletedAt IS NULL AND a.status<>'deleted'
          AND (a.createdAt<? OR (a.createdAt=? AND a.assetId<?))
        ORDER BY a.createdAt DESC,a.assetId DESC LIMIT 100`, [1, 10, 1, 10, 1, 10, new Date('2030-01-02T00:00:00.000Z'), new Date('2030-01-02T00:00:00.000Z'), 'asset-99999'])
     const assetNodes = tableNodes(JSON.parse(String(assetRows[0]?.EXPLAIN)))
