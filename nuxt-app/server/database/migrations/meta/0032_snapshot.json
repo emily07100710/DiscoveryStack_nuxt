@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "edeb9e93-b168-491f-839b-34b3034d2a3a",
+  "id": "e6f73032-9d68-4be6-913d-208ab6a649ab",
   "prevId": "01a03c35-def3-44ff-a6b7-e1af9d6c9b50",
   "tables": {
     "auditEvidenceLedger": {
@@ -8753,6 +8753,16 @@
           "columns": [
             "ownerUserId",
             "status",
+            "updatedAt"
+          ],
+          "isUnique": false
+        },
+        "geo_outcome_modelops_policy_scheduler_idx": {
+          "name": "geo_outcome_modelops_policy_scheduler_idx",
+          "columns": [
+            "status",
+            "expiresAt",
+            "ownerUserId",
             "updatedAt"
           ],
           "isUnique": false

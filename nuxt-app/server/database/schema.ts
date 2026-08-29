@@ -2757,6 +2757,7 @@ export const geoOutcomeModelopsPolicies = mysqlTable('geoOutcomeModelopsPolicies
 }, table => [
   uniqueIndex('geo_outcome_modelops_policy_owner_id_unique').on(table.ownerUserId, table.policyId),
   index('geo_outcome_modelops_policy_owner_status_idx').on(table.ownerUserId, table.status, table.updatedAt),
+  index('geo_outcome_modelops_policy_scheduler_idx').on(table.status, table.expiresAt, table.ownerUserId, table.updatedAt),
 ])
 
 /** Durable cycle projection. All values are redacted fingerprints or bounded reason metadata. */

@@ -239,4 +239,5 @@ CREATE INDEX `content_operation_entity_profile_owner_scope_idx` ON `contentOpera
 CREATE INDEX `content_operation_machine_auth_owner_entry_idx` ON `contentOperationMachineAuthorizations` (`ownerUserId`,`entryId`,`createdAt`);--> statement-breakpoint
 CREATE INDEX `content_operation_query_ownership_scope_query_idx` ON `contentOperationQueryOwnership` (`ownerUserId`,`clientId`,`websiteId`,`normalizedQuery`,`status`);--> statement-breakpoint
 CREATE INDEX `content_operation_repair_owner_entry_idx` ON `contentOperationRepairAttempts` (`ownerUserId`,`entryId`,`repairAttempt`);--> statement-breakpoint
-CREATE INDEX `content_operation_substitution_owner_entry_idx` ON `contentOperationTopicSubstitutions` (`ownerUserId`,`entryId`,`substitutionAttempt`);
+CREATE INDEX `content_operation_substitution_owner_entry_idx` ON `contentOperationTopicSubstitutions` (`ownerUserId`,`entryId`,`substitutionAttempt`);--> statement-breakpoint
+CREATE INDEX `geo_outcome_modelops_policy_scheduler_idx` ON `geoOutcomeModelopsPolicies` (`status`,`expiresAt`,`ownerUserId`,`updatedAt`);

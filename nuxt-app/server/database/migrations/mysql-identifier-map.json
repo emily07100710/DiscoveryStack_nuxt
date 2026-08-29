@@ -1191,7 +1191,7 @@
       "correctedBytes": 53
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationBudgetReservations",
       "column": "entryId",
       "targetTable": "contentOperationCalendarEntries",
@@ -1202,7 +1202,7 @@
       "correctedBytes": 47
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationBudgetReservations",
       "column": "publicationTargetId",
       "targetTable": "contentOperationPublicationTargets",
@@ -1213,7 +1213,7 @@
       "correctedBytes": 57
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationEntityStrategyProfiles",
       "column": "clientId",
       "targetTable": "contentOperationClients",
@@ -1224,7 +1224,7 @@
       "correctedBytes": 48
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationMachineAuthorizations",
       "column": "clientId",
       "targetTable": "contentOperationClients",
@@ -1235,7 +1235,7 @@
       "correctedBytes": 48
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationMachineAuthorizations",
       "column": "draftId",
       "targetTable": "seoGeoContentDrafts",
@@ -1246,7 +1246,7 @@
       "correctedBytes": 47
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationMachineAuthorizations",
       "column": "entryId",
       "targetTable": "contentOperationCalendarEntries",
@@ -1257,7 +1257,7 @@
       "correctedBytes": 47
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationMachineAuthorizations",
       "column": "jobId",
       "targetTable": "seoGeoContentJobs",
@@ -1268,7 +1268,7 @@
       "correctedBytes": 45
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationMachineAuthorizations",
       "column": "publicationTargetId",
       "targetTable": "contentOperationPublicationTargets",
@@ -1279,7 +1279,7 @@
       "correctedBytes": 57
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationQueryOwnership",
       "column": "clientId",
       "targetTable": "contentOperationClients",
@@ -1290,7 +1290,7 @@
       "correctedBytes": 48
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationRepairAttempts",
       "column": "clientId",
       "targetTable": "contentOperationClients",
@@ -1301,7 +1301,7 @@
       "correctedBytes": 48
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationRepairAttempts",
       "column": "entryId",
       "targetTable": "contentOperationCalendarEntries",
@@ -1312,7 +1312,7 @@
       "correctedBytes": 47
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationTopicSubstitutions",
       "column": "clientId",
       "targetTable": "contentOperationClients",
@@ -1323,7 +1323,7 @@
       "correctedBytes": 48
     },
     {
-      "migration": "0032_glamorous_mac_gargan.sql",
+      "migration": "0032_youthful_famine.sql",
       "table": "contentOperationTopicSubstitutions",
       "column": "entryId",
       "targetTable": "contentOperationCalendarEntries",

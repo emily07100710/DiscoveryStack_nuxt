@@ -128,7 +128,8 @@ if (write) {
   for (const correction of [...discovered, ...snapshotCorrections]) byOriginal.set(correction.original, correction)
   mapping.corrections = [...byOriginal.values()].map(item => {
     const corrected = Buffer.byteLength(item.corrected, 'utf8') > 64 ? boundedForeignKeyName(item.table, item.column, item.original) : item.corrected
-    return { ...item, corrected, correctedBytes: Buffer.byteLength(corrected, 'utf8') }
+    const migration = sqlNames.includes(item.migration) ? item.migration : sqlNames.find(name => readFileSync(new URL(name, migrationDirectory), 'utf8').includes(`\`${corrected}\``)) || item.migration
+    return { ...item, migration, corrected, correctedBytes: Buffer.byteLength(corrected, 'utf8') }
   }).sort((left, right) => left.migration.localeCompare(right.migration) || left.original.localeCompare(right.original))
 }
 
