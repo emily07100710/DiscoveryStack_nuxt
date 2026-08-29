@@ -37,7 +37,7 @@ function discoverSnapshotCorrections() {
   const pattern = /ALTER TABLE `([^`]+)` ADD CONSTRAINT `([^`]+)` FOREIGN KEY \(`([^`]+)`\) REFERENCES `([^`]+)`\(`([^`]+)`\)/gu
   for (const migration of sqlNames) {
     const sql = readFileSync(new URL(migration, migrationDirectory), 'utf8')
-    for (const match of sql.matchAll(pattern)) relationToSql.set(`${match[1]}:${match[3]}:${match[4]}:${match[5]}`, { migration, corrected: match[2] })
+    for (const match of sql.matchAll(pattern)) relationToSql.set(`${match[1]}:${match[3]}:${match[4]}:${match[5]}`, { migration, corrected: Buffer.byteLength(match[2], 'utf8') > 64 ? boundedForeignKeyName(match[1], match[3], match[2]) : match[2] })
   }
   const snapshot = JSON.parse(readFileSync(new URL(currentSnapshotName, metadataDirectory), 'utf8'))
   const corrections = []
@@ -127,7 +127,11 @@ if (!mapping) mapping = { version: 1, policy: 'Preserve an existing bounded SQL 
 if (write) {
   const byOriginal = new Map(mapping.corrections.map(item => [item.original, item]))
   for (const correction of [...discovered, ...snapshotCorrections]) byOriginal.set(correction.original, correction)
-  mapping.corrections = [...byOriginal.values()].sort((left, right) => codeUnitCompare(left.migration, right.migration) || codeUnitCompare(left.original, right.original))
+  mapping.corrections = [...byOriginal.values()].map(item => {
+    const corrected = Buffer.byteLength(item.corrected, 'utf8') > 64 ? boundedForeignKeyName(item.table, item.column, item.original) : item.corrected
+    const migration = sqlNames.includes(item.migration) ? item.migration : sqlNames.find(name => readFileSync(new URL(name, migrationDirectory), 'utf8').includes(`\`${corrected}\``)) || item.migration
+    return { ...item, migration, corrected, correctedBytes: Buffer.byteLength(corrected, 'utf8') }
+  }).sort((left, right) => codeUnitCompare(left.migration, right.migration) || codeUnitCompare(left.original, right.original))
 }
 
 const replacements = new Map(mapping.corrections.map(item => [item.original, item.corrected]))
@@ -145,6 +149,7 @@ if (write) {
     writeFileSync(path, JSON.stringify(normalized, null, 2))
   }
   let schema = rewriteSchema(readFileSync(schemaPath, 'utf8'), mapping.corrections)
+  for (const [original, corrected] of replacements) schema = schema.replaceAll(`name: '${original}'`, `name: '${corrected}'`)
   const legacy = implicitForeignKeyIdentities(schema)
   mapping.schemaPolicy = { newForeignKeysRequireExplicitBoundedNames: true, legacyImplicitForeignKeyCount: legacy.length, legacyImplicitForeignKeysSha256: sha256(legacy.join('\n')) }
   writeFileSync(schemaPath, schema)

@@ -8,6 +8,8 @@ import type { MemoryGeoOutcomeState } from '../server/geo-outcome-model/types'
 import { trustedState } from './support/modelops-fixtures'
 
 const POLICY = { cadence: 'weekly', minimumNewVerifiedCandidates: 200, minimumNewQueryGroups: 30, minimumNewWebsites: 5, minimumObservationSpanDays: 14, allowedModelFamilies: ['regularized_logistic_baseline_v1'], maximumTrainingRunsPerCycle: 1, cooldownHours: 168, shadowEvaluationEnabled: false, expiresAt: null }
+const SCHEDULER_NOW = new Date('2026-08-28T00:00:00.000Z')
+const modelOpsRepository = () => createMemoryModelOpsRepository(undefined, () => new Date(SCHEDULER_NOW))
 
 function remapOwner<T>(value: T, ownerUserId: number): T {
   const clone = structuredClone(value) as unknown
@@ -29,7 +31,7 @@ describe('content-operations:geo-modelops-tick', () => {
   beforeAll(async () => { sourceState = await trustedState() })
 
   it('has exact Nitro task identity and processes at most 25 owners in stable order', async () => {
-    const modelOps = createMemoryModelOpsRepository()
+    const modelOps = modelOpsRepository()
     for (let ownerUserId = 1; ownerUserId <= 30; ownerUserId++) {
       const policy = await createModelOpsPolicy(ownerUserId, POLICY, `scheduler-policy-${ownerUserId}`, modelOps)
       await modelOps.updatePolicy(ownerUserId, policy.policyId, { status: 'enabled', authorizedByOwnerUserId: ownerUserId, authorizedAt: new Date('2026-08-28T00:00:00.000Z').toISOString() })
@@ -47,7 +49,7 @@ describe('content-operations:geo-modelops-tick', () => {
   })
 
   it('blocks malformed multiple active cycles per owner instead of choosing silently', async () => {
-    const modelOps = createMemoryModelOpsRepository()
+    const modelOps = modelOpsRepository()
     const outcome = createMemoryGeoOutcomeRepository()
     const policy = await createModelOpsPolicy(42, { ...POLICY, cooldownHours: 0 }, 'active-cycle-policy', modelOps)
     await modelOps.updatePolicy(42, policy.policyId, { status: 'enabled', authorizedByOwnerUserId: 42, authorizedAt: new Date().toISOString() })
@@ -58,7 +60,7 @@ describe('content-operations:geo-modelops-tick', () => {
   })
 
   it('uses the sole enabled policy when a newer policy draft remains paused', async () => {
-    const modelOps = createMemoryModelOpsRepository()
+    const modelOps = modelOpsRepository()
     const outcome = createMemoryGeoOutcomeRepository()
     const enabled = await createModelOpsPolicy(42, { ...POLICY, cooldownHours: 0 }, 'enabled-policy-version', modelOps)
     await modelOps.updatePolicy(42, enabled.policyId, { status: 'enabled', authorizedByOwnerUserId: 42, authorizedAt: new Date('2026-08-28T00:00:00.000Z').toISOString() })
@@ -74,7 +76,7 @@ describe('content-operations:geo-modelops-tick', () => {
   })
 
   it('fails closed when more than one policy is enabled for the same owner', async () => {
-    const modelOps = createMemoryModelOpsRepository()
+    const modelOps = modelOpsRepository()
     const outcome = createMemoryGeoOutcomeRepository()
     const first = await createModelOpsPolicy(42, { ...POLICY, cooldownHours: 0 }, 'ambiguous-policy-one', modelOps)
     const second = await createModelOpsPolicy(42, { ...POLICY, cooldownHours: 1 }, 'ambiguous-policy-two', modelOps)
@@ -90,7 +92,7 @@ describe('content-operations:geo-modelops-tick', () => {
   it('caps training executions at five and leaves the sixth owner deferred', async () => {
     const ownerIds = [42, 43, 44, 45, 46, 47]
     const outcome = createMemoryGeoOutcomeRepository(combinedState(sourceState, ownerIds))
-    const modelOps = createMemoryModelOpsRepository()
+    const modelOps = modelOpsRepository()
     for (const ownerUserId of ownerIds) {
       const policy = await createModelOpsPolicy(ownerUserId, POLICY, `training-budget-policy-${ownerUserId}`, modelOps)
       await modelOps.updatePolicy(ownerUserId, policy.policyId, { status: 'enabled', authorizedByOwnerUserId: ownerUserId, authorizedAt: new Date().toISOString() })
@@ -99,5 +101,23 @@ describe('content-operations:geo-modelops-tick', () => {
     expect(result.maxTrainingExecutionsPerTick).toBe(5)
     expect(result.trainingExecutions).toBe(5)
     expect(result.processed.some(item => item.ownerUserId === 47 && item.reason === 'training_execution_budget_exhausted')).toBe(true)
+  })
+
+  it('reloads the persisted autonomous execution flag and does not train after it is disabled', async () => {
+    const ownerUserId = 42
+    const state = combinedState(sourceState, [ownerUserId])
+    state.datasets = []; state.datasetMembers = {}; state.trainingRuns = []; state.artifacts = []; state.datasetDecisions = []; state.decisions = []
+    const outcome = createMemoryGeoOutcomeRepository(state)
+    const modelOps = modelOpsRepository()
+    const policy = await createModelOpsPolicy(ownerUserId, { ...POLICY, autonomousExecutionEnabled: true, cooldownHours: 0 }, 'persisted-autonomous-disable', modelOps)
+    await modelOps.updatePolicy(ownerUserId, policy.policyId, { status: 'enabled', authorizedByOwnerUserId: ownerUserId, authorizedAt: '2026-08-28T00:00:00.000Z' })
+    const disabled = await modelOps.updatePolicy(ownerUserId, policy.policyId, { autonomousExecutionEnabled: false })
+    expect(disabled.autonomousExecutionEnabled).toBe(false)
+
+    const result = await runGeoModelOpsTick({ outcomeRepository: outcome, modelOpsRepository: modelOps }, new Date('2026-08-28T00:00:01.000Z'), 'scheduler-disabled-autonomous-worker')
+
+    expect(result.trainingExecutions).toBe(0)
+    expect(await outcome.listTrainingRuns(ownerUserId)).toHaveLength(0)
+    expect((await outcome.listDatasets(ownerUserId)).at(-1)?.status).toBe('ready_for_review')
   })
 })

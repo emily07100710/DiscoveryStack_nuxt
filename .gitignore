@@ -1,6 +1,8 @@
 # Dependencies
 **/node_modules
 .pnpm-store/
+__pycache__/
+*.py[cod]
 
 # Build outputs
 dist/
@@ -46,6 +48,11 @@ pids
 *.seed
 *.pid.lock
 *.bak
+
+# Private page-evidence inputs and outputs (must also live outside Git worktrees)
+page_evidence_runs/
+ml/private/
+*.page-evidence-targets.private.json
 
 # Coverage directory used by tools like istanbul
 coverage/

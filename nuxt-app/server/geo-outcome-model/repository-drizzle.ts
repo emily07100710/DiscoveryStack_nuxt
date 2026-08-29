@@ -388,7 +388,7 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
       return repo.mapDataset(row)
     })
   }
-  async transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetManifest['status'], reviewerUserId: number, reason: string) {
+  async transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetManifest['status'], reviewerUserId: number | null, reason: string) {
     return this.db.transaction(async tx => {
       const repo = new DrizzleGeoOutcomeRepository(tx)
       const current = await repo.getDataset(ownerUserId, manifestId)
