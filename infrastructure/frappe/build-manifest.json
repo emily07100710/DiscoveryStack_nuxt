@@ -1,13 +1,13 @@
 {
   "schemaVersion": "system-factory-image-build-manifest-v1",
-  "status": "local-image-built-and-runtime-authority-verified-production-publication-not-reviewed",
+  "status": "source-changed-image-rebuild-blocked-docker-daemon-unavailable",
   "baseImage": "docker.io/frappe/erpnext:v16.33.0@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd",
   "frappeCommit": "5cba016e86b54b57f34a3864282b92300ef20fb0",
   "erpnextCommit": "b24c9eba551905e256e336ff170a91a92d197a2f",
-  "customAppSha256": "5b7ae5fb1d9ff84e8d77c942fa2c143f888f0dae1906c12b724bd85fe3fba7e7",
+  "customAppSha256": "e2fa36bd04c2eaba39fbc8b74d7e73f51646f882260c694f1958c6ce8a436803",
   "buildRecipeFingerprint": "dabf5882d47dc5cc1fa7487aa753d589b223d225ec38a6d4434e78d5769c4257",
   "builtImageReference": "discoverystack/frappe-system-factory:v1-local",
-  "imageManifestDigest": "sha256:b605100bd1c529f7c3e6ba7c38d184d7d05dfebdc48c102713c4b63d0cd7d7ca",
-  "imageConfigDigest": "sha256:2289518c3c8eb06cfede043d136799b1df58ae74334b3ae170d7d3620ec29ba7",
+  "imageManifestDigest": null,
+  "imageConfigDigest": null,
   "productionApproved": false
 }

@@ -6,7 +6,7 @@ import frappe
 
 from discovery_stack import tenant_operations
 from discovery_stack.compiler import compile_spec
-from discovery_stack.executor import _canonical, _fingerprint, _target_name, apply_compiled_plan, health_snapshot, validate_compiled_plan
+from discovery_stack.executor import _canonical, _fingerprint, _kpi_runtime_names, _target_name, apply_compiled_plan, health_snapshot, validate_compiled_plan
 
 
 def _field(key, label, logical_type, *, options=None, link=None, required=False):
@@ -70,8 +70,40 @@ def _assert_materialized(plan, expected):
     role = _target_name(tenant, "role", expected["role"]); assert frappe.db.exists("Role", role); assert frappe.db.count("Custom DocPerm", {"role": role}) >= 1
     workflow = _target_name(tenant, "workflow", expected["workflow"]); assert frappe.db.exists("Workflow", workflow); assert len(frappe.get_doc("Workflow", workflow).transitions) >= 1
     report = _target_name(tenant, "report", expected["report"]); assert frappe.db.exists("Report", report); assert frappe.get_doc("Report", report).report_type == "Report Builder"
-    view = next(item for item in units if item["kind"] == "view"); assert frappe.db.exists("DiscoveryStack View Definition", {"system_tenant_id": tenant, "view_key": view["key"], "view_kind": expected["view"]})
+    view = next(item for item in units if item["kind"] == "view"); view_name = frappe.db.get_value("DiscoveryStack View Definition", {"system_tenant_id": tenant, "view_key": view["key"], "view_kind": expected["view"]}, "name"); assert view_name; view_doc = frappe.get_doc("DiscoveryStack View Definition", view_name); assert view_doc.materialization_status == ("desk_ready" if expected["view"] in {"list", "form"} else "registry_only")
+    kpi = next(item for item in units if item["kind"] == "kpi"); card, chart = _kpi_runtime_names(tenant, kpi["key"], plan); assert frappe.db.exists("Number Card", card); assert frappe.db.exists("Dashboard Chart", chart)
+    workspace = next(item["target"] for item in first["units"] if item["kind"] == "workspace"); workspace_doc = frappe.get_doc("Workspace", workspace); assert not workspace_doc.public and not workspace_doc.is_hidden; assert role in [row.role for row in workspace_doc.roles]; assert report in [row.link_to for row in workspace_doc.shortcuts]; assert card in [row.number_card_name for row in workspace_doc.number_cards]; assert chart in [row.chart_name for row in workspace_doc.charts]
+    if expected["view"] in {"calendar", "kanban"}: assert targets_absent(workspace_doc.shortcuts, next(item["target"] for item in first["units"] if item["kind"] == "doctype" and item["key"] == view["definition"]["entity"]))
     return first
+
+
+def targets_absent(shortcuts, target):
+    return target not in [row.link_to for row in shortcuts if row.type == "DocType"]
+
+
+def _assert_custom_crud_and_isolation(booking, custom):
+    booking_tenant = booking["tenantBinding"]["systemTenantId"]; custom_tenant = custom["tenantBinding"]["systemTenantId"]
+    booking_target = _target_name(booking_tenant, "doctype", "appointment"); custom_target = _target_name(custom_tenant, "doctype", "asset")
+    booking_role = _target_name(booking_tenant, "role", "booking_manager"); custom_role = _target_name(custom_tenant, "role", "system_manager")
+    users = []
+    for email, role in (("booking-runtime-user@example.invalid", booking_role), ("custom-runtime-user@example.invalid", custom_role)):
+        if frappe.db.exists("User", email): frappe.delete_doc("User", email, ignore_permissions=True)
+        frappe.get_doc({"doctype": "User", "email": email, "first_name": "Disposable Runtime", "enabled": 1, "send_welcome_email": 0, "roles": [{"role": role}]}).insert(ignore_permissions=True); users.append(email)
+    try:
+        assert frappe.has_permission(booking_target, "create", user=users[0]); assert frappe.has_permission(booking_target, "read", user=users[0]); assert frappe.has_permission(booking_target, "write", user=users[0])
+        assert not frappe.has_permission(custom_target, "read", user=users[0]); assert not frappe.has_permission(booking_target, "read", user=users[1])
+        frappe.set_user(users[0]); record = frappe.get_doc({"doctype": booking_target, "starts_at": frappe.utils.now_datetime(), "ends_at": frappe.utils.add_to_date(frappe.utils.now_datetime(), hours=1)}); record.insert(); record.ends_at = frappe.utils.add_to_date(record.starts_at, hours=2); record.save(); assert frappe.get_doc(booking_target, record.name).name == record.name
+        frappe.set_user(users[1]); denied = False
+        try: frappe.get_doc(booking_target, record.name).check_permission("read")
+        except frappe.PermissionError: denied = True
+        assert denied
+        frappe.set_user("Administrator"); frappe.delete_doc(booking_target, record.name, ignore_permissions=True)
+        workspace = _target_name(booking_tenant, "workspace", f"system_{booking['planFingerprint'][:8]}"); assert frappe.has_permission("Workspace", "read", doc=frappe.get_doc("Workspace", workspace), user=users[0])
+    finally:
+        frappe.set_user("Administrator")
+        for email in users:
+            if frappe.db.exists("User", email): frappe.delete_doc("User", email, ignore_permissions=True)
+        frappe.db.commit()
 
 
 def _expect_rejected(plan, fragment):
@@ -88,6 +120,7 @@ def run():
     crm_result = _assert_materialized(crm, {"doctypes": {"lead": ["lead_name", "email_id", "status"], "opportunity": ["title", "opportunity_amount", "status"]}, "role": "crm_manager", "workflow": "lead_lifecycle", "report": "lead_count", "view": "list"})
     booking_result = _assert_materialized(booking, {"doctypes": {"customer": ["customer_name"], "appointment": ["starts_at", "ends_at", "customer", "status"]}, "role": "booking_manager", "workflow": "appointment_lifecycle", "report": "appointment_count", "view": "calendar"})
     custom_result = _assert_materialized(custom, {"doctypes": {"asset": ["title", "quantity", "active", "category"], "asset_note": ["asset", "body"]}, "role": "system_manager", "workflow": "asset_lifecycle", "report": "asset_count", "view": "kanban"})
+    _assert_custom_crud_and_isolation(booking, custom)
 
     upgraded = copy.deepcopy(booking); upgraded["specVersion"] = 2; upgraded["parentFingerprint"] = booking["specFingerprint"]; upgraded["specFingerprint"] = _fingerprint({"booking": "v2"}); upgraded["canonicalSpecJson"] = '{"booking":"v2"}'
     appointment = next(unit for unit in upgraded["materializationManifest"]["units"] if unit["kind"] == "doctype" and unit["key"] == "appointment"); appointment["fields"].append({"key": "notes", "label": "Notes", "type": "long_text", "required": False, "unique": False, "sensitive": False, "readOnly": False, "options": [], "linkEntity": None, "targetField": "notes", "frappeFieldType": "Long Text"})
@@ -121,6 +154,30 @@ def run():
     except Exception as error: assert "stale" in str(error).casefold()
     else: raise AssertionError("Stale plan was accepted.")
 
+    resumable = copy.deepcopy(custom); resumable["tenantBinding"]["systemTenantId"] = "tenant:resume-smoke"; resumable["tenantBinding"]["websiteId"] = "website:resume-smoke"; resumable["specId"] = "spec:resume-smoke"; _rehash(resumable)
+    frappe.flags.discovery_stack_materialization_crash_point = "after_ddl_before_ledger"
+    try: apply_compiled_plan(resumable)
+    except RuntimeError as error: assert "INJECTED" in str(error)
+    else: raise AssertionError("Injected after-DDL interruption did not stop the run.")
+    finally: frappe.flags.discovery_stack_materialization_crash_point = None
+    assert health_snapshot("tenant:resume-smoke")["healthy"] is False; resumed = apply_compiled_plan(resumable); assert resumed["applied"] is True and health_snapshot("tenant:resume-smoke")["healthy"] is True
+
+    activation_resume = copy.deepcopy(custom); activation_resume["tenantBinding"]["systemTenantId"] = "tenant:activation-resume"; activation_resume["tenantBinding"]["websiteId"] = "website:activation-resume"; activation_resume["specId"] = "spec:activation-resume"; _rehash(activation_resume)
+    frappe.flags.discovery_stack_materialization_crash_point = "after_ledger_before_active"
+    try: apply_compiled_plan(activation_resume)
+    except RuntimeError as error: assert "INJECTED" in str(error)
+    else: raise AssertionError("Injected pre-activation interruption did not stop the run.")
+    finally: frappe.flags.discovery_stack_materialization_crash_point = None
+    assert health_snapshot("tenant:activation-resume")["healthy"] is False; apply_compiled_plan(activation_resume); assert health_snapshot("tenant:activation-resume")["healthy"] is True
+
+    permission_interrupt = copy.deepcopy(booking); permission_interrupt["specVersion"] = 3; permission_interrupt["parentFingerprint"] = booking["specFingerprint"]; permission_interrupt["specFingerprint"] = _fingerprint({"booking": "v3-permission-interrupt"}); permission_interrupt["canonicalSpecJson"] = '{"booking":"v3-permission-interrupt"}'; manager = next(unit for unit in permission_interrupt["materializationManifest"]["units"] if unit["kind"] == "role" and unit["key"] == "booking_manager"); next(item for item in manager["permissions"] if item["entity"] == "appointment")["actions"].remove("write"); _rehash(permission_interrupt); before_permissions = copy.deepcopy(frappe.get_all("Custom DocPerm", filters={"role": manager_role}, fields=["parent", "read", "write", "create", "delete"], order_by="parent asc"))
+    frappe.flags.discovery_stack_materialization_crash_point = "permission_replacement"
+    try: apply_compiled_plan(permission_interrupt)
+    except RuntimeError as error: assert "INJECTED" in str(error)
+    else: raise AssertionError("Injected permission replacement interruption did not stop the run.")
+    finally: frappe.flags.discovery_stack_materialization_crash_point = None
+    after_permissions = frappe.get_all("Custom DocPerm", filters={"role": manager_role}, fields=["parent", "read", "write", "create", "delete"], order_by="parent asc"); assert before_permissions == after_permissions; assert health_snapshot("tenant:booking-smoke")["healthy"] is True
+
     view_name = frappe.db.get_value("DiscoveryStack View Definition", {"system_tenant_id": "tenant:booking-smoke", "view_key": "appointment_calendar"}, "name"); view = frappe.get_doc("DiscoveryStack View Definition", view_name); original_fields = view.view_fields; view.view_fields = "[]"; view.save(ignore_permissions=True); frappe.db.commit(); assert health_snapshot("tenant:booking-smoke")["healthy"] is False; view.view_fields = original_fields; view.save(ignore_permissions=True); frappe.db.commit(); assert health_snapshot("tenant:booking-smoke")["healthy"] is True
 
     role_name = _target_name("tenant:booking-smoke", "role", "booking_viewer"); user = frappe.get_doc({"doctype": "User", "email": "materialization-smoke-user@example.invalid", "first_name": "Materialization Smoke", "enabled": 1, "send_welcome_email": 0, "roles": [{"role": role_name}]}); user.insert(ignore_permissions=True)
@@ -132,4 +189,4 @@ def run():
     else: raise AssertionError("Preflight report collision was accepted.")
     assert not frappe.db.exists("DocType", _target_name("tenant:partial-smoke", "doctype", "asset")); assert not frappe.db.exists("DiscoveryStack Tenant Identity", "tenant:partial-smoke"); frappe.delete_doc("Report", conflict_name, ignore_permissions=True); frappe.db.commit()
 
-    return {"ok": True, "templates": {"light_crm": crm_result["unitCount"], "appointment_booking": booking_result["unitCount"], "custom_bounded": custom_result["unitCount"]}, "actualRecords": {"DocType": frappe.db.count("DiscoveryStack Materialized Unit", {"unit_kind": "doctype"}), "Custom DocPerm": frappe.db.count("Custom DocPerm", {"role": ["like", "DS Role %"]}), "Workflow": frappe.db.count("Workflow", {"workflow_name": ["like", "DS Workflow %"]}), "Report": frappe.db.count("Report", {"report_name": ["like", "DS Report %"]}), "View": frappe.db.count("DiscoveryStack View Definition"), "Metric": frappe.db.count("DiscoveryStack Metric Definition"), "Intent": frappe.db.count("DiscoveryStack Disabled Intent")}}
+    return {"ok": True, "templates": {"light_crm": crm_result["unitCount"], "appointment_booking": booking_result["unitCount"], "custom_bounded": custom_result["unitCount"]}, "actualRecords": {"DocType": frappe.db.count("DiscoveryStack Materialized Unit", {"unit_kind": "doctype"}), "Custom DocPerm": frappe.db.count("Custom DocPerm", {"role": ["like", "DS Role %"]}), "Workflow": frappe.db.count("Workflow", {"workflow_name": ["like", "DS Workflow %"]}), "Report": frappe.db.count("Report", {"report_name": ["like", "DS Report %"]}), "Workspace": frappe.db.count("Workspace", {"label": ["like", "DS Workspace %"]}), "Number Card": frappe.db.count("Number Card", {"label": ["like", "DS KPI %"]}), "Dashboard Chart": frappe.db.count("Dashboard Chart", {"chart_name": ["like", "DS Chart %"]}), "View": frappe.db.count("DiscoveryStack View Definition"), "Metric": frappe.db.count("DiscoveryStack Metric Definition"), "Materialization Run": frappe.db.count("DiscoveryStack Materialization Run"), "Materialization Journal": frappe.db.count("DiscoveryStack Materialization Journal"), "Intent": frappe.db.count("DiscoveryStack Disabled Intent")}}

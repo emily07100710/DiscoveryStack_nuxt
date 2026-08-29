@@ -7,5 +7,7 @@ def test_compiler_is_deterministic():
     first = compile_spec(spec)
     assert first == compile_spec(spec)
     assert first["fingerprint"]
-    assert {unit["kind"] for unit in first["units"]} == {"doctype", "role", "view", "report", "kpi"}
+    assert {unit["kind"] for unit in first["units"]} == {"doctype", "role", "view", "report", "kpi", "workspace"}
+    view = next(unit for unit in first["units"] if unit["kind"] == "view")
+    assert view["definition"]["materialization"] == "desk_ready"
     assert canonical_json({"b": 1, "a": 2}) == '{"a":2,"b":1}'

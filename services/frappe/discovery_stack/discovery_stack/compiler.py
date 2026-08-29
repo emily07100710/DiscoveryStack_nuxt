@@ -49,16 +49,17 @@ def compile_spec(spec):
     for workflow in sorted(spec.get("workflows", []), key=lambda item: item["key"]):
         units.append(_unit({"kind": "workflow", **workflow}))
     for view in sorted(spec.get("views", []), key=lambda item: item["key"]):
-        units.append(_unit({"kind": "view", "key": view["key"], "definition": view}))
+        units.append(_unit({"kind": "view", "key": view["key"], "definition": {**view, "materialization": "desk_ready" if view["kind"] in {"list", "form"} else "registry_only"}}))
     for report in sorted(spec.get("reports", []), key=lambda item: item["key"]):
         units.append(_unit({"kind": "report", "key": report["key"], "definition": report}))
     for kpi in sorted(spec.get("kpis", []), key=lambda item: item["key"]):
         units.append(_unit({"kind": "kpi", "key": kpi["key"], "definition": kpi}))
+    units.append(_unit({"kind": "workspace", "key": "tenant_workspace", "definition": {"viewKeys": sorted(item["key"] for item in spec.get("views", [])), "reportKeys": sorted(item["key"] for item in spec.get("reports", [])), "kpiKeys": sorted(item["key"] for item in spec.get("kpis", [])), "roleKeys": sorted(item["key"] for item in spec.get("roles", []))}}))
     for notification in sorted(spec.get("notificationIntents", []), key=lambda item: item["key"]):
         units.append(_unit({"kind": "notification_intent", "key": notification["key"], "definition": {**notification, "effectiveEnabled": False}}))
     for integration in sorted(spec.get("integrationIntents", []), key=lambda item: item["key"]):
         units.append(_unit({"kind": "integration_intent", "key": integration["key"], "definition": {**integration, "effectiveEnabled": False}}))
-    order = {"module": 1, "doctype": 2, "status": 3, "role": 4, "workflow": 5, "view": 6, "report": 7, "kpi": 8, "notification_intent": 9, "integration_intent": 10}
+    order = {"module": 1, "doctype": 2, "status": 3, "role": 4, "workflow": 5, "view": 6, "report": 7, "kpi": 8, "workspace": 9, "notification_intent": 10, "integration_intent": 11}
     units.sort(key=lambda item: (order[item["kind"]], item["key"]))
     manifest_draft = {"schemaVersion": "system-materialization-manifest-v1", "units": units}
     return {**manifest_draft, "fingerprint": sha256(canonical_json(manifest_draft))}

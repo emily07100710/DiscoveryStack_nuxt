@@ -14,9 +14,10 @@ export type CompiledUnit = MaterializationBase & (
   | { kind: 'status'; entity: string; values: string[]; initial: string; terminal: string[] }
   | { kind: 'workflow'; entity: string; transitions: SystemSpec['workflows'][number]['transitions'] }
   | { kind: 'role'; label: string; permissions: Array<{ entity: string; actions: Array<'create' | 'read' | 'write'> }> }
-  | { kind: 'view'; definition: SystemSpec['views'][number] }
+  | { kind: 'view'; definition: SystemSpec['views'][number] & { materialization: 'desk_ready' | 'registry_only' } }
   | { kind: 'report'; definition: SystemSpec['reports'][number] }
   | { kind: 'kpi'; definition: SystemSpec['kpis'][number] }
+  | { kind: 'workspace'; definition: { viewKeys: string[]; reportKeys: string[]; kpiKeys: string[]; roleKeys: string[] } }
   | { kind: 'notification_intent'; definition: SystemSpec['notificationIntents'][number] & { effectiveEnabled: false } }
   | { kind: 'integration_intent'; definition: SystemSpec['integrationIntents'][number] & { effectiveEnabled: false } }
 )
@@ -45,12 +46,13 @@ export function compileSystemSpec(input: unknown): CompiledSystemPlan {
   for (const status of spec.statuses) units.push(unit({ kind: 'status', key: `${status.entity}_statuses`, ...status }))
   for (const role of spec.roles) units.push(unit({ kind: 'role', key: role.key, label: role.label, permissions: role.permissions.map(permission => ({ entity: permission.entity, actions: permission.actions.map(action => action === 'update' ? 'write' as const : action).filter((action): action is 'create' | 'read' | 'write' => ['create', 'read', 'write'].includes(action)) })) }))
   for (const workflow of spec.workflows) units.push(unit({ kind: 'workflow', key: workflow.key, entity: workflow.entity, transitions: workflow.transitions }))
-  for (const view of spec.views) units.push(unit({ kind: 'view', key: view.key, definition: view }))
+  for (const view of spec.views) units.push(unit({ kind: 'view', key: view.key, definition: { ...view, materialization: view.kind === 'list' || view.kind === 'form' ? 'desk_ready' : 'registry_only' } }))
   for (const report of spec.reports) units.push(unit({ kind: 'report', key: report.key, definition: report }))
   for (const kpi of spec.kpis) units.push(unit({ kind: 'kpi', key: kpi.key, definition: kpi }))
+  units.push(unit({ kind: 'workspace', key: 'tenant_workspace', definition: { viewKeys: spec.views.map(item => item.key).sort(), reportKeys: spec.reports.map(item => item.key).sort(), kpiKeys: spec.kpis.map(item => item.key).sort(), roleKeys: spec.roles.map(item => item.key).sort() } }))
   for (const notification of spec.notificationIntents) units.push(unit({ kind: 'notification_intent', key: notification.key, definition: { ...notification, effectiveEnabled: false } }))
   for (const integration of spec.integrationIntents) units.push(unit({ kind: 'integration_intent', key: integration.key, definition: { ...integration, effectiveEnabled: false } }))
-  const order: Record<CompiledUnit['kind'], number> = { module: 1, doctype: 2, status: 3, role: 4, workflow: 5, view: 6, report: 7, kpi: 8, notification_intent: 9, integration_intent: 10 }
+  const order: Record<CompiledUnit['kind'], number> = { module: 1, doctype: 2, status: 3, role: 4, workflow: 5, view: 6, report: 7, kpi: 8, workspace: 9, notification_intent: 10, integration_intent: 11 }
   units.sort((left, right) => order[left.kind] - order[right.kind] || left.key.localeCompare(right.key))
   const manifestDraft = { schemaVersion: MATERIALIZATION_MANIFEST_VERSION, units }
   const materializationManifest = { ...manifestDraft, fingerprint: fingerprint(manifestDraft) }
