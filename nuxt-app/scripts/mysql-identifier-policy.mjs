@@ -8,6 +8,10 @@ const schemaPath = new URL('../server/database/schema.ts', import.meta.url)
 const mappingPath = new URL('../server/database/migrations/mysql-identifier-map.json', import.meta.url)
 const write = process.argv.includes('--write')
 const sqlNames = readdirSync(migrationDirectory).filter(name => /^\d{4}_.+\.sql$/u.test(name)).sort()
+const snapshotNames = readdirSync(metadataDirectory).filter(name => /^\d{4}_snapshot\.json$/u.test(name)).sort()
+const currentSnapshotName = snapshotNames.at(-1)
+if (!currentSnapshotName) throw new Error('At least one Drizzle snapshot is required.')
+const codeUnitCompare = (left, right) => left < right ? -1 : left > right ? 1 : 0
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex') }
 function snake(value) { return value.replace(/([a-z0-9])([A-Z])/gu, '$1_$2').replace(/[^a-zA-Z0-9]+/gu, '_').replace(/^_+|_+$/gu, '').toLowerCase() }
@@ -35,7 +39,7 @@ function discoverSnapshotCorrections() {
     const sql = readFileSync(new URL(migration, migrationDirectory), 'utf8')
     for (const match of sql.matchAll(pattern)) relationToSql.set(`${match[1]}:${match[3]}:${match[4]}:${match[5]}`, { migration, corrected: match[2] })
   }
-  const snapshot = JSON.parse(readFileSync(new URL('0031_snapshot.json', metadataDirectory), 'utf8'))
+  const snapshot = JSON.parse(readFileSync(new URL(currentSnapshotName, metadataDirectory), 'utf8'))
   const corrections = []
   for (const table of Object.values(snapshot.tables)) {
     for (const foreignKey of Object.values(table.foreignKeys || {})) {
@@ -123,7 +127,7 @@ if (!mapping) mapping = { version: 1, policy: 'Preserve an existing bounded SQL 
 if (write) {
   const byOriginal = new Map(mapping.corrections.map(item => [item.original, item]))
   for (const correction of [...discovered, ...snapshotCorrections]) byOriginal.set(correction.original, correction)
-  mapping.corrections = [...byOriginal.values()].sort((left, right) => left.migration.localeCompare(right.migration) || left.original.localeCompare(right.original))
+  mapping.corrections = [...byOriginal.values()].sort((left, right) => codeUnitCompare(left.migration, right.migration) || codeUnitCompare(left.original, right.original))
 }
 
 const replacements = new Map(mapping.corrections.map(item => [item.original, item.corrected]))
@@ -135,7 +139,7 @@ if (write) {
     for (const [original, corrected] of replacements) sql = sql.replaceAll(`\`${original}\``, `\`${corrected}\``)
     writeFileSync(path, sql)
   }
-  for (const snapshot of readdirSync(metadataDirectory).filter(name => /^\d{4}_snapshot\.json$/u.test(name)).sort()) {
+  for (const snapshot of snapshotNames) {
     const path = new URL(snapshot, metadataDirectory)
     const normalized = replaceObjectKeysAndValues(JSON.parse(readFileSync(path, 'utf8')), replacements)
     writeFileSync(path, JSON.stringify(normalized, null, 2))
@@ -185,32 +189,32 @@ for (const correction of mapping.corrections) if (!schema.includes(`name: '${cor
 const legacy = implicitForeignKeyIdentities(schema)
 if (legacy.length !== mapping.schemaPolicy.legacyImplicitForeignKeyCount || sha256(legacy.join('\n')) !== mapping.schemaPolicy.legacyImplicitForeignKeysSha256) errors.push('schema.ts: legacy implicit foreign key baseline changed; new foreign keys must use foreignKey({ name }) with a bounded explicit name.')
 
-const currentSnapshot = readFileSync(new URL('0031_snapshot.json', metadataDirectory), 'utf8')
+const currentSnapshot = readFileSync(new URL(currentSnapshotName, metadataDirectory), 'utf8')
 const currentSnapshotValue = JSON.parse(currentSnapshot)
 const currentForeignKeys = new Map()
 for (const [tableName, table] of Object.entries(currentSnapshotValue.tables)) {
   const tableIdentifiers = new Set()
   for (const [key, index] of Object.entries(table.indexes || {})) {
-    if (key !== index.name) errors.push(`0031 snapshot index key/name mismatch in ${tableName}: ${key}`)
-    if (Buffer.byteLength(index.name, 'utf8') > 64) errors.push(`0031 snapshot index exceeds 64 bytes in ${tableName}: ${index.name}`)
-    if (tableIdentifiers.has(index.name)) errors.push(`0031 snapshot duplicate table identifier in ${tableName}: ${index.name}`)
+    if (key !== index.name) errors.push(`${currentSnapshotName} index key/name mismatch in ${tableName}: ${key}`)
+    if (Buffer.byteLength(index.name, 'utf8') > 64) errors.push(`${currentSnapshotName} index exceeds 64 bytes in ${tableName}: ${index.name}`)
+    if (tableIdentifiers.has(index.name)) errors.push(`${currentSnapshotName} duplicate table identifier in ${tableName}: ${index.name}`)
     tableIdentifiers.add(index.name)
   }
   for (const [key, foreignKey] of Object.entries(table.foreignKeys || {})) {
-    if (key !== foreignKey.name) errors.push(`0031 snapshot foreign key key/name mismatch in ${tableName}: ${key}`)
-    if (Buffer.byteLength(foreignKey.name, 'utf8') > 64) errors.push(`0031 snapshot foreign key exceeds 64 bytes in ${tableName}: ${foreignKey.name}`)
-    if (tableIdentifiers.has(foreignKey.name)) errors.push(`0031 snapshot duplicate table identifier in ${tableName}: ${foreignKey.name}`)
+    if (key !== foreignKey.name) errors.push(`${currentSnapshotName} foreign key key/name mismatch in ${tableName}: ${key}`)
+    if (Buffer.byteLength(foreignKey.name, 'utf8') > 64) errors.push(`${currentSnapshotName} foreign key exceeds 64 bytes in ${tableName}: ${foreignKey.name}`)
+    if (tableIdentifiers.has(foreignKey.name)) errors.push(`${currentSnapshotName} duplicate table identifier in ${tableName}: ${foreignKey.name}`)
     tableIdentifiers.add(foreignKey.name)
     const prior = currentForeignKeys.get(foreignKey.name)
-    if (prior && prior !== tableName) errors.push(`0031 snapshot duplicate schema foreign key: ${foreignKey.name}`)
+    if (prior && prior !== tableName) errors.push(`${currentSnapshotName} duplicate schema foreign key: ${foreignKey.name}`)
     currentForeignKeys.set(foreignKey.name, tableName)
   }
 }
 for (const correction of mapping.corrections) {
-  if (currentSnapshot.includes(correction.original)) errors.push(`0031 snapshot retains legacy name: ${correction.original}`)
-  if (!currentSnapshot.includes(correction.corrected)) errors.push(`0031 snapshot is missing corrected name: ${correction.corrected}`)
+  if (currentSnapshot.includes(correction.original)) errors.push(`${currentSnapshotName} retains legacy name: ${correction.original}`)
+  if (!currentSnapshot.includes(correction.corrected)) errors.push(`${currentSnapshotName} is missing corrected name: ${correction.corrected}`)
   const foreignKey = currentSnapshotValue.tables?.[correction.table]?.foreignKeys?.[correction.corrected]
-  if (!foreignKey || foreignKey.tableTo !== correction.targetTable || foreignKey.columnsFrom?.[0] !== correction.column || foreignKey.columnsTo?.[0] !== correction.targetColumn) errors.push(`0031 snapshot corrected foreign key semantics mismatch: ${correction.corrected}`)
+  if (!foreignKey || foreignKey.tableTo !== correction.targetTable || foreignKey.columnsFrom?.[0] !== correction.column || foreignKey.columnsTo?.[0] !== correction.targetColumn) errors.push(`${currentSnapshotName} corrected foreign key semantics mismatch: ${correction.corrected}`)
 }
 
 if (errors.length) throw new Error(errors.join('\n'))

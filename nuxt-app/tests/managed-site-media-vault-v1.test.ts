@@ -94,4 +94,13 @@ describe('managed-site multi-tenant media vault V1', () => {
   it('requires trash, retention, no active usage and explicit elevated confirmation for permanent deletion', async () => {
     const deps = dependencies(); const ready = await uploadReady(deps); const trashed = await trashMediaAsset(deps.repository, actor(), ready.asset.assetId, new Date('2026-07-01T00:00:00Z')); expect(trashed?.status).toBe('trashed'); expect((await restoreMediaAsset(deps.repository, actor(), ready.asset.assetId, new Date('2026-07-02T00:00:00Z')))?.status).toBe('ready'); await trashMediaAsset(deps.repository, actor(), ready.asset.assetId, new Date('2026-07-01T00:00:00Z')); await deps.repository.setActiveUsageCount(actor(), ready.asset.assetId, 1); await expect(permanentlyDeleteMediaAsset(deps, actor(), { assetId: ready.asset.assetId, confirmation: `DELETE:${ready.asset.assetId}` }, new Date('2026-08-02T00:00:00Z'))).rejects.toThrow(/in-use/i); await deps.repository.setActiveUsageCount(actor(), ready.asset.assetId, 0); const deleted = await permanentlyDeleteMediaAsset(deps, actor(), { assetId: ready.asset.assetId, confirmation: `DELETE:${ready.asset.assetId}` }, new Date('2026-08-02T00:00:00Z')); expect(deleted.asset?.status).toBe('deleted'); expect(deleted.receipt.metadata.objectCount).toBe(6)
   })
+
+  it('keeps deletion pending and records durable cleanup work when object storage fails mid-saga', async () => {
+    const deps = dependencies(); const ready = await uploadReady(deps, actor(), png(), 'delete-recovery-base-01'); await trashMediaAsset(deps.repository, actor(), ready.asset.assetId, new Date('2026-07-01T00:00:00Z'))
+    const unavailableStorage = { ...deps.storage, async deleteObject() { throw new Error('fixture object provider unavailable') } }
+    await expect(permanentlyDeleteMediaAsset({ repository: deps.repository, storage: unavailableStorage }, actor(), { assetId: ready.asset.assetId, confirmation: `DELETE:${ready.asset.assetId}` }, new Date('2026-08-02T00:00:00Z'))).rejects.toMatchObject({ statusCode: 503 })
+    expect(await deps.repository.findAsset(actor(), ready.asset.assetId)).toMatchObject({ status: 'deletion_pending', deletedAt: null })
+    expect((await deps.repository.listEvents(actor())).map(item => item.eventType)).toContain('media_object_cleanup_queued')
+    expect(await deps.repository.getQuota(actor())).toMatchObject({ assetCountUsed: 1, originalBytesUsed: ready.asset.byteSize })
+  })
 })

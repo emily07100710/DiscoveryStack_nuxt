@@ -26,7 +26,7 @@ export interface PageDiff { fromVersion: number; toVersion: number; changedBlock
 
 export interface PageEditorRepository {
   transaction<T>(work: (repository: PageEditorRepository) => Promise<T>): Promise<T>
-  listPages(ownerUserId: number, projectId: number): Promise<PageDocument[]>
+  listPages(ownerUserId: number, projectId: number, options?: { limit?: number; afterRoute?: string; afterPageId?: string }): Promise<PageDocument[]>
   findCurrent(ownerUserId: number, projectId: number, pageId: string): Promise<PageDocument | null>
   findVersion(ownerUserId: number, projectId: number, pageId: string, version: number): Promise<PageDocument | null>
   listVersions(ownerUserId: number, projectId: number, pageId: string): Promise<PageDocument[]>

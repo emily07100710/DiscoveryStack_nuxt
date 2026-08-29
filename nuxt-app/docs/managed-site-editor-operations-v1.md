@@ -69,7 +69,7 @@ Desktop/tablet/mobile projections are deterministic. The first hero image is eag
 - AI: propose and apply-to-draft
 - Owner-only storage connection configuration
 
-The Drizzle scheduler claims at most 20 tenants and 10 jobs per tenant per tick (200 total) with CAS leases, stale recovery, bounded exponential retry and append-only attempt receipts. Its handlers cover upload expiry, processing retry, scheduled visibility, trash-retention notification and publication retry. Any external action is made only through the governed injected storage/scanner/first-party adapter. It never permanently deletes retained assets automatically.
+The Drizzle scheduler claims bounded tenants and jobs per tick with CAS leases, stale recovery, bounded exponential retry and append-only attempt receipts. Its handlers cover durable media-object cleanup, upload expiry, processing retry, scheduled visibility, trash-retention notification and publication retry. Any external action is made only through the governed injected storage/scanner/first-party adapter. It never permanently deletes retained assets automatically; an explicitly confirmed post-retention deletion first enters `deletion_pending`, retries object cleanup, and only then finalizes quota and database state.
 
 Editor media responses strip object keys. Ready thumbnail variants receive ephemeral tenant-scoped signed reads and are rendered in the media grid and bound page blocks. Expiry refreshes workspace authority; signed URLs are never serialized into PageDocument, artifacts or permanent HTML. Preview may label otherwise-valid private or rights-unapproved media as not publishable, while public compilation rejects it.
 

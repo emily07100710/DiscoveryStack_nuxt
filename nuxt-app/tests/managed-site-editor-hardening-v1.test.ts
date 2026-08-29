@@ -11,7 +11,8 @@ import { compilePageDocument } from '../server/managed-sites/page-editor/compile
 import { canonicalFingerprint } from '../server/managed-sites/page-editor/canonical'
 import { createInitialPage } from '../server/managed-sites/page-editor/canonical'
 import { executeDrizzlePagePublicationWork, validateAndExecutePublicationWork } from '../server/managed-sites/page-editor/publication-runtime'
-import { contentOperationPublicationTargets, managedSiteMediaAssets, managedSiteMediaAssetVersions, managedSiteMediaTagLinks, managedSiteMediaUploadSessions, managedSiteMediaUsageBindings, managedSiteMediaVariants, managedSitePagePublicationAttempts, managedSitePagePublicationReceipts, managedSitePagePublicationWorks, managedSitePages, managedSitePageVersions, managedSiteReleaseProjections } from '../server/database/schema'
+import { serializeManagedPageTransport } from '../server/managed-sites/page-editor/transport'
+import { contentOperationPublicationTargets, managedSiteMediaAssets, managedSiteMediaAssetVersions, managedSiteMediaObjects, managedSiteMediaTagLinks, managedSiteMediaUploadSessions, managedSiteMediaUsageBindings, managedSiteMediaVariants, managedSitePagePublicationAttempts, managedSitePagePublicationReceipts, managedSitePagePublicationWorks, managedSitePages, managedSitePageVersions, managedSiteReleaseProjections } from '../server/database/schema'
 import type { MediaAssetProjection } from '../server/managed-sites/media-vault/types'
 import type { PageActor } from '../server/managed-sites/page-editor/types'
 import type { FirstPartyFetch } from '../server/first-party-publishing/types'
@@ -22,7 +23,32 @@ const actor: PageActor = { ownerUserId: 1, projectId: 10, actorUserId: 7, author
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 function asset(overrides: Partial<MediaAssetProjection> = {}): MediaAssetProjection { const digest = sha('asset-v1'); return { ownerUserId: 1, projectId: 10, assetId: 'asset_ready_0001', version: 1, status: 'ready', visibility: 'public', filename: 'hero.jpg', declaredMime: 'image/jpeg', sniffedMime: 'image/jpeg', byteSize: 1024, width: 1600, height: 900, sha256: digest, originalObjectKey: 'tenant/1/site/10/original.jpg', processingFingerprint: sha('processing'), scannerVerdict: 'passed', variants: [{ key: 'small', format: 'webp', width: 640, height: 360, byteSize: 100, sha256: sha('small'), objectKey: 'tenant/1/site/10/small.webp', transformation: { stripMetadata: true, preserveOrientation: true } }, { key: 'large', format: 'webp', width: 1600, height: 900, byteSize: 300, sha256: sha('large'), objectKey: 'tenant/1/site/10/large.webp', transformation: { stripMetadata: true, preserveOrientation: true } }], collectionId: null, tags: [], rightsMetadata: { license: 'customer-confirmed', source: null, photographer: null, consentReference: null, publishAllowed: true, expiresAt: null }, createdAt: now.toISOString(), trashedAt: null, retentionUntil: null, deletedAt: null, ...overrides } }
 function page(media = asset()) { return createInitialPage(actor, { pageId: 'page_home_0001', locale: 'zh-hant', route: '/', contentType: 'home', designThemeId: 'default', designTokenVersion: 'tokens-v1', designTokens: { palette: 'indigo_sand', typeScale: 'balanced', spacing: 'balanced', radius: 'soft', maxWidth: 'standard', contrast: 'aa' }, sections: [{ blockId: 'block_hero_0001', type: 'hero', visible: true, layoutVariant: 'split', data: { title: '首頁', description: '測試發布', alignment: 'left' }, mediaBindingIds: ['binding_hero_0001'], schedule: null }], seo: { title: '首頁', description: '測試首頁發布內容', canonicalPath: '/', noindex: false, ogBindingId: 'binding_hero_0001' }, mediaBindings: [{ bindingId: 'binding_hero_0001', assetId: media.assetId, assetVersion: media.version, assetSha256: media.sha256!, role: 'hero', alt: '首頁主圖', decorative: false, provenance: 'customer' }] }, now) }
-async function publicationFixture(media = asset()) { const document = page(media); const artifact = await compilePageDocument({ actor, document, resolveMedia: async () => media, mode: 'publish', now }); const work: any = { id: 91, ownerUserId: 1, projectId: 10, clientId: 21, pageId: document.pageId, pageVersion: document.version, releaseId: 31, publicationTargetId: 41, operationKind: 'publish', artifact, artifactBytes: Buffer.byteLength(JSON.stringify(artifact)), artifactFingerprint: artifact.artifactFingerprint, mediaSetFingerprint: artifact.mediaSetFingerprint, pageFingerprint: document.fingerprint, contentHash: canonicalFingerprint(artifact), idempotencyKey: 'publish-hardening-0001', requestFingerprint: sha('request'), status: 'leased', attemptCount: 1, maxAttempts: 5, availableAt: now, leaseOwner: 'worker-1', leaseUntil: new Date(now.getTime() + 60_000), lastErrorCode: null, createdAt: now, updatedAt: now }; const target: any = { id: 41, ownerUserId: 1, clientId: 21, websiteId: 'site-10', targetId: 'target-managed-site-10', destinationPublicationIdentity: 'managed-page-home', framework: 'astro', transport: 'first_party_signed_api', targetOrigin: 'https://customer-site.example.tw', contentRoot: 'src/content', defaultBranch: 'main', repositoryOwner: null, repositoryName: null, endpointPath: '/api/first-party/content-ingest', serviceReference: null, credentialReference: 'hmac-key:managed-site-10', allowedContentTypes: ['article'], allowedLanguages: ['zh-hant'], maximumPayloadBytes: 1_000_000, status: 'active', executionEnabled: true, activeSlot: 1, configurationFingerprint: sha('target'), provenance: {}, idempotencyKey: 'target-fixture-01', createdAt: now, updatedAt: now, revokedAt: null }; return { document, artifact, work, target, media } }
+async function publicationFixture(media = asset()) {
+  const document = page(media)
+  const artifact = await compilePageDocument({ actor, document, resolveMedia: async () => media, mode: 'publish', now })
+  const transport = serializeManagedPageTransport(artifact)
+  if (!transport) throw new Error('fixture transport failed')
+  const work: any = {
+    id: 91, ownerUserId: 1, projectId: 10, clientId: 21, pageId: document.pageId, pageVersion: document.version,
+    releaseId: 31, publicationTargetId: 41, operationKind: 'publish', artifact,
+    artifactBytes: Buffer.byteLength(transport), artifactFingerprint: artifact.artifactFingerprint,
+    mediaSetFingerprint: artifact.mediaSetFingerprint, pageFingerprint: document.fingerprint,
+    contentHash: sha(transport), idempotencyKey: 'publish-hardening-0001', requestFingerprint: sha('request'),
+    status: 'leased', attemptCount: 1, maxAttempts: 5, availableAt: now, leaseOwner: 'worker-1',
+    leaseUntil: new Date(now.getTime() + 60_000), lastErrorCode: null, createdAt: now, updatedAt: now,
+  }
+  const target: any = {
+    id: 41, ownerUserId: 1, clientId: 21, websiteId: 'site-10', targetId: 'target-managed-site-10',
+    destinationPublicationIdentity: 'managed-page-home', framework: 'astro', transport: 'first_party_signed_api',
+    targetOrigin: 'https://customer-site.example.tw', contentRoot: 'src/content', defaultBranch: 'main',
+    repositoryOwner: null, repositoryName: null, endpointPath: '/api/first-party/content-ingest',
+    serviceReference: null, credentialReference: 'hmac-key:managed-site-10', allowedContentTypes: ['managed_page'],
+    allowedLanguages: ['zh-hant'], maximumPayloadBytes: 1_000_000, status: 'active', executionEnabled: true,
+    activeSlot: 1, configurationFingerprint: sha('target'), provenance: {}, idempotencyKey: 'target-fixture-01',
+    createdAt: now, updatedAt: now, revokedAt: null,
+  }
+  return { document, artifact, work, target, media }
+}
 
 function publicationDatabase(fixture: Awaited<ReturnType<typeof publicationFixture>>) {
   const state: any = { workStatus: 'leased', pageStatus: 'publishing', publishedVersion: 0, versionStatus: 'draft', receiptStatus: 'publishing', attempts: [] }
@@ -32,17 +58,18 @@ function publicationDatabase(fixture: Awaited<ReturnType<typeof publicationFixtu
     if (table === contentOperationPublicationTargets) return [fixture.target]
     if (table === managedSiteReleaseProjections) return [{ status: 'approved' }]
     if (table === managedSitePagePublicationWorks) return state.workStatus === 'succeeded' ? [] : [fixture.work]
-    if (table === managedSiteMediaAssets) return [{ id: 501, ownerUserId: 1, projectId: 10, assetId: fixture.media.assetId, currentVersion: fixture.media.version, status: fixture.media.status, visibility: fixture.media.visibility, originalFilename: fixture.media.filename, collectionId: null, rightsMetadata: fixture.media.rightsMetadata, createdAt: now, trashedAt: null, retentionUntil: null, deletedAt: null }]
+    if (table === managedSiteMediaAssets) return [{ asset: { id: 501, ownerUserId: 1, projectId: 10, assetId: fixture.media.assetId, currentVersion: fixture.media.version, currentVersionId: 601, status: fixture.media.status, visibility: fixture.media.visibility, originalFilename: fixture.media.filename, collectionId: null, rightsMetadata: fixture.media.rightsMetadata, createdAt: now, trashedAt: null, retentionUntil: null, deletedAt: null }, version: { id: 601, assetId: fixture.media.assetId, declaredMime: fixture.media.declaredMime, sniffedMime: fixture.media.sniffedMime, byteSize: fixture.media.byteSize, width: fixture.media.width, height: fixture.media.height, sha256: fixture.media.sha256, processingFingerprint: fixture.media.processingFingerprint, metadata: { scannerVerdict: fixture.media.scannerVerdict } }, originalObjectKey: fixture.media.originalObjectKey }]
     if (table === managedSiteMediaAssetVersions) return [{ id: 601, declaredMime: fixture.media.declaredMime, sniffedMime: fixture.media.sniffedMime, byteSize: fixture.media.byteSize, width: fixture.media.width, height: fixture.media.height, sha256: fixture.media.sha256, processingFingerprint: fixture.media.processingFingerprint, metadata: { scannerVerdict: fixture.media.scannerVerdict } }]
     if (table === managedSiteMediaUploadSessions) return [{ objectKey: fixture.media.originalObjectKey, declaredMime: fixture.media.declaredMime, declaredBytes: fixture.media.byteSize }]
-    if (table === managedSiteMediaVariants) return fixture.media.variants
+    if (table === managedSiteMediaVariants) return fixture.media.variants.map(variant => ({ ...variant, assetVersionId: 601 }))
+    if (table === managedSiteMediaObjects) return []
     if (table === managedSiteMediaTagLinks) return []
     return []
   }
   const database: any = {
     select() {
       let table: any
-      const builder: any = { from(value: any) { table = value; return builder }, innerJoin() { return builder }, where() { return builder }, orderBy() { return builder }, limit() { return Promise.resolve(rows(table)) }, then(resolve: any, reject: any) { return Promise.resolve(rows(table)).then(resolve, reject) } }
+      const builder: any = { from(value: any) { table = value; return builder }, innerJoin() { return builder }, leftJoin() { return builder }, where() { return builder }, orderBy() { return builder }, limit() { return Promise.resolve(rows(table)) }, then(resolve: any, reject: any) { return Promise.resolve(rows(table)).then(resolve, reject) } }
       return builder
     },
     insert(table: any) {
@@ -84,7 +111,7 @@ describe('managed-site editor P0/P1 hardening', () => {
 
   it('commits AI proposal, budget claim and cost ledger in one transaction and applies proposals atomically', () => { const repository = readFileSync('server/managed-sites/page-editor/ai-repository-drizzle.ts', 'utf8'); const route = readFileSync('server/api/managed-sites/editor/ai/propose.post.ts', 'utf8'); expect(repository).toContain('saveAiProposalAndCommitBudget'); expect(repository).toContain('return database.transaction'); expect(repository).toContain('await saveAiProposal(actor, proposal, transaction)'); expect(repository).toContain('createDrizzleAiBudgetPort(joinedDatabase).commit!'); expect(repository).toContain(".for('update')"); expect(repository).toContain('applyAiProposalToDraft({ repository: joined'); expect(route).toContain('deferBudgetCommit: true'); expect(route).toContain('saveAiProposalAndCommitBudget') })
 
-  it('keeps current draft and last published media in use until all targets verify success', () => { const repository = readFileSync('server/managed-sites/page-editor/repository-drizzle.ts', 'utf8'); const runtime = readFileSync('server/managed-sites/page-editor/publication-runtime.ts', 'utf8'); expect(repository).toContain('publishedVersion: managedSitePages.publishedVersion'); expect(repository).toContain('ne(managedSiteMediaUsageBindings.pageVersion, identity?.publishedVersion || 0)'); expect(runtime).toContain('if (!unfinished.length)'); expect(runtime).toContain('ne(managedSiteMediaUsageBindings.pageVersion, work.pageVersion)') })
+  it('keeps current draft and last published media in use until all targets verify success', () => { const repository = readFileSync('server/managed-sites/page-editor/repository-drizzle.ts', 'utf8'); const runtime = readFileSync('server/managed-sites/page-editor/publication-runtime.ts', 'utf8'); expect(repository).toContain('publishedVersion: managedSitePages.publishedVersion'); expect(repository).toMatch(/ne\(\s*managedSiteMediaUsageBindings\.pageVersion,\s*identity\?\.publishedVersion \|\| 0\s*\)/u); expect(runtime).toContain('if (!unfinished.length)'); expect(runtime).toContain('ne(managedSiteMediaUsageBindings.pageVersion, work.pageVersion)') })
 
   it('connects actual thumbnail, bulk upload, cancellation, crop, restore and version-history UI controls', () => { const editor = readFileSync('pages/customer/managed-sites/editor.vue', 'utf8'); expect(editor).toContain('asset.thumbnailAuthorization.url'); expect(editor).toContain('body: { requests: selected.map'); expect(editor).toContain('cancelUpload(String(name))'); expect(editor).toContain('@click="cropAndUse(asset)"'); expect(editor).toContain('@click="restoreAsset(asset)"'); expect(editor).toContain('@click="showAssetHistory(asset)"') })
 

@@ -1,21 +1,244 @@
-import { createError } from 'h3'
-import { canonicalFingerprint, parsePageDocument } from './canonical'
-import type { CompiledPageArtifact, MediaAuthorityResolver, PageActor, PageBlock, PageDocument, ResponsiveMediaProjection } from './types'
+import { createError } from "h3";
+import { canonicalFingerprint, parsePageDocument } from "./canonical";
+import type {
+  CompiledPageArtifact,
+  MediaAuthorityResolver,
+  PageActor,
+  PageBlock,
+  PageDocument,
+  ResponsiveMediaProjection,
+} from "./types";
 
-const RESPONSIVE: Record<string, { desktop: string; tablet: string; mobile: string }> = {
-  split: { desktop: 'two-column-60-40', tablet: 'two-column-50-50', mobile: 'stack' }, overlay: { desktop: 'overlay-contained', tablet: 'overlay-contained', mobile: 'stack-overlay-safe' }, centered: { desktop: 'centered-wide', tablet: 'centered', mobile: 'centered' }, stacked: { desktop: 'stack-wide', tablet: 'stack', mobile: 'stack' }, cards: { desktop: 'grid-3', tablet: 'grid-2', mobile: 'grid-1' }, list: { desktop: 'list', tablet: 'list', mobile: 'list' }, featured: { desktop: 'featured-grid', tablet: 'grid-2', mobile: 'grid-1' }, editorial: { desktop: 'editorial-grid', tablet: 'grid-2', mobile: 'grid-1' }, masonry: { desktop: 'masonry-4', tablet: 'masonry-2', mobile: 'grid-1' }, grid: { desktop: 'grid-configured', tablet: 'grid-max-3', mobile: 'grid-max-2' }, contained: { desktop: 'carousel-contained', tablet: 'carousel-contained', mobile: 'single-or-scroll' }, edge: { desktop: 'carousel-edge', tablet: 'carousel-contained', mobile: 'single-or-scroll' }, portraits: { desktop: 'grid-4', tablet: 'grid-2', mobile: 'grid-1' }, quotes: { desktop: 'grid-2', tablet: 'grid-2', mobile: 'grid-1' }, accordion: { desktop: 'accordion', tablet: 'accordion', mobile: 'accordion' }, band: { desktop: 'band', tablet: 'band', mobile: 'card' }, card: { desktop: 'card', tablet: 'card', mobile: 'card' }, form: { desktop: 'form-contained', tablet: 'form-contained', mobile: 'form-stack' }, prose: { desktop: 'prose-readable', tablet: 'prose-readable', mobile: 'prose-mobile' }, columns: { desktop: 'prose-columns-2', tablet: 'prose-readable', mobile: 'prose-mobile' }, default: { desktop: 'token-default', tablet: 'token-default', mobile: 'token-default' }, space: { desktop: 'token-space', tablet: 'token-space', mobile: 'token-space' }, line: { desktop: 'token-line', tablet: 'token-line', mobile: 'token-line' }, dots: { desktop: 'token-dots', tablet: 'token-dots', mobile: 'token-dots' },
+const RESPONSIVE: Record<
+  string,
+  { desktop: string; tablet: string; mobile: string }
+> = {
+  split: {
+    desktop: "two-column-60-40",
+    tablet: "two-column-50-50",
+    mobile: "stack",
+  },
+  overlay: {
+    desktop: "overlay-contained",
+    tablet: "overlay-contained",
+    mobile: "stack-overlay-safe",
+  },
+  centered: {
+    desktop: "centered-wide",
+    tablet: "centered",
+    mobile: "centered",
+  },
+  stacked: { desktop: "stack-wide", tablet: "stack", mobile: "stack" },
+  cards: { desktop: "grid-3", tablet: "grid-2", mobile: "grid-1" },
+  list: { desktop: "list", tablet: "list", mobile: "list" },
+  featured: { desktop: "featured-grid", tablet: "grid-2", mobile: "grid-1" },
+  editorial: { desktop: "editorial-grid", tablet: "grid-2", mobile: "grid-1" },
+  masonry: { desktop: "masonry-4", tablet: "masonry-2", mobile: "grid-1" },
+  grid: {
+    desktop: "grid-configured",
+    tablet: "grid-max-3",
+    mobile: "grid-max-2",
+  },
+  contained: {
+    desktop: "carousel-contained",
+    tablet: "carousel-contained",
+    mobile: "single-or-scroll",
+  },
+  edge: {
+    desktop: "carousel-edge",
+    tablet: "carousel-contained",
+    mobile: "single-or-scroll",
+  },
+  portraits: { desktop: "grid-4", tablet: "grid-2", mobile: "grid-1" },
+  quotes: { desktop: "grid-2", tablet: "grid-2", mobile: "grid-1" },
+  accordion: { desktop: "accordion", tablet: "accordion", mobile: "accordion" },
+  band: { desktop: "band", tablet: "band", mobile: "card" },
+  card: { desktop: "card", tablet: "card", mobile: "card" },
+  form: {
+    desktop: "form-contained",
+    tablet: "form-contained",
+    mobile: "form-stack",
+  },
+  prose: {
+    desktop: "prose-readable",
+    tablet: "prose-readable",
+    mobile: "prose-mobile",
+  },
+  columns: {
+    desktop: "prose-columns-2",
+    tablet: "prose-readable",
+    mobile: "prose-mobile",
+  },
+  default: {
+    desktop: "token-default",
+    tablet: "token-default",
+    mobile: "token-default",
+  },
+  space: {
+    desktop: "token-space",
+    tablet: "token-space",
+    mobile: "token-space",
+  },
+  line: { desktop: "token-line", tablet: "token-line", mobile: "token-line" },
+  dots: { desktop: "token-dots", tablet: "token-dots", mobile: "token-dots" },
+};
+function responsive(block: PageBlock) {
+  const value = RESPONSIVE[block.layoutVariant];
+  if (!value)
+    throw createError({
+      statusCode: 422,
+      statusMessage: "Block layout has no deterministic responsive projection.",
+    });
+  if (block.type === "carousel" && (block.data as any).mobileMode === "single")
+    return { ...value, mobile: "single-static-with-controls" };
+  return value;
 }
-function responsive(block: PageBlock) { const value = RESPONSIVE[block.layoutVariant]; if (!value) throw createError({ statusCode: 422, statusMessage: 'Block layout has no deterministic responsive projection.' }); if (block.type === 'carousel' && (block.data as any).mobileMode === 'single') return { ...value, mobile: 'single-static-with-controls' }; return value }
-function publicReference(sha256: string, width: number, format: string): string { return `media-ref:${sha256}:${width}:${format}` }
+function publicReference(
+  sha256: string,
+  width: number,
+  format: string
+): string {
+  return `media-ref:${sha256}:${width}:${format}`;
+}
 
-export async function compilePageDocument(input: { actor: PageActor; document: PageDocument; resolveMedia: MediaAuthorityResolver; mode: 'preview' | 'publish'; now?: Date; generatedAt?: Date }): Promise<CompiledPageArtifact> {
-  const page = parsePageDocument(input.document); if (page.pageId !== input.document.pageId) throw createError({ statusCode: 409, statusMessage: 'Page identity changed during compilation.' })
-  const assets = new Map<string, Awaited<ReturnType<MediaAuthorityResolver>>>(); for (const binding of page.mediaBindings) { const asset = await input.resolveMedia(input.actor, binding); if (!asset || asset.ownerUserId !== input.actor.ownerUserId || asset.projectId !== input.actor.projectId || asset.status !== 'ready' || asset.version !== binding.assetVersion || asset.sha256 !== binding.assetSha256) throw createError({ statusCode: 409, statusMessage: 'Page media binding is not a ready exact version in this tenant and site.' }); if (input.mode === 'publish' && (asset.visibility !== 'public' || binding.provenance === 'ai_suggestion_pending' || !asset.rightsMetadata.publishAllowed || asset.rightsMetadata.expiresAt && Date.parse(asset.rightsMetadata.expiresAt) <= (input.now || new Date()).getTime())) throw createError({ statusCode: 409, statusMessage: 'Private, internal, rights-expired or unapproved media cannot enter a public page artifact.' }); assets.set(binding.bindingId, asset) }
-  let heroMediaClaimed = false
-  const blocks = page.sections.filter(block => block.visible && (!block.schedule || (!block.schedule.visibleFrom || Date.parse(block.schedule.visibleFrom) <= (input.now || new Date()).getTime()) && (!block.schedule.visibleUntil || Date.parse(block.schedule.visibleUntil) > (input.now || new Date()).getTime()))).map(block => {
-    const media: ResponsiveMediaProjection[] = block.mediaBindingIds.map(bindingId => { const binding = page.mediaBindings.find(item => item.bindingId === bindingId)!; const asset = assets.get(bindingId)!; const variants = asset!.variants.filter(variant => ['small', 'medium', 'large', 'original_policy'].includes(variant.key)).sort((a, b) => a.width - b.width); if (!variants.length || !asset!.width || !asset!.height) throw createError({ statusCode: 409, statusMessage: 'Ready media is missing responsive variants or dimensions.' }); const hero = block.type === 'hero' && binding.role === 'hero' && !heroMediaClaimed; if (hero) heroMediaClaimed = true; return { bindingId, assetId: binding.assetId, assetVersion: binding.assetVersion, assetSha256: binding.assetSha256, alt: binding.alt, decorative: binding.decorative, loading: hero ? 'eager' : 'lazy', fetchPriority: hero ? 'high' : 'auto', width: asset!.width, height: asset!.height, srcset: variants.map(variant => `${publicReference(variant.sha256, variant.width, variant.format)} ${variant.width}w`).join(', '), sizes: block.type === 'hero' ? '100vw' : '(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 1200px', focalPoint: binding.focalPoint || null } })
-    return { ...block, responsive: responsive(block), media }
-  })
-  const mediaIdentity = page.mediaBindings.map(binding => ({ bindingId: binding.bindingId, assetId: binding.assetId, version: binding.assetVersion, sha256: binding.assetSha256 })).sort((a, b) => a.bindingId.localeCompare(b.bindingId)); const mediaSetFingerprint = canonicalFingerprint(mediaIdentity)
-  const stable = { version: 'managed-site-page-artifact-v1' as const, pageId: page.pageId, pageVersion: page.version, route: page.route, locale: page.locale, contentType: page.contentType, design: page.designTokens, blocks, seo: page.seo, pageFingerprint: page.fingerprint, mediaSetFingerprint }; return { ...stable, artifactFingerprint: canonicalFingerprint(stable), generatedAt: (input.generatedAt || input.now || new Date()).toISOString() }
+export async function compilePageDocument(input: {
+  actor: PageActor;
+  document: PageDocument;
+  resolveMedia: MediaAuthorityResolver;
+  mode: "preview" | "publish";
+  now?: Date;
+  generatedAt?: Date;
+}): Promise<CompiledPageArtifact> {
+  const page = parsePageDocument(input.document);
+  if (page.pageId !== input.document.pageId)
+    throw createError({
+      statusCode: 409,
+      statusMessage: "Page identity changed during compilation.",
+    });
+  const assets = new Map<string, Awaited<ReturnType<MediaAuthorityResolver>>>();
+  for (const binding of page.mediaBindings) {
+    const asset = await input.resolveMedia(input.actor, binding);
+    if (
+      !asset ||
+      asset.ownerUserId !== input.actor.ownerUserId ||
+      asset.projectId !== input.actor.projectId ||
+      asset.status !== "ready" ||
+      asset.version !== binding.assetVersion ||
+      asset.sha256 !== binding.assetSha256
+    )
+      throw createError({
+        statusCode: 409,
+        statusMessage:
+          "Page media binding is not a ready exact version in this tenant and site.",
+      });
+    if (
+      input.mode === "publish" &&
+      (asset.visibility !== "public" ||
+        binding.provenance === "ai_suggestion_pending" ||
+        !asset.rightsMetadata.publishAllowed ||
+        (asset.rightsMetadata.expiresAt &&
+          Date.parse(asset.rightsMetadata.expiresAt) <=
+            (input.now || new Date()).getTime()))
+    )
+      throw createError({
+        statusCode: 409,
+        statusMessage:
+          "Private, internal, rights-expired or unapproved media cannot enter a public page artifact.",
+      });
+    assets.set(binding.bindingId, asset);
+  }
+  let heroMediaClaimed = false;
+  const blocks = page.sections
+    .filter(
+      block =>
+        block.visible &&
+        (!block.schedule ||
+          ((!block.schedule.visibleFrom ||
+            Date.parse(block.schedule.visibleFrom) <=
+              (input.now || new Date()).getTime()) &&
+            (!block.schedule.visibleUntil ||
+              Date.parse(block.schedule.visibleUntil) >
+                (input.now || new Date()).getTime())))
+    )
+    .map(block => {
+      const media: ResponsiveMediaProjection[] = block.mediaBindingIds.map(
+        bindingId => {
+          const binding = page.mediaBindings.find(
+            item => item.bindingId === bindingId
+          )!;
+          const asset = assets.get(bindingId)!;
+          const variants = asset!.variants
+            .filter(variant =>
+              ["small", "medium", "large", "original_policy"].includes(
+                variant.key
+              )
+            )
+            .sort((a, b) => a.width - b.width);
+          if (!variants.length || !asset!.width || !asset!.height)
+            throw createError({
+              statusCode: 409,
+              statusMessage:
+                "Ready media is missing responsive variants or dimensions.",
+            });
+          const hero =
+            block.type === "hero" &&
+            binding.role === "hero" &&
+            !heroMediaClaimed;
+          if (hero) heroMediaClaimed = true;
+          return {
+            bindingId,
+            assetId: binding.assetId,
+            assetVersion: binding.assetVersion,
+            assetSha256: binding.assetSha256,
+            alt: binding.alt,
+            decorative: binding.decorative,
+            loading: hero ? "eager" : "lazy",
+            fetchPriority: hero ? "high" : "auto",
+            width: asset!.width,
+            height: asset!.height,
+            srcset: variants
+              .map(
+                variant =>
+                  `${publicReference(variant.sha256, variant.width, variant.format)} ${variant.width}w`
+              )
+              .join(", "),
+            sizes:
+              block.type === "hero"
+                ? "100vw"
+                : "(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 1200px",
+            focalPoint: binding.focalPoint || null,
+          };
+        }
+      );
+      return { ...block, responsive: responsive(block), media };
+    });
+  const mediaIdentity = page.mediaBindings
+    .map(binding => ({
+      bindingId: binding.bindingId,
+      assetId: binding.assetId,
+      version: binding.assetVersion,
+      sha256: binding.assetSha256,
+    }))
+    .sort((a, b) =>
+      a.bindingId < b.bindingId ? -1 : a.bindingId > b.bindingId ? 1 : 0
+    );
+  const mediaSetFingerprint = canonicalFingerprint(mediaIdentity);
+  const stable = {
+    version: "managed-site-page-artifact-v1" as const,
+    pageId: page.pageId,
+    pageVersion: page.version,
+    route: page.route,
+    locale: page.locale,
+    contentType: page.contentType,
+    design: page.designTokens,
+    blocks,
+    seo: page.seo,
+    pageFingerprint: page.fingerprint,
+    mediaSetFingerprint,
+  };
+  return {
+    ...stable,
+    artifactFingerprint: canonicalFingerprint(stable),
+    generatedAt: (input.generatedAt || input.now || new Date()).toISOString(),
+  };
 }

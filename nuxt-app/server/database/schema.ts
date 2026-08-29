@@ -1557,6 +1557,7 @@ export const managedSiteMediaAssets = mysqlTable('managedSiteMediaAssets', {
 }, table => [
   uniqueIndex('managed_site_media_asset_id_unique').on(table.assetId),
   index('managed_site_media_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status),
+  index('managed_site_media_asset_tenant_page_idx').on(table.ownerUserId, table.projectId, table.deletedAt, table.createdAt, table.assetId),
 ])
 
 /** Immutable original or replacement lineage for one media asset. */
@@ -1598,7 +1599,7 @@ export const managedSiteMediaObjects = mysqlTable('managedSiteMediaObjects', {
   deletedAt: timestamp('deletedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
-  uniqueIndex('managed_site_media_object_key_unique').on(table.connectionId, table.objectKey),
+  uniqueIndex('managed_site_media_object_version_key_unique').on(table.connectionId, table.assetVersionId, table.objectKey),
   index('managed_site_media_object_tenant_version_idx').on(table.ownerUserId, table.projectId, table.assetVersionId),
 ])
 
@@ -1650,7 +1651,7 @@ export const managedSiteMediaUploadSessions = mysqlTable('managedSiteMediaUpload
   assetId: varchar('assetId', { length: 64 }).notNull(), connectionId: int('connectionId').notNull().references(() => managedSiteStorageConnections.id), objectKey: varchar('objectKey', { length: 512 }).notNull(),
   originalFilename: varchar('originalFilename', { length: 255 }).notNull(), visibility: mysqlEnum('visibility', ['public', 'private', 'internal']).default('private').notNull(), declaredMime: varchar('declaredMime', { length: 160 }).notNull(), declaredBytes: int('declaredBytes').notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
   status: mysqlEnum('status', ['issued', 'uploading', 'uploaded', 'completing', 'completed', 'expired', 'cancelled', 'rejected']).default('issued').notNull(), completionFingerprint: varchar('completionFingerprint', { length: 128 }), quotaOriginalBytesCommitted: int('quotaOriginalBytesCommitted').default(0).notNull(), quotaAssetCountCommitted: int('quotaAssetCountCommitted').default(0).notNull(), expiresAt: timestamp('expiresAt').notNull(), leaseUntil: timestamp('leaseUntil'), completedAt: timestamp('completedAt'), createdAt: timestamp('createdAt').defaultNow().notNull(),
-}, table => [uniqueIndex('managed_site_media_upload_id_unique').on(table.uploadId), uniqueIndex('managed_site_media_upload_idempotency_unique').on(table.ownerUserId, table.projectId, table.idempotencyKey), uniqueIndex('managed_site_media_upload_request_unique').on(table.ownerUserId, table.projectId, table.requestFingerprint)])
+}, table => [uniqueIndex('managed_site_media_upload_id_unique').on(table.uploadId), uniqueIndex('managed_site_media_upload_idempotency_unique').on(table.ownerUserId, table.projectId, table.idempotencyKey), uniqueIndex('managed_site_media_upload_request_unique').on(table.ownerUserId, table.projectId, table.requestFingerprint), index('managed_site_media_upload_asset_status_idx').on(table.ownerUserId, table.projectId, table.assetId, table.status, table.createdAt)])
 
 export const managedSiteMediaProcessingRuns = mysqlTable('managedSiteMediaProcessingRuns', {
   id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), assetVersionId: int('assetVersionId').notNull().references(() => managedSiteMediaAssetVersions.id),
@@ -1662,7 +1663,7 @@ export const managedSiteMediaProcessingRuns = mysqlTable('managedSiteMediaProces
 export const managedSiteMediaEvents = mysqlTable('managedSiteMediaEvents', {
   id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), assetId: varchar('assetId', { length: 64 }), uploadId: varchar('uploadId', { length: 64 }),
   eventType: varchar('eventType', { length: 96 }).notNull(), actorAuthority: varchar('actorAuthority', { length: 160 }).notNull(), beforeFingerprint: varchar('beforeFingerprint', { length: 128 }), afterFingerprint: varchar('afterFingerprint', { length: 128 }), metadata: json('metadata').notNull(), receiptFingerprint: varchar('receiptFingerprint', { length: 128 }).notNull(), occurredAt: timestamp('occurredAt').defaultNow().notNull(),
-}, table => [uniqueIndex('managed_site_media_event_receipt_unique').on(table.receiptFingerprint), index('managed_site_media_event_tenant_time_idx').on(table.ownerUserId, table.projectId, table.occurredAt)])
+}, table => [uniqueIndex('managed_site_media_event_receipt_unique').on(table.receiptFingerprint), index('managed_site_media_event_tenant_time_idx').on(table.ownerUserId, table.projectId, table.occurredAt), index('managed_site_media_event_asset_type_idx').on(table.ownerUserId, table.projectId, table.assetId, table.eventType)])
 
 export const managedSiteMediaQuotaProjections = mysqlTable('managedSiteMediaQuotaProjections', {
   id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), planKey: varchar('planKey', { length: 96 }).notNull(),
@@ -1684,7 +1685,7 @@ export const managedSiteMediaQuotaClaims = mysqlTable('managedSiteMediaQuotaClai
 export const managedSitePages = mysqlTable('managedSitePages', {
   id: int('id').autoincrement().primaryKey(), pageId: varchar('pageId', { length: 64 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
   locale: varchar('locale', { length: 20 }).notNull(), route: varchar('route', { length: 512 }).notNull(), contentType: varchar('contentType', { length: 80 }).notNull(), currentDraftVersion: int('currentDraftVersion').default(0).notNull(), publishedVersion: int('publishedVersion').default(0).notNull(), status: mysqlEnum('status', ['draft', 'preview', 'publishing', 'published', 'failed', 'archived']).default('draft').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
-}, table => [uniqueIndex('managed_site_page_id_unique').on(table.pageId), uniqueIndex('managed_site_page_route_unique').on(table.projectId, table.locale, table.route)])
+}, table => [uniqueIndex('managed_site_page_id_unique').on(table.pageId), uniqueIndex('managed_site_page_route_unique').on(table.projectId, table.locale, table.route), index('managed_site_page_tenant_route_idx').on(table.ownerUserId, table.projectId, table.route, table.pageId)])
 
 /** Append-only validated PageDocument snapshots. */
 export const managedSitePageVersions = mysqlTable('managedSitePageVersions', {
@@ -1719,7 +1720,7 @@ export const managedSitePagePublicationAttempts = mysqlTable('managedSitePagePub
 /** Unified bounded scheduler queue for editor jobs, independent of transport/provider implementations. */
 export const managedSiteEditorJobs = mysqlTable('managedSiteEditorJobs', {
   id: int('id').autoincrement().primaryKey(), jobId: varchar('jobId', { length: 96 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
-  kind: mysqlEnum('kind', ['media_processing', 'scheduled_visibility', 'orphan_upload_expiry', 'trash_retention', 'publish_retry']).notNull(), sourceReference: varchar('sourceReference', { length: 160 }).notNull(), stateFingerprint: varchar('stateFingerprint', { length: 128 }).notNull(), payload: json('payload').notNull(),
+  kind: mysqlEnum('kind', ['media_processing', 'media_object_cleanup', 'scheduled_visibility', 'orphan_upload_expiry', 'trash_retention', 'publish_retry']).notNull(), sourceReference: varchar('sourceReference', { length: 160 }).notNull(), stateFingerprint: varchar('stateFingerprint', { length: 128 }).notNull(), payload: json('payload').notNull(),
   status: mysqlEnum('status', ['queued', 'leased', 'retry_wait', 'succeeded', 'blocked']).default('queued').notNull(), attemptCount: int('attemptCount').default(0).notNull(), maxAttempts: int('maxAttempts').default(5).notNull(), availableAt: timestamp('availableAt').defaultNow().notNull(), leaseOwner: varchar('leaseOwner', { length: 128 }), leaseUntil: timestamp('leaseUntil'), lastErrorCode: varchar('lastErrorCode', { length: 120 }), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [uniqueIndex('managed_site_editor_job_identity_unique').on(table.jobId), uniqueIndex('managed_site_editor_job_source_unique').on(table.kind, table.sourceReference, table.stateFingerprint), index('managed_site_editor_job_due_idx').on(table.status, table.availableAt, table.leaseUntil), index('managed_site_editor_job_tenant_idx').on(table.ownerUserId, table.projectId, table.status)])
 

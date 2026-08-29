@@ -141,7 +141,7 @@ function remoteFrontmatterIdentity(decoded: string): RemoteFrontmatterIdentity {
 }
 
 function buildPutBody(input: FirstPartyAdapterInput, existingSha: string | undefined): string {
-  const artifactBytes = `${input.artifact.frontmatter}\n${input.artifact.body}`
+  const artifactBytes = input.artifact.frontmatter ? `${input.artifact.frontmatter}\n${input.artifact.body}` : input.artifact.body
   const payload = {
     message: input.command.commitMessage,
     content: Buffer.from(artifactBytes, 'utf8').toString('base64'),
@@ -221,7 +221,23 @@ export async function executeGitContentsPublish(input: FirstPartyAdapterInput, d
     if (typeof existingSha !== 'string' || !SHA_PATTERN.test(existingSha)) return blocked('RESPONSE_INVALID', 'GitHub GET response is missing a valid blob SHA')
     const remoteIdentity = remoteFrontmatterIdentity(existingContent)
     if (remoteIdentity.status === 'invalid') return blocked('REMOTE_IDENTITY_COLLISION', 'remote publication frontmatter identity is malformed or ambiguous')
-    const expectedArtifact = `${input.artifact.frontmatter}\n${input.artifact.body}`
+    const expectedArtifact = input.artifact.frontmatter ? `${input.artifact.frontmatter}\n${input.artifact.body}` : input.artifact.body
+    if (existingContent === expectedArtifact) {
+      return {
+        status: 'ok',
+        remoteState: 'idempotent_replay',
+        remote: {
+          publicationId: input.publication.productionDeliverableId,
+          contentHash: input.publication.contentHash,
+          remoteRevision: existingSha,
+          repositoryOwner: input.target.repositoryOwner,
+          repositoryName: input.target.repositoryName,
+          branch: input.target.defaultBranch,
+          path: input.artifact.path,
+          blobSha: existingSha,
+        },
+      }
+    }
     if (remoteIdentity.status === 'present' && remoteIdentity.publicationId === input.publication.productionDeliverableId && remoteIdentity.contentHash === input.publication.contentHash && existingContent === expectedArtifact) {
       return {
         status: 'ok',

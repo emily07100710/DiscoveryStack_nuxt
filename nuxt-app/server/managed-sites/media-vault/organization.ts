@@ -1,44 +1,414 @@
-import { and, asc, eq, inArray, isNull } from 'drizzle-orm'
-import { createError } from 'h3'
-import { getDatabase } from '../../database'
-import { managedSiteMediaAssets, managedSiteMediaAssetVersions, managedSiteMediaCollections, managedSiteMediaTagLinks, managedSiteMediaTags } from '../../database/schema'
-import { stableFingerprint } from '../../seo-geo-core/repository'
-import type { MediaActor, MediaEvent, MediaVaultRepository } from './types'
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { createError } from "h3";
+import { getDatabase } from "../../database";
+import {
+  managedSiteMediaAssets,
+  managedSiteMediaAssetVersions,
+  managedSiteMediaCollections,
+  managedSiteMediaTagLinks,
+  managedSiteMediaTags,
+} from "../../database/schema";
+import { stableFingerprint } from "../../seo-geo-core/repository";
+import type { MediaActor, MediaEvent, MediaVaultRepository } from "./types";
 
-function databaseOrThrow() { const database = getDatabase(); if (!database) throw createError({ statusCode: 503, statusMessage: 'Media organization database is unavailable.' }); return database }
-function key(value: unknown, max = 120): { name: string; canonicalKey: string } { if (typeof value !== 'string') throw createError({ statusCode: 422, statusMessage: 'Media organization name is invalid.' }); const name = value.trim().normalize('NFKC'); const canonicalKey = name.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/gu, ''); if (!name || name.length > max || !canonicalKey || canonicalKey.length > 160) throw createError({ statusCode: 422, statusMessage: 'Media organization name is invalid.' }); return { name, canonicalKey } }
-function mutationKey(value: unknown): string { if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/u.test(value)) throw createError({ statusCode: 422, statusMessage: 'Media organization idempotency key is invalid.' }); return value }
-function insertId(value: unknown): number { const id = Number((value as any)?.[0]?.insertId); if (!Number.isSafeInteger(id) || id < 1) throw createError({ statusCode: 500, statusMessage: 'Media organization identity was not returned.' }); return id }
+function databaseOrThrow() {
+  const database = getDatabase();
+  if (!database)
+    throw createError({
+      statusCode: 503,
+      statusMessage: "Media organization database is unavailable.",
+    });
+  return database;
+}
+function key(
+  value: unknown,
+  max = 120
+): { name: string; canonicalKey: string } {
+  if (typeof value !== "string")
+    throw createError({
+      statusCode: 422,
+      statusMessage: "Media organization name is invalid.",
+    });
+  const name = value.trim().normalize("NFKC");
+  const canonicalKey = name
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-|-$/gu, "");
+  if (!name || name.length > max || !canonicalKey || canonicalKey.length > 160)
+    throw createError({
+      statusCode: 422,
+      statusMessage: "Media organization name is invalid.",
+    });
+  return { name, canonicalKey };
+}
+function mutationKey(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/u.test(value)
+  )
+    throw createError({
+      statusCode: 422,
+      statusMessage: "Media organization idempotency key is invalid.",
+    });
+  return value;
+}
+function insertId(value: unknown): number {
+  const id = Number((value as any)?.[0]?.insertId);
+  if (!Number.isSafeInteger(id) || id < 1)
+    throw createError({
+      statusCode: 500,
+      statusMessage: "Media organization identity was not returned.",
+    });
+  return id;
+}
 
 export async function listMediaOrganization(actor: MediaActor) {
-  const database = databaseOrThrow(); const [collections, tags] = await Promise.all([
-    database.select({ id: managedSiteMediaCollections.id, parentId: managedSiteMediaCollections.parentId, name: managedSiteMediaCollections.name, canonicalKey: managedSiteMediaCollections.canonicalKey }).from(managedSiteMediaCollections).where(and(eq(managedSiteMediaCollections.ownerUserId, actor.ownerUserId), eq(managedSiteMediaCollections.projectId, actor.projectId))).orderBy(asc(managedSiteMediaCollections.name)).limit(500),
-    database.select({ id: managedSiteMediaTags.id, name: managedSiteMediaTags.name, canonicalKey: managedSiteMediaTags.canonicalKey }).from(managedSiteMediaTags).where(and(eq(managedSiteMediaTags.ownerUserId, actor.ownerUserId), eq(managedSiteMediaTags.projectId, actor.projectId))).orderBy(asc(managedSiteMediaTags.name)).limit(500),
-  ]); return { collections, tags }
-}
-
-export async function listMediaAssetVersions(actor: MediaActor, assetId: string) {
-  const database = databaseOrThrow(); const [asset] = await database.select({ assetId: managedSiteMediaAssets.assetId }).from(managedSiteMediaAssets).where(and(eq(managedSiteMediaAssets.ownerUserId, actor.ownerUserId), eq(managedSiteMediaAssets.projectId, actor.projectId), eq(managedSiteMediaAssets.assetId, assetId))).limit(1); if (!asset) throw createError({ statusCode: 404, statusMessage: 'Media asset was not found in this site.' }); return database.select({ version: managedSiteMediaAssetVersions.version, declaredMime: managedSiteMediaAssetVersions.declaredMime, sniffedMime: managedSiteMediaAssetVersions.sniffedMime, byteSize: managedSiteMediaAssetVersions.byteSize, width: managedSiteMediaAssetVersions.width, height: managedSiteMediaAssetVersions.height, sha256: managedSiteMediaAssetVersions.sha256, processingFingerprint: managedSiteMediaAssetVersions.processingFingerprint, parentVersionId: managedSiteMediaAssetVersions.parentVersionId, createdAt: managedSiteMediaAssetVersions.createdAt }).from(managedSiteMediaAssetVersions).where(and(eq(managedSiteMediaAssetVersions.ownerUserId, actor.ownerUserId), eq(managedSiteMediaAssetVersions.projectId, actor.projectId), eq(managedSiteMediaAssetVersions.assetId, assetId))).orderBy(asc(managedSiteMediaAssetVersions.version)).limit(200)
-}
-
-export async function createMediaCollection(actor: MediaActor, input: { name: unknown; parentId?: unknown; idempotencyKey: unknown }) {
-  if (actor.role === 'viewer') throw createError({ statusCode: 403, statusMessage: 'Viewer role cannot create media collections.' }); const database = databaseOrThrow(); const value = key(input.name); const idempotencyKey = mutationKey(input.idempotencyKey); const parentId = input.parentId === null || input.parentId === undefined ? null : Number(input.parentId); if (parentId !== null && (!Number.isSafeInteger(parentId) || parentId < 1)) throw createError({ statusCode: 422, statusMessage: 'Media collection parent is invalid.' })
-  if (parentId !== null) { const [parent] = await database.select({ id: managedSiteMediaCollections.id }).from(managedSiteMediaCollections).where(and(eq(managedSiteMediaCollections.ownerUserId, actor.ownerUserId), eq(managedSiteMediaCollections.projectId, actor.projectId), eq(managedSiteMediaCollections.id, parentId))).limit(1); if (!parent) throw createError({ statusCode: 404, statusMessage: 'Media collection parent was not found in this site.' }) }
-  const [existing] = await database.select().from(managedSiteMediaCollections).where(and(eq(managedSiteMediaCollections.ownerUserId, actor.ownerUserId), eq(managedSiteMediaCollections.projectId, actor.projectId), parentId === null ? isNull(managedSiteMediaCollections.parentId) : eq(managedSiteMediaCollections.parentId, parentId), eq(managedSiteMediaCollections.canonicalKey, value.canonicalKey))).limit(1); if (existing) return { collection: existing, replayed: true, idempotencyKey }
-  const id = insertId(await database.insert(managedSiteMediaCollections).values({ ownerUserId: actor.ownerUserId, projectId: actor.projectId, parentId, ...value })); return { collection: { id, parentId, ...value }, replayed: false, idempotencyKey }
-}
-
-export async function createMediaTag(actor: MediaActor, input: { name: unknown; idempotencyKey: unknown }) {
-  if (actor.role === 'viewer') throw createError({ statusCode: 403, statusMessage: 'Viewer role cannot create media tags.' }); const database = databaseOrThrow(); const value = key(input.name, 80); const idempotencyKey = mutationKey(input.idempotencyKey); const [existing] = await database.select().from(managedSiteMediaTags).where(and(eq(managedSiteMediaTags.ownerUserId, actor.ownerUserId), eq(managedSiteMediaTags.projectId, actor.projectId), eq(managedSiteMediaTags.canonicalKey, value.canonicalKey))).limit(1); if (existing) return { tag: existing, replayed: true, idempotencyKey }; const id = insertId(await database.insert(managedSiteMediaTags).values({ ownerUserId: actor.ownerUserId, projectId: actor.projectId, ...value })); return { tag: { id, ...value }, replayed: false, idempotencyKey }
-}
-
-export async function organizeMediaAsset(repository: MediaVaultRepository, actor: MediaActor, input: { assetId: string; collectionId: number | null; tagIds: number[]; idempotencyKey: unknown }) {
-  if (actor.role === 'viewer') throw createError({ statusCode: 403, statusMessage: 'Viewer role cannot organize media.' }); const idempotencyKey = mutationKey(input.idempotencyKey); const database = databaseOrThrow(); const asset = await repository.findAsset(actor, input.assetId); if (!asset) throw createError({ statusCode: 404, statusMessage: 'Media asset was not found in this site.' }); if (input.collectionId !== null && (!Number.isSafeInteger(input.collectionId) || input.collectionId < 1)) throw createError({ statusCode: 422, statusMessage: 'Media collection is invalid.' }); if (!Array.isArray(input.tagIds) || input.tagIds.length > 50 || input.tagIds.some(id => !Number.isSafeInteger(id) || id < 1) || new Set(input.tagIds).size !== input.tagIds.length) throw createError({ statusCode: 422, statusMessage: 'Media tag selection is invalid.' })
+  const database = databaseOrThrow();
   const [collections, tags] = await Promise.all([
-    input.collectionId === null ? [] : database.select({ id: managedSiteMediaCollections.id }).from(managedSiteMediaCollections).where(and(eq(managedSiteMediaCollections.ownerUserId, actor.ownerUserId), eq(managedSiteMediaCollections.projectId, actor.projectId), eq(managedSiteMediaCollections.id, input.collectionId))).limit(1),
-    input.tagIds.length ? database.select({ id: managedSiteMediaTags.id }).from(managedSiteMediaTags).where(and(eq(managedSiteMediaTags.ownerUserId, actor.ownerUserId), eq(managedSiteMediaTags.projectId, actor.projectId), inArray(managedSiteMediaTags.id, input.tagIds))) : [],
-  ]); if (input.collectionId !== null && collections.length !== 1 || tags.length !== input.tagIds.length) throw createError({ statusCode: 404, statusMessage: 'Media collection or tag was not found in this site.' })
-  const requestFingerprint = stableFingerprint({ version: 'media-organize-v1', ownerUserId: actor.ownerUserId, projectId: actor.projectId, assetId: asset.assetId, collectionId: input.collectionId, tagIds: [...input.tagIds].sort((a, b) => a - b) }); const prior = (await repository.listEvents(actor, asset.assetId)).find(item => item.eventType === 'media_organized' && item.metadata.idempotencyKey === idempotencyKey); if (prior) { if (prior.metadata.requestFingerprint !== requestFingerprint) throw createError({ statusCode: 409, statusMessage: 'Media organization idempotency key collided.' }); return { asset: await repository.findAsset(actor, asset.assetId), receipt: prior, replayed: true } }
-  await database.transaction(async transaction => { await transaction.update(managedSiteMediaAssets).set({ collectionId: input.collectionId }).where(and(eq(managedSiteMediaAssets.ownerUserId, actor.ownerUserId), eq(managedSiteMediaAssets.projectId, actor.projectId), eq(managedSiteMediaAssets.assetId, asset.assetId))); await transaction.delete(managedSiteMediaTagLinks).where(and(eq(managedSiteMediaTagLinks.ownerUserId, actor.ownerUserId), eq(managedSiteMediaTagLinks.projectId, actor.projectId), eq(managedSiteMediaTagLinks.assetId, asset.assetId))); if (input.tagIds.length) await transaction.insert(managedSiteMediaTagLinks).values(input.tagIds.map(tagId => ({ ownerUserId: actor.ownerUserId, projectId: actor.projectId, assetId: asset.assetId, tagId }))) })
-  const receipt: MediaEvent = { eventType: 'media_organized', assetId: asset.assetId, uploadId: null, receiptFingerprint: stableFingerprint({ version: 'media-organize-receipt-v1', ownerUserId: actor.ownerUserId, projectId: actor.projectId, idempotencyKey }), metadata: { idempotencyKey, requestFingerprint, collectionId: input.collectionId, tagIds: input.tagIds }, occurredAt: new Date().toISOString() }; await repository.appendEvent(actor, receipt); return { asset: await repository.findAsset(actor, asset.assetId), receipt, replayed: false }
+    database
+      .select({
+        id: managedSiteMediaCollections.id,
+        parentId: managedSiteMediaCollections.parentId,
+        name: managedSiteMediaCollections.name,
+        canonicalKey: managedSiteMediaCollections.canonicalKey,
+      })
+      .from(managedSiteMediaCollections)
+      .where(
+        and(
+          eq(managedSiteMediaCollections.ownerUserId, actor.ownerUserId),
+          eq(managedSiteMediaCollections.projectId, actor.projectId)
+        )
+      )
+      .orderBy(asc(managedSiteMediaCollections.name))
+      .limit(500),
+    database
+      .select({
+        id: managedSiteMediaTags.id,
+        name: managedSiteMediaTags.name,
+        canonicalKey: managedSiteMediaTags.canonicalKey,
+      })
+      .from(managedSiteMediaTags)
+      .where(
+        and(
+          eq(managedSiteMediaTags.ownerUserId, actor.ownerUserId),
+          eq(managedSiteMediaTags.projectId, actor.projectId)
+        )
+      )
+      .orderBy(asc(managedSiteMediaTags.name))
+      .limit(500),
+  ]);
+  return { collections, tags };
+}
+
+export async function listMediaAssetVersions(
+  actor: MediaActor,
+  assetId: string
+) {
+  const database = databaseOrThrow();
+  const [asset] = await database
+    .select({ assetId: managedSiteMediaAssets.assetId })
+    .from(managedSiteMediaAssets)
+    .where(
+      and(
+        eq(managedSiteMediaAssets.ownerUserId, actor.ownerUserId),
+        eq(managedSiteMediaAssets.projectId, actor.projectId),
+        eq(managedSiteMediaAssets.assetId, assetId)
+      )
+    )
+    .limit(1);
+  if (!asset)
+    throw createError({
+      statusCode: 404,
+      statusMessage: "Media asset was not found in this site.",
+    });
+  return database
+    .select({
+      version: managedSiteMediaAssetVersions.version,
+      declaredMime: managedSiteMediaAssetVersions.declaredMime,
+      sniffedMime: managedSiteMediaAssetVersions.sniffedMime,
+      byteSize: managedSiteMediaAssetVersions.byteSize,
+      width: managedSiteMediaAssetVersions.width,
+      height: managedSiteMediaAssetVersions.height,
+      sha256: managedSiteMediaAssetVersions.sha256,
+      processingFingerprint:
+        managedSiteMediaAssetVersions.processingFingerprint,
+      parentVersionId: managedSiteMediaAssetVersions.parentVersionId,
+      createdAt: managedSiteMediaAssetVersions.createdAt,
+    })
+    .from(managedSiteMediaAssetVersions)
+    .where(
+      and(
+        eq(managedSiteMediaAssetVersions.ownerUserId, actor.ownerUserId),
+        eq(managedSiteMediaAssetVersions.projectId, actor.projectId),
+        eq(managedSiteMediaAssetVersions.assetId, assetId)
+      )
+    )
+    .orderBy(asc(managedSiteMediaAssetVersions.version))
+    .limit(200);
+}
+
+export async function createMediaCollection(
+  actor: MediaActor,
+  input: { name: unknown; parentId?: unknown; idempotencyKey: unknown }
+) {
+  if (actor.role === "viewer")
+    throw createError({
+      statusCode: 403,
+      statusMessage: "Viewer role cannot create media collections.",
+    });
+  const database = databaseOrThrow();
+  const value = key(input.name);
+  const idempotencyKey = mutationKey(input.idempotencyKey);
+  const parentId =
+    input.parentId === null || input.parentId === undefined
+      ? null
+      : Number(input.parentId);
+  if (parentId !== null && (!Number.isSafeInteger(parentId) || parentId < 1))
+    throw createError({
+      statusCode: 422,
+      statusMessage: "Media collection parent is invalid.",
+    });
+  if (parentId !== null) {
+    const [parent] = await database
+      .select({ id: managedSiteMediaCollections.id })
+      .from(managedSiteMediaCollections)
+      .where(
+        and(
+          eq(managedSiteMediaCollections.ownerUserId, actor.ownerUserId),
+          eq(managedSiteMediaCollections.projectId, actor.projectId),
+          eq(managedSiteMediaCollections.id, parentId)
+        )
+      )
+      .limit(1);
+    if (!parent)
+      throw createError({
+        statusCode: 404,
+        statusMessage: "Media collection parent was not found in this site.",
+      });
+  }
+  const [existing] = await database
+    .select()
+    .from(managedSiteMediaCollections)
+    .where(
+      and(
+        eq(managedSiteMediaCollections.ownerUserId, actor.ownerUserId),
+        eq(managedSiteMediaCollections.projectId, actor.projectId),
+        parentId === null
+          ? isNull(managedSiteMediaCollections.parentId)
+          : eq(managedSiteMediaCollections.parentId, parentId),
+        eq(managedSiteMediaCollections.canonicalKey, value.canonicalKey)
+      )
+    )
+    .limit(1);
+  if (existing) return { collection: existing, replayed: true, idempotencyKey };
+  const id = insertId(
+    await database
+      .insert(managedSiteMediaCollections)
+      .values({
+        ownerUserId: actor.ownerUserId,
+        projectId: actor.projectId,
+        parentId,
+        ...value,
+      })
+  );
+  return {
+    collection: { id, parentId, ...value },
+    replayed: false,
+    idempotencyKey,
+  };
+}
+
+export async function createMediaTag(
+  actor: MediaActor,
+  input: { name: unknown; idempotencyKey: unknown }
+) {
+  if (actor.role === "viewer")
+    throw createError({
+      statusCode: 403,
+      statusMessage: "Viewer role cannot create media tags.",
+    });
+  const database = databaseOrThrow();
+  const value = key(input.name, 80);
+  const idempotencyKey = mutationKey(input.idempotencyKey);
+  const [existing] = await database
+    .select()
+    .from(managedSiteMediaTags)
+    .where(
+      and(
+        eq(managedSiteMediaTags.ownerUserId, actor.ownerUserId),
+        eq(managedSiteMediaTags.projectId, actor.projectId),
+        eq(managedSiteMediaTags.canonicalKey, value.canonicalKey)
+      )
+    )
+    .limit(1);
+  if (existing) return { tag: existing, replayed: true, idempotencyKey };
+  const id = insertId(
+    await database
+      .insert(managedSiteMediaTags)
+      .values({
+        ownerUserId: actor.ownerUserId,
+        projectId: actor.projectId,
+        ...value,
+      })
+  );
+  return { tag: { id, ...value }, replayed: false, idempotencyKey };
+}
+
+export async function organizeMediaAsset(
+  repository: MediaVaultRepository,
+  actor: MediaActor,
+  input: {
+    assetId: string;
+    collectionId: number | null;
+    tagIds: number[];
+    idempotencyKey: unknown;
+  }
+) {
+  if (actor.role === "viewer")
+    throw createError({
+      statusCode: 403,
+      statusMessage: "Viewer role cannot organize media.",
+    });
+  const idempotencyKey = mutationKey(input.idempotencyKey);
+  const database = databaseOrThrow();
+  const asset = await repository.findAsset(actor, input.assetId);
+  if (!asset)
+    throw createError({
+      statusCode: 404,
+      statusMessage: "Media asset was not found in this site.",
+    });
+  if (
+    input.collectionId !== null &&
+    (!Number.isSafeInteger(input.collectionId) || input.collectionId < 1)
+  )
+    throw createError({
+      statusCode: 422,
+      statusMessage: "Media collection is invalid.",
+    });
+  if (
+    !Array.isArray(input.tagIds) ||
+    input.tagIds.length > 50 ||
+    input.tagIds.some(id => !Number.isSafeInteger(id) || id < 1) ||
+    new Set(input.tagIds).size !== input.tagIds.length
+  )
+    throw createError({
+      statusCode: 422,
+      statusMessage: "Media tag selection is invalid.",
+    });
+  const [collections, tags] = await Promise.all([
+    input.collectionId === null
+      ? []
+      : database
+          .select({ id: managedSiteMediaCollections.id })
+          .from(managedSiteMediaCollections)
+          .where(
+            and(
+              eq(managedSiteMediaCollections.ownerUserId, actor.ownerUserId),
+              eq(managedSiteMediaCollections.projectId, actor.projectId),
+              eq(managedSiteMediaCollections.id, input.collectionId)
+            )
+          )
+          .limit(1),
+    input.tagIds.length
+      ? database
+          .select({ id: managedSiteMediaTags.id })
+          .from(managedSiteMediaTags)
+          .where(
+            and(
+              eq(managedSiteMediaTags.ownerUserId, actor.ownerUserId),
+              eq(managedSiteMediaTags.projectId, actor.projectId),
+              inArray(managedSiteMediaTags.id, input.tagIds)
+            )
+          )
+      : [],
+  ]);
+  if (
+    (input.collectionId !== null && collections.length !== 1) ||
+    tags.length !== input.tagIds.length
+  )
+    throw createError({
+      statusCode: 404,
+      statusMessage: "Media collection or tag was not found in this site.",
+    });
+  const requestFingerprint = stableFingerprint({
+    version: "media-organize-v1",
+    ownerUserId: actor.ownerUserId,
+    projectId: actor.projectId,
+    assetId: asset.assetId,
+    collectionId: input.collectionId,
+    tagIds: [...input.tagIds].sort((a, b) => a - b),
+  });
+  const prior = (await repository.listEvents(actor, asset.assetId)).find(
+    item =>
+      item.eventType === "media_organized" &&
+      item.metadata.idempotencyKey === idempotencyKey
+  );
+  if (prior) {
+    if (prior.metadata.requestFingerprint !== requestFingerprint)
+      throw createError({
+        statusCode: 409,
+        statusMessage: "Media organization idempotency key collided.",
+      });
+    return {
+      asset: await repository.findAsset(actor, asset.assetId),
+      receipt: prior,
+      replayed: true,
+    };
+  }
+  await database.transaction(async transaction => {
+    await transaction
+      .update(managedSiteMediaAssets)
+      .set({ collectionId: input.collectionId })
+      .where(
+        and(
+          eq(managedSiteMediaAssets.ownerUserId, actor.ownerUserId),
+          eq(managedSiteMediaAssets.projectId, actor.projectId),
+          eq(managedSiteMediaAssets.assetId, asset.assetId)
+        )
+      );
+    await transaction
+      .delete(managedSiteMediaTagLinks)
+      .where(
+        and(
+          eq(managedSiteMediaTagLinks.ownerUserId, actor.ownerUserId),
+          eq(managedSiteMediaTagLinks.projectId, actor.projectId),
+          eq(managedSiteMediaTagLinks.assetId, asset.assetId)
+        )
+      );
+    if (input.tagIds.length)
+      await transaction
+        .insert(managedSiteMediaTagLinks)
+        .values(
+          input.tagIds.map(tagId => ({
+            ownerUserId: actor.ownerUserId,
+            projectId: actor.projectId,
+            assetId: asset.assetId,
+            tagId,
+          }))
+        );
+  });
+  const receipt: MediaEvent = {
+    eventType: "media_organized",
+    assetId: asset.assetId,
+    uploadId: null,
+    receiptFingerprint: stableFingerprint({
+      version: "media-organize-receipt-v1",
+      ownerUserId: actor.ownerUserId,
+      projectId: actor.projectId,
+      idempotencyKey,
+    }),
+    metadata: {
+      idempotencyKey,
+      requestFingerprint,
+      collectionId: input.collectionId,
+      tagIds: input.tagIds,
+    },
+    occurredAt: new Date().toISOString(),
+  };
+  await repository.appendEvent(actor, receipt);
+  return {
+    asset: await repository.findAsset(actor, asset.assetId),
+    receipt,
+    replayed: false,
+  };
 }

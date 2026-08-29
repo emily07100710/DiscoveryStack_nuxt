@@ -6,7 +6,7 @@ const MAX_JOBS_PER_TICK = 10
 const MAX_CONCURRENT_HANDLERS = 5
 const MAX_CLAIMED_WAIT_WAVES = Math.ceil(MAX_JOBS_PER_TICK / MAX_CONCURRENT_HANDLERS)
 export const EDITOR_SCHEDULER_LIMITS = Object.freeze({ maxTenantsPerTick: 10, maxJobsPerTenant: 1, maxJobsPerTick: MAX_JOBS_PER_TICK, maxConcurrentHandlers: MAX_CONCURRENT_HANDLERS, leaseMs: MAX_HANDLER_WALL_TIME_MS * MAX_CLAIMED_WAIT_WAVES + 60_000, maxAttempts: 5 })
-export type EditorJobKind = 'media_processing' | 'scheduled_visibility' | 'orphan_upload_expiry' | 'trash_retention' | 'publish_retry'
+export type EditorJobKind = 'media_processing' | 'media_object_cleanup' | 'scheduled_visibility' | 'orphan_upload_expiry' | 'trash_retention' | 'publish_retry'
 export interface EditorSchedulerJob { jobId: string; ownerUserId: number; projectId: number; kind: EditorJobKind; attempt: number; availableAt: string; leaseUntil: string | null; stateFingerprint: string; sourceReference?: string; payload?: Record<string, unknown> }
 export interface EditorSchedulerPort {
   claim(input: { now: Date; maxTenants: number; maxPerTenant: number; maxTotal: number; leaseUntil: Date }): Promise<EditorSchedulerJob[]>

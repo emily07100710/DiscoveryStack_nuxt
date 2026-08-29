@@ -29,15 +29,16 @@ function publicationIdentity(publication: ApprovedFirstPartyPublication): FirstP
   }
 }
 
-function routeSegment(contentType: ApprovedFirstPartyPublication['contentType']): 'articles' | 'faq' | 'services' | undefined {
-  return contentType === 'article' ? 'articles' : contentType === 'faq' ? 'faq' : contentType === 'service_page' ? 'services' : undefined
+function routeSegment(contentType: ApprovedFirstPartyPublication['contentType']): 'articles' | 'faq' | 'services' | 'pages' | undefined {
+  return contentType === 'article' ? 'articles' : contentType === 'faq' ? 'faq' : contentType === 'service_page' ? 'services' : contentType === 'managed_page' ? 'pages' : undefined
 }
 
 function safeFinalPath(contentRoot: string, language: ApprovedFirstPartyPublication['language'], contentType: ApprovedFirstPartyPublication['contentType'], slug: string): string | undefined {
   const segment = routeSegment(contentType)
   if (language !== 'en' && language !== 'zh-hant') return undefined
   if (segment === undefined) return undefined
-  const path = `${contentRoot}/${language}/${segment}/${slug}.md`
+  const extension = contentType === 'managed_page' ? 'json' : 'md'
+  const path = `${contentRoot}/${language}/${segment}/${slug}.${extension}`
   const segments = path.split('/')
   if (!isValidContentRoot(contentRoot) || !isValidSlug(slug) || segments.some(segment => segment.length === 0 || segment === '.' || segment === '..' || segment.includes('\\') || segment.includes('%'))) return undefined
   if (!path.startsWith(`${contentRoot}/`) || path.includes('//') || path.includes('..')) return undefined
@@ -80,7 +81,7 @@ export function buildFirstPartyMarkdownArtifact(contentRoot: unknown, input: unk
     if (!isValidSha256(publication.evidenceSnapshotHash) || !isValidSha256(publication.contentHash)) return blocked('INVALID_SHA256', 'publication hash is invalid')
     const path = safeFinalPath(contentRoot, publication.language, publication.contentType, publication.slug)
     if (!path) return blocked('ARTIFACT_PATH_INVALID', 'artifact path is outside the content root or contains traversal')
-    const frontmatter = buildFrontmatter(publication)
+    const frontmatter = publication.contentType === 'managed_page' ? '' : buildFrontmatter(publication)
     const bodyBytes = utf8ByteLength(publication.body)
     const calculatedContentHash = createHash('sha256').update(publication.body, 'utf8').digest('hex')
     if (calculatedContentHash !== publication.contentHash) return blocked('CONTENT_HASH_MISMATCH', 'body UTF-8 hash does not match publication contentHash')
@@ -99,7 +100,7 @@ export function buildFirstPartyMarkdownArtifact(contentRoot: unknown, input: unk
       path,
       frontmatter,
       body: publication.body,
-      bytes: utf8ByteLength(`${frontmatter}\n${publication.body}`),
+      bytes: utf8ByteLength(frontmatter ? `${frontmatter}\n${publication.body}` : publication.body),
       contentHash: calculatedContentHash,
       artifactFingerprint,
       publicationIdentity: identity,

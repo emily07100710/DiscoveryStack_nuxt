@@ -11,7 +11,7 @@ import { claimSpecificPagePublicationWork, executeDrizzlePagePublicationWork } f
 import { EDITOR_SCHEDULER_LIMITS, runEditorSchedulerTick, type EditorJobHandlers, type EditorSchedulerJob, type EditorSchedulerPort } from './scheduler'
 
 function rowsAffected(value: unknown): number { return Number((value as any)?.[0]?.affectedRows || 0) }
-export const ORPHAN_UPLOAD_EXPIRY_STATUSES = ['issued', 'uploading', 'uploaded', 'expired'] as const
+export const ORPHAN_UPLOAD_EXPIRY_STATUSES = ['issued', 'uploading', 'uploaded', 'completing', 'expired', 'rejected'] as const
 export function editorJobId(kind: string, source: string, fingerprint: string): string { return `edj_${stableFingerprint({ kind, source, fingerprint }).slice(0, 48)}` }
 function timestamp(value: Date | string | null | undefined): string | null { return value instanceof Date ? value.toISOString() : value ? new Date(value).toISOString() : null }
 export function publicationJobStateFingerprint(work: { status: string; attemptCount: number; availableAt: Date | string; requestFingerprint: string }): string { return stableFingerprint({ version: 'managed-site-publication-source-state-v1', status: work.status, attemptCount: work.attemptCount, availableAt: timestamp(work.availableAt), requestFingerprint: work.requestFingerprint }) }
@@ -46,6 +46,44 @@ export function createDrizzleEditorSchedulerPort(database: any, leaseOwner = `ed
 
 export function createDrizzleEditorHandlers(database: any, now: Date): EditorJobHandlers {
   return {
+    async media_object_cleanup(job) {
+      const objectKeys = Array.isArray(job.payload?.objectKeys)
+        ? job.payload.objectKeys.filter(
+            (value): value is string =>
+              typeof value === 'string' && value.length > 0 && value.length <= 512
+          )
+        : []
+      if (!objectKeys.length || objectKeys.length > 12 || new Set(objectKeys).size !== objectKeys.length)
+        throw Object.assign(new Error('Media cleanup payload is invalid.'), { reasonCode: 'INVALID_CLEANUP_PAYLOAD', terminal: true })
+      const actor = { ownerUserId: job.ownerUserId, projectId: job.projectId, actorUserId: null, authority: 'system_workflow' as const, role: 'platform_owner' as const }
+      const runtime = await resolveEditorRuntime(actor)
+      const receipts: Array<{ objectKey: string; deleted: boolean; receiptReference: string }> = []
+      for (const objectKey of objectKeys) {
+        const deletion = await runtime.storage.deleteObject({ ...actor, objectKey })
+        receipts.push({ objectKey, ...deletion })
+      }
+      const receiptFingerprint = stableFingerprint({ version: 'media-object-cleanup-receipt-v1', jobId: job.jobId, attempt: job.attempt, receipts })
+      await runtime.mediaRepository.appendEvent(actor, { eventType: 'media_object_cleanup_succeeded', assetId: null, uploadId: null, receiptFingerprint, metadata: { sourceReference: job.sourceReference || null, receipts }, occurredAt: now.toISOString() })
+      const finalize = job.payload?.finalizeDeletion as { assetId?: unknown; originalBytes?: unknown } | null | undefined
+      if (finalize) {
+        const assetId = typeof finalize.assetId === 'string' ? finalize.assetId : ''
+        const originalBytes = Number(finalize.originalBytes)
+        if (!assetId || !Number.isSafeInteger(originalBytes) || originalBytes < 0)
+          throw Object.assign(new Error('Media deletion finalizer is invalid.'), { reasonCode: 'INVALID_DELETION_FINALIZER', terminal: true })
+        await runtime.mediaRepository.transaction(async repository => {
+          const fingerprint = stableFingerprint({ version: 'media-permanent-delete-v1', ownerUserId: actor.ownerUserId, projectId: actor.projectId, assetId, originalBytes })
+          const pending = await repository.findAsset(actor, assetId)
+          if (!pending || pending.status !== 'deletion_pending') throw Object.assign(new Error('Asset is not in the exact deletion-pending state.'), { reasonCode: 'STALE_DELETION_AUTHORITY', terminal: true })
+          const persistedOriginalBytes = await repository.getOriginalBytesForAsset(actor, assetId)
+          if (persistedOriginalBytes !== originalBytes) throw Object.assign(new Error('Deletion quota lineage changed before cleanup finalization.'), { reasonCode: 'STALE_DELETION_QUOTA_LINEAGE', terminal: true })
+          await repository.creditQuota(actor, { idempotencyKey: `delete:${assetId}`.slice(0, 128), requestFingerprint: fingerprint, delta: { originalBytes, assetCount: 1 } })
+          const updated = await repository.updateAsset(actor, assetId, { status: 'deleted', deletedAt: now.toISOString() })
+          if (!updated) throw Object.assign(new Error('Deletion-pending asset no longer exists.'), { reasonCode: 'STALE_DELETION_AUTHORITY', terminal: true })
+          await repository.appendEvent(actor, { eventType: 'media_permanently_deleted', assetId, uploadId: null, receiptFingerprint: stableFingerprint({ fingerprint, receipts }), metadata: { objectReceipts: receipts.map(item => item.receiptReference), objectCount: receipts.length, quotaOriginalBytesReleased: originalBytes, quotaAssetCountReleased: 1, recoveredByCleanupJob: true }, occurredAt: now.toISOString() })
+        })
+      }
+      return { outcome: 'media_objects_cleanup_succeeded', externalCalls: runtime.storage.kind === 's3_compatible' }
+    },
     async publish_retry(job) { const work = await claimSpecificPagePublicationWork(database, Number(job.payload?.workId), now, `editor-publication-${job.jobId}`, EDITOR_SCHEDULER_LIMITS.leaseMs); if (!work) return { outcome: 'publication_already_claimed_or_not_due', externalCalls: false }; const result = await executeDrizzlePagePublicationWork(work, { database, now }); if (result.status === 'retry_wait') throw Object.assign(new Error('First-party publication requested retry.'), { reasonCode: 'PUBLICATION_RETRY_WAIT', externalCalls: result.externalCalls }); if (result.status === 'blocked') throw Object.assign(new Error('First-party publication was blocked.'), { reasonCode: 'PUBLICATION_BLOCKED', terminal: true, externalCalls: result.externalCalls }); return { outcome: `publication_${result.status}`, externalCalls: result.externalCalls } },
     async media_processing(job) {
       const runId = Number(job.payload?.processingRunId)

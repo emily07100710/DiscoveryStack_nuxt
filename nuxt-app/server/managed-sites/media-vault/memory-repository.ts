@@ -1,39 +1,450 @@
-import { createError } from 'h3'
-import type { MediaAssetProjection, MediaEvent, MediaQuota, MediaQuotaClaim, MediaQuotaDelta, MediaTenantScope, MediaUploadSession, MediaVaultRepository } from './types'
+import { createError } from "h3";
+import type {
+  MediaAssetProjection,
+  MediaEvent,
+  MediaQuota,
+  MediaQuotaClaim,
+  MediaQuotaDelta,
+  MediaTenantScope,
+  MediaUploadSession,
+  MediaVaultRepository,
+} from "./types";
+import { stableFingerprint } from "../../seo-geo-core/repository";
 
-const scopeKey = (scope: MediaTenantScope) => `${scope.ownerUserId}:${scope.projectId}`
-const compound = (scope: MediaTenantScope, value: string) => `${scopeKey(scope)}:${value}`
-function clone<T>(value: T): T { return structuredClone(value) }
+const scopeKey = (scope: MediaTenantScope) =>
+  `${scope.ownerUserId}:${scope.projectId}`;
+const compound = (scope: MediaTenantScope, value: string) =>
+  `${scopeKey(scope)}:${value}`;
+function clone<T>(value: T): T {
+  return structuredClone(value);
+}
 
-export function createMemoryMediaVaultRepository(initialQuota: Partial<MediaQuota> = {}): MediaVaultRepository {
-  const uploads = new Map<string, MediaUploadSession>(); const assets = new Map<string, MediaAssetProjection>(); const events = new Map<string, MediaEvent[]>(); const quotas = new Map<string, MediaQuota>(); const usages = new Map<string, number>(); const quotaClaims = new Map<string, MediaQuotaClaim>()
-  const defaultQuota = (scope: MediaTenantScope): MediaQuota => ({ maxOriginalBytes: 500 * 1024 * 1024, maxAssetCount: 5000, maxMonthlyUploadBytes: 1024 * 1024 * 1024, maxMonthlyProcessingCount: 5000, originalBytesUsed: 0, assetCountUsed: 0, monthlyUploadBytesUsed: 0, monthlyProcessingCountUsed: 0, periodKey: new Date().toISOString().slice(0, 7), ...initialQuota })
-  let transactionTail = Promise.resolve()
+export function createMemoryMediaVaultRepository(
+  initialQuota: Partial<MediaQuota> = {}
+): MediaVaultRepository {
+  const uploads = new Map<string, MediaUploadSession>();
+  const assets = new Map<string, MediaAssetProjection>();
+  const events = new Map<string, MediaEvent[]>();
+  const quotas = new Map<string, MediaQuota>();
+  const usages = new Map<string, number>();
+  const quotaClaims = new Map<string, MediaQuotaClaim>();
+  const defaultQuota = (scope: MediaTenantScope): MediaQuota => ({
+    maxOriginalBytes: 500 * 1024 * 1024,
+    maxAssetCount: 5000,
+    maxMonthlyUploadBytes: 1024 * 1024 * 1024,
+    maxMonthlyProcessingCount: 5000,
+    originalBytesUsed: 0,
+    assetCountUsed: 0,
+    monthlyUploadBytesUsed: 0,
+    monthlyProcessingCountUsed: 0,
+    periodKey: new Date().toISOString().slice(0, 7),
+    ...initialQuota,
+  });
+  let transactionTail = Promise.resolve();
   const repository: MediaVaultRepository = {
-    async transaction<T>(work: (repository: MediaVaultRepository) => Promise<T>): Promise<T> { let release!: () => void; const preceding = transactionTail; transactionTail = new Promise<void>(resolve => { release = resolve }); await preceding; const snapshot = { uploads: clone([...uploads]), assets: clone([...assets]), events: clone([...events]), quotas: clone([...quotas]), usages: clone([...usages]), quotaClaims: clone([...quotaClaims]) }; try { return await work(repository) } catch (error) { uploads.clear(); assets.clear(); events.clear(); quotas.clear(); usages.clear(); quotaClaims.clear(); for (const [key, value] of snapshot.uploads) uploads.set(key, value); for (const [key, value] of snapshot.assets) assets.set(key, value); for (const [key, value] of snapshot.events) events.set(key, value); for (const [key, value] of snapshot.quotas) quotas.set(key, value); for (const [key, value] of snapshot.usages) usages.set(key, value); for (const [key, value] of snapshot.quotaClaims) quotaClaims.set(key, value); throw error } finally { release() } },
-    async getQuota(scope) { return clone(quotas.get(scopeKey(scope)) || defaultQuota(scope)) }, async saveQuota(scope, quota) { quotas.set(scopeKey(scope), clone(quota)) },
-    async reserveQuota(scope, input) { const quotaKey = scopeKey(scope); const quota = quotas.get(quotaKey) || defaultQuota(scope); const claimKey = `${quotaKey}:${quota.periodKey}:${input.idempotencyKey}`; const existing = quotaClaims.get(claimKey); if (existing) { if (existing.requestFingerprint !== input.requestFingerprint || JSON.stringify(existing.delta) !== JSON.stringify(input.delta)) throw createError({ statusCode: 409, statusMessage: 'Media quota idempotency key collided.' }); return { ...clone(existing), replayed: true } } const next = { ...quota, originalBytesUsed: quota.originalBytesUsed + input.delta.originalBytes, assetCountUsed: quota.assetCountUsed + input.delta.assetCount, monthlyUploadBytesUsed: quota.monthlyUploadBytesUsed + input.delta.uploadBytes, monthlyProcessingCountUsed: quota.monthlyProcessingCountUsed + input.delta.processingCount }; if (next.originalBytesUsed > quota.maxOriginalBytes || next.assetCountUsed > quota.maxAssetCount || next.monthlyUploadBytesUsed > quota.maxMonthlyUploadBytes || next.monthlyProcessingCountUsed > quota.maxMonthlyProcessingCount) throw createError({ statusCode: 413, statusMessage: 'Media quota would be exceeded.' }); quotas.set(quotaKey, next); const claim: MediaQuotaClaim = { idempotencyKey: input.idempotencyKey, requestFingerprint: input.requestFingerprint, periodKey: quota.periodKey, delta: clone(input.delta), status: 'reserved', replayed: false }; quotaClaims.set(claimKey, claim); return clone(claim) },
-    async settleQuota(scope, input) { const quotaKey = scopeKey(scope); const quota = quotas.get(quotaKey) || defaultQuota(scope); const claimKey = `${quotaKey}:${quota.periodKey}:${input.idempotencyKey}`; const claim = quotaClaims.get(claimKey); if (!claim || claim.requestFingerprint !== input.requestFingerprint) throw createError({ statusCode: 409, statusMessage: 'Media quota reservation was not found or collided.' }); if (claim.status === 'released') throw createError({ statusCode: 409, statusMessage: 'Released media quota cannot be committed.' }); if (claim.status === 'committed') return { ...clone(claim), replayed: true }; const remainder = (key: keyof MediaQuotaDelta) => claim.delta[key] - input.committed[key]; if (Object.keys(input.committed).some(key => input.committed[key as keyof MediaQuotaDelta] < 0 || remainder(key as keyof MediaQuotaDelta) < 0)) throw createError({ statusCode: 409, statusMessage: 'Media quota settlement exceeds its reservation.' }); quotas.set(quotaKey, { ...quota, originalBytesUsed: quota.originalBytesUsed - remainder('originalBytes'), assetCountUsed: quota.assetCountUsed - remainder('assetCount'), monthlyUploadBytesUsed: quota.monthlyUploadBytesUsed - remainder('uploadBytes'), monthlyProcessingCountUsed: quota.monthlyProcessingCountUsed - remainder('processingCount') }); const settled: MediaQuotaClaim = { ...claim, delta: clone(input.committed), status: 'committed', replayed: false }; quotaClaims.set(claimKey, settled); return clone(settled) },
-    async releaseQuota(scope, input) { const quotaKey = scopeKey(scope); const quota = quotas.get(quotaKey) || defaultQuota(scope); const claimKey = `${quotaKey}:${quota.periodKey}:${input.idempotencyKey}`; const claim = quotaClaims.get(claimKey); if (!claim || claim.requestFingerprint !== input.requestFingerprint) throw createError({ statusCode: 409, statusMessage: 'Media quota reservation was not found or collided.' }); if (claim.status === 'released') return { ...clone(claim), replayed: true }; if (claim.status === 'committed') throw createError({ statusCode: 409, statusMessage: 'Committed media quota cannot be released.' }); quotas.set(quotaKey, { ...quota, originalBytesUsed: quota.originalBytesUsed - claim.delta.originalBytes, assetCountUsed: quota.assetCountUsed - claim.delta.assetCount, monthlyUploadBytesUsed: quota.monthlyUploadBytesUsed - claim.delta.uploadBytes, monthlyProcessingCountUsed: quota.monthlyProcessingCountUsed - claim.delta.processingCount }); const released: MediaQuotaClaim = { ...claim, status: 'released', replayed: false }; quotaClaims.set(claimKey, released); return clone(released) },
-    async creditQuota(scope, input) { const quotaKey = scopeKey(scope); const quota = quotas.get(quotaKey) || defaultQuota(scope); const claimKey = `${quotaKey}:${quota.periodKey}:${input.idempotencyKey}`; const delta = { originalBytes: input.delta.originalBytes, assetCount: input.delta.assetCount, uploadBytes: 0, processingCount: 0 }; const existing = quotaClaims.get(claimKey); if (existing) { if (existing.requestFingerprint !== input.requestFingerprint || JSON.stringify(existing.delta) !== JSON.stringify(delta) || existing.status !== 'committed') throw createError({ statusCode: 409, statusMessage: 'Media quota credit idempotency key collided.' }); return { ...clone(existing), replayed: true } } if (delta.originalBytes < 0 || delta.assetCount < 0 || quota.originalBytesUsed < delta.originalBytes || quota.assetCountUsed < delta.assetCount) throw createError({ statusCode: 409, statusMessage: 'Media quota credit exceeds committed usage.' }); quotas.set(quotaKey, { ...quota, originalBytesUsed: quota.originalBytesUsed - delta.originalBytes, assetCountUsed: quota.assetCountUsed - delta.assetCount }); const claim: MediaQuotaClaim = { idempotencyKey: input.idempotencyKey, requestFingerprint: input.requestFingerprint, periodKey: quota.periodKey, delta, status: 'committed', replayed: false }; quotaClaims.set(claimKey, claim); return clone(claim) },
-    async findUploadById(scope, uploadId) { const value = uploads.get(compound(scope, uploadId)); return value ? clone(value) : null },
-    async findUploadByIdempotency(scope, idempotencyKey) { const value = [...uploads.values()].find(item => scopeKey(item) === scopeKey(scope) && item.idempotencyKey === idempotencyKey); return value ? clone(value) : null },
-    async insertUpload(upload) { const key = compound(upload, upload.uploadId); if (uploads.has(key)) throw createError({ statusCode: 409, statusMessage: 'Media upload identity collided.' }); uploads.set(key, clone(upload)) },
-    async updateUpload(scope, uploadId, patch) { const key = compound(scope, uploadId); const value = uploads.get(key); if (!value) return null; const updated = { ...value, ...clone(patch), ownerUserId: value.ownerUserId, projectId: value.projectId, uploadId: value.uploadId }; uploads.set(key, updated); return clone(updated) },
-    async claimUploadStatus(scope, uploadId, from, to) { const key = compound(scope, uploadId); const value = uploads.get(key); if (!value || !from.includes(value.status)) return false; uploads.set(key, { ...value, status: to }); return true },
-    async findAsset(scope, assetId) { const value = assets.get(compound(scope, assetId)); return value ? clone(value) : null },
-    async findReadyAssetByHash(scope, sha256) { const value = [...assets.values()].find(item => scopeKey(item) === scopeKey(scope) && item.sha256 === sha256 && item.status === 'ready'); return value ? clone(value) : null },
-    async listAssets(scope) { return [...assets.values()].filter(item => scopeKey(item) === scopeKey(scope) && item.status !== 'deleted').map(clone).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) },
-    async insertAsset(asset) { const key = compound(asset, asset.assetId); if (assets.has(key)) throw createError({ statusCode: 409, statusMessage: 'Media asset identity collided.' }); assets.set(key, clone(asset)) },
-    async updateAsset(scope, assetId, patch) { const key = compound(scope, assetId); const value = assets.get(key); if (!value) return null; const updated = { ...value, ...clone(patch), ownerUserId: value.ownerUserId, projectId: value.projectId, assetId: value.assetId }; assets.set(key, updated); return clone(updated) },
-    async appendReplacementVersion(scope, replacement) { const key = compound(scope, replacement.assetId); const current = assets.get(key); if (!current || replacement.version !== current.version + 1) return null; assets.set(key, clone(replacement)); return clone(replacement) },
-    async claimAssetStatus(scope, assetId, from, to) { const key = compound(scope, assetId); const value = assets.get(key); if (!value || !from.includes(value.status)) return false; assets.set(key, { ...value, status: to }); return true },
-    async listObjectKeys(scope, assetId) { const asset = assets.get(compound(scope, assetId)); return asset ? [asset.originalObjectKey, ...asset.variants.map(item => item.objectKey)] : [] },
-    async getOriginalBytesForAsset(scope, assetId) { return [...uploads.values()].filter(item => item.ownerUserId === scope.ownerUserId && item.projectId === scope.projectId && item.assetId === assetId && item.status === 'completed').reduce((sum, item) => sum + item.quotaOriginalBytesCommitted, 0) },
+    async transaction<T>(
+      work: (repository: MediaVaultRepository) => Promise<T>
+    ): Promise<T> {
+      let release!: () => void;
+      const preceding = transactionTail;
+      transactionTail = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      await preceding;
+      const snapshot = {
+        uploads: clone([...uploads]),
+        assets: clone([...assets]),
+        events: clone([...events]),
+        quotas: clone([...quotas]),
+        usages: clone([...usages]),
+        quotaClaims: clone([...quotaClaims]),
+      };
+      try {
+        return await work(repository);
+      } catch (error) {
+        uploads.clear();
+        assets.clear();
+        events.clear();
+        quotas.clear();
+        usages.clear();
+        quotaClaims.clear();
+        for (const [key, value] of snapshot.uploads) uploads.set(key, value);
+        for (const [key, value] of snapshot.assets) assets.set(key, value);
+        for (const [key, value] of snapshot.events) events.set(key, value);
+        for (const [key, value] of snapshot.quotas) quotas.set(key, value);
+        for (const [key, value] of snapshot.usages) usages.set(key, value);
+        for (const [key, value] of snapshot.quotaClaims)
+          quotaClaims.set(key, value);
+        throw error;
+      } finally {
+        release();
+      }
+    },
+    async getQuota(scope) {
+      return clone(quotas.get(scopeKey(scope)) || defaultQuota(scope));
+    },
+    async saveQuota(scope, quota) {
+      quotas.set(scopeKey(scope), clone(quota));
+    },
+    async reserveQuota(scope, input) {
+      const quotaKey = scopeKey(scope);
+      const quota = quotas.get(quotaKey) || defaultQuota(scope);
+      const claimKey = `${quotaKey}:${quota.periodKey}:${input.idempotencyKey}`;
+      const existing = quotaClaims.get(claimKey);
+      if (existing) {
+        if (
+          existing.requestFingerprint !== input.requestFingerprint ||
+          JSON.stringify(existing.delta) !== JSON.stringify(input.delta)
+        )
+          throw createError({
+            statusCode: 409,
+            statusMessage: "Media quota idempotency key collided.",
+          });
+        return { ...clone(existing), replayed: true };
+      }
+      const next = {
+        ...quota,
+        originalBytesUsed: quota.originalBytesUsed + input.delta.originalBytes,
+        assetCountUsed: quota.assetCountUsed + input.delta.assetCount,
+        monthlyUploadBytesUsed:
+          quota.monthlyUploadBytesUsed + input.delta.uploadBytes,
+        monthlyProcessingCountUsed:
+          quota.monthlyProcessingCountUsed + input.delta.processingCount,
+      };
+      if (
+        next.originalBytesUsed > quota.maxOriginalBytes ||
+        next.assetCountUsed > quota.maxAssetCount ||
+        next.monthlyUploadBytesUsed > quota.maxMonthlyUploadBytes ||
+        next.monthlyProcessingCountUsed > quota.maxMonthlyProcessingCount
+      )
+        throw createError({
+          statusCode: 413,
+          statusMessage: "Media quota would be exceeded.",
+        });
+      quotas.set(quotaKey, next);
+      const claim: MediaQuotaClaim = {
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: input.requestFingerprint,
+        periodKey: quota.periodKey,
+        delta: clone(input.delta),
+        status: "reserved",
+        replayed: false,
+      };
+      quotaClaims.set(claimKey, claim);
+      return clone(claim);
+    },
+    async settleQuota(scope, input) {
+      const quotaKey = scopeKey(scope);
+      const quota = quotas.get(quotaKey) || defaultQuota(scope);
+      const claimKey = `${quotaKey}:${quota.periodKey}:${input.idempotencyKey}`;
+      const claim = quotaClaims.get(claimKey);
+      if (!claim || claim.requestFingerprint !== input.requestFingerprint)
+        throw createError({
+          statusCode: 409,
+          statusMessage: "Media quota reservation was not found or collided.",
+        });
+      if (claim.status === "released")
+        throw createError({
+          statusCode: 409,
+          statusMessage: "Released media quota cannot be committed.",
+        });
+      if (claim.status === "committed")
+        return { ...clone(claim), replayed: true };
+      const remainder = (key: keyof MediaQuotaDelta) =>
+        claim.delta[key] - input.committed[key];
+      if (
+        Object.keys(input.committed).some(
+          key =>
+            input.committed[key as keyof MediaQuotaDelta] < 0 ||
+            remainder(key as keyof MediaQuotaDelta) < 0
+        )
+      )
+        throw createError({
+          statusCode: 409,
+          statusMessage: "Media quota settlement exceeds its reservation.",
+        });
+      quotas.set(quotaKey, {
+        ...quota,
+        originalBytesUsed: quota.originalBytesUsed - remainder("originalBytes"),
+        assetCountUsed: quota.assetCountUsed - remainder("assetCount"),
+        monthlyUploadBytesUsed:
+          quota.monthlyUploadBytesUsed - remainder("uploadBytes"),
+        monthlyProcessingCountUsed:
+          quota.monthlyProcessingCountUsed - remainder("processingCount"),
+      });
+      const settled: MediaQuotaClaim = {
+        ...claim,
+        delta: clone(input.committed),
+        status: "committed",
+        replayed: false,
+      };
+      quotaClaims.set(claimKey, settled);
+      return clone(settled);
+    },
+    async releaseQuota(scope, input) {
+      const quotaKey = scopeKey(scope);
+      const quota = quotas.get(quotaKey) || defaultQuota(scope);
+      const claimKey = `${quotaKey}:${quota.periodKey}:${input.idempotencyKey}`;
+      const claim = quotaClaims.get(claimKey);
+      if (!claim || claim.requestFingerprint !== input.requestFingerprint)
+        throw createError({
+          statusCode: 409,
+          statusMessage: "Media quota reservation was not found or collided.",
+        });
+      if (claim.status === "released")
+        return { ...clone(claim), replayed: true };
+      if (claim.status === "committed")
+        throw createError({
+          statusCode: 409,
+          statusMessage: "Committed media quota cannot be released.",
+        });
+      quotas.set(quotaKey, {
+        ...quota,
+        originalBytesUsed: quota.originalBytesUsed - claim.delta.originalBytes,
+        assetCountUsed: quota.assetCountUsed - claim.delta.assetCount,
+        monthlyUploadBytesUsed:
+          quota.monthlyUploadBytesUsed - claim.delta.uploadBytes,
+        monthlyProcessingCountUsed:
+          quota.monthlyProcessingCountUsed - claim.delta.processingCount,
+      });
+      const released: MediaQuotaClaim = {
+        ...claim,
+        status: "released",
+        replayed: false,
+      };
+      quotaClaims.set(claimKey, released);
+      return clone(released);
+    },
+    async creditQuota(scope, input) {
+      const quotaKey = scopeKey(scope);
+      const quota = quotas.get(quotaKey) || defaultQuota(scope);
+      const claimKey = `${quotaKey}:${quota.periodKey}:${input.idempotencyKey}`;
+      const delta = {
+        originalBytes: input.delta.originalBytes,
+        assetCount: input.delta.assetCount,
+        uploadBytes: 0,
+        processingCount: 0,
+      };
+      const existing = quotaClaims.get(claimKey);
+      if (existing) {
+        if (
+          existing.requestFingerprint !== input.requestFingerprint ||
+          JSON.stringify(existing.delta) !== JSON.stringify(delta) ||
+          existing.status !== "committed"
+        )
+          throw createError({
+            statusCode: 409,
+            statusMessage: "Media quota credit idempotency key collided.",
+          });
+        return { ...clone(existing), replayed: true };
+      }
+      if (
+        delta.originalBytes < 0 ||
+        delta.assetCount < 0 ||
+        quota.originalBytesUsed < delta.originalBytes ||
+        quota.assetCountUsed < delta.assetCount
+      )
+        throw createError({
+          statusCode: 409,
+          statusMessage: "Media quota credit exceeds committed usage.",
+        });
+      quotas.set(quotaKey, {
+        ...quota,
+        originalBytesUsed: quota.originalBytesUsed - delta.originalBytes,
+        assetCountUsed: quota.assetCountUsed - delta.assetCount,
+      });
+      const claim: MediaQuotaClaim = {
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: input.requestFingerprint,
+        periodKey: quota.periodKey,
+        delta,
+        status: "committed",
+        replayed: false,
+      };
+      quotaClaims.set(claimKey, claim);
+      return clone(claim);
+    },
+    async findUploadById(scope, uploadId) {
+      const value = uploads.get(compound(scope, uploadId));
+      return value ? clone(value) : null;
+    },
+    async findUploadByIdempotency(scope, idempotencyKey) {
+      const value = [...uploads.values()].find(
+        item =>
+          scopeKey(item) === scopeKey(scope) &&
+          item.idempotencyKey === idempotencyKey
+      );
+      return value ? clone(value) : null;
+    },
+    async insertUpload(upload) {
+      const key = compound(upload, upload.uploadId);
+      if (uploads.has(key))
+        throw createError({
+          statusCode: 409,
+          statusMessage: "Media upload identity collided.",
+        });
+      uploads.set(key, clone(upload));
+    },
+    async updateUpload(scope, uploadId, patch) {
+      const key = compound(scope, uploadId);
+      const value = uploads.get(key);
+      if (!value) return null;
+      const updated = {
+        ...value,
+        ...clone(patch),
+        ownerUserId: value.ownerUserId,
+        projectId: value.projectId,
+        uploadId: value.uploadId,
+      };
+      uploads.set(key, updated);
+      return clone(updated);
+    },
+    async claimUploadStatus(scope, uploadId, from, to) {
+      const key = compound(scope, uploadId);
+      const value = uploads.get(key);
+      if (!value || !from.includes(value.status)) return false;
+      uploads.set(key, { ...value, status: to });
+      return true;
+    },
+    async findAsset(scope, assetId) {
+      const value = assets.get(compound(scope, assetId));
+      return value ? clone(value) : null;
+    },
+    async findReadyAssetByHash(scope, sha256) {
+      const value = [...assets.values()].find(
+        item =>
+          scopeKey(item) === scopeKey(scope) &&
+          item.sha256 === sha256 &&
+          item.status === "ready"
+      );
+      return value ? clone(value) : null;
+    },
+    async listAssets(scope, options = {}) {
+      const limit = Number.isSafeInteger(options.limit)
+        ? Math.max(1, Math.min(100, options.limit!))
+        : 100;
+      return [...assets.values()]
+        .filter(
+          item =>
+            scopeKey(item) === scopeKey(scope) &&
+            item.status !== "deleted" &&
+            (!options.beforeCreatedAt || !options.beforeAssetId ||
+              item.createdAt < options.beforeCreatedAt ||
+              (item.createdAt === options.beforeCreatedAt &&
+                item.assetId < options.beforeAssetId))
+        )
+        .map(clone)
+        .sort((a, b) =>
+          a.createdAt === b.createdAt
+            ? a.assetId < b.assetId
+              ? 1
+              : a.assetId > b.assetId
+                ? -1
+                : 0
+            : a.createdAt < b.createdAt
+              ? 1
+              : -1
+        )
+        .slice(0, limit);
+    },
+    async insertAsset(asset) {
+      const key = compound(asset, asset.assetId);
+      if (assets.has(key))
+        throw createError({
+          statusCode: 409,
+          statusMessage: "Media asset identity collided.",
+        });
+      assets.set(key, clone(asset));
+    },
+    async updateAsset(scope, assetId, patch) {
+      const key = compound(scope, assetId);
+      const value = assets.get(key);
+      if (!value) return null;
+      const updated = {
+        ...value,
+        ...clone(patch),
+        ownerUserId: value.ownerUserId,
+        projectId: value.projectId,
+        assetId: value.assetId,
+      };
+      assets.set(key, updated);
+      return clone(updated);
+    },
+    async appendReplacementVersion(scope, replacement) {
+      const key = compound(scope, replacement.assetId);
+      const current = assets.get(key);
+      if (!current || replacement.version !== current.version + 1) return null;
+      assets.set(key, clone(replacement));
+      return clone(replacement);
+    },
+    async claimAssetStatus(scope, assetId, from, to) {
+      const key = compound(scope, assetId);
+      const value = assets.get(key);
+      if (!value || !from.includes(value.status)) return false;
+      assets.set(key, { ...value, status: to });
+      return true;
+    },
+    async listObjectKeys(scope, assetId) {
+      const asset = assets.get(compound(scope, assetId));
+      return asset
+        ? [
+            asset.originalObjectKey,
+            ...asset.variants.map(item => item.objectKey),
+          ]
+        : [];
+    },
+    async getOriginalBytesForAsset(scope, assetId) {
+      return [...uploads.values()]
+        .filter(
+          item =>
+            item.ownerUserId === scope.ownerUserId &&
+            item.projectId === scope.projectId &&
+            item.assetId === assetId &&
+            item.status === "completed"
+        )
+        .reduce((sum, item) => sum + item.quotaOriginalBytesCommitted, 0);
+    },
     async recordProcessingRun() {},
-    async appendEvent(scope, event) { const list = events.get(scopeKey(scope)) || []; const existing = list.find(item => item.receiptFingerprint === event.receiptFingerprint); if (existing) return clone(existing); list.push(clone(event)); events.set(scopeKey(scope), list); return clone(event) },
-    async listEvents(scope, assetId) { return (events.get(scopeKey(scope)) || []).filter(event => !assetId || event.assetId === assetId).map(clone) },
-    async countActiveUsages(scope, assetId) { return usages.get(compound(scope, assetId)) || 0 }, async setActiveUsageCount(scope, assetId, count) { usages.set(compound(scope, assetId), count) },
-  }
-  return repository
+    async appendEvent(scope, event) {
+      const list = events.get(scopeKey(scope)) || [];
+      const existing = list.find(
+        item => item.receiptFingerprint === event.receiptFingerprint
+      );
+      if (existing) return clone(existing);
+      list.push(clone(event));
+      events.set(scopeKey(scope), list);
+      return clone(event);
+    },
+    async listEvents(scope, assetId) {
+      return (events.get(scopeKey(scope)) || [])
+        .filter(event => !assetId || event.assetId === assetId)
+        .map(clone);
+    },
+    async findEventByIdempotency(scope, input) {
+      const value = (events.get(scopeKey(scope)) || []).find(
+        item =>
+          item.assetId === input.assetId &&
+          item.eventType === input.eventType &&
+          item.metadata.idempotencyKey === input.idempotencyKey
+      );
+      return value ? clone(value) : null;
+    },
+    async enqueueObjectCleanup(scope, input) {
+      await repository.appendEvent(scope, {
+        eventType: "media_object_cleanup_queued",
+        assetId: null,
+        uploadId: null,
+        receiptFingerprint: stableFingerprint({ scope, input }),
+        metadata: clone(input),
+        occurredAt: new Date(0).toISOString(),
+      });
+    },
+    async countActiveUsages(scope, assetId) {
+      return usages.get(compound(scope, assetId)) || 0;
+    },
+    async setActiveUsageCount(scope, assetId, count) {
+      usages.set(compound(scope, assetId), count);
+    },
+  };
+  return repository;
 }
