@@ -1,9 +1,9 @@
-import { and, asc, eq, ne } from 'drizzle-orm'
+import { and, asc, eq, gt, ne, sql } from 'drizzle-orm'
 import { getDatabase } from '../database'
 import { geoOutcomeModelopsAdvisoryAssignments, geoOutcomeModelopsCycles, geoOutcomeModelopsEvents, geoOutcomeModelopsPolicies, geoOutcomeModelopsRollbackDecisions, geoOutcomeModelopsShadowEvaluations } from '../database/schema'
 import { fingerprint } from './canonical'
 import type { ModelFamily } from './constants'
-import type { ModelOpsAdvisoryAssignment, ModelOpsCycle, ModelOpsCycleClaimResult, ModelOpsEvent, ModelOpsPolicy, ModelOpsRepositoryPort, ModelOpsRollbackDecision, ModelOpsShadowEvaluation } from './modelops-types'
+import type { ModelOpsAdvisoryAssignment, ModelOpsCycle, ModelOpsCycleClaimResult, ModelOpsEvent, ModelOpsLeaseFence, ModelOpsPolicy, ModelOpsRepositoryPort, ModelOpsRollbackDecision, ModelOpsShadowEvaluation } from './modelops-types'
 
 function iso(value: Date | string | null | undefined): string | null { if (value === null || value === undefined) return null; const date = new Date(value); if (!Number.isFinite(date.getTime())) throw new Error('Corrupt durable ModelOps timestamp.'); return date.toISOString() }
 function strings(value: unknown, label: string): string[] { if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) throw new Error(`Corrupt durable ${label}.`); const max = /observation fingerprints/iu.test(label) ? 10_000 : /reason|limitation|family/iu.test(label) ? 128 : 256; if (value.length > max) throw new Error(`Corrupt durable ${label}: bounded array exceeded.`); return [...value] }
@@ -17,13 +17,15 @@ export type ModelOpsDrizzleDatabase = NonNullable<ReturnType<typeof getDatabase>
 
 export class DrizzleModelOpsRepository implements ModelOpsRepositoryPort {
   private readonly db: ModelOpsDrizzleDatabase
-  constructor(database: ModelOpsDrizzleDatabase | null = getDatabase()) { if (!database) throw new Error('ModelOps database is not configured.'); this.db = database }
+  private readonly clock: () => Date
+  private readonly insideTransaction: boolean
+  constructor(database: ModelOpsDrizzleDatabase | null = getDatabase(), clock: () => Date = () => new Date(), insideTransaction = false) { if (!database) throw new Error('ModelOps database is not configured.'); this.db = database; this.clock = clock; this.insideTransaction = insideTransaction }
 
   private policy(row: typeof geoOutcomeModelopsPolicies.$inferSelect): ModelOpsPolicy {
     return { policyId: row.policyId, ownerUserId: row.ownerUserId, status: row.status, cadence: row.cadence, minimumNewVerifiedCandidates: row.minimumNewVerifiedCandidates, minimumNewQueryGroups: row.minimumNewQueryGroups, minimumNewWebsites: row.minimumNewWebsites, minimumObservationSpanDays: row.minimumObservationSpanDays, allowedModelFamilies: modelFamilies(row.allowedModelFamilies), maximumTrainingRunsPerCycle: row.maximumTrainingRunsPerCycle, cooldownHours: row.cooldownHours, shadowEvaluationEnabled: row.shadowEvaluationEnabled, autonomousExecutionEnabled: row.autonomousExecutionEnabled === true, authorizedByOwnerUserId: row.authorizedByOwnerUserId, authorizedAt: iso(row.authorizedAt), expiresAt: iso(row.expiresAt), configurationFingerprint: row.configurationFingerprint, createdAt: iso(row.createdAt)!, updatedAt: iso(row.updatedAt)!, revokedAt: iso(row.revokedAt) }
   }
   private cycle(row: typeof geoOutcomeModelopsCycles.$inferSelect): ModelOpsCycle {
-    return { cycleId: row.cycleId, ownerUserId: row.ownerUserId, policyId: row.policyId, policyFingerprint: row.policyFingerprint, trigger: row.trigger, status: row.status, readinessSnapshotFingerprint: row.readinessSnapshotFingerprint, eligibleObservationFingerprints: strings(row.eligibleObservationFingerprints, 'eligible observation fingerprints'), previousApprovedDatasetFingerprint: row.previousApprovedDatasetFingerprint, generatedDatasetFingerprint: row.generatedDatasetFingerprint, trainingRunId: row.trainingRunId, modelArtifactId: row.modelArtifactId, artifactHash: row.artifactHash, shadowEvaluationFingerprint: row.shadowEvaluationFingerprint, reasonCodes: strings(row.reasonCodes, 'reason codes'), limitations: strings(row.limitations, 'limitations'), errorClass: row.errorClass, startedAt: iso(row.startedAt), completedAt: iso(row.completedAt), attempt: row.attempt, leaseOwner: row.leaseOwner, leaseExpiresAt: iso(row.leaseExpiresAt), idempotencyKey: row.idempotencyKey, inputFingerprint: row.inputFingerprint, createdAt: iso(row.createdAt)!, updatedAt: iso(row.updatedAt)! }
+    return { cycleId: row.cycleId, ownerUserId: row.ownerUserId, policyId: row.policyId, policyFingerprint: row.policyFingerprint, trigger: row.trigger, status: row.status, readinessSnapshotFingerprint: row.readinessSnapshotFingerprint, eligibleObservationFingerprints: strings(row.eligibleObservationFingerprints, 'eligible observation fingerprints'), previousApprovedDatasetFingerprint: row.previousApprovedDatasetFingerprint, generatedDatasetFingerprint: row.generatedDatasetFingerprint, trainingRunId: row.trainingRunId, modelArtifactId: row.modelArtifactId, artifactHash: row.artifactHash, shadowEvaluationFingerprint: row.shadowEvaluationFingerprint, reasonCodes: strings(row.reasonCodes, 'reason codes'), limitations: strings(row.limitations, 'limitations'), errorClass: row.errorClass, startedAt: iso(row.startedAt), completedAt: iso(row.completedAt), attempt: row.attempt, leaseOwner: row.leaseOwner, leaseExpiresAt: iso(row.leaseExpiresAt), leaseVersion: row.leaseVersion, idempotencyKey: row.idempotencyKey, inputFingerprint: row.inputFingerprint, createdAt: iso(row.createdAt)!, updatedAt: iso(row.updatedAt)! }
   }
   private event(row: typeof geoOutcomeModelopsEvents.$inferSelect): ModelOpsEvent { return { eventId: row.eventId, ownerUserId: row.ownerUserId, cycleId: row.cycleId, eventType: row.eventType, eventPayload: record(row.eventPayload, 'event payload'), eventFingerprint: row.eventFingerprint, createdAt: iso(row.createdAt)! } }
   private shadow(row: typeof geoOutcomeModelopsShadowEvaluations.$inferSelect): ModelOpsShadowEvaluation { return { evaluationId: row.evaluationId, ownerUserId: row.ownerUserId, artifactId: row.artifactId, artifactHash: row.artifactHash, evaluationWindowStart: iso(row.evaluationWindowStart)!, evaluationWindowEnd: iso(row.evaluationWindowEnd)!, observationFingerprints: strings(row.observationFingerprints, 'shadow observation fingerprints'), candidateCount: row.candidateCount, positiveCount: row.positiveCount, negativeCount: row.negativeCount, queryGroupCount: row.queryGroupCount, websiteCount: row.websiteCount, engineCounts: record(row.engineCounts, 'shadow engine counts') as Record<string, number>, binaryMetrics: record(row.binaryMetrics, 'shadow binary metrics'), rankingMetrics: record(row.rankingMetrics, 'shadow ranking metrics'), calibrationDiagnostics: record(row.calibrationDiagnostics, 'calibration diagnostics'), driftDiagnostics: record(row.driftDiagnostics, 'drift diagnostics'), status: row.status, reasonCodes: strings(row.reasonCodes, 'shadow reason codes'), evaluationFingerprint: row.evaluationFingerprint, createdAt: iso(row.createdAt)! } }
@@ -69,28 +71,46 @@ export class DrizzleModelOpsRepository implements ModelOpsRepositoryPort {
     const current = await this.getCycle(ownerUserId, cycleId); if (!current) throw new Error('Cycle not found.')
     if (current.status === 'completed' || current.status === 'insufficient_data' || current.status === 'blocked') return { outcome: 'replay', cycle: current }
     const expires = current.leaseExpiresAt ? new Date(current.leaseExpiresAt).getTime() : 0
-    if (current.status === 'running' && expires > Date.now()) return { outcome: 'in_progress', cycle: current }
+    const observedAt = this.clock()
+    if (current.status === 'running' && expires > observedAt.getTime()) return { outcome: 'in_progress', cycle: current }
     if (current.status === 'failed') return { outcome: 'collision', cycle: current }
     const stale = current.status === 'running'
-    const result = await this.db.update(geoOutcomeModelopsCycles).set({ status: 'running', startedAt: current.startedAt ? new Date(current.startedAt) : new Date(), leaseOwner, leaseExpiresAt: new Date(leaseExpiresAt), attempt: current.attempt + 1, updatedAt: new Date() }).where(and(eq(geoOutcomeModelopsCycles.ownerUserId, ownerUserId), eq(geoOutcomeModelopsCycles.cycleId, cycleId), eq(geoOutcomeModelopsCycles.status, current.status), eq(geoOutcomeModelopsCycles.attempt, current.attempt)))
+    const result = await this.db.update(geoOutcomeModelopsCycles).set({ status: 'running', startedAt: current.startedAt ? new Date(current.startedAt) : observedAt, leaseOwner, leaseExpiresAt: new Date(leaseExpiresAt), attempt: current.attempt + 1, leaseVersion: current.leaseVersion + 1, updatedAt: observedAt }).where(and(eq(geoOutcomeModelopsCycles.ownerUserId, ownerUserId), eq(geoOutcomeModelopsCycles.cycleId, cycleId), eq(geoOutcomeModelopsCycles.status, current.status), eq(geoOutcomeModelopsCycles.attempt, current.attempt), eq(geoOutcomeModelopsCycles.leaseVersion, current.leaseVersion)))
     if (affectedRows(result) === 1) return { outcome: stale ? 'stale_recovered' : 'claimed', cycle: (await this.getCycle(ownerUserId, cycleId))! }
     const after = await this.getCycle(ownerUserId, cycleId); if (!after) throw new Error('Cycle disappeared after compare-and-swap.')
     if (after.status === 'running') return { outcome: 'in_progress', cycle: after }
     if (after.status === 'completed' || after.status === 'blocked' || after.status === 'insufficient_data') return { outcome: 'replay', cycle: after }
     return { outcome: 'collision', cycle: after }
   }
-  async updateCycle(ownerUserId: number, cycleId: string, patch: Partial<ModelOpsCycle>) {
+  async assertCycleFence(ownerUserId: number, cycleId: string, fence: ModelOpsLeaseFence) {
+    const observedAt = this.clock()
+    if (this.insideTransaction) await this.db.execute(sql`SELECT ${geoOutcomeModelopsCycles.cycleId} FROM ${geoOutcomeModelopsCycles} WHERE ${geoOutcomeModelopsCycles.ownerUserId} = ${ownerUserId} AND ${geoOutcomeModelopsCycles.cycleId} = ${cycleId} FOR UPDATE`)
+    const [row] = await this.db.select().from(geoOutcomeModelopsCycles).where(and(eq(geoOutcomeModelopsCycles.ownerUserId, ownerUserId), eq(geoOutcomeModelopsCycles.cycleId, cycleId), eq(geoOutcomeModelopsCycles.leaseOwner, fence.leaseOwner), eq(geoOutcomeModelopsCycles.leaseVersion, fence.leaseVersion), eq(geoOutcomeModelopsCycles.attempt, fence.attempt), gt(geoOutcomeModelopsCycles.leaseExpiresAt, observedAt))).limit(1)
+    if (!row) throw new Error('ModelOps cycle lease fence is stale or expired.')
+    return this.cycle(row)
+  }
+  async updateCycle(ownerUserId: number, cycleId: string, patch: Partial<ModelOpsCycle>, fence?: ModelOpsLeaseFence) {
     if (patch.ownerUserId !== undefined && patch.ownerUserId !== ownerUserId) throw new Error('Owner scope mismatch.')
-    const values: Record<string, unknown> = { updatedAt: new Date() }
-    for (const key of ['policyId', 'policyFingerprint', 'status', 'readinessSnapshotFingerprint', 'previousApprovedDatasetFingerprint', 'generatedDatasetFingerprint', 'trainingRunId', 'modelArtifactId', 'artifactHash', 'shadowEvaluationFingerprint', 'errorClass', 'attempt', 'leaseOwner', 'idempotencyKey', 'inputFingerprint'] as const) if (patch[key] !== undefined) values[key] = patch[key]
+    if (!fence) throw new Error('ModelOps cycle update requires a lease fence.')
+    if (patch.attempt !== undefined || patch.leaseVersion !== undefined) throw new Error('ModelOps attempt and lease version are claim-owned fields.')
+    const observedAt = this.clock()
+    const values: Record<string, unknown> = { updatedAt: observedAt }
+    for (const key of ['policyId', 'policyFingerprint', 'status', 'readinessSnapshotFingerprint', 'previousApprovedDatasetFingerprint', 'generatedDatasetFingerprint', 'trainingRunId', 'modelArtifactId', 'artifactHash', 'shadowEvaluationFingerprint', 'errorClass', 'idempotencyKey', 'inputFingerprint'] as const) if (patch[key] !== undefined) values[key] = patch[key]
     for (const key of ['eligibleObservationFingerprints', 'reasonCodes', 'limitations'] as const) if (patch[key] !== undefined) values[key] = jsonValue(patch[key])
-    for (const key of ['startedAt', 'completedAt', 'leaseExpiresAt'] as const) if (patch[key] !== undefined) values[key] = patch[key] ? new Date(patch[key]!) : null
-    await this.db.update(geoOutcomeModelopsCycles).set(values as never).where(and(eq(geoOutcomeModelopsCycles.ownerUserId, ownerUserId), eq(geoOutcomeModelopsCycles.cycleId, cycleId)))
+    for (const key of ['startedAt', 'completedAt'] as const) if (patch[key] !== undefined) values[key] = patch[key] ? new Date(patch[key]!) : null
+    const result = await this.db.update(geoOutcomeModelopsCycles).set(values as never).where(and(eq(geoOutcomeModelopsCycles.ownerUserId, ownerUserId), eq(geoOutcomeModelopsCycles.cycleId, cycleId), eq(geoOutcomeModelopsCycles.status, 'running'), eq(geoOutcomeModelopsCycles.leaseOwner, fence.leaseOwner), eq(geoOutcomeModelopsCycles.leaseVersion, fence.leaseVersion), eq(geoOutcomeModelopsCycles.attempt, fence.attempt), gt(geoOutcomeModelopsCycles.leaseExpiresAt, observedAt)))
+    if (affectedRows(result) !== 1) throw new Error('ModelOps cycle lease fence is stale or expired.')
     const updated = await this.getCycle(ownerUserId, cycleId); if (!updated) throw new Error('Cycle update was not persisted.'); return updated
   }
 
-  async appendEvent(ownerUserId: number, event: ModelOpsEvent) {
+  async appendEvent(ownerUserId: number, event: ModelOpsEvent, fence?: ModelOpsLeaseFence) {
     if (event.ownerUserId !== ownerUserId) throw new Error('Owner scope mismatch.')
+    const cycle = await this.getCycle(ownerUserId, event.cycleId)
+    if (cycle) {
+      if (!fence) throw new Error('ModelOps cycle event requires a lease fence.')
+      if (!this.insideTransaction) return this.transaction(transaction => transaction.appendEvent(ownerUserId, event, fence))
+      await this.assertCycleFence(ownerUserId, event.cycleId, fence)
+    }
     const [same] = await this.db.select().from(geoOutcomeModelopsEvents).where(and(eq(geoOutcomeModelopsEvents.ownerUserId, ownerUserId), eq(geoOutcomeModelopsEvents.eventFingerprint, event.eventFingerprint))).limit(1)
     if (same) return this.event(same)
     await this.db.insert(geoOutcomeModelopsEvents).values({ ...event, eventPayload: jsonValue(event.eventPayload), createdAt: new Date(event.createdAt) })
@@ -134,7 +154,7 @@ export class DrizzleModelOpsRepository implements ModelOpsRepositoryPort {
     return row ? this.advisory(row) : null
   }
 
-  async transaction<T>(work: (repository: ModelOpsRepositoryPort) => Promise<T>): Promise<T> { return this.db.transaction(async tx => work(new DrizzleModelOpsRepository(tx))) }
+  async transaction<T>(work: (repository: ModelOpsRepositoryPort) => Promise<T>): Promise<T> { return this.db.transaction(async tx => work(new DrizzleModelOpsRepository(tx, this.clock, true))) }
 }
 
 export function getProductionModelOpsRepository(): ModelOpsRepositoryPort { return new DrizzleModelOpsRepository() }

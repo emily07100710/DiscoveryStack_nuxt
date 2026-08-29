@@ -325,13 +325,15 @@ export async function runOwnerProductionRepair(input: {
     approvedBriefConstraints: [...context.opportunity.constraints, ...input.repairInstructions.map(item => `Repair ${item.code}: ${item.instruction}`)],
   }
   const riskGate = withEvidenceMaterialGate(evaluateContentRisk({ source, candidateTitle: candidate.optimizedTitle, candidateBody: candidate.optimizedContent, evidenceCount: context.evidenceSnapshot.refs.length }), context.evidenceSnapshot.materials)
+  const originalProvenance = input.originalDraft.provenance && typeof input.originalDraft.provenance === 'object' && !Array.isArray(input.originalDraft.provenance) ? input.originalDraft.provenance as Record<string, unknown> : {}
+  const canonicalProviderModel = typeof originalProvenance.providerModel === 'string' && originalProvenance.providerModel.includes(':') ? originalProvenance.providerModel : `bailian:${candidate.provenance.model}`
   const draft = await persistDraft({
     jobId: job.id,
     title: candidate.optimizedTitle,
     body: candidate.optimizedContent,
     contentHash: contentFingerprint(candidate.optimizedTitle, candidate.optimizedContent),
     sourceMode: candidate.provider === 'reference-rules-v1' ? 'reference_fallback' : 'provider_candidate',
-    provenance: { provider: candidate.provider, providerVersion: candidate.providerVersion, providerModel: candidate.provenance.model, providerExecution: candidate.provenance.providerExecution === true, providerProvenance: candidate.provenance, runtimeProvider: runtimeProviders.provenance, actualProviderMode: runtimeProviders.mode, fallbackReason: runtimeProviders.fallbackReason ?? candidate.provenance.fallbackReason ?? null, stage: 'optimized', generationMode: 'repair_selected_rule_optimization', parentDraftId: input.originalDraft.id, parentDraftHash: input.originalDraft.contentHash, repairAttempt: input.repairAttempt, repairContractFingerprint: input.repairContractFingerprint, selectedRuleIds: selectedRules.map(rule => rule.id), appliedRuleIds: candidate.appliedRuleIds, evidenceSnapshotHash: context.evidenceSnapshot.hash },
+    provenance: { provider: candidate.provider, providerVersion: candidate.providerVersion, providerModel: canonicalProviderModel, providerExecution: candidate.provenance.providerExecution === true, providerProvenance: candidate.provenance, runtimeProvider: runtimeProviders.provenance, actualProviderMode: runtimeProviders.mode, fallbackReason: runtimeProviders.fallbackReason ?? candidate.provenance.fallbackReason ?? null, stage: 'optimized', generationMode: 'repair_selected_rule_optimization', parentDraftId: input.originalDraft.id, parentDraftHash: input.originalDraft.contentHash, repairAttempt: input.repairAttempt, repairContractFingerprint: input.repairContractFingerprint, selectedRuleIds: selectedRules.map(rule => rule.id), appliedRuleIds: candidate.appliedRuleIds, evidenceSnapshotHash: context.evidenceSnapshot.hash },
     evidenceRefs: context.evidenceSnapshot.refs,
     safetyStatus: riskGate.status === 'blocked' ? 'blocked' : riskGate.status === 'needs_human_review' ? 'needs_review' : 'passed',
     safetyNotes: [...candidate.safetyNotes, optimizationResult.interpretationLimit, 'Repair output remains bounded by the same evidence, risk, and publication authority gates.'],

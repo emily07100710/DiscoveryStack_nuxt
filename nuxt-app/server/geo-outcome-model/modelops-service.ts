@@ -9,7 +9,7 @@ import { assignModelOpsAdvisory, rollbackModelOpsAdvisory } from './modelops-adv
 import type { DatasetManifest, DatasetMember, EvaluationBundle, GeoOutcomeRepositoryPort, ModelArtifact, ModelArtifactSummary, TrainingRun } from './types'
 import type { ModelFamily } from './constants'
 import type { TrainedParameters } from './trainer'
-import type { ModelOpsCycle, ModelOpsCycleClaimResult, ModelOpsCycleResult, ModelOpsEvent, ModelOpsPolicy, ModelOpsPolicyConfig, ModelOpsRepositoryPort, ModelOpsRollbackDecision, ModelOpsShadowEvaluation, ModelOpsWorkspace } from './modelops-types'
+import type { ModelOpsCycle, ModelOpsCycleClaimResult, ModelOpsCycleResult, ModelOpsEvent, ModelOpsLeaseFence, ModelOpsPolicy, ModelOpsPolicyConfig, ModelOpsRepositoryPort, ModelOpsRollbackDecision, ModelOpsShadowEvaluation, ModelOpsWorkspace } from './modelops-types'
 
 const MODEL_FAMILIES: ModelFamily[] = ['regularized_logistic_baseline_v1', 'pairwise_logistic_ranker_v1']
 const DEFAULT_POLICY: ModelOpsPolicyConfig = {
@@ -72,6 +72,16 @@ function policyForTrigger(policies: readonly ModelOpsPolicy[], trigger: ModelOps
 function splitFor(dataset: DatasetManifest) { return { train: dataset.trainFingerprints, validation: dataset.validationFingerprints, test: dataset.testFingerprints, siteHoldout: dataset.siteHoldoutFingerprints, queryHoldout: dataset.queryHoldoutFingerprints, temporalHoldout: dataset.temporalHoldoutFingerprints } }
 function event(ownerUserId: number, cycleId: string, eventType: string, payload: Record<string, unknown>): ModelOpsEvent { const redactedPayload = Object.fromEntries(Object.entries(payload).filter(([key]) => !/(token|secret|credential|prompt|response|url|body|stack)/iu.test(key))); const eventFingerprint = fingerprint({ ownerUserId, cycleId, eventType, payload: redactedPayload }); return { eventId: `geo-modelops-event-${eventFingerprint.slice(0, 20)}`, ownerUserId, cycleId, eventType, eventPayload: redactedPayload, eventFingerprint, createdAt: now() } }
 async function append(repo: ModelOpsRepositoryPort, ownerUserId: number, cycleId: string, eventType: string, payload: Record<string, unknown>) { await repo.appendEvent(ownerUserId, event(ownerUserId, cycleId, eventType, payload)) }
+function fencedRepository(repository: ModelOpsRepositoryPort, fence: ModelOpsLeaseFence): ModelOpsRepositoryPort {
+  return new Proxy(repository, {
+    get(target, property, receiver) {
+      if (property === 'updateCycle') return (ownerUserId: number, cycleId: string, patch: Partial<ModelOpsCycle>) => target.updateCycle(ownerUserId, cycleId, patch, fence)
+      if (property === 'appendEvent') return (ownerUserId: number, value: ModelOpsEvent) => target.appendEvent(ownerUserId, value, fence)
+      const member = Reflect.get(target, property, receiver)
+      return typeof member === 'function' ? member.bind(target) : member
+    },
+  })
+}
 
 export function parseModelOpsPolicyConfig(input: unknown): ModelOpsPolicyConfig { return asPolicyConfig(input) }
 export async function createModelOpsPolicy(ownerUserId: number, input: unknown, idempotencyKey: string, repository: ModelOpsRepositoryPort): Promise<ModelOpsPolicy> {
@@ -117,6 +127,7 @@ async function finalizePolicyShadow(ownerUserId: number, cycle: ModelOpsCycle, p
     return { cycle: blocked, artifact, shadowEvaluation: null }
   }
   const shadowEvaluation = await evaluateModelOpsShadow(ownerUserId, artifact.artifactId, outcomeRepository, modelOpsRepository, at)
+  cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { modelArtifactId: artifact.artifactId, artifactHash: artifact.artifactHash, shadowEvaluationFingerprint: shadowEvaluation.evaluationFingerprint })
   const degraded = shadowEvaluation.status === 'needs_owner_attention'
   const activeCandidateAssignment = (await modelOpsRepository.listAdvisoryAssignments(ownerUserId)).find(item => item.status === 'advisory' && item.candidateArtifactHash === artifact.artifactHash)
   if (degraded && activeCandidateAssignment) {
@@ -126,7 +137,7 @@ async function finalizePolicyShadow(ownerUserId: number, cycle: ModelOpsCycle, p
   if (shadowEvaluation.status === 'completed') {
     const current = (await outcomeRepository.listArtifacts(ownerUserId)).filter(item => item.artifactHash !== artifact.artifactHash && item.status === 'approved_for_shadow' && item.taskType === artifact.taskType && item.modelFamily === artifact.modelFamily && item.featureCatalogVersion === artifact.featureCatalogVersion && item.labelContractVersion === artifact.labelContractVersion).at(-1)
     if (current) {
-      const assignment = await assignModelOpsAdvisory({ ownerUserId, policyId: policy.policyId, cycleId: cycle.cycleId, candidateArtifactId: artifact.artifactId, currentArtifactHash: current.artifactHash, candidateArtifactHash: artifact.artifactHash, datasetFingerprint: dataset.manifestFingerprint, splitFingerprint: fingerprint(splitFor(dataset)), metricsFingerprint: fingerprint({ binaryMetrics: shadowEvaluation.binaryMetrics, rankingMetrics: shadowEvaluation.rankingMetrics, calibrationDiagnostics: shadowEvaluation.calibrationDiagnostics, driftDiagnostics: shadowEvaluation.driftDiagnostics }), now: at }, modelOpsRepository)
+      const assignment = await assignModelOpsAdvisory({ ownerUserId, policyId: policy.policyId, cycleId: cycle.cycleId, candidateArtifactId: artifact.artifactId, currentArtifactHash: current.artifactHash, now: at }, outcomeRepository, modelOpsRepository)
       await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'advisory_assignment_created', { assignmentId: assignment.assignmentId, currentArtifactHash: current.artifactHash, candidateArtifactHash: artifact.artifactHash, productionActivation: false })
     } else {
       await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'advisory_assignment_blocked', { reasonCode: 'compatible_current_artifact_missing', candidateArtifactHash: artifact.artifactHash, productionActivation: false })
@@ -169,7 +180,7 @@ export async function createModelOpsCycle(ownerUserId: number, trigger: ModelOps
   if (!/^[A-Za-z0-9._:-]{8,128}$/u.test(idempotencyKey)) throw new Error('A bounded idempotencyKey is required.')
   const latestCycle = (await modelOpsRepository.listCycles(ownerUserId)).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1)
   if (trigger === 'scheduled' && latestCycle && policy.cooldownHours > 0 && new Date(latestCycle.createdAt).getTime() + policy.cooldownHours * 3_600_000 > at.getTime()) throw new Error('ModelOps policy cooldown is active.')
-  const observations = primaryObservations(await outcomeRepository.listObservations(ownerUserId)); const previous = await latestApprovedDataset(ownerUserId, outcomeRepository); const previousSet = new Set(previous?.sourceObservationFingerprints || []); const fresh = observations.filter(item => !previousSet.has(item.observationFingerprint)); const snapshot = fingerprint({ ownerUserId, policyFingerprint: policy.configurationFingerprint, trigger, idempotencyKey, eligible: fresh.map(item => item.observationFingerprint).sort(), cadenceBucket: cadenceBucket(at, policy.cadence) }); const timestamp = at.toISOString(); const cycle: ModelOpsCycle = { cycleId: `geo-modelops-cycle-${snapshot.slice(0, 24)}`, ownerUserId, policyId: policy.policyId, policyFingerprint: policy.configurationFingerprint, trigger, status: 'planned', readinessSnapshotFingerprint: fingerprint({ summary: summary(fresh), eligible: fresh.map(item => item.observationFingerprint).sort() }), eligibleObservationFingerprints: fresh.map(item => item.observationFingerprint), previousApprovedDatasetFingerprint: previous?.manifestFingerprint || null, generatedDatasetFingerprint: null, trainingRunId: null, modelArtifactId: null, artifactHash: null, shadowEvaluationFingerprint: null, reasonCodes: [], limitations: ['This cycle is governed automation; it cannot approve a dataset or model.', 'No production_active status exists in V1.', 'All model scores remain experimental and are not verified outcomes.'], errorClass: null, startedAt: null, completedAt: null, attempt: 0, leaseOwner: null, leaseExpiresAt: null, idempotencyKey, inputFingerprint: snapshot, createdAt: timestamp, updatedAt: timestamp }
+  const observations = primaryObservations(await outcomeRepository.listObservations(ownerUserId)); const previous = await latestApprovedDataset(ownerUserId, outcomeRepository); const previousSet = new Set(previous?.sourceObservationFingerprints || []); const fresh = observations.filter(item => !previousSet.has(item.observationFingerprint)); const snapshot = fingerprint({ ownerUserId, policyFingerprint: policy.configurationFingerprint, trigger, idempotencyKey, eligible: fresh.map(item => item.observationFingerprint).sort(), cadenceBucket: cadenceBucket(at, policy.cadence) }); const timestamp = at.toISOString(); const cycle: ModelOpsCycle = { cycleId: `geo-modelops-cycle-${snapshot.slice(0, 24)}`, ownerUserId, policyId: policy.policyId, policyFingerprint: policy.configurationFingerprint, trigger, status: 'planned', readinessSnapshotFingerprint: fingerprint({ summary: summary(fresh), eligible: fresh.map(item => item.observationFingerprint).sort() }), eligibleObservationFingerprints: fresh.map(item => item.observationFingerprint), previousApprovedDatasetFingerprint: previous?.manifestFingerprint || null, generatedDatasetFingerprint: null, trainingRunId: null, modelArtifactId: null, artifactHash: null, shadowEvaluationFingerprint: null, reasonCodes: [], limitations: ['This cycle is governed automation; it cannot approve a dataset or model.', 'No production_active status exists in V1.', 'All model scores remain experimental and are not verified outcomes.'], errorClass: null, startedAt: null, completedAt: null, attempt: 0, leaseOwner: null, leaseExpiresAt: null, leaseVersion: 0, idempotencyKey, inputFingerprint: snapshot, createdAt: timestamp, updatedAt: timestamp }
   return modelOpsRepository.saveCycle(ownerUserId, cycle)
 }
 
@@ -178,6 +189,7 @@ function isRetryable(error: unknown): boolean { const message = error instanceof
 async function executeApprovedDatasetIfNeeded(ownerUserId: number, cycle: ModelOpsCycle, policy: ModelOpsPolicy, outcomeRepository: GeoOutcomeRepositoryPort, modelOpsRepository: ModelOpsRepositoryPort, at: Date): Promise<ModelOpsCycleResult | null> {
   const dataset = await latestApprovedDataset(ownerUserId, outcomeRepository)
   if (!dataset) return null
+  cycle = await modelOpsRepository.updateCycle(ownerUserId, cycle.cycleId, { generatedDatasetFingerprint: dataset.manifestFingerprint })
   if (policy.maximumTrainingRunsPerCycle < 1) throw new Error('Policy maximumTrainingRunsPerCycle must be at least 1.')
   const family = policy.allowedModelFamilies[0]!
   let trainingRun = await existingTraining(ownerUserId, dataset, family, outcomeRepository)
@@ -212,6 +224,7 @@ async function executeApprovedDatasetIfNeeded(ownerUserId: number, cycle: ModelO
 
 export async function executeModelOpsCycle(ownerUserId: number, cycleId: string, outcomeRepository: GeoOutcomeRepositoryPort, modelOpsRepository: ModelOpsRepositoryPort, leaseOwner = `geo-modelops-worker-${process.pid}`, at = new Date()): Promise<ModelOpsCycleResult> {
   assertOwner(ownerUserId); const claimed: ModelOpsCycleClaimResult = await modelOpsRepository.claimCycle(ownerUserId, cycleId, leaseOwner, new Date(at.getTime() + 300_000).toISOString()); if (claimed.outcome !== 'claimed' && claimed.outcome !== 'stale_recovered') return { cycle: claimed.cycle, dataset: null, trainingRun: null, artifact: null, shadowEvaluation: null }
+  modelOpsRepository = fencedRepository(modelOpsRepository, { leaseOwner, leaseVersion: claimed.cycle.leaseVersion, attempt: claimed.cycle.attempt })
   let cycle = claimed.cycle; let dataset: DatasetManifest | null = null; let trainingRun: TrainingRun | null = null; let artifact: ModelArtifact | null = null
   try {
     await append(modelOpsRepository, ownerUserId, cycle.cycleId, 'cycle_started', { trigger: cycle.trigger, attempt: cycle.attempt })

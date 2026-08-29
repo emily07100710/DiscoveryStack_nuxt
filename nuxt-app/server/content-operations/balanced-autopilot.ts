@@ -72,6 +72,8 @@ export type AutopilotPolicySnapshot = {
   maximumTopicSubstitutions: number
   generationBudget: number
   publicationBudget: number
+  evidenceFreshnessHours: number
+  allowedProviderModels: string[]
   configurationFingerprint: string
   activatedAt: string
   expiresAt: string | null
@@ -93,7 +95,8 @@ export type BalancedAutopilotInput = {
   contentHash: string
   evidenceSnapshotHash: string
   evidenceStatus: 'approved_fresh' | 'stale' | 'missing' | 'revoked'
-  providerProvenanceComplete?: boolean
+  providerProvenanceComplete: boolean
+  providerModel: string | null
   targetIdentityVerified: boolean
   lineageVerified: boolean
   repairAttempts: number
@@ -151,7 +154,7 @@ export type RepairContract = {
 export type MachineAuthorization = {
   authorizationVersion: 'machine-authorization-v2'
   authorizationId: string
-  policy: { policyId: string; policyVersion: string; configurationFingerprint: string; ownerUserId: number; clientId: number; websiteId: string; mode: AutopilotMode }
+  policy: { policyId: string; policyVersion: string; configurationFingerprint: string; ownerUserId: number; clientId: number; websiteId: string; mode: AutopilotMode; evidenceFreshnessHours: number; allowedProviderModels: string[] }
   candidate: { candidateId: string; contentHash: string; contentType: string; locale: string }
   evidence: { snapshotHash: string; status: 'approved_fresh'; capturedAt: string }
   risk: { contractVersion: string; gateId: number; gateVersion: string; gateStatus: string; severity: AutopilotRiskSeverity; businessClass: AutopilotBusinessRiskClass; semanticsVersion: typeof V4_RISK_SEMANTICS_VERSION; reasonCodes: string[]; findingFingerprints: string[]; draftId: number; contentHash: string; evidenceSnapshotHash: string; fingerprint: string }
@@ -301,7 +304,8 @@ export function decideBalancedAutopilot(input: BalancedAutopilotInput): Balanced
   if (!input.targetIdentityVerified) return common('hard_block', 'TARGET_IDENTITY_UNVERIFIED', ['publication target identity is not verified'])
   if (!input.lineageVerified) return common('hard_block', 'LINEAGE_UNVERIFIED', ['content/evidence/policy lineage is not verified'])
   if (input.evidenceStatus !== 'approved_fresh') return common('hard_block', 'EVIDENCE_NOT_CURRENT', [`evidence status is ${input.evidenceStatus}`])
-  if (input.providerProvenanceComplete === false) return common('hard_block', 'PROVIDER_PROVENANCE_INCOMPLETE', ['provider/model provenance is incomplete'])
+  if (input.providerProvenanceComplete !== true || !input.providerModel) return common('hard_block', 'PROVIDER_PROVENANCE_INCOMPLETE', ['provider/model provenance is incomplete'])
+  if (!policy.allowedProviderModels.map(normalized).includes(normalized(input.providerModel))) return common('hard_block', 'PROVIDER_MODEL_NOT_ALLOWED', ['provider/model is outside the owner allowlist'])
   const explicitHardBlock = reasons.map(hardBlockReason).find(Boolean)
   if (explicitHardBlock) return common('hard_block', explicitHardBlock, reasons)
   const stuffing = input.contentText ? detectKeywordStuffing({ text: input.contentText, primaryQuery: input.primaryQuery }) : undefined
@@ -329,18 +333,17 @@ export function decideBalancedAutopilot(input: BalancedAutopilotInput): Balanced
   return common('skip', 'SKIPPED_AFTER_BOUNDED_REPAIR', [...repairReasons, 'repair and substitution budgets exhausted'], instructions)
 }
 
-export function buildMachineAuthorization(input: { decision: BalancedAutopilotDecision; policy: AutopilotPolicySnapshot; candidateId: string; contentHash: string; contentType: string; locale: string; evidenceSnapshotHash: string; evidenceCapturedAt: string; riskClass?: AutopilotRiskClass; riskSeverity?: AutopilotRiskSeverity; businessRiskClass?: AutopilotBusinessRiskClass; riskReasonCodes: string[]; riskSnapshot?: MachineAuthorization['risk']; qualityEvaluation?: MachineAuthorization['quality']; qualityFingerprint?: string; entryId?: number; jobId?: number; draftId: string; entityProfileFingerprint?: string; queryOwnershipFingerprint?: string; providerModel: string; repairAttempts: number; substitutionCount: number; targetRowId?: number; targetConfigurationFingerprint?: string; destinationId: string; now: string }): MachineAuthorization {
+export function buildMachineAuthorization(input: { decision: BalancedAutopilotDecision; policy: AutopilotPolicySnapshot; candidateId: string; contentHash: string; contentType: string; locale: string; evidenceSnapshotHash: string; evidenceCapturedAt: string; riskSeverity: AutopilotRiskSeverity; businessRiskClass: AutopilotBusinessRiskClass; riskReasonCodes: string[]; riskSnapshot: MachineAuthorization['risk']; qualityEvaluation: MachineAuthorization['quality']; entryId: number; jobId: number; draftId: string; entityProfileFingerprint: string; queryOwnershipFingerprint: string; providerModel: string; repairAttempts: number; substitutionCount: number; targetRowId: number; targetConfigurationFingerprint: string; destinationId: string; now: string }): MachineAuthorization {
   if (input.decision.action !== 'publish' || !input.decision.machineAuthorized) throw new Error('Only an allowed publish decision can create machine authorization.')
   if (!hasIso(input.evidenceCapturedAt) || !hasIso(input.now) || Date.parse(input.evidenceCapturedAt) > Date.parse(input.now)) throw new Error('Machine authorization timestamps are invalid.')
-  const riskSeverity = input.riskSeverity || (input.riskClass === 'high' ? 'high' : 'low')
-  const businessRiskClass = input.businessRiskClass || 'general'
+  if (![input.entryId, input.jobId, input.targetRowId].every(value => Number.isSafeInteger(value) && value > 0) || !input.entityProfileFingerprint.trim() || !input.queryOwnershipFingerprint.trim() || !input.targetConfigurationFingerprint.trim()) throw new Error('Machine authorization identity lineage is incomplete.')
+  if (!input.policy.allowedProviderModels.map(normalized).includes(normalized(input.providerModel))) throw new Error('Machine authorization provider/model is outside the owner allowlist.')
+  const riskSeverity = input.riskSeverity
+  const businessRiskClass = input.businessRiskClass
   const riskReasonCodes = [...new Set(input.riskReasonCodes)].sort()
-  const risk = input.riskSnapshot || { contractVersion: 'legacy-risk-snapshot-v3', gateId: 0, gateVersion: 'legacy-v3', gateStatus: 'passed', severity: riskSeverity, businessClass: businessRiskClass, semanticsVersion: V4_RISK_SEMANTICS_VERSION, reasonCodes: riskReasonCodes, findingFingerprints: [], draftId: Number(input.draftId) || 0, contentHash: input.contentHash, evidenceSnapshotHash: input.evidenceSnapshotHash, fingerprint: hash({ severity: riskSeverity, businessClass: businessRiskClass, semanticsVersion: V4_RISK_SEMANTICS_VERSION, reasonCodes: riskReasonCodes }) }
-  const quality = input.qualityEvaluation || { status: 'passed' as const, reasonCodes: [], engineVersion: BALANCED_AUTOPILOT_ENGINE_VERSION, fingerprint: input.qualityFingerprint || hash({ status: 'passed', contentHash: input.contentHash, engineVersion: BALANCED_AUTOPILOT_ENGINE_VERSION }) }
-  const targetRowId = input.targetRowId || 0
-  const entryId = input.entryId || 0
-  const jobId = input.jobId || 0
-  const base = { authorizationVersion: 'machine-authorization-v2' as const, authorizationId: `machine-auth-${hash({ policyId: input.policy.policyId, targetRowId, entryId, jobId, draftId: input.draftId, contentHash: input.contentHash, evidenceSnapshotHash: input.evidenceSnapshotHash }).slice(0, 32)}`, policy: { policyId: input.policy.policyId, policyVersion: input.policy.policyVersion, configurationFingerprint: input.policy.configurationFingerprint, ownerUserId: input.policy.ownerUserId, clientId: input.policy.clientId, websiteId: input.policy.websiteId, mode: input.policy.mode }, candidate: { candidateId: input.candidateId, contentHash: input.contentHash, contentType: input.contentType, locale: input.locale }, evidence: { snapshotHash: input.evidenceSnapshotHash, status: 'approved_fresh' as const, capturedAt: new Date(input.evidenceCapturedAt).toISOString() }, risk, quality, content: { draftId: input.draftId, contentHash: input.contentHash, providerModel: input.providerModel, repairAttempts: input.repairAttempts, substitutionCount: input.substitutionCount }, target: { websiteId: input.policy.websiteId, targetRowId, destinationId: input.destinationId, configurationFingerprint: input.targetConfigurationFingerprint || 'legacy-v3', identityVerified: true as const }, lineage: { entryId, jobId, draftId: input.draftId, entityProfileFingerprint: input.entityProfileFingerprint || 'legacy-v3', queryOwnershipFingerprint: input.queryOwnershipFingerprint || 'legacy-v3' }, decision: { action: 'publish' as const, decidedAt: new Date(input.now).toISOString(), decisionFingerprint: input.decision.decisionFingerprint } }
+  const risk = input.riskSnapshot
+  const quality = input.qualityEvaluation
+  const base = { authorizationVersion: 'machine-authorization-v2' as const, authorizationId: `machine-auth-${hash({ policyId: input.policy.policyId, targetRowId: input.targetRowId, entryId: input.entryId, jobId: input.jobId, draftId: input.draftId, contentHash: input.contentHash, evidenceSnapshotHash: input.evidenceSnapshotHash }).slice(0, 32)}`, policy: { policyId: input.policy.policyId, policyVersion: input.policy.policyVersion, configurationFingerprint: input.policy.configurationFingerprint, ownerUserId: input.policy.ownerUserId, clientId: input.policy.clientId, websiteId: input.policy.websiteId, mode: input.policy.mode, evidenceFreshnessHours: input.policy.evidenceFreshnessHours, allowedProviderModels: [...input.policy.allowedProviderModels] }, candidate: { candidateId: input.candidateId, contentHash: input.contentHash, contentType: input.contentType, locale: input.locale }, evidence: { snapshotHash: input.evidenceSnapshotHash, status: 'approved_fresh' as const, capturedAt: new Date(input.evidenceCapturedAt).toISOString() }, risk, quality, content: { draftId: input.draftId, contentHash: input.contentHash, providerModel: input.providerModel, repairAttempts: input.repairAttempts, substitutionCount: input.substitutionCount }, target: { websiteId: input.policy.websiteId, targetRowId: input.targetRowId, destinationId: input.destinationId, configurationFingerprint: input.targetConfigurationFingerprint, identityVerified: true as const }, lineage: { entryId: input.entryId, jobId: input.jobId, draftId: input.draftId, entityProfileFingerprint: input.entityProfileFingerprint, queryOwnershipFingerprint: input.queryOwnershipFingerprint }, decision: { action: 'publish' as const, decidedAt: new Date(input.now).toISOString(), decisionFingerprint: input.decision.decisionFingerprint } }
   return { ...base, authorizationFingerprint: hash(base) }
 }
 

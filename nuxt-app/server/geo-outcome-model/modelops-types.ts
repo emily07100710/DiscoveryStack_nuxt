@@ -55,6 +55,8 @@ export interface ModelOpsCycle {
   startedAt: string | null
   completedAt: string | null
   attempt: number
+  /** Monotonic fencing token; every successful claim/takeover increments it. */
+  leaseVersion: number
   leaseOwner: string | null
   leaseExpiresAt: string | null
   idempotencyKey: string
@@ -138,6 +140,12 @@ export interface ModelOpsCycleClaimResult {
   cycle: ModelOpsCycle
 }
 
+export interface ModelOpsLeaseFence {
+  leaseOwner: string
+  leaseVersion: number
+  attempt: number
+}
+
 export interface ModelOpsWorkspace {
   ownerUserId: number
   policy: ModelOpsPolicy | null
@@ -166,8 +174,9 @@ export interface ModelOpsRepositoryPort {
   getCycle(ownerUserId: number, cycleId: string): Promise<ModelOpsCycle | null>
   saveCycle(ownerUserId: number, cycle: ModelOpsCycle): Promise<ModelOpsCycle>
   claimCycle(ownerUserId: number, cycleId: string, leaseOwner: string, leaseExpiresAt: string): Promise<ModelOpsCycleClaimResult>
-  updateCycle(ownerUserId: number, cycleId: string, patch: Partial<ModelOpsCycle>): Promise<ModelOpsCycle>
-  appendEvent(ownerUserId: number, event: ModelOpsEvent): Promise<ModelOpsEvent>
+  assertCycleFence(ownerUserId: number, cycleId: string, fence: ModelOpsLeaseFence): Promise<ModelOpsCycle>
+  updateCycle(ownerUserId: number, cycleId: string, patch: Partial<ModelOpsCycle>, fence?: ModelOpsLeaseFence): Promise<ModelOpsCycle>
+  appendEvent(ownerUserId: number, event: ModelOpsEvent, fence?: ModelOpsLeaseFence): Promise<ModelOpsEvent>
   listEvents(ownerUserId: number, cycleId?: string): Promise<ModelOpsEvent[]>
   saveShadowEvaluation(ownerUserId: number, evaluation: ModelOpsShadowEvaluation): Promise<ModelOpsShadowEvaluation>
   listShadowEvaluations(ownerUserId: number, artifactId?: string): Promise<ModelOpsShadowEvaluation[]>

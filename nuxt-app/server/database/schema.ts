@@ -878,14 +878,17 @@ export const contentOperationBudgetReservations = mysqlTable('contentOperationBu
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   policyId: varchar('policyId', { length: 160 }).notNull(),
-  publicationTargetId: int('publicationTargetId').notNull().references(() => contentOperationPublicationTargets.id),
-  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  publicationTargetId: int('publicationTargetId').notNull(),
+  entryId: int('entryId').notNull(),
   kind: mysqlEnum('kind', ['generation', 'publication']).notNull(),
   units: int('units').notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 160 }).notNull(),
   inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_budget_publication_target_301e2f78f9', columns: [table.publicationTargetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+  foreignKey({ name: 'fk_content_operation_budget_entry_id_f9984d8a11', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+
   uniqueIndex('content_operation_budget_owner_key_unique').on(table.ownerUserId, table.policyId, table.kind, table.idempotencyKey),
   index('content_operation_budget_owner_policy_idx').on(table.ownerUserId, table.policyId, table.kind),
 ])
@@ -895,7 +898,7 @@ export const contentOperationEntityStrategyProfiles = mysqlTable('contentOperati
   id: int('id').autoincrement().primaryKey(),
   profileId: varchar('profileId', { length: 160 }).notNull(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  clientId: int('clientId').notNull(),
   websiteId: varchar('websiteId', { length: 128 }).notNull(),
   canonicalBrandName: varchar('canonicalBrandName', { length: 160 }).notNull(),
   brandAliases: json('brandAliases').notNull(),
@@ -929,6 +932,8 @@ export const contentOperationEntityStrategyProfiles = mysqlTable('contentOperati
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_entity_client_id_93fa2c6912', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+
   uniqueIndex('content_operation_entity_profile_owner_id_unique').on(table.ownerUserId, table.profileId),
   uniqueIndex('content_operation_entity_profile_owner_fingerprint_unique').on(table.ownerUserId, table.profileFingerprint),
   uniqueIndex('content_operation_entity_profile_active_scope_unique').on(table.ownerUserId, table.activeScopeKey),
@@ -939,7 +944,7 @@ export const contentOperationEntityStrategyProfiles = mysqlTable('contentOperati
 export const contentOperationQueryOwnership = mysqlTable('contentOperationQueryOwnership', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  clientId: int('clientId').notNull(),
   websiteId: varchar('websiteId', { length: 128 }).notNull(),
   ownerPageId: varchar('ownerPageId', { length: 256 }).notNull(),
   normalizedQuery: varchar('normalizedQuery', { length: 500 }).notNull(),
@@ -952,6 +957,8 @@ export const contentOperationQueryOwnership = mysqlTable('contentOperationQueryO
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   revokedAt: timestamp('revokedAt'),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_query__client_id_ae8ba34aa7', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+
   uniqueIndex('content_operation_query_ownership_owner_fingerprint_unique').on(table.ownerUserId, table.fingerprint),
   uniqueIndex('content_operation_query_ownership_active_scope_unique').on(table.ownerUserId, table.activeScopeKey),
   index('content_operation_query_ownership_scope_query_idx').on(table.ownerUserId, table.clientId, table.websiteId, table.normalizedQuery, table.status),
@@ -961,9 +968,9 @@ export const contentOperationQueryOwnership = mysqlTable('contentOperationQueryO
 export const contentOperationRepairAttempts = mysqlTable('contentOperationRepairAttempts', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  clientId: int('clientId').notNull(),
   websiteId: varchar('websiteId', { length: 128 }).notNull(),
-  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  entryId: int('entryId').notNull(),
   originalDraftId: varchar('originalDraftId', { length: 160 }).notNull(),
   originalContentHash: varchar('originalContentHash', { length: 128 }).notNull(),
   repairAttempt: int('repairAttempt').notNull(),
@@ -986,6 +993,9 @@ export const contentOperationRepairAttempts = mysqlTable('contentOperationRepair
   leaseExpiresAt: timestamp('leaseExpiresAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_repair_client_id_c44092d2bd', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_repair_entry_id_c4a371cc0a', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+
   uniqueIndex('content_operation_repair_owner_fingerprint_unique').on(table.ownerUserId, table.repairFingerprint),
   index('content_operation_repair_owner_entry_idx').on(table.ownerUserId, table.entryId, table.repairAttempt),
 ])
@@ -994,9 +1004,9 @@ export const contentOperationRepairAttempts = mysqlTable('contentOperationRepair
 export const contentOperationTopicSubstitutions = mysqlTable('contentOperationTopicSubstitutions', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  clientId: int('clientId').notNull(),
   websiteId: varchar('websiteId', { length: 128 }).notNull(),
-  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  entryId: int('entryId').notNull(),
   substitutionAttempt: int('substitutionAttempt').notNull(),
   originalTopic: varchar('originalTopic', { length: 500 }).notNull(),
   substitutedTopic: varchar('substitutedTopic', { length: 500 }).notNull(),
@@ -1006,6 +1016,9 @@ export const contentOperationTopicSubstitutions = mysqlTable('contentOperationTo
   status: mysqlEnum('status', ['planned', 'applied', 'skipped']).default('planned').notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_topic__client_id_a49c8626e8', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_topic__entry_id_56892ad217', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+
   uniqueIndex('content_operation_substitution_owner_fingerprint_unique').on(table.ownerUserId, table.substitutionFingerprint),
   index('content_operation_substitution_owner_entry_idx').on(table.ownerUserId, table.entryId, table.substitutionAttempt),
 ])
@@ -1015,12 +1028,12 @@ export const contentOperationMachineAuthorizations = mysqlTable('contentOperatio
   id: int('id').autoincrement().primaryKey(),
   authorizationId: varchar('authorizationId', { length: 160 }).notNull(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  clientId: int('clientId').notNull(),
   websiteId: varchar('websiteId', { length: 128 }).notNull(),
-  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
-  jobId: int('jobId').references(() => seoGeoContentJobs.id),
-  draftId: int('draftId').notNull().references(() => seoGeoContentDrafts.id),
-  publicationTargetId: int('publicationTargetId').references(() => contentOperationPublicationTargets.id),
+  entryId: int('entryId').notNull(),
+  jobId: int('jobId'),
+  draftId: int('draftId').notNull(),
+  publicationTargetId: int('publicationTargetId'),
   policyId: varchar('policyId', { length: 160 }).notNull(),
   policyVersion: varchar('policyVersion', { length: 128 }).notNull(),
   candidateId: varchar('candidateId', { length: 160 }).notNull(),
@@ -1043,6 +1056,12 @@ export const contentOperationMachineAuthorizations = mysqlTable('contentOperatio
   revokedAt: timestamp('revokedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_machin_client_id_786cef497a', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_machin_entry_id_07afe0cb6d', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+  foreignKey({ name: 'fk_content_operation_machin_job_id_305a9e3c04', columns: [table.jobId], foreignColumns: [seoGeoContentJobs.id] }),
+  foreignKey({ name: 'fk_content_operation_machin_draft_id_8fb1f6c556', columns: [table.draftId], foreignColumns: [seoGeoContentDrafts.id] }),
+  foreignKey({ name: 'fk_content_operation_machin_publication_target_7e7e3215e9', columns: [table.publicationTargetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+
   uniqueIndex('content_operation_machine_auth_owner_id_unique').on(table.ownerUserId, table.authorizationId),
   uniqueIndex('content_operation_machine_auth_owner_fingerprint_unique').on(table.ownerUserId, table.authorizationFingerprint),
   uniqueIndex('content_operation_machine_auth_owner_target_unique').on(table.ownerUserId, table.entryId, table.publicationTargetId, table.authorizationFingerprint),
@@ -2763,6 +2782,7 @@ export const geoOutcomeModelopsCycles = mysqlTable('geoOutcomeModelopsCycles', {
   startedAt: timestamp('startedAt'),
   completedAt: timestamp('completedAt'),
   attempt: int('attempt').default(0).notNull(),
+  leaseVersion: int('leaseVersion').default(0).notNull(),
   leaseOwner: varchar('leaseOwner', { length: 128 }),
   leaseExpiresAt: timestamp('leaseExpiresAt'),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),

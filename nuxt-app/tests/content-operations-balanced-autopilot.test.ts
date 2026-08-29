@@ -10,14 +10,19 @@ const HASH = 'a'.repeat(64)
 
 function policy(overrides: Partial<AutopilotPolicySnapshot> = {}): AutopilotPolicySnapshot {
   return {
-    policyId: 'policy-1', policyVersion: 'governed-autopilot-policy-v3', ownerUserId: 1, clientId: 2, websiteId: 'website-1', mode: 'balanced', status: 'enabled', allowedContentTypes: ['article'], allowedLocales: ['en'], allowedDestinations: ['primary'], allowedCadences: [3], allowedRiskClasses: ['low', 'general'], entityStrategyProfileId: 'entity-1', maximumRepairAttempts: 3, maximumTopicSubstitutions: 2, generationBudget: 10, publicationBudget: 10, configurationFingerprint: HASH, activatedAt: '2026-08-01T00:00:00.000Z', expiresAt: '2026-12-31T00:00:00.000Z', revokedAt: null, ...overrides,
+    policyId: 'policy-1', policyVersion: 'governed-autopilot-policy-v3', ownerUserId: 1, clientId: 2, websiteId: 'website-1', mode: 'balanced', status: 'enabled', allowedContentTypes: ['article'], allowedLocales: ['en'], allowedDestinations: ['primary'], allowedCadences: [3], allowedRiskClasses: ['low', 'general'], entityStrategyProfileId: 'entity-1', maximumRepairAttempts: 3, maximumTopicSubstitutions: 2, generationBudget: 10, publicationBudget: 10, evidenceFreshnessHours: 720, allowedProviderModels: ['bailian:qwen-plus'], configurationFingerprint: HASH, activatedAt: '2026-08-01T00:00:00.000Z', expiresAt: '2026-12-31T00:00:00.000Z', revokedAt: null, ...overrides,
   }
 }
 
 function input(overrides: Partial<Parameters<typeof decideBalancedAutopilot>[0]> = {}) {
   return {
-    policy: policy(), candidateId: 'candidate-1', contentType: 'article', locale: 'en', destinationId: 'primary', cadenceDays: 3, riskClass: 'general' as const, qualityStatus: 'passed' as const, reasonCodes: [], contentHash: HASH, evidenceSnapshotHash: HASH, evidenceStatus: 'approved_fresh' as const, targetIdentityVerified: true, lineageVerified: true, repairAttempts: 0, topicSubstitutions: 0, candidateSafeTopics: ['supporting topic'], entityProfile: null, queryOwnership: null, contentText: 'Acme explains a useful service for an audience.', primaryQuery: 'useful service', now: NOW, ...overrides,
+    policy: policy(), candidateId: 'candidate-1', contentType: 'article', locale: 'en', destinationId: 'primary', cadenceDays: 3, riskClass: 'general' as const, qualityStatus: 'passed' as const, reasonCodes: [], contentHash: HASH, evidenceSnapshotHash: HASH, evidenceStatus: 'approved_fresh' as const, providerProvenanceComplete: true, providerModel: 'bailian:qwen-plus', targetIdentityVerified: true, lineageVerified: true, repairAttempts: 0, topicSubstitutions: 0, candidateSafeTopics: ['supporting topic'], entityProfile: null, queryOwnership: null, contentText: 'Acme explains a useful service for an audience.', primaryQuery: 'useful service', now: NOW, ...overrides,
   }
+}
+
+function authorizationInput(decision: ReturnType<typeof decideBalancedAutopilot>) {
+  const riskSnapshot = canonicalAutonomousRiskSnapshot({ gateId: 9, gateVersion: 'content-risk-gate-v1', gateStatus: 'passed', riskLevel: 'low', findings: [], draftId: 11, contentHash: HASH, evidenceSnapshotHash: HASH })
+  return { decision, policy: policy(), candidateId: 'candidate-1', contentHash: HASH, contentType: 'article', locale: 'en', evidenceSnapshotHash: HASH, evidenceCapturedAt: '2026-08-28T10:00:00.000Z', riskSeverity: riskSnapshot.severity, businessRiskClass: riskSnapshot.businessClass, riskReasonCodes: [], riskSnapshot, qualityEvaluation: { status: 'passed' as const, reasonCodes: [], engineVersion: 'geo-content-quality-evaluation-v1', fingerprint: HASH }, entryId: 1, jobId: 2, draftId: '11', entityProfileFingerprint: HASH, queryOwnershipFingerprint: HASH, providerModel: 'bailian:qwen-plus', repairAttempts: 0, substitutionCount: 0, targetRowId: 3, targetConfigurationFingerprint: HASH, destinationId: 'primary', now: NOW.toISOString() }
 }
 
 describe('balanced autonomous GEO decision engine', () => {
@@ -25,7 +30,7 @@ describe('balanced autonomous GEO decision engine', () => {
     const decision = decideBalancedAutopilot(input())
     expect(decision.action).toBe('publish')
     expect(decision.machineAuthorized).toBe(true)
-    const authorization = buildMachineAuthorization({ decision, policy: policy(), candidateId: 'candidate-1', contentHash: HASH, contentType: 'article', locale: 'en', evidenceSnapshotHash: HASH, evidenceCapturedAt: '2026-08-28T10:00:00.000Z', riskClass: 'general', riskReasonCodes: [], draftId: 'draft-1', providerModel: 'qwen-plus', repairAttempts: 0, substitutionCount: 0, destinationId: 'primary', now: NOW.toISOString() })
+    const authorization = buildMachineAuthorization(authorizationInput(decision))
     expect(authorization.target.identityVerified).toBe(true)
     expect(authorization.quality.status).toBe('passed')
     expect(authorization.authorizationFingerprint).toMatch(/^[a-f0-9]{64}$/)
@@ -57,6 +62,12 @@ describe('balanced autonomous GEO decision engine', () => {
     expect(wellness.code).toBe('REPAIR_REQUIRED')
   })
 
+  it('fails closed unless provider provenance is exact true and the provider/model is owner-allowed', () => {
+    expect(decideBalancedAutopilot(input({ providerProvenanceComplete: false })).code).toBe('PROVIDER_PROVENANCE_INCOMPLETE')
+    expect(decideBalancedAutopilot(input({ providerProvenanceComplete: undefined as never })).code).toBe('PROVIDER_PROVENANCE_INCOMPLETE')
+    expect(decideBalancedAutopilot(input({ providerModel: 'bailian:qwen-max' })).code).toBe('PROVIDER_MODEL_NOT_ALLOWED')
+  })
+
   it('detects exact phrase stuffing and validates entity/query ownership fingerprints', () => {
     const stuffing = detectKeywordStuffing({ text: 'local service local service local service local service', primaryQuery: 'local service' })
     expect(stuffing.detected).toBe(true)
@@ -69,7 +80,7 @@ describe('balanced autonomous GEO decision engine', () => {
 
   it('rejects machine authorization for a repair or blocked decision', () => {
     const decision = decideBalancedAutopilot(input({ qualityStatus: 'needs_repair', reasonCodes: ['BRAND_MISSING'] }))
-    expect(() => buildMachineAuthorization({ decision, policy: policy(), candidateId: 'candidate-1', contentHash: HASH, contentType: 'article', locale: 'en', evidenceSnapshotHash: HASH, evidenceCapturedAt: NOW.toISOString(), riskClass: 'general', riskReasonCodes: [], draftId: 'draft-1', providerModel: 'qwen-plus', repairAttempts: 0, substitutionCount: 0, destinationId: 'primary', now: NOW.toISOString() })).toThrow(/allowed publish decision/)
+    expect(() => buildMachineAuthorization(authorizationInput(decision))).toThrow(/allowed publish decision/)
     const contract = buildRepairContract({ originalDraftId: 'draft-1', originalContentHash: HASH, repairAttempt: 1, reasonCodes: ['BRAND_MISSING'], requestedRepairs: decision.repairInstructions, candidateId: 'candidate-1', evidenceSnapshotHash: HASH, createdAt: NOW.toISOString() })
     expect(contract.parentLineage.contentHash).toBe(HASH)
     expect(contract.repairFingerprint).toMatch(/^[a-f0-9]{64}$/)

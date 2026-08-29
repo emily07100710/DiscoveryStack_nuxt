@@ -114,6 +114,24 @@ async function createMultiAutopilotFixture(policyOverrides: Record<string, unkno
   return { fixture, client, calendar, entry, firstParty, wordpress, firstPolicy: firstPolicy.policy, secondPolicy: secondPolicy.policy }
 }
 
+async function createFormalV4GateFixture(label: string, options: { evidenceApprovalAt?: string; evidenceFreshnessHours?: number; allowedProviderModels?: readonly string[] } = {}) {
+  const fixture = new ContentOperationsFixture()
+  const client = fixture.addClient(1)
+  client.canonicalSiteOrigin = `https://${label.replace(/[^a-z0-9-]/gu, '-')}.owner1-test.com`
+  client.publicationTransport = 'first_party_git'
+  const calendar = await fixture.addCalendar(1, '2026-08-25', 1)
+  calendar.updatedAt = NOW
+  fixture.evidenceApprovalAt = options.evidenceApprovalAt || NOW.toISOString()
+  const entry = fixture.entries.find(item => item.calendarId === calendar.id)!
+  const target = (await createOwnerPublicationTarget(1, client.id, { ...targetInput(`${label}-target`), targetOrigin: 'https://api.github.com' }, fixture.repository)).target
+  await bindOwnerEntryPublicationTargets(1, entry.id, { targetRowIds: [target.id] }, fixture.repository)
+  const profile = await saveOwnerEntityStrategyProfile(1, client.id, { targetRowId: target.id, idempotencyKey: `${label}-profile`, canonicalBrandName: 'Fixture Brand', brandAliases: [], canonicalWebsiteOrigin: client.canonicalSiteOrigin, businessType: 'services', primaryLocale: 'en', secondaryLocales: [], primaryLocations: [], serviceAreas: [], primaryServices: ['content strategy'], secondaryServices: [], targetAudience: ['owners'], primaryQueryClusters: [entry.topicCluster], supportingQueryClusters: [], canonicalPillarPages: [`${client.canonicalSiteOrigin}/pillar`], servicePageBindings: {}, approvedBrandFacts: ['Fixture Brand provides content strategy.'], approvedDifferentiators: [], prohibitedClaims: ['guaranteed results'], preferredTone: 'clear', requiredDisclosures: [], internalLinkPolicy: 'canonical links only', structuredDataIdentity: { name: 'Fixture Brand' }, evidenceSnapshotHash: entry.evidenceSnapshotHash }, fixture.repository, NOW)
+  await saveOwnerQueryOwnership(1, client.id, { targetRowId: target.id, idempotencyKey: `${label}-query`, ownerPageId: `${client.canonicalSiteOrigin}/pillar`, normalizedQuery: entry.topicCluster, queryCluster: entry.topicCluster, supportingArticleIds: [], evidenceSnapshotHash: entry.evidenceSnapshotHash }, fixture.repository, NOW)
+  await enableOwnerAutopilot(1, client.id, { policyVersion: 'governed-autopilot-policy-v4', targetRowId: target.id, entityStrategyProfileId: profile.profile.profileId, mode: 'balanced', expiresAt: '2026-12-31T23:59:59.000Z', allowedContentTypes: ['article'], allowedLanguages: ['en'], allowedDestinations: [target.targetId], allowedCadences: [3], allowedRiskClasses: ['general'], allowedProviderModels: options.allowedProviderModels || ['bailian:qwen-plus'], evidenceFreshnessHours: options.evidenceFreshnessHours || 720, maximumRepairAttempts: 1, maximumTopicSubstitutions: 0, generationBudget: 1, publicationBudget: 1 }, fixture.repository, NOW)
+  await materializeOwnerDueContent(1, { calendarId: calendar.id, expectedPlanFingerprint: calendar.planFingerprint, idempotencyKey: `${label}-materialize` }, fixture.repository, { clock: { now: () => NOW, localDate: () => '2026-08-25' }, eligibleEntryIds: [entry.id] })
+  return { fixture, client, calendar, entry, target }
+}
+
 describe('Content Operations application-level lifecycle V1', () => {
   it('runs manual generation→owner review→publication and derives outcome/learning from the verified receipt', async () => {
     const { fixture, entry, target } = await createSingleManualFixture()
@@ -247,6 +265,7 @@ describe('Content Operations application-level lifecycle V1', () => {
 
   it('runs formal V4 across three independently authorized targets, preserves two receipts, and retries only the failed target', async () => {
     const fixture = new ContentOperationsFixture()
+    fixture.evidenceApprovalAt = NOW.toISOString()
     const client = fixture.addClient(1)
     client.canonicalSiteOrigin = 'https://owner1-test.com'
     client.publicationTransport = 'first_party_git'
@@ -345,8 +364,30 @@ describe('Content Operations application-level lifecycle V1', () => {
     expect(runtime.autoGeoProvider).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    ['stale evidence', { evidenceApprovalAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000).toISOString(), evidenceFreshnessHours: 1 }],
+    ['disallowed provider/model', { allowedProviderModels: ['bailian:qwen-max'] }],
+  ] as const)('formal V4 blocks %s before machine authorization, publication budget, or executor calls', async (label, options) => {
+    const context = await createFormalV4GateFixture(label.replaceAll(' ', '-'), options)
+    const runtime = createProviderBackedMockRuntime()
+    const registry = mockedMultiChannelRegistry()
+    const dependencies = { productionRuntime: productionRuntime(context.fixture, runtime), multiChannelRegistry: registry.registry, resolveMultiChannelCredential: async () => 'ref-mock-credential' }
+    const generated = await runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: context.fixture.repository, dependencies })
+    expect(generated.results.some(result => result.outcome === 'awaiting_review')).toBe(true)
+    const providerCallsBeforeReview = runtime.qwenFetch.mock.calls.length + runtime.autoGeoProvider.mock.calls.length
+    const reviewed = await runContentOperationsExecutionTick({ ownerUserId: 1, now: NOW, repository: context.fixture.repository, dependencies })
+    expect(reviewed.results.some(result => result.outcome === 'blocked')).toBe(true)
+    expect(runtime.qwenFetch.mock.calls.length + runtime.autoGeoProvider.mock.calls.length).toBe(providerCallsBeforeReview)
+    expect(registry.firstPartyCalls).not.toHaveBeenCalled()
+    expect(registry.httpCalls).not.toHaveBeenCalled()
+    expect(context.fixture.machineAuthorizations).toHaveLength(0)
+    expect(context.fixture.budgetReservations.filter(row => row.kind === 'publication')).toHaveLength(0)
+    expect(context.fixture.attempts).toHaveLength(0)
+  })
+
   it('runs scheduler repair once, requeues the exact child, then authorizes and publishes on the next tick', async () => {
     const fixture = new ContentOperationsFixture()
+    fixture.evidenceApprovalAt = NOW.toISOString()
     const client = fixture.addClient(1); client.canonicalSiteOrigin = 'https://owner1-repair.com'; client.publicationTransport = 'first_party_signed_api'
     const calendar = await fixture.addCalendar(1, '2026-08-25', 1)
     const entry = fixture.entries.find(row => row.calendarId === calendar.id)!
@@ -362,7 +403,7 @@ describe('Content Operations application-level lifecycle V1', () => {
       const title = 'Fixture Brand opportunity-1 repaired guide'
       const body = '# Fixture Brand opportunity-1 repaired guide\n\nFixture Brand gives owners a bounded opportunity-1 answer using only approved evidence. [cite:1]\n\n## Evidence boundary\n\nThe repaired child preserves the approved source and makes no unsupported performance claim.'
       const childHash = contentFingerprint(title, body)
-      const child = await persistence.saveContentCandidate({ jobId: repair.jobId, title, body, contentHash: childHash, sourceMode: 'provider_candidate', provenance: { provider: 'autogeo-bailian-qwen', providerVersion: 'mock-repair-v1', providerModel: 'qwen-plus', providerExecution: true, providerProvenance: { providerExecution: true, model: 'qwen-plus' }, stage: 'optimized', generationMode: 'repair_selected_rule_optimization', parentDraftId: repair.originalDraft.id, parentDraftHash: repair.originalDraft.contentHash, repairAttempt: repair.repairAttempt, repairContractFingerprint: repair.repairContractFingerprint, selectedRuleIds: ['direct-answer-first', 'semantic-sections'], appliedRuleIds: ['direct-answer-first', 'semantic-sections'], evidenceSnapshotHash: entry.evidenceSnapshotHash }, evidenceRefs: [{ sourceId: 1, artifactId: 1, reason: 'approved fixture evidence' }], safetyStatus: 'passed', safetyNotes: ['injected repair mock only'] })
+      const child = await persistence.saveContentCandidate({ jobId: repair.jobId, title, body, contentHash: childHash, sourceMode: 'provider_candidate', provenance: { provider: 'autogeo-bailian-qwen', providerVersion: 'mock-repair-v1', providerModel: 'bailian:qwen-plus', providerExecution: true, providerProvenance: { providerExecution: true, model: 'qwen-plus' }, stage: 'optimized', generationMode: 'repair_selected_rule_optimization', parentDraftId: repair.originalDraft.id, parentDraftHash: repair.originalDraft.contentHash, repairAttempt: repair.repairAttempt, repairContractFingerprint: repair.repairContractFingerprint, selectedRuleIds: ['direct-answer-first', 'semantic-sections'], appliedRuleIds: ['direct-answer-first', 'semantic-sections'], evidenceSnapshotHash: entry.evidenceSnapshotHash }, evidenceRefs: [{ sourceId: 1, artifactId: 1, reason: 'approved fixture evidence' }], safetyStatus: 'passed', safetyNotes: ['injected repair mock only'] })
       await persistence.saveRiskGate({ draftId: child.id, result: { gateVersion: 'content-risk-gate-v1', status: 'passed', riskLevel: 'low', findings: [] } as never, evidenceSnapshotHash: entry.evidenceSnapshotHash })
       return { draft: { id: child.id }, riskGate: { status: 'passed' } }
     })
@@ -385,6 +426,7 @@ describe('Content Operations application-level lifecycle V1', () => {
   it('creates a fresh replacement from the formal scheduler and skips safely when every bounded option is exhausted', async () => {
     async function setup(label: string, maximumTopicSubstitutions: number) {
       const fixture = new ContentOperationsFixture()
+      fixture.evidenceApprovalAt = NOW.toISOString()
       const client = fixture.addClient(1); client.canonicalSiteOrigin = `https://owner1-${label}.com`; client.publicationTransport = 'first_party_signed_api'
       const calendar = await fixture.addCalendar(1, '2026-08-25', 1)
       const entry = fixture.entries.find(row => row.calendarId === calendar.id)!
