@@ -1,0 +1,19 @@
+[project]
+name = "discovery_stack"
+version = "0.1.0"
+description = "DiscoveryStack governed SystemSpec application boundary"
+requires-python = ">=3.14"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["discovery_stack*"]
+
+[tool.setuptools.package-data]
+discovery_stack = ["**/*.json", "**/*.txt"]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["discovery_stack/tests"]

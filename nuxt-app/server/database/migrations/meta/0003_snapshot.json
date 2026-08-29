@@ -1403,8 +1403,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceArtifacts_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceArtifacts_sourceId_publicIntelligenceSources_id_fk",
+        "pia_source_fk": {
+          "name": "pia_source_fk",
           "tableFrom": "publicIntelligenceArtifacts",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -1685,8 +1685,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceDatasetMembers_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk": {
-          "name": "publicIntelligenceDatasetMembers_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk",
+        "pidm_build_fk": {
+          "name": "pidm_build_fk",
           "tableFrom": "publicIntelligenceDatasetMembers",
           "tableTo": "publicIntelligenceDatasetBuilds",
           "columnsFrom": [
@@ -1698,8 +1698,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceDatasetMembers_artifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "publicIntelligenceDatasetMembers_artifactId_publicIntelligenceArtifacts_id_fk",
+        "pidm_artifact_fk": {
+          "name": "pidm_artifact_fk",
           "tableFrom": "publicIntelligenceDatasetMembers",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -1829,8 +1829,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceSourceReviews_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceSourceReviews_sourceId_publicIntelligenceSources_id_fk",
+        "pisr_source_fk": {
+          "name": "pisr_source_fk",
           "tableFrom": "publicIntelligenceSourceReviews",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
