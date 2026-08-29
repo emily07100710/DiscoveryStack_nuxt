@@ -11,12 +11,11 @@ function plan() { return compileSystemSpec(createGuidedSystemSpec({ requirements
 
 describe('System Factory database selection and round-trip bounds', () => {
   it('selects earliest eligible run per tenant in one database round trip', async () => {
-    let selects = 0; const stages: string[] = []
-    const builder: any = { from() { stages.push('from'); return this }, where() { stages.push('where'); return this }, groupBy() { stages.push('groupBy'); return this }, orderBy() { stages.push('orderBy'); return this }, async limit() { stages.push('limit'); return [{ runRowId: 3, tenantRowId: 10 }, { runRowId: 9, tenantRowId: 11 }] } }
-    const database: any = { select() { selects++; return builder } }
+    let roundTrips = 0; let statement = ''
+    const database: any = { async execute(query: { toQuery: (config: any) => { sql: string } }) { roundTrips++; statement = query.toQuery({ escapeName: (name: string) => `\`${name}\``, escapeParam: () => '?', escapeString: (value: string) => `'${value}'`, casing: { getColumnCasing: (column: { name: string }) => column.name } }).sql; return [[{ runRowId: 3, tenantRowId: 10 }, { runRowId: 9, tenantRowId: 11 }], []] } }
     const repository = new DrizzleProvisioningRepository(database, authority)
     await expect(repository.listEligible(new Date('2030-01-01T00:00:00Z'), 20)).resolves.toEqual([{ runRowId: 3, tenantRowId: 10 }, { runRowId: 9, tenantRowId: 11 }])
-    expect(selects).toBe(1); expect(stages).toEqual(['from', 'where', 'groupBy', 'orderBy', 'limit'])
+    expect(roundTrips).toBe(1); expect(statement.match(/UNION ALL/gu)).toHaveLength(2); expect(statement).toContain('GROUP BY candidate.tenantRowId'); expect(statement).not.toContain('SELECT *')
   })
 
   it('reads completed operations once per claim regardless of step count', async () => {

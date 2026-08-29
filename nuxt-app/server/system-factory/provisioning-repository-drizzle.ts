@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, lte, min, or } from 'drizzle-orm'
+import { and, asc, eq, gt, lte, or, sql } from 'drizzle-orm'
 import type { MySql2Database } from 'drizzle-orm/mysql2'
 import * as schema from '../database/schema'
 import { fingerprint, SystemFactoryError } from './canonical'
@@ -12,20 +12,34 @@ type Db = MySql2Database<typeof schema>
 function affected(result: any): number { return Number(result?.[0]?.affectedRows || 0) }
 function rowId(result: any): number { const value = Number(result?.[0]?.insertId); if (!Number.isSafeInteger(value) || value < 1) throw new SystemFactoryError('DATABASE_INSERT', 'Durable provisioning insert failed.', 500); return value }
 function exactSteps(value: unknown): boolean { return Array.isArray(value) && value.length === PROVISIONING_OPERATIONS.length && value.every((step, index) => step && typeof step === 'object' && (step as any).operation === PROVISIONING_OPERATIONS[index] && (step as any).ordinal === index + 1) }
+function duplicateEntry(error: unknown): boolean { const value = error as { code?: unknown; errno?: unknown }; return value?.code === 'ER_DUP_ENTRY' || Number(value?.errno) === 1062 }
 
 export class DrizzleProvisioningRepository implements DurableProvisioningRepositoryPort {
   constructor(private readonly db: Db, private readonly authority: SystemFactoryRuntimeAuthority) {}
   async listEligible(now: Date, limit: number) {
-    const eligible = or(eq(schema.systemProvisioningRuns.status, 'queued'), and(eq(schema.systemProvisioningRuns.status, 'retry_wait'), lte(schema.systemProvisioningRuns.retryEligibleAt, now)), and(eq(schema.systemProvisioningRuns.status, 'processing'), lte(schema.systemProvisioningRuns.leaseExpiresAt, now)))
-    const firstRunId = min(schema.systemProvisioningRuns.id)
-    const rows = await this.db.select({ runRowId: firstRunId, tenantRowId: schema.systemProvisioningRuns.systemTenantId }).from(schema.systemProvisioningRuns).where(eligible).groupBy(schema.systemProvisioningRuns.systemTenantId).orderBy(asc(firstRunId), asc(schema.systemProvisioningRuns.systemTenantId)).limit(Math.max(1, Math.min(limit, 20)))
+    const boundedLimit = Math.max(1, Math.min(limit, 20))
+    // Three covering range scans avoid the OR/index-merge table lookups seen
+    // on MariaDB while retaining one round trip and one earliest run/tenant.
+    const [rows] = await this.db.execute(sql`
+      SELECT MIN(candidate.runRowId) AS runRowId, candidate.tenantRowId
+      FROM (
+        (SELECT MIN(id) AS runRowId, systemTenantId AS tenantRowId FROM systemProvisioningRuns WHERE status = 'queued' GROUP BY systemTenantId)
+        UNION ALL
+        (SELECT MIN(id), systemTenantId FROM systemProvisioningRuns WHERE status = 'retry_wait' AND retryEligibleAt <= ${sql.param(now, schema.systemProvisioningRuns.retryEligibleAt)} GROUP BY systemTenantId)
+        UNION ALL
+        (SELECT MIN(id), systemTenantId FROM systemProvisioningRuns WHERE status = 'processing' AND leaseExpiresAt <= ${sql.param(now, schema.systemProvisioningRuns.leaseExpiresAt)} GROUP BY systemTenantId)
+      ) candidate
+      GROUP BY candidate.tenantRowId
+      ORDER BY MIN(candidate.runRowId), candidate.tenantRowId
+      LIMIT ${boundedLimit}
+    `) as unknown as [{ runRowId: number | string; tenantRowId: number }[], unknown]
     return rows.map(row => ({ runRowId: Number(row.runRowId), tenantRowId: row.tenantRowId })).filter(row => Number.isSafeInteger(row.runRowId) && row.runRowId > 0)
   }
   async claim(runRowId: number, leaseOwner: string, now: Date, leaseExpiresAt: Date) {
     return this.db.transaction(async tx => { const result = await tx.update(schema.systemProvisioningRuns).set({ status: 'processing', leaseOwner, leaseExpiresAt, retryEligibleAt: null } as any).where(and(eq(schema.systemProvisioningRuns.id, runRowId), or(eq(schema.systemProvisioningRuns.status, 'queued'), and(eq(schema.systemProvisioningRuns.status, 'retry_wait'), lte(schema.systemProvisioningRuns.retryEligibleAt, now)), and(eq(schema.systemProvisioningRuns.status, 'processing'), lte(schema.systemProvisioningRuns.leaseExpiresAt, now))))); if (affected(result) !== 1) return null; await tx.update(schema.systemProvisioningAttempts).set({ status: 'retry_wait', errorCode: 'STALE_LEASE_RECOVERED', errorSummary: 'Prior worker lease expired before completion.', completedAt: now } as any).where(and(eq(schema.systemProvisioningAttempts.runId, runRowId), eq(schema.systemProvisioningAttempts.status, 'processing'))); return { runRowId, leaseOwner, leaseExpiresAt } })
   }
   async renewLease(claim: ProvisioningClaim, now: Date, leaseExpiresAt: Date) { const result = await this.db.update(schema.systemProvisioningRuns).set({ leaseExpiresAt } as any).where(and(eq(schema.systemProvisioningRuns.id, claim.runRowId), eq(schema.systemProvisioningRuns.status, 'processing'), eq(schema.systemProvisioningRuns.leaseOwner, claim.leaseOwner), eq(schema.systemProvisioningRuns.leaseExpiresAt, claim.leaseExpiresAt), gt(schema.systemProvisioningRuns.leaseExpiresAt, now))); return affected(result) === 1 ? { ...claim, leaseExpiresAt } : null }
-  private async owned(claim: ProvisioningClaim, tx: Db = this.db, now?: Date) { const conditions = [eq(schema.systemProvisioningRuns.id, claim.runRowId), eq(schema.systemProvisioningRuns.status, 'processing'), eq(schema.systemProvisioningRuns.leaseOwner, claim.leaseOwner), eq(schema.systemProvisioningRuns.leaseExpiresAt, claim.leaseExpiresAt)]; if (now) conditions.push(gt(schema.systemProvisioningRuns.leaseExpiresAt, now)); const [run] = await tx.select().from(schema.systemProvisioningRuns).where(and(...conditions)).limit(1); if (!run || !run.leaseExpiresAt || run.leaseExpiresAt.getTime() !== claim.leaseExpiresAt.getTime()) throw new SystemFactoryError('LEASE_LOST', 'Provisioning lease is no longer owned.', 409); return run }
+  private async owned(claim: ProvisioningClaim, tx: Db = this.db, now?: Date) { const conditions = [eq(schema.systemProvisioningRuns.id, claim.runRowId), eq(schema.systemProvisioningRuns.status, 'processing'), eq(schema.systemProvisioningRuns.leaseOwner, claim.leaseOwner), eq(schema.systemProvisioningRuns.leaseExpiresAt, claim.leaseExpiresAt)]; if (now) conditions.push(gt(schema.systemProvisioningRuns.leaseExpiresAt, now)); const [run] = await tx.select({ id: schema.systemProvisioningRuns.id, runId: schema.systemProvisioningRuns.runId, ownerUserId: schema.systemProvisioningRuns.ownerUserId, systemTenantId: schema.systemProvisioningRuns.systemTenantId, planId: schema.systemProvisioningRuns.planId, status: schema.systemProvisioningRuns.status, attempt: schema.systemProvisioningRuns.attempt, maxAttempts: schema.systemProvisioningRuns.maxAttempts, leaseOwner: schema.systemProvisioningRuns.leaseOwner, leaseExpiresAt: schema.systemProvisioningRuns.leaseExpiresAt, retryEligibleAt: schema.systemProvisioningRuns.retryEligibleAt, inputFingerprint: schema.systemProvisioningRuns.inputFingerprint, idempotencyKey: schema.systemProvisioningRuns.idempotencyKey, createdAt: schema.systemProvisioningRuns.createdAt }).from(schema.systemProvisioningRuns).where(and(...conditions)).limit(1); if (!run || !run.leaseExpiresAt || run.leaseExpiresAt.getTime() !== claim.leaseExpiresAt.getTime()) throw new SystemFactoryError('LEASE_LOST', 'Provisioning lease is no longer owned.', 409); return run }
   async loadContext(claim: ProvisioningClaim): Promise<ProvisioningRunContext> {
     const run = await this.owned(claim)
     const [[plan], [tenant], [binding], refs] = await Promise.all([
@@ -46,7 +60,12 @@ export class DrizzleProvisioningRepository implements DurableProvisioningReposit
     if (prior.some(item => item.requestFingerprint !== requestFingerprint)) throw new SystemFactoryError('IDEMPOTENCY_COLLISION', 'Provisioning operation payload changed under the same run.', 409)
     if (prior.some(item => item.status === 'succeeded')) throw new SystemFactoryError('IDEMPOTENCY_REPLAY', 'Provisioning operation has already succeeded.', 409)
     const attemptNumber = prior.length + 1; if (attemptNumber > run.maxAttempts) throw new SystemFactoryError('ATTEMPT_EXHAUSTED', 'Provisioning operation exhausted bounded attempts.', 409)
-    await this.db.insert(schema.systemProvisioningAttempts).values({ ownerUserId: run.ownerUserId, systemTenantId: run.systemTenantId, runId: run.id, operation, attemptNumber, status: 'processing', timeoutMs, requestFingerprint, createdAt: now } as any)
+    try { await this.db.insert(schema.systemProvisioningAttempts).values({ ownerUserId: run.ownerUserId, systemTenantId: run.systemTenantId, runId: run.id, operation, attemptNumber, status: 'processing', timeoutMs, requestFingerprint, createdAt: now } as any) } catch (error) {
+      if (!duplicateEntry(error)) throw error
+      const current = await this.db.select({ requestFingerprint: schema.systemProvisioningAttempts.requestFingerprint, status: schema.systemProvisioningAttempts.status }).from(schema.systemProvisioningAttempts).where(and(eq(schema.systemProvisioningAttempts.runId, run.id), eq(schema.systemProvisioningAttempts.operation, operation), eq(schema.systemProvisioningAttempts.attemptNumber, attemptNumber))).limit(1)
+      if (!current[0] || current[0].requestFingerprint !== requestFingerprint) throw new SystemFactoryError('IDEMPOTENCY_COLLISION', 'Concurrent provisioning operation payload changed under the same attempt.', 409)
+      throw new SystemFactoryError(current[0].status === 'succeeded' ? 'IDEMPOTENCY_REPLAY' : 'ATTEMPT_IN_PROGRESS', 'Provisioning operation attempt is already claimed.', 409)
+    }
     return { operation, attemptNumber, requestFingerprint, startedAt: now }
   }
   async blockClaim(claim: ProvisioningClaim, code: string, now: Date) { const run = await this.owned(claim, this.db, now); const receiptFingerprint = fingerprint({ runId: run.runId, code, authority: this.authority.authorityFingerprint, blockedAt: now.toISOString() }); await this.db.transaction(async tx => { const result = await tx.update(schema.systemProvisioningRuns).set({ status: 'blocked', leaseOwner: null, leaseExpiresAt: null } as any).where(and(eq(schema.systemProvisioningRuns.id, run.id), eq(schema.systemProvisioningRuns.status, 'processing'), eq(schema.systemProvisioningRuns.leaseOwner, claim.leaseOwner), eq(schema.systemProvisioningRuns.leaseExpiresAt, claim.leaseExpiresAt), gt(schema.systemProvisioningRuns.leaseExpiresAt, now))); if (affected(result) !== 1) throw new SystemFactoryError('RUN_CAS', 'Provisioning blocked transition lost its claim.', 409); await tx.insert(schema.systemReceipts).values({ receiptId: `system-blocked-${receiptFingerprint.slice(0, 32)}`, ownerUserId: run.ownerUserId, systemTenantId: run.systemTenantId, runId: run.id, receiptType: 'provisioning_claim', status: 'blocked', requestFingerprint: run.inputFingerprint, responseFingerprint: null, exactResponseIdentity: null, metadata: { code: code.slice(0, 96), authorityFingerprint: this.authority.authorityFingerprint }, receiptFingerprint, createdAt: now } as any) }) }

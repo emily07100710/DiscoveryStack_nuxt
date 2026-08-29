@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { boolean, decimal, index, int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/mysql-core'
+import { boolean, decimal, foreignKey, index, int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/mysql-core'
 
 /** OAuth identities are private and are used only for owner-gated administration. */
 export const users = mysqlTable('users', {
@@ -2596,17 +2596,21 @@ export const systemTenantBindings = mysqlTable('systemTenantBindings', {
   systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id),
   clientId: int('clientId').notNull().references(() => contentOperationClients.id),
   websiteId: varchar('websiteId', { length: 128 }),
-  managedSiteProjectId: int('managedSiteProjectId').references(() => managedSiteProjects.id),
-  managedSitePreviewId: int('managedSitePreviewId').references(() => managedSitePreviews.id),
+  managedSiteProjectId: int('managedSiteProjectId'),
+  managedSitePreviewId: int('managedSitePreviewId'),
   managedSiteQuoteId: int('managedSiteQuoteId').references(() => managedSiteQuotes.id),
-  managedSiteDraftOrderId: int('managedSiteDraftOrderId').references(() => managedSiteDraftOrders.id),
-  managedSitePaymentEventId: int('managedSitePaymentEventId').references(() => managedSitePaymentEvents.id),
+  managedSiteDraftOrderId: int('managedSiteDraftOrderId'),
+  managedSitePaymentEventId: int('managedSitePaymentEventId'),
   bindingFingerprint: varchar('bindingFingerprint', { length: 64 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
   uniqueIndex('system_tenant_bindings_tenant_unique').on(table.systemTenantId),
   uniqueIndex('system_tenant_bindings_owner_fingerprint_unique').on(table.ownerUserId, table.bindingFingerprint),
   index('system_tenant_bindings_commerce_idx').on(table.managedSiteDraftOrderId, table.managedSitePaymentEventId),
+  foreignKey({ name: 'stb_managed_project_fk', columns: [table.managedSiteProjectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'stb_managed_preview_fk', columns: [table.managedSitePreviewId], foreignColumns: [managedSitePreviews.id] }),
+  foreignKey({ name: 'stb_draft_order_fk', columns: [table.managedSiteDraftOrderId], foreignColumns: [managedSiteDraftOrders.id] }),
+  foreignKey({ name: 'stb_payment_event_fk', columns: [table.managedSitePaymentEventId], foreignColumns: [managedSitePaymentEvents.id] }),
 ])
 
 /** Reviewed immutable plan. A dry-run receipt is never treated as provisioning success. */
@@ -2615,14 +2619,14 @@ export const systemProvisioningPlans = mysqlTable('systemProvisioningPlans', {
   planId: varchar('planId', { length: 128 }).notNull(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id),
-  systemSpecVersionId: int('systemSpecVersionId').notNull().references(() => systemSpecVersions.id),
+  systemSpecVersionId: int('systemSpecVersionId').notNull(),
   planFingerprint: varchar('planFingerprint', { length: 64 }).notNull(),
   steps: json('steps').notNull(),
   status: mysqlEnum('status', ['planned', 'running', 'retry_wait', 'failed', 'health_checking', 'invitation_pending', 'completed', 'cancelled']).default('planned').notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
-}, table => [uniqueIndex('system_provisioning_plans_public_id_unique').on(table.planId), uniqueIndex('system_provisioning_plans_owner_key_unique').on(table.ownerUserId, table.idempotencyKey), uniqueIndex('system_provisioning_plans_tenant_fingerprint_unique').on(table.systemTenantId, table.planFingerprint), index('system_provisioning_plans_owner_status_idx').on(table.ownerUserId, table.status)])
+}, table => [uniqueIndex('system_provisioning_plans_public_id_unique').on(table.planId), uniqueIndex('system_provisioning_plans_owner_key_unique').on(table.ownerUserId, table.idempotencyKey), uniqueIndex('system_provisioning_plans_tenant_fingerprint_unique').on(table.systemTenantId, table.planFingerprint), index('system_provisioning_plans_owner_status_idx').on(table.ownerUserId, table.status), foreignKey({ name: 'spp_spec_version_fk', columns: [table.systemSpecVersionId], foreignColumns: [systemSpecVersions.id] })])
 
 /** Leased workflow run with bounded attempts and stale-lease recovery. */
 export const systemProvisioningRuns = mysqlTable('systemProvisioningRuns', {

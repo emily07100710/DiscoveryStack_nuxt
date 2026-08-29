@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "510cee0c-60ab-4964-abfa-8b5efb80d26a",
+  "id": "01a03c35-def3-44ff-a6b7-e1af9d6c9b50",
   "prevId": "7e25560d-00b6-431a-8158-91b261d8b5f8",
   "tables": {
     "auditEvidenceLedger": {
@@ -20545,8 +20545,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "systemProvisioningPlans_systemSpecVersionId_systemSpecVersions_id_fk": {
-          "name": "systemProvisioningPlans_systemSpecVersionId_systemSpecVersions_id_fk",
+        "spp_spec_version_fk": {
+          "name": "spp_spec_version_fk",
           "tableFrom": "systemProvisioningPlans",
           "tableTo": "systemSpecVersions",
           "columnsFrom": [
@@ -21497,32 +21497,6 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "systemTenantBindings_managedSiteProjectId_managedSiteProjects_id_fk": {
-          "name": "systemTenantBindings_managedSiteProjectId_managedSiteProjects_id_fk",
-          "tableFrom": "systemTenantBindings",
-          "tableTo": "managedSiteProjects",
-          "columnsFrom": [
-            "managedSiteProjectId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "systemTenantBindings_managedSitePreviewId_managedSitePreviews_id_fk": {
-          "name": "systemTenantBindings_managedSitePreviewId_managedSitePreviews_id_fk",
-          "tableFrom": "systemTenantBindings",
-          "tableTo": "managedSitePreviews",
-          "columnsFrom": [
-            "managedSitePreviewId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
         "systemTenantBindings_managedSiteQuoteId_managedSiteQuotes_id_fk": {
           "name": "systemTenantBindings_managedSiteQuoteId_managedSiteQuotes_id_fk",
           "tableFrom": "systemTenantBindings",
@@ -21536,8 +21510,34 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "systemTenantBindings_managedSiteDraftOrderId_managedSiteDraftOrders_id_fk": {
-          "name": "systemTenantBindings_managedSiteDraftOrderId_managedSiteDraftOrders_id_fk",
+        "stb_managed_project_fk": {
+          "name": "stb_managed_project_fk",
+          "tableFrom": "systemTenantBindings",
+          "tableTo": "managedSiteProjects",
+          "columnsFrom": [
+            "managedSiteProjectId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "stb_managed_preview_fk": {
+          "name": "stb_managed_preview_fk",
+          "tableFrom": "systemTenantBindings",
+          "tableTo": "managedSitePreviews",
+          "columnsFrom": [
+            "managedSitePreviewId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "stb_draft_order_fk": {
+          "name": "stb_draft_order_fk",
           "tableFrom": "systemTenantBindings",
           "tableTo": "managedSiteDraftOrders",
           "columnsFrom": [
@@ -21549,8 +21549,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "systemTenantBindings_managedSitePaymentEventId_managedSitePaymentEvents_id_fk": {
-          "name": "systemTenantBindings_managedSitePaymentEventId_managedSitePaymentEvents_id_fk",
+        "stb_payment_event_fk": {
+          "name": "stb_payment_event_fk",
           "tableFrom": "systemTenantBindings",
           "tableTo": "managedSitePaymentEvents",
           "columnsFrom": [
