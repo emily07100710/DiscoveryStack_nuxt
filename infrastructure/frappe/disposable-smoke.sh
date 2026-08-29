@@ -43,7 +43,12 @@ ds_smoke_compose run --rm --no-deps \
     bench --site ds-smoke-v1.localhost migrate
     bench --site ds-smoke-v1.localhost execute frappe.utils.fixtures.sync_fixtures --kwargs "{\"app\":\"discovery_stack\"}"
     bench --site ds-smoke-v1.localhost list-apps
-    bench --site ds-smoke-v1.localhost execute discovery_stack.tests.materialization_smoke.run
+    DS_MATERIALIZATION_RESULT="$(bench --site ds-smoke-v1.localhost execute discovery_stack.tests.bench_runner.run)"
+    printf "%s\n" "$DS_MATERIALIZATION_RESULT"
+    if ! grep -Fq "\"marker\": \"DISCOVERYSTACK_FRAPPE_SMOKE\"" <<<"$DS_MATERIALIZATION_RESULT" || ! grep -Fq "\"ok\": true" <<<"$DS_MATERIALIZATION_RESULT"; then
+      printf "%s\n" "FRAPPE_MATERIALIZATION_SMOKE=FAIL" >&2
+      exit 1
+    fi
   '
 
 printf '%s\n' 'FRAPPE_DISPOSABLE_SMOKE=PASS'

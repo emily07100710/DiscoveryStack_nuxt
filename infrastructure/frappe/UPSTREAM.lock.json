@@ -48,12 +48,12 @@
     "dockerfile": "infrastructure/frappe/Dockerfile.system-factory",
     "frappeSourceCommit": "5cba016e86b54b57f34a3864282b92300ef20fb0",
     "erpnextSourceCommit": "b24c9eba551905e256e336ff170a91a92d197a2f",
-    "customAppSha256": "7e458f3126ea35968b2997aaacf2362d984d357a575a5d15cb4e509f0f031e2f",
+    "customAppSha256": "4db2698b4c5730c5650d52daab66bfb8c31edd615280e7051295699688590ec3",
     "buildRecipeFingerprint": "dabf5882d47dc5cc1fa7487aa753d589b223d225ec38a6d4434e78d5769c4257",
-    "imageManifestDigest": null,
-    "imageConfigDigest": null,
+    "imageManifestDigest": "sha256:537d0a332716541df27a96c906c8ff90ca69574b6b35bb64599926d6ff4ec6e2",
+    "imageConfigDigest": "sha256:7b8e808d7ba13fb97963cad4ca6e71f9c1ce129d27d220b309020a21373e899f",
     "productionApproved": false,
-    "status": "IMAGE_REBUILD_BLOCKED_DOCKER_DAEMON_UNAVAILABLE"
+    "status": "LOCAL_IMAGE_AUTHORITY_VERIFIED_PRODUCTION_UNAPPROVED"
   },
   "runtimeImages": {
     "mariadb": "docker.io/library/mariadb:11.8@sha256:2439dcd7d14010ecd1ff7a4e1c5abe8e208c34fe35290744deeeaac3569043c3",

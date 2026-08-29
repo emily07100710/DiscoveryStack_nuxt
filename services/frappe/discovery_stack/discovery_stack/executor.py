@@ -255,6 +255,76 @@ def _materialize_status(unit, tenant_id):
     return ",".join(names), {"states": names, "initial": unit["initial"], "terminal": unit["terminal"]}
 
 
+def _workflow_state_names(status, tenant_id):
+    return {value: f"DS {_tenant_token(tenant_id)} {value.replace('_', ' ').title()}"[:140] for value in status["values"]}
+
+
+def _workflow_fieldname(tenant_id, workflow_key):
+    """Return a caller-independent, tenant-scoped Frappe fieldname."""
+    return f"ds_wf_{_tenant_token(tenant_id)}_{_sha(workflow_key)[:8]}"
+
+
+def _workflow_field_expected(unit, tenant_id, target, status):
+    fieldname = _workflow_fieldname(tenant_id, unit["key"])
+    state_names = _workflow_state_names(status, tenant_id)
+    record_name = f"{target}-{fieldname}"
+    if len(record_name) > 140:
+        raise frappe.ValidationError("Workflow Custom Field identity exceeds the Frappe bound.")
+    return {
+        "name": record_name,
+        "dt": target,
+        "fieldname": fieldname,
+        "label": f"DS Workflow State {_tenant_token(tenant_id)}",
+        "fieldtype": "Select",
+        "options": "\n".join(state_names[value] for value in status["values"]),
+        "default": state_names[status["initial"]],
+        "hidden": 0,
+        "allow_on_submit": 1,
+        "no_copy": 1,
+        "module": "Discovery Stack",
+        "is_system_generated": 1,
+    }
+
+
+def _workflow_field_projection(expected):
+    if not frappe.db.exists("Custom Field", expected["name"]):
+        raise frappe.ValidationError("Dedicated workflow Custom Field is missing.")
+    doc = frappe.get_doc("Custom Field", expected["name"])
+    projection = {key: doc.get(key) for key in expected}
+    meta_field = frappe.get_meta(expected["dt"], cached=False).get_field(expected["fieldname"])
+    if not meta_field or meta_field.fieldtype != "Select" or (meta_field.options or "") != expected["options"] or (meta_field.default or "") != expected["default"]:
+        raise frappe.ValidationError("Dedicated workflow runtime field is drifted.")
+    return projection
+
+
+def _materialize_workflow_field(expected, allow_update=False):
+    existing_by_key = frappe.db.get_value("Custom Field", {"dt": expected["dt"], "fieldname": expected["fieldname"]}, "name")
+    if existing_by_key and existing_by_key != expected["name"]:
+        raise frappe.ValidationError("Dedicated workflow Custom Field identity collision.")
+    if not existing_by_key:
+        created = frappe.get_doc({"doctype": "Custom Field", **expected}).insert(ignore_permissions=True)
+        if created.name != expected["name"]:
+            raise frappe.ValidationError("Dedicated workflow Custom Field identity is not deterministic.")
+    else:
+        actual = {key: frappe.get_doc("Custom Field", expected["name"]).get(key) for key in expected}
+        if actual != expected and allow_update:
+            prior_options = [value for value in (actual.get("options") or "").split("\n") if value]
+            next_options = expected["options"].split("\n")
+            immutable = {key for key in expected if key not in {"options"}}
+            if any(actual.get(key) != expected[key] for key in immutable) or not set(prior_options).issubset(set(next_options)):
+                raise frappe.ValidationError("Dedicated workflow Custom Field update is destructive or collided.")
+            field = frappe.get_doc("Custom Field", expected["name"])
+            field.options = expected["options"]
+            field.save(ignore_permissions=True)
+        elif actual != expected:
+            raise frappe.ValidationError("Dedicated workflow Custom Field definition collision.")
+    frappe.clear_cache(doctype=expected["dt"])
+    actual = _workflow_field_projection(expected)
+    if actual != expected:
+        raise frappe.ValidationError("Dedicated workflow Custom Field materialization failed.")
+    return actual
+
+
 def _role_permissions(role_name):
     rows = frappe.get_all("Custom DocPerm", filters={"role": role_name}, fields=["parent", "read", "write", "create", "delete"], order_by="parent asc")
     return [{"doctype": row.parent, "read": int(row.read or 0), "write": int(row.write or 0), "create": int(row.create or 0), "delete": int(row.delete or 0)} for row in rows]
@@ -297,7 +367,7 @@ def _update_role_permissions(unit, tenant_id, targets):
     role_name, expected = _role_projection(unit, tenant_id, targets)
     prior = _role_permissions(role_name)
     try:
-        for permission in expected:
+        for permission_index, permission in enumerate(expected):
             existing_name = frappe.db.get_value("Custom DocPerm", {"role": role_name, "parent": permission["doctype"], "permlevel": 0}, "name")
             if existing_name:
                 doc = frappe.get_doc("Custom DocPerm", existing_name); doc.update({key: permission[key] for key in ("read", "write", "create", "delete")}); doc.save(ignore_permissions=True)
@@ -319,11 +389,13 @@ def _update_role_permissions(unit, tenant_id, targets):
     return role_name, {"role": role_name, "permissions": expected}
 
 
-def _workflow_projection(name):
+def _workflow_projection(name, field_expected):
     doc = frappe.get_doc("Workflow", name)
-    states = sorted(({"state": row.state, "allow_edit": row.allow_edit} for row in doc.states), key=lambda item: item["state"])
+    # Frappe treats the first row for a document status as the initial state.
+    # Preserve the governed row order instead of hiding it behind a sort.
+    states = [{"state": row.state, "allow_edit": row.allow_edit} for row in doc.states]
     transitions = sorted(({"state": row.state, "action": row.action, "next_state": row.next_state, "allowed": row.allowed} for row in doc.transitions), key=lambda item: (item["state"], item["next_state"], item["action"], item["allowed"]))
-    return {"workflow": name, "document_type": doc.document_type, "workflow_state_field": doc.workflow_state_field, "states": states, "transitions": transitions}
+    return {"workflow": name, "document_type": doc.document_type, "workflow_state_field": doc.workflow_state_field, "state_field": _workflow_field_projection(field_expected), "states": states, "transitions": transitions}
 
 
 def _expected_workflow(unit, tenant_id, targets, units):
@@ -332,25 +404,29 @@ def _expected_workflow(unit, tenant_id, targets, units):
     if not target or not status:
         raise frappe.ValidationError("Workflow status authority is unavailable.")
     role_names = {candidate["key"]: _target_name(tenant_id, "role", candidate["key"]) for candidate in units if candidate["kind"] == "role"}
-    state_names = {value: f"DS {_tenant_token(tenant_id)} {value.replace('_', ' ').title()}"[:140] for value in status["values"]}
+    state_names = _workflow_state_names(status, tenant_id)
+    field = _workflow_field_expected(unit, tenant_id, target, status)
     name = _target_name(tenant_id, "workflow", unit["key"])
     edit_role = sorted({role for transition in unit["transitions"] for role in transition["roles"]})[0]
     transitions = []
     for item in unit["transitions"]:
         for role in item["roles"]:
             transitions.append({"state": state_names[item["from"]], "action": f"DS {_tenant_token(tenant_id)} {item['from']} to {item['to']}"[:140], "next_state": state_names[item["to"]], "allowed": role_names[role]})
-    return {"workflow": name, "document_type": target, "workflow_state_field": "status", "states": sorted(({"state": state_names[value], "allow_edit": role_names[edit_role]} for value in status["values"]), key=lambda item: item["state"]), "transitions": sorted(transitions, key=lambda item: (item["state"], item["next_state"], item["action"], item["allowed"]))}
+    ordered_values = [status["initial"], *(value for value in status["values"] if value != status["initial"])]
+    return {"workflow": name, "document_type": target, "workflow_state_field": field["fieldname"], "state_field": field, "states": [{"state": state_names[value], "allow_edit": role_names[edit_role]} for value in ordered_values], "transitions": sorted(transitions, key=lambda item: (item["state"], item["next_state"], item["action"], item["allowed"]))}
 
 
 def _materialize_workflow(unit, tenant_id, targets, units, allow_update=False):
     expected = _expected_workflow(unit, tenant_id, targets, units)
     name = expected["workflow"]
+    _materialize_workflow_field(expected["state_field"], allow_update)
+    _inject_crash("workflow_field_ddl")
     for transition in expected["transitions"]:
         if not frappe.db.exists("Workflow Action Master", transition["action"]):
             frappe.get_doc({"doctype": "Workflow Action Master", "workflow_action_name": transition["action"]}).insert(ignore_permissions=True)
     if not frappe.db.exists("Workflow", name):
-        frappe.get_doc({"doctype": "Workflow", "workflow_name": name, "document_type": expected["document_type"], "is_active": 1, "workflow_state_field": "status", "send_email_alert": 0, "states": [{**item, "doc_status": "0"} for item in expected["states"]], "transitions": [dict(item) for item in expected["transitions"]]}).insert(ignore_permissions=True)
-    actual = _workflow_projection(name)
+        frappe.get_doc({"doctype": "Workflow", "workflow_name": name, "document_type": expected["document_type"], "is_active": 1, "workflow_state_field": expected["workflow_state_field"], "send_email_alert": 0, "states": [{**item, "doc_status": "0"} for item in expected["states"]], "transitions": [dict(item) for item in expected["transitions"]]}).insert(ignore_permissions=True)
+    actual = _workflow_projection(name, expected["state_field"])
     if actual != expected and allow_update:
         workflow = frappe.get_doc("Workflow", name)
         workflow.document_type = expected["document_type"]
@@ -358,9 +434,9 @@ def _materialize_workflow(unit, tenant_id, targets, units, allow_update=False):
         workflow.set("states", [{**item, "doc_status": "0"} for item in expected["states"]])
         workflow.set("transitions", [dict(item) for item in expected["transitions"]])
         workflow.save(ignore_permissions=True)
-        actual = _workflow_projection(name)
+        actual = _workflow_projection(name, expected["state_field"])
     if actual != expected:
-        for field in ("document_type", "workflow_state_field", "states", "transitions"):
+        for field in ("document_type", "workflow_state_field", "state_field", "states", "transitions"):
             if actual[field] != expected[field]:
                 diagnostic = _canonical({"actualFingerprint": _fingerprint(actual[field]), "expectedFingerprint": _fingerprint(expected[field])})
                 raise frappe.ValidationError(f"Workflow {field} definition collision: {diagnostic}")
@@ -431,7 +507,7 @@ def _workspace_projection(tenant_id, plan):
     }
 
 
-def _materialize_workspace(unit, tenant_id, plan, targets):
+def _workspace_expected(unit, tenant_id, plan, targets):
     units = plan["materializationManifest"]["units"]
     name = _target_name(tenant_id, "workspace", f"system_{plan['planFingerprint'][:8]}")
     roles = sorted(_target_name(tenant_id, "role", key) for key in unit["definition"]["roleKeys"])
@@ -445,14 +521,18 @@ def _materialize_workspace(unit, tenant_id, plan, targets):
     shortcuts.sort(key=lambda item: (item["type"], item["link_to"]))
     cards = sorted(_kpi_runtime_names(tenant_id, key, plan)[0] for key in unit["definition"]["kpiKeys"])
     charts = sorted(_kpi_runtime_names(tenant_id, key, plan)[1] for key in unit["definition"]["kpiKeys"])
-    # Frappe mutates child-table dictionaries passed to get_doc() by adding
-    # framework metadata such as ``doctype``.  Keep the comparison projection
-    # detached so a create followed by an idempotent replay compares only the
-    # governed fields that belong to this contract.
     expected_shortcuts = [{"label": item["label"], "type": item["type"], "link_to": item["link_to"]} for item in shortcuts]
     expected = {"workspace": name, "label": name, "public": 0, "module": "Discovery Stack", "roles": roles, "shortcuts": expected_shortcuts, "number_cards": cards, "charts": charts}
+    return name, expected, shortcuts
+
+
+def _materialize_workspace(unit, tenant_id, plan, targets):
+    # Frappe mutates child-table dictionaries passed to get_doc() by adding
+    # framework metadata such as ``doctype``. Keep the governed expectation
+    # detached so replay and crash-resume ignore framework-owned child fields.
+    name, expected, shortcuts = _workspace_expected(unit, tenant_id, plan, targets)
     if not frappe.db.exists("Workspace", name):
-        frappe.get_doc({"doctype": "Workspace", "label": name, "title": name, "module": "Discovery Stack", "public": 0, "is_hidden": 1, "content": "[]", "roles": [{"role": role} for role in roles], "shortcuts": shortcuts, "number_cards": [{"number_card_name": card} for card in cards], "charts": [{"chart_name": chart} for chart in charts]}).insert(ignore_permissions=True)
+        frappe.get_doc({"doctype": "Workspace", "label": name, "title": name, "module": "Discovery Stack", "public": 0, "is_hidden": 1, "content": "[]", "roles": [{"role": role} for role in expected["roles"]], "shortcuts": shortcuts, "number_cards": [{"number_card_name": card} for card in expected["number_cards"]], "charts": [{"chart_name": chart} for chart in expected["charts"]]}).insert(ignore_permissions=True)
     actual = _workspace_projection(tenant_id, plan)
     if actual != expected:
         raise frappe.ValidationError("Tenant Workspace definition collision.")
@@ -536,8 +616,9 @@ def _upgrade_guard(plan, tenant_id):
             old_permissions = {(item["entity"], action) for item in old["permissions"] for action in item["actions"]}; new_permissions = {(item["entity"], action) for item in new["permissions"] for action in item["actions"]}
             if not new_permissions.issubset(old_permissions):
                 raise frappe.ValidationError("Permission escalation requires reviewed intent.")
-        if old["kind"] == "status" and new and not set(old["values"]).issubset(set(new["values"])):
-                raise frappe.ValidationError("Workflow state orphaning is blocked.")
+        if old["kind"] == "status" and new:
+            if old["initial"] != new["initial"] or not set(old["values"]).issubset(set(new["values"])) or not set(old["terminal"]).issubset(set(new["terminal"])):
+                raise frappe.ValidationError("Workflow state removal, initial-state change, or terminal-state orphaning is blocked.")
         if old["kind"] == "workflow" and new:
             old_edges = {(item["from"], item["to"]): set(item["roles"]) for item in old["transitions"]}
             new_edges = {(item["from"], item["to"]): set(item["roles"]) for item in new["transitions"]}
@@ -575,7 +656,8 @@ def _preflight_materialization(plan, tenant_id, targets, prior=None):
             prior_unit = next((candidate for candidate in (prior or {}).get("materializationManifest", {}).get("units", []) if candidate["kind"] == "workflow" and candidate["key"] == unit["key"]), None)
             comparison = prior_unit or unit
             comparison_units = (prior or plan)["materializationManifest"]["units"]
-            if _workflow_projection(_target_name(tenant_id, "workflow", unit["key"])) != _expected_workflow(comparison, tenant_id, targets, comparison_units):
+            expected = _expected_workflow(comparison, tenant_id, targets, comparison_units)
+            if _workflow_projection(_target_name(tenant_id, "workflow", unit["key"]), expected["state_field"]) != expected:
                 raise frappe.ValidationError("Workflow definition collision.")
         if unit["kind"] == "report":
             name = _target_name(tenant_id, "report", unit["key"])
@@ -592,7 +674,8 @@ def _preflight_materialization(plan, tenant_id, targets, prior=None):
                     raise frappe.ValidationError("KPI runtime metadata definition collision.") from error
         if unit["kind"] == "workspace" and frappe.db.exists("Workspace", _target_name(tenant_id, "workspace", f"system_{plan['planFingerprint'][:8]}")):
             prior_workspace = next((candidate for candidate in (prior or {}).get("materializationManifest", {}).get("units", []) if candidate["kind"] == "workspace"), None)
-            if prior_workspace is None:
+            _, expected, _ = _workspace_expected(unit, tenant_id, plan, targets)
+            if prior_workspace is None and _workspace_projection(tenant_id, plan) != expected:
                 raise frappe.ValidationError("Tenant Workspace identity collision.")
 
 
@@ -652,6 +735,12 @@ def _compensate_initial_run(run_identity, tenant_id, plan, targets):
             elif kind == "workflow":
                 name = _target_name(tenant_id, "workflow", unit["key"])
                 if frappe.db.exists("Workflow", name): frappe.delete_doc("Workflow", name, ignore_permissions=True)
+                status = next((candidate for candidate in plan["materializationManifest"]["units"] if candidate["kind"] == "status" and candidate["entity"] == unit["entity"]), None)
+                if status:
+                    field = _workflow_field_expected(unit, tenant_id, targets[unit["entity"]], status)
+                    if frappe.db.exists("Custom Field", field["name"]):
+                        actual = {key: frappe.get_doc("Custom Field", field["name"]).get(key) for key in field}
+                        if actual == field: frappe.delete_doc("Custom Field", field["name"], ignore_permissions=True)
             elif kind == "role":
                 name = _target_name(tenant_id, "role", unit["key"])
                 for permission in frappe.get_all("Custom DocPerm", filters={"role": name}, pluck="name"): frappe.delete_doc("Custom DocPerm", permission, ignore_permissions=True)
@@ -745,7 +834,8 @@ def apply_compiled_plan(plan, authority_binding=None):
                 journal = frappe.get_doc({"doctype": "DiscoveryStack Materialization Journal", **journal_values}); journal.insert(ignore_permissions=True)
             journal.status = "applying"; journal.save(ignore_permissions=True); frappe.db.commit()
             target, projection = _materialize_unit(unit, tenant_id, plan, targets, allow_update)
-            _inject_crash("after_ddl_before_ledger")
+            if unit["kind"] == "workflow" or unit["kind"] == "doctype" and unit.get("mode") == "custom_doctype":
+                _inject_crash("after_ddl_before_ledger")
             applied_fingerprint = _fingerprint(projection)
             unit_identity = _unit_identity(tenant_id, plan["planFingerprint"], unit)
             values = {"system_tenant_id": tenant_id, "owner_id_hash": identity["owner_id_hash"], "client_id_hash": identity["client_id_hash"], "plan_fingerprint": plan["planFingerprint"], "manifest_fingerprint": plan["materializationManifest"]["fingerprint"], "unit_kind": unit["kind"], "unit_key": unit["key"], "target_name": target, "definition_fingerprint": unit["definitionFingerprint"], "applied_fingerprint": applied_fingerprint, "unit_metadata": _canonical({"projection": projection})}
@@ -775,12 +865,20 @@ def apply_compiled_plan(plan, authority_binding=None):
     except Exception as error:
         frappe.db.rollback()
         if frappe.db.exists("DiscoveryStack Materialization Run", run_identity):
-            run = frappe.get_doc("DiscoveryStack Materialization Run", run_identity); run.status = "failed"; run.error_code = _error_code(error); run.save(ignore_permissions=True)
-            if frappe.db.exists("DiscoveryStack Tenant Policy", tenant_id):
+            run = frappe.get_doc("DiscoveryStack Materialization Run", run_identity)
+            # A drifted/colliding replay of an already-active plan is rejected,
+            # but it must not demote the last verified active run. Only a
+            # staged/resumed run owns a failure transition here.
+            if run.status != "active":
+                run.status = "failed"; run.error_code = _error_code(error); run.save(ignore_permissions=True)
+            if run.status != "active" and frappe.db.exists("DiscoveryStack Tenant Policy", tenant_id):
                 policy = frappe.get_doc("DiscoveryStack Tenant Policy", tenant_id); policy.staged_plan_fingerprint = plan["planFingerprint"]; policy.materialization_state = "active" if prior else "incomplete"; policy.policy_fingerprint = _fingerprint({"tenant": tenant_id, "active": policy.active_plan_fingerprint, "manifest": policy.manifest_fingerprint, "run": policy.active_run_identity, "staged": plan["planFingerprint"], "state": policy.materialization_state, "suspended": int(policy.suspended or 0)}); policy.save(ignore_permissions=True)
             frappe.db.commit()
         injected = "DISCOVERY_STACK_INJECTED_" in str(error)
-        if not prior and not injected:
+        # Preflight and upgrade-guard failures happen before a durable run is
+        # created and therefore have nothing to compensate. Never mask their
+        # fail-closed error by attempting to load a non-existent run.
+        if not prior and not injected and frappe.db.exists("DiscoveryStack Materialization Run", run_identity):
             _compensate_initial_run(run_identity, tenant_id, plan, _entity_targets(plan, tenant_id))
             run = frappe.get_doc("DiscoveryStack Materialization Run", run_identity); run.status = "compensated"; run.save(ignore_permissions=True)
             if frappe.db.exists("DiscoveryStack Tenant Policy", tenant_id): policy = frappe.get_doc("DiscoveryStack Tenant Policy", tenant_id); policy.materialization_state = "compensated"; policy.save(ignore_permissions=True)
@@ -840,7 +938,8 @@ def _inspect_materialized_unit(unit, tenant_id, plan, targets):
         return name, {"role": name, "permissions": _role_permissions(name)}
     if kind == "workflow":
         name = _target_name(tenant_id, "workflow", unit["key"])
-        projection = _workflow_projection(name)
+        expected = _expected_workflow(unit, tenant_id, targets, plan["materializationManifest"]["units"])
+        projection = _workflow_projection(name, expected["state_field"])
         if any(not frappe.db.exists("Workflow Action Master", transition["action"]) for transition in projection["transitions"]): raise frappe.ValidationError("Workflow action drift.")
         return name, projection
     identity = _unit_identity(tenant_id, plan["planFingerprint"], unit)
