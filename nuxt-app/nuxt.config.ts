@@ -1,6 +1,7 @@
 const faviconLink = [{ rel: 'icon' as const, type: 'image/svg+xml', href: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%234d5dad%22/%3E%3Cpath d=%22M8 23V16h4v7H8Zm6 0V10h4v13h-4Zm6 0V6h4v17h-4Z%22 fill=%22%23f5f2eb%22/%3E%3C/svg%3E' }]
 const modelImprovementCron = process.env.MODEL_IMPROVEMENT_CRON || '0 18 * * *'
 const geoModelOpsCron = process.env.GEO_MODELOPS_CRON || '*/15 * * * *'
+const systemFactoryCron = process.env.SYSTEM_FACTORY_CRON || '*/5 * * * *'
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-16',
@@ -26,7 +27,7 @@ export default defineNuxtConfig({
   },
   nitro: {
     experimental: { tasks: true },
-    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'], [geoModelOpsCron]: ['content-operations:geo-modelops-tick'] },
+    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'], [geoModelOpsCron]: ['content-operations:geo-modelops-tick'], [systemFactoryCron]: ['system-factory:provisioning-tick'] },
   },
   routeRules: {
     '/': { redirect: { to: '/audit-lab', statusCode: 302 } },
@@ -41,6 +42,7 @@ export default defineNuxtConfig({
   },
   runtimeConfig: {
     discoveryStackPublicSiteOrigin: process.env.DISCOVERYSTACK_PUBLIC_SITE_ORIGIN || '',
+    discoveryStackPrivateOrigin: process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN || '',
     oauthServerUrl: process.env.OAUTH_SERVER_URL || '',
     oauthPortalUrl: process.env.VITE_OAUTH_PORTAL_URL || '',
     oauthAppId: process.env.VITE_APP_ID || '',

@@ -1523,8 +1523,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceArtifacts_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceArtifacts_sourceId_publicIntelligenceSources_id_fk",
+        "pia_source_fk": {
+          "name": "pia_source_fk",
           "tableFrom": "publicIntelligenceArtifacts",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -1805,8 +1805,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceDatasetMembers_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk": {
-          "name": "publicIntelligenceDatasetMembers_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk",
+        "pidm_build_fk": {
+          "name": "pidm_build_fk",
           "tableFrom": "publicIntelligenceDatasetMembers",
           "tableTo": "publicIntelligenceDatasetBuilds",
           "columnsFrom": [
@@ -1818,8 +1818,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceDatasetMembers_artifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "publicIntelligenceDatasetMembers_artifactId_publicIntelligenceArtifacts_id_fk",
+        "pidm_artifact_fk": {
+          "name": "pidm_artifact_fk",
           "tableFrom": "publicIntelligenceDatasetMembers",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -1984,8 +1984,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceInferences_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceInferences_sourceId_publicIntelligenceSources_id_fk",
+        "piii_source_fk": {
+          "name": "piii_source_fk",
           "tableFrom": "publicIntelligenceInferences",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -1997,8 +1997,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceInferences_ingestionJobId_publicIntelligenceIngestionJobs_id_fk": {
-          "name": "publicIntelligenceInferences_ingestionJobId_publicIntelligenceIngestionJobs_id_fk",
+        "piii_job_fk": {
+          "name": "piii_job_fk",
           "tableFrom": "publicIntelligenceInferences",
           "tableTo": "publicIntelligenceIngestionJobs",
           "columnsFrom": [
@@ -2267,8 +2267,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceIngestionJobs_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceIngestionJobs_sourceId_publicIntelligenceSources_id_fk",
+        "piij_source_fk": {
+          "name": "piij_source_fk",
           "tableFrom": "publicIntelligenceIngestionJobs",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -2280,8 +2280,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceIngestionJobs_primaryArtifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "publicIntelligenceIngestionJobs_primaryArtifactId_publicIntelligenceArtifacts_id_fk",
+        "piij_artifact_fk": {
+          "name": "piij_artifact_fk",
           "tableFrom": "publicIntelligenceIngestionJobs",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -2398,8 +2398,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceSourceReviews_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceSourceReviews_sourceId_publicIntelligenceSources_id_fk",
+        "pisr_source_fk": {
+          "name": "pisr_source_fk",
           "tableFrom": "publicIntelligenceSourceReviews",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -2955,8 +2955,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceTrainingRuns_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk": {
-          "name": "publicIntelligenceTrainingRuns_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk",
+        "fk_public_intelligence_trai_dataset_build_id_43cf8ee54e": {
+          "name": "fk_public_intelligence_trai_dataset_build_id_43cf8ee54e",
           "tableFrom": "publicIntelligenceTrainingRuns",
           "tableTo": "publicIntelligenceDatasetBuilds",
           "columnsFrom": [

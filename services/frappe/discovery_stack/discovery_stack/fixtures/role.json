@@ -1,0 +1,5 @@
+[
+  {"doctype":"Role","name":"DiscoveryStack System Manager","role_name":"DiscoveryStack System Manager","desk_access":1},
+  {"doctype":"Role","name":"DiscoveryStack System User","role_name":"DiscoveryStack System User","desk_access":1},
+  {"doctype":"Role","name":"DiscoveryStack System Viewer","role_name":"DiscoveryStack System Viewer","desk_access":1}
+]

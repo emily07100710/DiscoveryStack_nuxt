@@ -1,0 +1,45 @@
+ARG BASE_IMAGE=docker.io/frappe/erpnext:v16.33.0@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd
+FROM ${BASE_IMAGE}
+
+ARG FRAPPE_COMMIT=5cba016e86b54b57f34a3864282b92300ef20fb0
+ARG ERPNEXT_COMMIT=b24c9eba551905e256e336ff170a91a92d197a2f
+
+USER root
+RUN test "${FRAPPE_COMMIT}" = "5cba016e86b54b57f34a3864282b92300ef20fb0" \
+ && test "${ERPNEXT_COMMIT}" = "b24c9eba551905e256e336ff170a91a92d197a2f" \
+ && rm -rf /tmp/frappe-source /tmp/erpnext-source \
+ && git clone --filter=blob:none --no-checkout https://github.com/frappe/frappe.git /tmp/frappe-source \
+ && git -C /tmp/frappe-source fetch --depth=1 origin "${FRAPPE_COMMIT}" \
+ && git -C /tmp/frappe-source checkout --detach "${FRAPPE_COMMIT}" \
+ && test "$(git -C /tmp/frappe-source rev-parse HEAD)" = "${FRAPPE_COMMIT}" \
+ && git clone --filter=blob:none --no-checkout https://github.com/frappe/erpnext.git /tmp/erpnext-source \
+ && git -C /tmp/erpnext-source fetch --depth=1 origin "${ERPNEXT_COMMIT}" \
+ && git -C /tmp/erpnext-source checkout --detach "${ERPNEXT_COMMIT}" \
+ && test "$(git -C /tmp/erpnext-source rev-parse HEAD)" = "${ERPNEXT_COMMIT}" \
+ && printf '%s\n' "${FRAPPE_COMMIT}" > /tmp/frappe-source/.discoverystack-source-commit \
+ && printf '%s\n' "${ERPNEXT_COMMIT}" > /tmp/erpnext-source/.discoverystack-source-commit \
+ && rm -rf /home/frappe/frappe-bench/apps/frappe /home/frappe/frappe-bench/apps/erpnext \
+ && mv /tmp/frappe-source /home/frappe/frappe-bench/apps/frappe \
+ && mv /tmp/erpnext-source /home/frappe/frappe-bench/apps/erpnext \
+ && rm -rf /home/frappe/frappe-bench/apps/frappe/.git /home/frappe/frappe-bench/apps/erpnext/.git
+
+ARG CUSTOM_APP_SHA256
+ARG BUILD_RECIPE_FINGERPRINT
+RUN test -n "${CUSTOM_APP_SHA256}" && test -n "${BUILD_RECIPE_FINGERPRINT}"
+
+COPY --chown=frappe:frappe services/frappe/discovery_stack /home/frappe/frappe-bench/apps/discovery_stack
+COPY --chown=frappe:frappe infrastructure/frappe/verify-runtime-authority.py /opt/discoverystack/verify-runtime-authority.py
+
+RUN printf '%s\n' \
+  "{\"schemaVersion\":\"system-factory-image-authority-v1\",\"frappeCommit\":\"${FRAPPE_COMMIT}\",\"erpnextCommit\":\"${ERPNEXT_COMMIT}\",\"customAppSha256\":\"${CUSTOM_APP_SHA256}\",\"buildRecipeFingerprint\":\"${BUILD_RECIPE_FINGERPRINT}\"}" \
+  > /opt/discoverystack/runtime-authority.json \
+ && chown -R frappe:frappe /home/frappe/frappe-bench/apps /opt/discoverystack
+
+USER frappe
+RUN /home/frappe/frappe-bench/env/bin/pip install --no-deps --disable-pip-version-check -e /home/frappe/frappe-bench/apps/frappe -e /home/frappe/frappe-bench/apps/erpnext -e /home/frappe/frappe-bench/apps/discovery_stack
+
+LABEL org.opencontainers.image.source="https://github.com/emily07100710/DiscoveryStack_nuxt" \
+      io.discoverystack.frappe.commit="${FRAPPE_COMMIT}" \
+      io.discoverystack.erpnext.commit="${ERPNEXT_COMMIT}" \
+      io.discoverystack.custom-app.sha256="${CUSTOM_APP_SHA256}" \
+      io.discoverystack.build-recipe.fingerprint="${BUILD_RECIPE_FINGERPRINT}"

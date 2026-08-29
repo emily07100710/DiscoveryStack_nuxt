@@ -66,7 +66,7 @@ describe('managed-site live connectors durable and private contracts', () => {
     expect(reachabilityRepair).toContain("ADD `activeCanonicalDomainKey` varchar(253) GENERATED ALWAYS AS (CASE WHEN `status` = 'released' THEN NULL ELSE `canonicalDomain` END) STORED")
     expect(reachabilityRepair).toContain('ADD `capabilityIdentity` varchar(160)')
     expect(reachabilityRepair).toContain('managed_site_domain_claim_active_canonical_unique')
-    for (const foreignKey of ['ownerUserId_users_id_fk', 'projectId_managedSiteProjects_id_fk', 'releaseId_managedSiteReleaseProjections_id_fk', 'draftOrderId_managedSiteDraftOrders_id_fk']) expect(reachabilityRepair).toContain(foreignKey)
+    for (const foreignKey of ['ownerUserId_users_id_fk', 'fk_managed_site_payment_web_project_id_ad7f219a2e', 'fk_managed_site_payment_web_release_id_a35c05d809', 'fk_managed_site_payment_web_draft_order_id_3e4558f042']) expect(reachabilityRepair).toContain(foreignKey)
     expect(reachabilityRepair).not.toMatch(/^\s*(?:INSERT|UPDATE|DELETE|TRUNCATE)\b/imu)
   })
 
