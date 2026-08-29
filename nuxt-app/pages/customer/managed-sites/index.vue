@@ -7,6 +7,7 @@ const loading = ref(true)
 const errorMessage = ref('')
 const projection = ref<any>(null)
 const moduleWorkspace = ref<any>(null)
+const systemStatus = ref<any>(null)
 const assistantQuestion = ref('')
 const assistantResult = ref<any>(null)
 const assistantLoading = ref(false)
@@ -17,6 +18,7 @@ async function loadCustomerSite() {
   try {
     projection.value = await $fetch('/api/managed-sites/customer/session')
     try { moduleWorkspace.value = await $fetch('/api/managed-sites/customer/modules') } catch { moduleWorkspace.value = null }
+    try { systemStatus.value = await $fetch('/api/system-factory/customer/status') } catch { systemStatus.value = null }
   } catch (error: any) {
     projection.value = null
     errorMessage.value = error?.data?.message || '此客戶入口需要有效的邀請工作階段。'
@@ -70,6 +72,12 @@ onMounted(loadCustomerSite)
         <p class="card__label">SUBSCRIPTION</p>
         <h2>{{ projection.subscription?.status || '尚未建立' }}</h2>
         <p>{{ projection.subscription?.planKey || '付款與方案確認後顯示。' }}</p>
+      </article>
+      <article class="card">
+        <p class="card__label">CRM / ERP SYSTEM</p>
+        <h2>{{ systemStatus?.system?.tenant?.state || (systemStatus?.available ? systemStatus?.system?.status : '尚未加購') }}</h2>
+        <p v-if="systemStatus?.system?.tenant?.adminLaunchAvailable">系統已通過 receipt-based health；進階管理入口仍由角色與 server session 控制。</p>
+        <p v-else>尚無可用的 verified health + active tenant，不顯示管理入口。</p>
       </article>
       <article class="card">
         <p class="card__label">ACCESS BOUNDARY</p>

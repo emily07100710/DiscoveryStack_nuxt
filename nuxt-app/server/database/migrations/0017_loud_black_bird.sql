@@ -23,7 +23,7 @@ CREATE TABLE `contentOperationAutopilotPolicies` (
 );
 --> statement-breakpoint
 ALTER TABLE `contentOperationAutopilotPolicies` ADD CONSTRAINT `contentOperationAutopilotPolicies_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE `contentOperationAutopilotPolicies` ADD CONSTRAINT `contentOperationAutopilotPolicies_clientId_contentOperationClients_id_fk` FOREIGN KEY (`clientId`) REFERENCES `contentOperationClients`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE `contentOperationAutopilotPolicies` ADD CONSTRAINT `contentOperationAutopilotPolicies_publicationTargetId_contentOperationPublicationTargets_id_fk` FOREIGN KEY (`publicationTargetId`) REFERENCES `contentOperationPublicationTargets`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE `contentOperationAutopilotPolicies` ADD CONSTRAINT `contentOperationAutopilotPolicies_authorizedByOwnerUserId_users_id_fk` FOREIGN KEY (`authorizedByOwnerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `contentOperationAutopilotPolicies` ADD CONSTRAINT `fk_content_operation_autopi_client_id_19d1865ec4` FOREIGN KEY (`clientId`) REFERENCES `contentOperationClients`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `contentOperationAutopilotPolicies` ADD CONSTRAINT `fk_content_operation_autopi_publication_target_1f95300e37` FOREIGN KEY (`publicationTargetId`) REFERENCES `contentOperationPublicationTargets`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `contentOperationAutopilotPolicies` ADD CONSTRAINT `fk_content_operation_autopi_authorized_by_owne_976f4633f8` FOREIGN KEY (`authorizedByOwnerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX `content_operation_autopilot_owner_status_idx` ON `contentOperationAutopilotPolicies` (`ownerUserId`,`status`,`expiresAt`);

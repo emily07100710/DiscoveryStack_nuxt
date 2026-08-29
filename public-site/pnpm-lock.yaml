@@ -17,6 +17,9 @@ importers:
       astro:
         specifier: 7.2.4
         version: 7.2.4(@astrojs/markdown-remark@7.2.4)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.3)(@types/node@24.7.0)(yaml@2.9.0)
+      cookie:
+        specifier: 2.0.1
+        version: 2.0.1
       vue:
         specifier: 3.5.41
         version: 3.5.41(typescript@5.9.3)

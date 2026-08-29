@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { boolean, decimal, index, int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/mysql-core'
+import { boolean, decimal, foreignKey, index, int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/mysql-core'
 
 /** OAuth identities are private and are used only for owner-gated administration. */
 export const users = mysqlTable('users', {
@@ -229,7 +229,7 @@ export const publicIntelligenceSources = mysqlTable('publicIntelligenceSources',
 /** Append-only policy and reviewer ledger for source-card lifecycle decisions. */
 export const publicIntelligenceSourceReviews = mysqlTable('publicIntelligenceSourceReviews', {
   id: int('id').autoincrement().primaryKey(),
-  sourceId: int('sourceId').notNull().references(() => publicIntelligenceSources.id),
+  sourceId: int('sourceId').notNull(),
   reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
   action: mysqlEnum('action', ['created', 'reviewed', 'approved', 'use_changed', 'removed', 'restored']).notNull(),
   previousAllowedUse: mysqlEnum('previousAllowedUse', ['research_only', 'evaluation_candidate', 'training_candidate', 'blocked']),
@@ -240,13 +240,15 @@ export const publicIntelligenceSourceReviews = mysqlTable('publicIntelligenceSou
   reviewNote: text('reviewNote'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'pisr_source_fk', columns: [table.sourceId], foreignColumns: [publicIntelligenceSources.id] }),
+
   index('public_intelligence_source_reviews_source_idx').on(table.sourceId, table.createdAt),
 ])
 
 /** A versioned public-data representation. Raw network captures are deliberately not required: derived text, spans, structured features and human annotations remain independently reviewable. */
 export const publicIntelligenceArtifacts = mysqlTable('publicIntelligenceArtifacts', {
   id: int('id').autoincrement().primaryKey(),
-  sourceId: int('sourceId').notNull().references(() => publicIntelligenceSources.id),
+  sourceId: int('sourceId').notNull(),
   sourceUrl: varchar('sourceUrl', { length: 2048 }).notNull(),
   canonicalUrl: varchar('canonicalUrl', { length: 2048 }),
   artifactType: mysqlEnum('artifactType', ['page_manifest', 'structural_features', 'topic_map', 'entity_map', 'semantic_features', 'technical_seo', 'derived_excerpt', 'human_annotation']).notNull(),
@@ -266,6 +268,8 @@ export const publicIntelligenceArtifacts = mysqlTable('publicIntelligenceArtifac
   removedAt: timestamp('removedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'pia_source_fk', columns: [table.sourceId], foreignColumns: [publicIntelligenceSources.id] }),
+
   uniqueIndex('public_intelligence_artifact_hash_unique').on(table.artifactHash),
   index('public_intelligence_artifacts_source_idx').on(table.sourceId, table.artifactType),
   index('public_intelligence_artifacts_use_idx').on(table.useSnapshot, table.qualityStatus),
@@ -297,7 +301,7 @@ export const modelImprovementCandidates = mysqlTable('modelImprovementCandidates
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   leadId: int('leadId').notNull().references(() => leads.id),
-  collectionRunId: int('collectionRunId').notNull().references(() => modelImprovementCollectionRuns.id),
+  collectionRunId: int('collectionRunId').notNull(),
   sourceUrl: varchar('sourceUrl', { length: 2048 }).notNull(),
   finalUrl: varchar('finalUrl', { length: 2048 }),
   hostname: varchar('hostname', { length: 253 }).notNull(),
@@ -315,13 +319,17 @@ export const modelImprovementCandidates = mysqlTable('modelImprovementCandidates
   collectionErrorCode: varchar('collectionErrorCode', { length: 120 }),
   reviewerUserId: int('reviewerUserId').references(() => users.id),
   reviewNote: text('reviewNote'),
-  publicSourceId: int('publicSourceId').references(() => publicIntelligenceSources.id),
-  publicArtifactId: int('publicArtifactId').references(() => publicIntelligenceArtifacts.id),
+  publicSourceId: int('publicSourceId'),
+  publicArtifactId: int('publicArtifactId'),
   collectedAt: timestamp('collectedAt'),
   reviewedAt: timestamp('reviewedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_model_improvement_candid_collection_run_id_04a0139065', columns: [table.collectionRunId], foreignColumns: [modelImprovementCollectionRuns.id] }),
+  foreignKey({ name: 'fk_model_improvement_candid_public_source_id_05804cf05a', columns: [table.publicSourceId], foreignColumns: [publicIntelligenceSources.id] }),
+  foreignKey({ name: 'fk_model_improvement_candid_public_artifact_id_15d483e187', columns: [table.publicArtifactId], foreignColumns: [publicIntelligenceArtifacts.id] }),
+
   uniqueIndex('model_improvement_candidate_lead_unique').on(table.ownerUserId, table.leadId),
   index('model_improvement_candidate_status_idx').on(table.ownerUserId, table.status, table.createdAt),
   index('model_improvement_candidate_snapshot_idx').on(table.snapshotFingerprint),
@@ -352,8 +360,8 @@ export const publicIntelligenceDatasetBuilds = mysqlTable('publicIntelligenceDat
 /** Many-to-many frozen member list with the exact reviewer decision that admitted an artifact to a specific dataset manifest. */
 export const publicIntelligenceDatasetMembers = mysqlTable('publicIntelligenceDatasetMembers', {
   id: int('id').autoincrement().primaryKey(),
-  datasetBuildId: int('datasetBuildId').notNull().references(() => publicIntelligenceDatasetBuilds.id),
-  artifactId: int('artifactId').notNull().references(() => publicIntelligenceArtifacts.id),
+  datasetBuildId: int('datasetBuildId').notNull(),
+  artifactId: int('artifactId').notNull(),
   dataSplit: mysqlEnum('dataSplit', ['unassigned', 'train', 'validation', 'test', 'holdout']).default('unassigned').notNull(),
   inclusionReason: text('inclusionReason').notNull(),
   reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
@@ -361,6 +369,9 @@ export const publicIntelligenceDatasetMembers = mysqlTable('publicIntelligenceDa
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   revokedAt: timestamp('revokedAt'),
 }, table => [
+  foreignKey({ name: 'pidm_build_fk', columns: [table.datasetBuildId], foreignColumns: [publicIntelligenceDatasetBuilds.id] }),
+  foreignKey({ name: 'pidm_artifact_fk', columns: [table.artifactId], foreignColumns: [publicIntelligenceArtifacts.id] }),
+
   uniqueIndex('public_intelligence_dataset_member_unique').on(table.datasetBuildId, table.artifactId),
   index('public_intelligence_dataset_members_artifact_idx').on(table.artifactId, table.memberStatus),
   ])
@@ -369,7 +380,7 @@ export const publicIntelligenceDatasetMembers = mysqlTable('publicIntelligenceDa
 export const publicIntelligenceIngestionJobs = mysqlTable('publicIntelligenceIngestionJobs', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  sourceId: int('sourceId').notNull().references(() => publicIntelligenceSources.id),
+  sourceId: int('sourceId').notNull(),
   requestedUrl: varchar('requestedUrl', { length: 2048 }).notNull(),
   requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
   collectionMode: mysqlEnum('collectionMode', ['owner_triggered_approved_fetch', 'owner_triggered_bounded_crawl']).notNull(),
@@ -390,13 +401,16 @@ export const publicIntelligenceIngestionJobs = mysqlTable('publicIntelligenceIng
   pagesCleaned: int('pagesCleaned').default(0).notNull(),
   artifactsCreated: int('artifactsCreated').default(0).notNull(),
   crawlResults: json('crawlResults'),
-  primaryArtifactId: int('primaryArtifactId').references(() => publicIntelligenceArtifacts.id),
+  primaryArtifactId: int('primaryArtifactId'),
   errorCode: varchar('errorCode', { length: 80 }),
   errorDetail: text('errorDetail'),
   requestedAt: timestamp('requestedAt').defaultNow().notNull(),
   startedAt: timestamp('startedAt'),
   completedAt: timestamp('completedAt'),
 }, table => [
+  foreignKey({ name: 'piij_source_fk', columns: [table.sourceId], foreignColumns: [publicIntelligenceSources.id] }),
+  foreignKey({ name: 'piij_artifact_fk', columns: [table.primaryArtifactId], foreignColumns: [publicIntelligenceArtifacts.id] }),
+
   index('public_intelligence_ingestion_owner_idx').on(table.ownerUserId, table.status),
   index('public_intelligence_ingestion_source_hash_idx').on(table.sourceId, table.contentHash),
 ])
@@ -406,7 +420,7 @@ export const publicIntelligenceIngestionJobs = mysqlTable('publicIntelligenceIng
 export const publicIntelligenceTrainingRuns = mysqlTable('publicIntelligenceTrainingRuns', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  datasetBuildId: int('datasetBuildId').references(() => publicIntelligenceDatasetBuilds.id),
+  datasetBuildId: int('datasetBuildId'),
   mode: mysqlEnum('mode', ['development', 'production']).notNull(),
   provider: mysqlEnum('provider', ['huggingface_jobs', 'google_colab_local']).default('huggingface_jobs').notNull(),
   modelFamily: mysqlEnum('modelFamily', ['huggingface_transformers']).notNull(),
@@ -433,6 +447,8 @@ export const publicIntelligenceTrainingRuns = mysqlTable('publicIntelligenceTrai
   startedAt: timestamp('startedAt'),
   completedAt: timestamp('completedAt'),
 }, table => [
+  foreignKey({ name: 'fk_public_intelligence_trai_dataset_build_id_43cf8ee54e', columns: [table.datasetBuildId], foreignColumns: [publicIntelligenceDatasetBuilds.id] }),
+
   index('public_intelligence_training_owner_idx').on(table.ownerUserId, table.createdAt),
   index('public_intelligence_training_status_idx').on(table.status, table.mode),
 ])
@@ -441,8 +457,8 @@ export const publicIntelligenceTrainingRuns = mysqlTable('publicIntelligenceTrai
 export const publicIntelligenceInferences = mysqlTable('publicIntelligenceInferences', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  sourceId: int('sourceId').notNull().references(() => publicIntelligenceSources.id),
-  ingestionJobId: int('ingestionJobId').references(() => publicIntelligenceIngestionJobs.id),
+  sourceId: int('sourceId').notNull(),
+  ingestionJobId: int('ingestionJobId'),
   artifactIds: json('artifactIds').notNull(),
   analysisKind: mysqlEnum('analysisKind', ['journey_friction_baseline', 'bge_m3_similarity']).notNull(),
   modelFamily: mysqlEnum('modelFamily', ['rule_baseline', 'bge_m3']).notNull(),
@@ -453,6 +469,9 @@ export const publicIntelligenceInferences = mysqlTable('publicIntelligenceInfere
   requiresHumanReview: boolean('requiresHumanReview').default(true).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'piii_source_fk', columns: [table.sourceId], foreignColumns: [publicIntelligenceSources.id] }),
+  foreignKey({ name: 'piii_job_fk', columns: [table.ingestionJobId], foreignColumns: [publicIntelligenceIngestionJobs.id] }),
+
   index('public_intelligence_inference_owner_idx').on(table.ownerUserId, table.createdAt),
   index('public_intelligence_inference_job_idx').on(table.ingestionJobId),
 ])
@@ -482,7 +501,7 @@ export const seoGeoEvidenceApprovals = mysqlTable('seoGeoEvidenceApprovals', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   sourceId: int('sourceId').notNull().references(() => publicIntelligenceSources.id),
-  artifactId: int('artifactId').references(() => publicIntelligenceArtifacts.id),
+  artifactId: int('artifactId'),
   allowedFor: mysqlEnum('allowedFor', ['diagnosis', 'recommendation', 'content_draft']).notNull(),
   status: mysqlEnum('status', ['approved', 'restricted', 'revoked']).default('restricted').notNull(),
   policySnapshot: json('policySnapshot').notNull(),
@@ -493,6 +512,8 @@ export const seoGeoEvidenceApprovals = mysqlTable('seoGeoEvidenceApprovals', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_seo_geo_evidence_approva_artifact_id_359e42c610', columns: [table.artifactId], foreignColumns: [publicIntelligenceArtifacts.id] }),
+
   uniqueIndex('seo_geo_evidence_approval_unique').on(table.ownerUserId, table.sourceId, table.artifactId, table.allowedFor),
   index('seo_geo_evidence_approval_owner_idx').on(table.ownerUserId, table.status, table.allowedFor),
 ])
@@ -550,8 +571,8 @@ export const seoGeoProductionPlans = mysqlTable('seoGeoProductionPlans', {
 export const seoGeoProductionPlanSelections = mysqlTable('seoGeoProductionPlanSelections', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  planId: int('planId').notNull().references(() => seoGeoProductionPlans.id),
-  strategyRecommendationId: int('strategyRecommendationId').notNull().references(() => seoGeoStrategyRecommendations.id),
+  planId: int('planId').notNull(),
+  strategyRecommendationId: int('strategyRecommendationId').notNull(),
   status: mysqlEnum('status', ['selected', 'deselected']).default('selected').notNull(),
   evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
@@ -559,6 +580,9 @@ export const seoGeoProductionPlanSelections = mysqlTable('seoGeoProductionPlanSe
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_seo_geo_production_plan__plan_id_574d8970df', columns: [table.planId], foreignColumns: [seoGeoProductionPlans.id] }),
+  foreignKey({ name: 'fk_seo_geo_production_plan__strategy_recommend_a4438b1735', columns: [table.strategyRecommendationId], foreignColumns: [seoGeoStrategyRecommendations.id] }),
+
   uniqueIndex('seo_geo_plan_selection_unique').on(table.ownerUserId, table.planId, table.strategyRecommendationId),
   uniqueIndex('seo_geo_plan_selection_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   index('seo_geo_plan_selection_plan_idx').on(table.planId, table.status),
@@ -569,7 +593,7 @@ export const seoGeoContentBriefs = mysqlTable('seoGeoContentBriefs', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   diagnosisId: int('diagnosisId').references(() => seoGeoDiagnoses.id),
-  strategyRecommendationId: int('strategyRecommendationId').references(() => seoGeoStrategyRecommendations.id),
+  strategyRecommendationId: int('strategyRecommendationId'),
   productionPlanId: int('productionPlanId').references(() => seoGeoProductionPlans.id),
   productionDeliverableId: int('productionDeliverableId'),
   ruleIds: json('ruleIds'),
@@ -588,6 +612,8 @@ export const seoGeoContentBriefs = mysqlTable('seoGeoContentBriefs', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_seo_geo_content_briefs_strategy_recommend_d62f22f8bd', columns: [table.strategyRecommendationId], foreignColumns: [seoGeoStrategyRecommendations.id] }),
+
   index('seo_geo_content_briefs_owner_idx').on(table.ownerUserId, table.status, table.createdAt),
   index('seo_geo_content_briefs_diagnosis_idx').on(table.diagnosisId),
 ])
@@ -597,7 +623,7 @@ export const seoGeoProductionDeliverables = mysqlTable('seoGeoProductionDelivera
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   planId: int('planId').notNull().references(() => seoGeoProductionPlans.id),
-  selectionId: int('selectionId').notNull().references(() => seoGeoProductionPlanSelections.id),
+  selectionId: int('selectionId').notNull(),
   opportunityKey: varchar('opportunityKey', { length: 180 }).notNull(),
   contentType: mysqlEnum('contentType', ['article', 'service_page', 'faq']).notNull(),
   title: varchar('title', { length: 300 }).notNull(),
@@ -614,6 +640,8 @@ export const seoGeoProductionDeliverables = mysqlTable('seoGeoProductionDelivera
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_seo_geo_production_deliv_selection_id_e7f45572e6', columns: [table.selectionId], foreignColumns: [seoGeoProductionPlanSelections.id] }),
+
   uniqueIndex('seo_geo_deliverable_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('seo_geo_deliverable_opportunity_unique').on(table.planId, table.opportunityKey),
   index('seo_geo_deliverable_plan_idx').on(table.planId, table.status),
@@ -625,8 +653,8 @@ export const seoGeoContentJobs = mysqlTable('seoGeoContentJobs', {
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   briefId: int('briefId').notNull().references(() => seoGeoContentBriefs.id),
   productionPlanId: int('productionPlanId').references(() => seoGeoProductionPlans.id),
-  strategyRecommendationId: int('strategyRecommendationId').references(() => seoGeoStrategyRecommendations.id),
-  productionDeliverableId: int('productionDeliverableId').references(() => seoGeoProductionDeliverables.id),
+  strategyRecommendationId: int('strategyRecommendationId'),
+  productionDeliverableId: int('productionDeliverableId'),
   requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
   operation: mysqlEnum('operation', ['autogeo_recommendation', 'content_draft', 'risk_scan', 'delivery_preview', 'delivery_publish']).notNull(),
   providerMode: mysqlEnum('providerMode', ['reference_rules', 'autogeo_bailian_qwen', 'autogeo_api', 'manual']).notNull(),
@@ -640,6 +668,9 @@ export const seoGeoContentJobs = mysqlTable('seoGeoContentJobs', {
   startedAt: timestamp('startedAt'),
   completedAt: timestamp('completedAt'),
 }, table => [
+  foreignKey({ name: 'fk_seo_geo_content_jobs_strategy_recommend_08ca8121f8', columns: [table.strategyRecommendationId], foreignColumns: [seoGeoStrategyRecommendations.id] }),
+  foreignKey({ name: 'fk_seo_geo_content_jobs_production_deliver_4d34f48e9a', columns: [table.productionDeliverableId], foreignColumns: [seoGeoProductionDeliverables.id] }),
+
   uniqueIndex('seo_geo_content_jobs_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   index('seo_geo_content_jobs_brief_idx').on(table.briefId, table.status, table.requestedAt),
 ])
@@ -708,7 +739,7 @@ export const seoGeoDeliveryAttempts = mysqlTable('seoGeoDeliveryAttempts', {
   jobId: int('jobId').notNull().references(() => seoGeoContentJobs.id),
   draftId: int('draftId').notNull().references(() => seoGeoContentDrafts.id),
   targetId: int('targetId').notNull().references(() => seoGeoDeliveryTargets.id),
-  approvalReviewId: int('approvalReviewId').references(() => seoGeoContentReviews.id),
+  approvalReviewId: int('approvalReviewId'),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   mode: mysqlEnum('mode', ['preview', 'publish']).notNull(),
   status: mysqlEnum('status', ['prepared', 'blocked', 'delivered', 'failed']).notNull(),
@@ -718,6 +749,8 @@ export const seoGeoDeliveryAttempts = mysqlTable('seoGeoDeliveryAttempts', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   completedAt: timestamp('completedAt'),
 }, table => [
+  foreignKey({ name: 'fk_seo_geo_delivery_attempt_approval_review_id_b332f1ba8e', columns: [table.approvalReviewId], foreignColumns: [seoGeoContentReviews.id] }),
+
   uniqueIndex('seo_geo_delivery_attempt_idempotency_unique').on(table.targetId, table.idempotencyKey),
   index('seo_geo_delivery_attempts_job_idx').on(table.jobId, table.createdAt),
 ])
@@ -748,7 +781,7 @@ export const contentOperationClients = mysqlTable('contentOperationClients', {
 export const contentOperationPublicationTargets = mysqlTable('contentOperationPublicationTargets', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  clientId: int('clientId').notNull(),
   /** Server-derived website identity; never a credential or caller authority. */
   websiteId: varchar('websiteId', { length: 128 }).notNull().default('legacy-website'),
   targetId: varchar('targetId', { length: 128 }).notNull(),
@@ -778,6 +811,8 @@ export const contentOperationPublicationTargets = mysqlTable('contentOperationPu
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
   revokedAt: timestamp('revokedAt'),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_public_client_id_77ba8ff867', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+
   uniqueIndex('content_operation_targets_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('content_operation_targets_owner_target_unique').on(table.ownerUserId, table.targetId),
   uniqueIndex('content_operation_targets_owner_client_active_slot_unique').on(table.ownerUserId, table.clientId, table.activeSlot),
@@ -789,11 +824,11 @@ export const contentOperationPublicationTargets = mysqlTable('contentOperationPu
 export const contentOperationAutopilotPolicies = mysqlTable('contentOperationAutopilotPolicies', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
-  publicationTargetId: int('publicationTargetId').notNull().references(() => contentOperationPublicationTargets.id),
+  clientId: int('clientId').notNull(),
+  publicationTargetId: int('publicationTargetId').notNull(),
   policyId: varchar('policyId', { length: 96 }).notNull(),
   policyVersion: varchar('policyVersion', { length: 96 }).notNull(),
-  authorizedByOwnerUserId: int('authorizedByOwnerUserId').notNull().references(() => users.id),
+  authorizedByOwnerUserId: int('authorizedByOwnerUserId').notNull(),
   status: mysqlEnum('status', ['enabled', 'paused', 'revoked']).default('enabled').notNull(),
   authorizedAt: timestamp('authorizedAt').notNull(),
   expiresAt: timestamp('expiresAt').notNull(),
@@ -813,6 +848,10 @@ export const contentOperationAutopilotPolicies = mysqlTable('contentOperationAut
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_autopi_client_id_19d1865ec4', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_autopi_publication_target_1f95300e37', columns: [table.publicationTargetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+  foreignKey({ name: 'fk_content_operation_autopi_authorized_by_owne_976f4633f8', columns: [table.authorizedByOwnerUserId], foreignColumns: [users.id] }),
+
   uniqueIndex('content_operation_autopilot_policy_id_unique').on(table.policyId),
   uniqueIndex('content_operation_autopilot_owner_target_unique').on(table.ownerUserId, table.publicationTargetId),
   index('content_operation_autopilot_owner_status_idx').on(table.ownerUserId, table.status, table.expiresAt),
@@ -822,10 +861,10 @@ export const contentOperationAutopilotPolicies = mysqlTable('contentOperationAut
 export const contentOperationPublicationAttempts = mysqlTable('contentOperationPublicationAttempts', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
-  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
-  runId: int('runId').notNull().references(() => contentOperationRuns.id),
-  targetId: int('targetId').notNull().references(() => contentOperationPublicationTargets.id),
+  clientId: int('clientId').notNull(),
+  entryId: int('entryId').notNull(),
+  runId: int('runId').notNull(),
+  targetId: int('targetId').notNull(),
   websiteId: varchar('websiteId', { length: 128 }),
   routingPlanId: varchar('routingPlanId', { length: 128 }),
   routeId: varchar('routeId', { length: 160 }),
@@ -854,6 +893,11 @@ export const contentOperationPublicationAttempts = mysqlTable('contentOperationP
   completedAt: timestamp('completedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_public_client_id_027a21ff01', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_public_entry_id_659198ccde', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+  foreignKey({ name: 'fk_content_operation_public_run_id_a44c615966', columns: [table.runId], foreignColumns: [contentOperationRuns.id] }),
+  foreignKey({ name: 'fk_content_operation_public_target_id_a2709a68bc', columns: [table.targetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+
   uniqueIndex('content_operation_attempts_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   index('content_operation_attempts_owner_entry_idx').on(table.ownerUserId, table.entryId),
   index('content_operation_attempts_owner_status_idx').on(table.ownerUserId, table.status),
@@ -866,7 +910,7 @@ export const contentOperationCalendars = mysqlTable('contentOperationCalendars',
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   clientId: int('clientId').notNull().references(() => contentOperationClients.id),
-  productionPlanId: int('productionPlanId').notNull().references(() => seoGeoProductionPlans.id),
+  productionPlanId: int('productionPlanId').notNull(),
   engineVersion: varchar('engineVersion', { length: 96 }).notNull(),
   status: mysqlEnum('status', ['ready', 'partial', 'blocked', 'paused', 'archived']).default('ready').notNull(),
   planStartDate: varchar('planStartDate', { length: 10 }).notNull(),
@@ -889,6 +933,8 @@ export const contentOperationCalendars = mysqlTable('contentOperationCalendars',
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_calend_production_plan_id_b42f43cf58', columns: [table.productionPlanId], foreignColumns: [seoGeoProductionPlans.id] }),
+
   uniqueIndex('content_operation_calendars_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   index('content_operation_calendars_owner_fingerprint_idx').on(table.ownerUserId, table.planFingerprint),
   index('content_operation_calendars_owner_status_idx').on(table.ownerUserId, table.status),
@@ -898,12 +944,12 @@ export const contentOperationCalendars = mysqlTable('contentOperationCalendars',
 export const contentOperationCalendarEntries = mysqlTable('contentOperationCalendarEntries', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  calendarId: int('calendarId').notNull().references(() => contentOperationCalendars.id),
-  productionDeliverableId: int('productionDeliverableId').notNull().references(() => seoGeoProductionDeliverables.id),
-  strategyRecommendationId: int('strategyRecommendationId').notNull().references(() => seoGeoStrategyRecommendations.id),
+  calendarId: int('calendarId').notNull(),
+  productionDeliverableId: int('productionDeliverableId').notNull(),
+  strategyRecommendationId: int('strategyRecommendationId').notNull(),
   jobId: int('jobId').references(() => seoGeoContentJobs.id),
-  draftId: int('draftId').references(() => seoGeoContentDrafts.id),
-  reviewId: int('reviewId').references(() => seoGeoContentReviews.id),
+  draftId: int('draftId'),
+  reviewId: int('reviewId'),
   scheduleKey: varchar('scheduleKey', { length: 180 }).notNull(),
   plannedLocalDate: varchar('plannedLocalDate', { length: 10 }).notNull(),
   publishLocalTime: varchar('publishLocalTime', { length: 5 }).notNull(),
@@ -915,7 +961,7 @@ export const contentOperationCalendarEntries = mysqlTable('contentOperationCalen
   contentHash: varchar('contentHash', { length: 128 }),
   publicationContentHash: varchar('publicationContentHash', { length: 128 }),
   /** Legacy single-target column retained for backward compatibility; bindings hold the authoritative set. */
-  publicationTargetId: int('publicationTargetId').references(() => contentOperationPublicationTargets.id),
+  publicationTargetId: int('publicationTargetId'),
   publicationSlug: varchar('publicationSlug', { length: 160 }),
   publicationPath: varchar('publicationPath', { length: 512 }),
   publicationIdentityFingerprint: varchar('publicationIdentityFingerprint', { length: 128 }),
@@ -928,6 +974,13 @@ export const contentOperationCalendarEntries = mysqlTable('contentOperationCalen
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_calend_calendar_id_c72ad0a558', columns: [table.calendarId], foreignColumns: [contentOperationCalendars.id] }),
+  foreignKey({ name: 'fk_content_operation_calend_production_deliver_cbdb622479', columns: [table.productionDeliverableId], foreignColumns: [seoGeoProductionDeliverables.id] }),
+  foreignKey({ name: 'fk_content_operation_calend_strategy_recommend_03ed594f59', columns: [table.strategyRecommendationId], foreignColumns: [seoGeoStrategyRecommendations.id] }),
+  foreignKey({ name: 'fk_content_operation_calend_draft_id_8868b4ffaf', columns: [table.draftId], foreignColumns: [seoGeoContentDrafts.id] }),
+  foreignKey({ name: 'fk_content_operation_calend_review_id_e20eb7911f', columns: [table.reviewId], foreignColumns: [seoGeoContentReviews.id] }),
+  foreignKey({ name: 'fk_content_operation_calend_publication_target_9de1ce9f59', columns: [table.publicationTargetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+
   uniqueIndex('content_operation_entries_calendar_engine_unique').on(table.calendarId, table.engineEntryId),
   uniqueIndex('content_operation_entries_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   index('content_operation_entries_owner_status_idx').on(table.ownerUserId, table.status, table.plannedLocalDate),
@@ -938,13 +991,17 @@ export const contentOperationCalendarEntries = mysqlTable('contentOperationCalen
 export const contentOperationCalendarEntryTargets = mysqlTable('contentOperationCalendarEntryTargets', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
-  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
-  targetId: int('targetId').notNull().references(() => contentOperationPublicationTargets.id),
+  clientId: int('clientId').notNull(),
+  entryId: int('entryId').notNull(),
+  targetId: int('targetId').notNull(),
   slot: int('slot').notNull(),
   bindingFingerprint: varchar('bindingFingerprint', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_calend_client_id_03ac90030a', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_calend_entry_id_82d007b891', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+  foreignKey({ name: 'fk_content_operation_calend_target_id_dcd23157bb', columns: [table.targetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+
   uniqueIndex('content_operation_entry_targets_owner_entry_target_unique').on(table.ownerUserId, table.entryId, table.targetId),
   uniqueIndex('content_operation_entry_targets_owner_entry_slot_unique').on(table.ownerUserId, table.entryId, table.slot),
   index('content_operation_entry_targets_owner_client_idx').on(table.ownerUserId, table.clientId),
@@ -954,7 +1011,7 @@ export const contentOperationCalendarEntryTargets = mysqlTable('contentOperation
 export const contentOperationRuns = mysqlTable('contentOperationRuns', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
+  entryId: int('entryId').notNull(),
   stage: mysqlEnum('stage', ['generation', 'review_wait', 'publication', 'measurement', 'learning']).notNull(),
   state: mysqlEnum('state', ['queued', 'processing', 'retry_wait', 'succeeded', 'failed', 'blocked', 'cancelled']).default('queued').notNull(),
   attemptNumber: int('attemptNumber').notNull(),
@@ -971,6 +1028,8 @@ export const contentOperationRuns = mysqlTable('contentOperationRuns', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_runs_entry_id_ae4a0120d9', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+
   uniqueIndex('content_operation_runs_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   index('content_operation_runs_entry_stage_idx').on(table.entryId, table.stage, table.state),
   index('content_operation_runs_lease_idx').on(table.entryId, table.stage, table.leaseExpiresAt),
@@ -981,11 +1040,11 @@ export const contentOperationEvents = mysqlTable('contentOperationEvents', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   clientId: int('clientId').references(() => contentOperationClients.id),
-  calendarId: int('calendarId').references(() => contentOperationCalendars.id),
-  entryId: int('entryId').references(() => contentOperationCalendarEntries.id),
+  calendarId: int('calendarId'),
+  entryId: int('entryId'),
   runId: int('runId').references(() => contentOperationRuns.id),
   websiteId: varchar('websiteId', { length: 128 }),
-  deliverableId: int('deliverableId').references(() => seoGeoProductionDeliverables.id),
+  deliverableId: int('deliverableId'),
   draftId: int('draftId').references(() => seoGeoContentDrafts.id),
   routingPlanId: varchar('routingPlanId', { length: 128 }),
   routeId: varchar('routeId', { length: 160 }),
@@ -1000,6 +1059,10 @@ export const contentOperationEvents = mysqlTable('contentOperationEvents', {
   metadata: json('metadata').notNull(),
   occurredAt: timestamp('occurredAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_events_calendar_id_d06bc3e5a5', columns: [table.calendarId], foreignColumns: [contentOperationCalendars.id] }),
+  foreignKey({ name: 'fk_content_operation_events_entry_id_daf7597de3', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+  foreignKey({ name: 'fk_content_operation_events_deliverable_id_afdfcd6132', columns: [table.deliverableId], foreignColumns: [seoGeoProductionDeliverables.id] }),
+
   uniqueIndex('content_operation_events_owner_fingerprint_unique').on(table.ownerUserId, table.eventFingerprint),
   index('content_operation_events_owner_occurred_idx').on(table.ownerUserId, table.occurredAt),
   index('content_operation_events_entry_idx').on(table.entryId, table.occurredAt),
@@ -1009,10 +1072,10 @@ export const contentOperationEvents = mysqlTable('contentOperationEvents', {
 export const contentOperationOutcomeAssessments = mysqlTable('contentOperationOutcomeAssessments', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
-  runId: int('runId').references(() => contentOperationRuns.id),
-  targetId: int('targetId').references(() => contentOperationPublicationTargets.id),
-  draftId: int('draftId').references(() => seoGeoContentDrafts.id),
+  entryId: int('entryId').notNull(),
+  runId: int('runId'),
+  targetId: int('targetId'),
+  draftId: int('draftId'),
   publicationReceiptFingerprint: varchar('publicationReceiptFingerprint', { length: 128 }),
   publishedUrl: varchar('publishedUrl', { length: 2048 }),
   contentHash: varchar('contentHash', { length: 128 }),
@@ -1027,6 +1090,11 @@ export const contentOperationOutcomeAssessments = mysqlTable('contentOperationOu
   measuredAt: timestamp('measuredAt').notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_outcom_entry_id_d4105827c1', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+  foreignKey({ name: 'fk_content_operation_outcom_run_id_460792842c', columns: [table.runId], foreignColumns: [contentOperationRuns.id] }),
+  foreignKey({ name: 'fk_content_operation_outcom_target_id_5183c5f472', columns: [table.targetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+  foreignKey({ name: 'fk_content_operation_outcom_draft_id_28ea2a8e88', columns: [table.draftId], foreignColumns: [seoGeoContentDrafts.id] }),
+
   uniqueIndex('content_operation_outcomes_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   index('content_operation_outcomes_entry_idx').on(table.entryId, table.measuredAt),
 ])
@@ -1119,7 +1187,7 @@ export const llmVisibilityObservationReviews = mysqlTable('llmVisibilityObservat
   id: int('id').autoincrement().primaryKey(),
   decisionId: varchar('decisionId', { length: 160 }).notNull(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  observationId: int('observationId').notNull().references(() => llmVisibilityObservations.id),
+  observationId: int('observationId').notNull(),
   reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
@@ -1130,6 +1198,8 @@ export const llmVisibilityObservationReviews = mysqlTable('llmVisibilityObservat
   decisionFingerprint: varchar('decisionFingerprint', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_llm_visibility_observati_observation_id_16b5f0f3b7', columns: [table.observationId], foreignColumns: [llmVisibilityObservations.id] }),
+
   uniqueIndex('llm_visibility_reviews_decision_unique').on(table.decisionId),
   uniqueIndex('llm_visibility_reviews_owner_key_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('llm_visibility_reviews_observation_status_unique').on(table.observationId, table.newStatus),
@@ -1140,8 +1210,8 @@ export const llmVisibilityObservationReviews = mysqlTable('llmVisibilityObservat
 export const contentOperationMeasurementConnections = mysqlTable('contentOperationMeasurementConnections', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
-  publicationTargetId: int('publicationTargetId').references(() => contentOperationPublicationTargets.id),
+  clientId: int('clientId').notNull(),
+  publicationTargetId: int('publicationTargetId'),
   /** Server-derived target/origin identity used for one live source per measured website. */
   websiteIdentity: varchar('websiteIdentity', { length: 160 }).notNull(),
   source: mysqlEnum('source', ['google_search_console', 'first_party_analytics', 'llm_visibility']).notNull(),
@@ -1152,7 +1222,7 @@ export const contentOperationMeasurementConnections = mysqlTable('contentOperati
   credentialReference: varchar('credentialReference', { length: 128 }),
   googleSearchConsoleProperty: varchar('googleSearchConsoleProperty', { length: 2048 }),
   ga4PropertyId: varchar('ga4PropertyId', { length: 12 }),
-  llmVisibilityProjectId: int('llmVisibilityProjectId').references(() => llmVisibilityProjects.id),
+  llmVisibilityProjectId: int('llmVisibilityProjectId'),
   canonicalOrigin: varchar('canonicalOrigin', { length: 2048 }).notNull(),
   timeZone: varchar('timeZone', { length: 80 }).notNull(),
   allowedPageScope: json('allowedPageScope').notNull(),
@@ -1165,6 +1235,10 @@ export const contentOperationMeasurementConnections = mysqlTable('contentOperati
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_measur_client_id_1c83d5c87a', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_measur_publication_target_e132211c28', columns: [table.publicationTargetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+  foreignKey({ name: 'fk_content_operation_measur_llm_visibility_pro_68a85804ca', columns: [table.llmVisibilityProjectId], foreignColumns: [llmVisibilityProjects.id] }),
+
   uniqueIndex('measurement_connections_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('measurement_connections_owner_website_active_source_unique').on(table.ownerUserId, table.websiteIdentity, table.activeSource),
   index('measurement_connections_owner_status_idx').on(table.ownerUserId, table.status),
@@ -1175,10 +1249,10 @@ export const contentOperationMeasurementConnections = mysqlTable('contentOperati
 export const contentOperationMeasurementRuns = mysqlTable('contentOperationMeasurementRuns', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
-  connectionId: int('connectionId').notNull().references(() => contentOperationMeasurementConnections.id),
-  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
-  targetId: int('targetId').notNull().references(() => contentOperationPublicationTargets.id),
+  clientId: int('clientId').notNull(),
+  connectionId: int('connectionId').notNull(),
+  entryId: int('entryId').notNull(),
+  targetId: int('targetId').notNull(),
   source: mysqlEnum('source', ['google_search_console', 'first_party_analytics', 'llm_visibility']).notNull(),
   checkpointDays: int('checkpointDays').notNull(),
   publicationReceiptFingerprint: varchar('publicationReceiptFingerprint', { length: 128 }).notNull(),
@@ -1207,6 +1281,11 @@ export const contentOperationMeasurementRuns = mysqlTable('contentOperationMeasu
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_measur_client_id_7c3a0db31b', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_measur_connection_id_641abb194f', columns: [table.connectionId], foreignColumns: [contentOperationMeasurementConnections.id] }),
+  foreignKey({ name: 'fk_content_operation_measur_entry_id_013f78a580', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+  foreignKey({ name: 'fk_content_operation_measur_target_id_9f6e02f2b0', columns: [table.targetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+
   uniqueIndex('measurement_runs_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('measurement_runs_owner_pair_unique').on(table.ownerUserId, table.entryId, table.targetId, table.source, table.checkpointDays, table.baselineWindowStart, table.followUpWindowStart, table.publicationReceiptFingerprint, table.contentHash, table.evidenceSnapshotHash),
   index('measurement_runs_owner_due_idx').on(table.ownerUserId, table.state, table.dueAt),
@@ -1219,9 +1298,9 @@ export const contentOperationMeasurementRuns = mysqlTable('contentOperationMeasu
 export const contentOperationMeasurementSnapshots = mysqlTable('contentOperationMeasurementSnapshots', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  runId: int('runId').notNull().references(() => contentOperationMeasurementRuns.id),
-  entryId: int('entryId').notNull().references(() => contentOperationCalendarEntries.id),
-  targetId: int('targetId').notNull().references(() => contentOperationPublicationTargets.id),
+  runId: int('runId').notNull(),
+  entryId: int('entryId').notNull(),
+  targetId: int('targetId').notNull(),
   source: mysqlEnum('source', ['google_search_console', 'first_party_analytics', 'llm_visibility']).notNull(),
   phase: mysqlEnum('phase', ['baseline', 'follow_up']).notNull(),
   deidentifiedSubjectKey: varchar('deidentifiedSubjectKey', { length: 64 }).notNull(),
@@ -1235,6 +1314,10 @@ export const contentOperationMeasurementSnapshots = mysqlTable('contentOperation
   limitations: json('limitations').notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_content_operation_measur_run_id_96920fa3da', columns: [table.runId], foreignColumns: [contentOperationMeasurementRuns.id] }),
+  foreignKey({ name: 'fk_content_operation_measur_entry_id_f920c00179', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+  foreignKey({ name: 'fk_content_operation_measur_target_id_de4fc33e99', columns: [table.targetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+
   uniqueIndex('measurement_snapshots_run_phase_unique').on(table.runId, table.phase),
   uniqueIndex('measurement_snapshots_owner_source_hash_unique').on(table.ownerUserId, table.sourceHash),
   index('measurement_snapshots_owner_entry_idx').on(table.ownerUserId, table.entryId, table.createdAt),
@@ -1279,7 +1362,7 @@ export const managedSiteProjects = mysqlTable('managedSiteProjects', {
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   canonicalClientIdentity: varchar('canonicalClientIdentity', { length: 160 }).notNull(),
   canonicalWebsiteIdentity: varchar('canonicalWebsiteIdentity', { length: 2048 }).notNull(),
-  contentOperationClientId: int('contentOperationClientId').references(() => contentOperationClients.id),
+  contentOperationClientId: int('contentOperationClientId'),
   status: mysqlEnum('status', ['draft', 'quoted', 'awaiting_customer_authorization', 'payment_pending', 'payment_verified', 'domain_intent_created', 'domain_purchase_pending', 'domain_registered', 'dns_pending', 'dns_verified', 'build_pending', 'building', 'deployment_failed', 'deployed', 'tls_pending', 'active', 'retry_wait', 'blocked', 'suspended']).default('draft').notNull(),
   siteType: mysqlEnum('siteType', ['one_page', 'brand_blog', 'simple_commerce']).notNull(),
   activeVersionId: int('activeVersionId'),
@@ -1290,6 +1373,8 @@ export const managedSiteProjects = mysqlTable('managedSiteProjects', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_projects_content_operation__50e755d3c5', columns: [table.contentOperationClientId], foreignColumns: [contentOperationClients.id] }),
+
   uniqueIndex('managed_site_projects_owner_client_identity_unique').on(table.ownerUserId, table.canonicalClientIdentity),
   uniqueIndex('managed_site_projects_owner_website_identity_unique').on(table.ownerUserId, table.canonicalWebsiteIdentity),
   uniqueIndex('managed_site_projects_owner_fingerprint_unique').on(table.ownerUserId, table.projectFingerprint),
@@ -1793,7 +1878,7 @@ export const managedSiteDraftOrders = mysqlTable('managedSiteDraftOrders', {
 export const managedSitePaymentEvents = mysqlTable('managedSitePaymentEvents', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  draftOrderId: int('draftOrderId').notNull().references(() => managedSiteDraftOrders.id),
+  draftOrderId: int('draftOrderId').notNull(),
   previewId: int('previewId').notNull().references(() => managedSitePreviews.id),
   quoteId: int('quoteId').notNull().references(() => managedSiteQuotes.id),
   providerKey: varchar('providerKey', { length: 96 }).notNull(),
@@ -1807,6 +1892,8 @@ export const managedSitePaymentEvents = mysqlTable('managedSitePaymentEvents', {
   eventFingerprint: varchar('eventFingerprint', { length: 128 }).notNull(),
   receivedAt: timestamp('receivedAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_payment_eve_draft_order_id_3b2b4659e3', columns: [table.draftOrderId], foreignColumns: [managedSiteDraftOrders.id] }),
+
   uniqueIndex('managed_site_payment_events_owner_provider_event_unique').on(table.ownerUserId, table.providerKey, table.eventId),
   uniqueIndex('managed_site_payment_events_fingerprint_unique').on(table.ownerUserId, table.eventFingerprint),
   index('managed_site_payment_events_order_idx').on(table.draftOrderId, table.receivedAt),
@@ -1816,7 +1903,7 @@ export const managedSitePaymentEvents = mysqlTable('managedSitePaymentEvents', {
 export const managedSiteSubscriptionIntents = mysqlTable('managedSiteSubscriptionIntents', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').references(() => users.id),
-  projectId: int('projectId').references(() => managedSiteProjects.id),
+  projectId: int('projectId'),
   quoteId: int('quoteId').notNull().references(() => managedSiteQuotes.id),
   planKey: varchar('planKey', { length: 96 }).notNull(),
   cadenceDays: int('cadenceDays').notNull(),
@@ -1826,6 +1913,8 @@ export const managedSiteSubscriptionIntents = mysqlTable('managedSiteSubscriptio
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_subscriptio_project_id_7b2e347c92', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+
   uniqueIndex('managed_site_subscription_intents_quote_unique').on(table.quoteId),
   uniqueIndex('managed_site_subscription_intents_fingerprint_unique').on(table.intentFingerprint),
   index('managed_site_subscription_intents_owner_status_idx').on(table.ownerUserId, table.status),
@@ -1845,7 +1934,7 @@ export const managedSiteDomainIntents = mysqlTable('managedSiteDomainIntents', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
-  draftOrderId: int('draftOrderId').references(() => managedSiteDraftOrders.id),
+  draftOrderId: int('draftOrderId'),
   mode: mysqlEnum('mode', ['customer_owned', 'new_registration', 'assisted']).notNull(),
   requestedDomain: varchar('requestedDomain', { length: 253 }).notNull(),
   normalizedDomain: varchar('normalizedDomain', { length: 253 }).notNull(),
@@ -1859,6 +1948,8 @@ export const managedSiteDomainIntents = mysqlTable('managedSiteDomainIntents', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_domain_inte_draft_order_id_a0bedc94c0', columns: [table.draftOrderId], foreignColumns: [managedSiteDraftOrders.id] }),
+
   uniqueIndex('managed_site_domain_intents_project_unique').on(table.projectId),
   uniqueIndex('managed_site_domain_intents_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   index('managed_site_domain_intents_owner_status_idx').on(table.ownerUserId, table.purchaseStatus, table.dnsStatus),
@@ -1870,7 +1961,7 @@ export const managedSiteProvisioningPlans = mysqlTable('managedSiteProvisioningP
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
   versionId: int('versionId').notNull().references(() => managedSiteVersions.id),
-  domainIntentId: int('domainIntentId').notNull().references(() => managedSiteDomainIntents.id),
+  domainIntentId: int('domainIntentId').notNull(),
   platform: mysqlEnum('platform', ['vercel', 'cloudflare_pages', 'manual_export']).notNull(),
   deploymentMode: mysqlEnum('deploymentMode', ['preview_only', 'customer_authorized', 'owner_authorized']).default('preview_only').notNull(),
   status: mysqlEnum('status', ['draft', 'awaiting_payment', 'awaiting_authorization', 'queued', 'processing', 'retry_wait', 'blocked', 'failed', 'succeeded', 'cancelled']).default('draft').notNull(),
@@ -1890,6 +1981,8 @@ export const managedSiteProvisioningPlans = mysqlTable('managedSiteProvisioningP
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_provisionin_domain_intent_id_35a0f6e70c', columns: [table.domainIntentId], foreignColumns: [managedSiteDomainIntents.id] }),
+
   uniqueIndex('managed_site_provisioning_plans_project_version_unique').on(table.projectId, table.versionId),
   uniqueIndex('managed_site_provisioning_plans_owner_intent_unique').on(table.ownerUserId, table.intentFingerprint),
   uniqueIndex('managed_site_provisioning_plans_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
@@ -1901,7 +1994,7 @@ export const managedSiteProvisioningSteps = mysqlTable('managedSiteProvisioningS
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
-  planId: int('planId').notNull().references(() => managedSiteProvisioningPlans.id),
+  planId: int('planId').notNull(),
   stepKey: varchar('stepKey', { length: 96 }).notNull(),
   ordinal: int('ordinal').notNull(),
   status: mysqlEnum('status', ['pending', 'awaiting_customer', 'blocked', 'processing', 'retry_wait', 'succeeded', 'failed', 'cancelled']).default('pending').notNull(),
@@ -1916,6 +2009,8 @@ export const managedSiteProvisioningSteps = mysqlTable('managedSiteProvisioningS
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_provisionin_plan_id_d8f05090c1', columns: [table.planId], foreignColumns: [managedSiteProvisioningPlans.id] }),
+
   uniqueIndex('managed_site_provisioning_steps_plan_key_unique').on(table.planId, table.stepKey),
   index('managed_site_provisioning_steps_owner_plan_status_idx').on(table.ownerUserId, table.planId, table.status),
 ])
@@ -1924,9 +2019,9 @@ export const managedSiteProvisioningSteps = mysqlTable('managedSiteProvisioningS
 export const managedSiteProvisioningEvents = mysqlTable('managedSiteProvisioningEvents', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
-  planId: int('planId').notNull().references(() => managedSiteProvisioningPlans.id),
-  stepId: int('stepId').references(() => managedSiteProvisioningSteps.id),
+  projectId: int('projectId').notNull(),
+  planId: int('planId').notNull(),
+  stepId: int('stepId'),
   eventType: varchar('eventType', { length: 120 }).notNull(),
   executionMode: mysqlEnum('executionMode', ['dry_run', 'mocked', 'external']).notNull(),
   status: mysqlEnum('status', ['planned', 'blocked', 'succeeded', 'failed']).notNull(),
@@ -1936,6 +2031,10 @@ export const managedSiteProvisioningEvents = mysqlTable('managedSiteProvisioning
   metadata: json('metadata').notNull(),
   occurredAt: timestamp('occurredAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_provisionin_project_id_7972f5fd7e', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_provisionin_plan_id_6c4258c2d1', columns: [table.planId], foreignColumns: [managedSiteProvisioningPlans.id] }),
+  foreignKey({ name: 'fk_managed_site_provisionin_step_id_5d821624ce', columns: [table.stepId], foreignColumns: [managedSiteProvisioningSteps.id] }),
+
   uniqueIndex('managed_site_provisioning_events_receipt_unique').on(table.ownerUserId, table.receiptFingerprint),
   index('managed_site_provisioning_events_owner_plan_idx').on(table.ownerUserId, table.planId, table.occurredAt),
 ])
@@ -1972,16 +2071,21 @@ export const managedSiteProviderConfigurations = mysqlTable('managedSiteProvider
 export const managedSitePrePurchaseBindings = mysqlTable('managedSitePrePurchaseBindings', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
-  sourceVersionId: int('sourceVersionId').notNull().references(() => managedSiteVersions.id),
-  previewId: int('previewId').notNull().references(() => managedSitePreviews.id),
+  projectId: int('projectId').notNull(),
+  sourceVersionId: int('sourceVersionId').notNull(),
+  previewId: int('previewId').notNull(),
   quoteId: int('quoteId').notNull().references(() => managedSiteQuotes.id),
-  draftOrderId: int('draftOrderId').notNull().references(() => managedSiteDraftOrders.id),
+  draftOrderId: int('draftOrderId').notNull(),
   commerceSnapshotFingerprint: varchar('commerceSnapshotFingerprint', { length: 128 }).notNull(),
   requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_pre_purchas_project_id_17eb9d490b', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_pre_purchas_source_version_id_15a924e8a2', columns: [table.sourceVersionId], foreignColumns: [managedSiteVersions.id] }),
+  foreignKey({ name: 'fk_managed_site_pre_purchas_preview_id_d7c83939e8', columns: [table.previewId], foreignColumns: [managedSitePreviews.id] }),
+  foreignKey({ name: 'fk_managed_site_pre_purchas_draft_order_id_7d8b59829b', columns: [table.draftOrderId], foreignColumns: [managedSiteDraftOrders.id] }),
+
   uniqueIndex('managed_site_prepurchase_project_unique').on(table.projectId),
   uniqueIndex('managed_site_prepurchase_order_unique').on(table.draftOrderId),
   uniqueIndex('managed_site_prepurchase_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
@@ -1993,8 +2097,8 @@ export const managedSitePrePurchaseBindings = mysqlTable('managedSitePrePurchase
 export const managedSiteGenerationCandidates = mysqlTable('managedSiteGenerationCandidates', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
-  sourceVersionId: int('sourceVersionId').notNull().references(() => managedSiteVersions.id),
+  projectId: int('projectId').notNull(),
+  sourceVersionId: int('sourceVersionId').notNull(),
   requestSchemaVersion: varchar('requestSchemaVersion', { length: 96 }).notNull(),
   requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
@@ -2008,6 +2112,9 @@ export const managedSiteGenerationCandidates = mysqlTable('managedSiteGeneration
   gateSummary: json('gateSummary').notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_generation__project_id_55edb3902f', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_generation__source_version_id_60efb7f93e', columns: [table.sourceVersionId], foreignColumns: [managedSiteVersions.id] }),
+
   uniqueIndex('managed_site_generation_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('managed_site_generation_owner_request_unique').on(table.ownerUserId, table.requestFingerprint),
   uniqueIndex('managed_site_generation_provider_request_unique').on(table.providerKey, table.providerRequestId),
@@ -2018,12 +2125,12 @@ export const managedSiteGenerationCandidates = mysqlTable('managedSiteGeneration
 export const managedSiteReleaseProjections = mysqlTable('managedSiteReleaseProjections', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
-  generationCandidateId: int('generationCandidateId').references(() => managedSiteGenerationCandidates.id),
-  versionId: int('versionId').notNull().references(() => managedSiteVersions.id),
-  previewId: int('previewId').references(() => managedSitePreviews.id),
+  projectId: int('projectId').notNull(),
+  generationCandidateId: int('generationCandidateId'),
+  versionId: int('versionId').notNull(),
+  previewId: int('previewId'),
   quoteId: int('quoteId').references(() => managedSiteQuotes.id),
-  draftOrderId: int('draftOrderId').references(() => managedSiteDraftOrders.id),
+  draftOrderId: int('draftOrderId'),
   commerceSnapshotFingerprint: varchar('commerceSnapshotFingerprint', { length: 128 }),
   releaseKind: mysqlEnum('releaseKind', ['generated_site', 'existing_site']).notNull(),
   targetKey: varchar('targetKey', { length: 120 }).notNull(),
@@ -2043,6 +2150,12 @@ export const managedSiteReleaseProjections = mysqlTable('managedSiteReleaseProje
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_release_pro_project_id_668c393740', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_release_pro_generation_candida_adf21b5422', columns: [table.generationCandidateId], foreignColumns: [managedSiteGenerationCandidates.id] }),
+  foreignKey({ name: 'fk_managed_site_release_pro_version_id_8d47a77bb7', columns: [table.versionId], foreignColumns: [managedSiteVersions.id] }),
+  foreignKey({ name: 'fk_managed_site_release_pro_preview_id_4b812a543b', columns: [table.previewId], foreignColumns: [managedSitePreviews.id] }),
+  foreignKey({ name: 'fk_managed_site_release_pro_draft_order_id_0d8e68ef2b', columns: [table.draftOrderId], foreignColumns: [managedSiteDraftOrders.id] }),
+
   uniqueIndex('managed_site_release_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('managed_site_release_project_target_content_unique').on(table.projectId, table.targetKey, table.contentHash),
   index('managed_site_release_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status),
@@ -2053,9 +2166,9 @@ export const managedSiteReleaseProjections = mysqlTable('managedSiteReleaseProje
 export const managedSitePaymentWebhookInbox = mysqlTable('managedSitePaymentWebhookInbox', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').references(() => users.id),
-  projectId: int('projectId').references(() => managedSiteProjects.id),
-  releaseId: int('releaseId').references(() => managedSiteReleaseProjections.id),
-  draftOrderId: int('draftOrderId').notNull().references(() => managedSiteDraftOrders.id),
+  projectId: int('projectId'),
+  releaseId: int('releaseId'),
+  draftOrderId: int('draftOrderId').notNull(),
   providerKey: varchar('providerKey', { length: 96 }).notNull(),
   providerEventId: varchar('providerEventId', { length: 160 }).notNull(),
   eventType: varchar('eventType', { length: 96 }).notNull(),
@@ -2067,6 +2180,10 @@ export const managedSitePaymentWebhookInbox = mysqlTable('managedSitePaymentWebh
   receivedAt: timestamp('receivedAt').defaultNow().notNull(),
   completedAt: timestamp('completedAt'),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_payment_web_project_id_ad7f219a2e', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_payment_web_release_id_a35c05d809', columns: [table.releaseId], foreignColumns: [managedSiteReleaseProjections.id] }),
+  foreignKey({ name: 'fk_managed_site_payment_web_draft_order_id_3e4558f042', columns: [table.draftOrderId], foreignColumns: [managedSiteDraftOrders.id] }),
+
   uniqueIndex('managed_site_payment_inbox_provider_event_unique').on(table.providerKey, table.providerEventId),
   uniqueIndex('managed_site_payment_inbox_event_fingerprint_unique').on(table.eventFingerprint),
   index('managed_site_payment_inbox_order_status_idx').on(table.draftOrderId, table.processingStatus),
@@ -2080,8 +2197,8 @@ export const managedSiteGateResults = mysqlTable('managedSiteGateResults', {
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
   versionId: int('versionId').notNull().references(() => managedSiteVersions.id),
-  generationCandidateId: int('generationCandidateId').notNull().references(() => managedSiteGenerationCandidates.id),
-  releaseId: int('releaseId').notNull().references(() => managedSiteReleaseProjections.id),
+  generationCandidateId: int('generationCandidateId').notNull(),
+  releaseId: int('releaseId').notNull(),
   gateType: mysqlEnum('gateType', ['artifact_admission', 'deterministic_compiler', 'preview_build', 'security_static_active_content', 'geo_content_structure', 'human_review']).notNull(),
   inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
   contentHash: varchar('contentHash', { length: 128 }).notNull(),
@@ -2091,6 +2208,9 @@ export const managedSiteGateResults = mysqlTable('managedSiteGateResults', {
   receiptFingerprint: varchar('receiptFingerprint', { length: 128 }).notNull(),
   observedAt: timestamp('observedAt').notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_gate_result_generation_candida_7e2a8eba4c', columns: [table.generationCandidateId], foreignColumns: [managedSiteGenerationCandidates.id] }),
+  foreignKey({ name: 'fk_managed_site_gate_result_release_id_ed32aa98b4', columns: [table.releaseId], foreignColumns: [managedSiteReleaseProjections.id] }),
+
   uniqueIndex('managed_site_gate_release_type_input_unique').on(table.releaseId, table.gateType, table.inputFingerprint),
   uniqueIndex('managed_site_gate_owner_receipt_unique').on(table.ownerUserId, table.receiptFingerprint),
   index('managed_site_gate_owner_release_result_idx').on(table.ownerUserId, table.releaseId, table.result),
@@ -2103,7 +2223,7 @@ export const managedSiteDomainClaims = mysqlTable('managedSiteDomainClaims', {
   activeCanonicalDomainKey: varchar('activeCanonicalDomainKey', { length: 253 }).generatedAlwaysAs(sql`CASE WHEN \`status\` = 'released' THEN NULL ELSE \`canonicalDomain\` END`, { mode: 'stored' }),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
-  releaseId: int('releaseId').notNull().references(() => managedSiteReleaseProjections.id),
+  releaseId: int('releaseId').notNull(),
   claimKind: mysqlEnum('claimKind', ['generated', 'existing']).notNull(),
   status: mysqlEnum('status', ['pending', 'verified', 'released', 'blocked']).default('pending').notNull(),
   authorityReceiptFingerprint: varchar('authorityReceiptFingerprint', { length: 128 }),
@@ -2113,6 +2233,8 @@ export const managedSiteDomainClaims = mysqlTable('managedSiteDomainClaims', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_domain_clai_release_id_6a2672e5b2', columns: [table.releaseId], foreignColumns: [managedSiteReleaseProjections.id] }),
+
   uniqueIndex('managed_site_domain_claim_active_canonical_unique').on(table.activeCanonicalDomainKey),
   uniqueIndex('managed_site_domain_claim_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('managed_site_domain_claim_release_unique').on(table.releaseId),
@@ -2124,8 +2246,8 @@ export const managedSiteConnectorAttempts = mysqlTable('managedSiteConnectorAtte
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').references(() => managedSiteProjects.id),
-  draftOrderId: int('draftOrderId').references(() => managedSiteDraftOrders.id),
-  releaseId: int('releaseId').references(() => managedSiteReleaseProjections.id),
+  draftOrderId: int('draftOrderId'),
+  releaseId: int('releaseId'),
   capability: mysqlEnum('capability', ['website_generator', 'payment', 'domain_registration', 'dns_tls', 'deployment']).notNull(),
   operation: varchar('operation', { length: 120 }).notNull(),
   executionMode: mysqlEnum('executionMode', ['dry_run', 'mocked', 'live']).notNull(),
@@ -2144,6 +2266,9 @@ export const managedSiteConnectorAttempts = mysqlTable('managedSiteConnectorAtte
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_connector_a_draft_order_id_a9e415145d', columns: [table.draftOrderId], foreignColumns: [managedSiteDraftOrders.id] }),
+  foreignKey({ name: 'fk_managed_site_connector_a_release_id_0fef79e84b', columns: [table.releaseId], foreignColumns: [managedSiteReleaseProjections.id] }),
+
   uniqueIndex('managed_site_connector_attempt_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('managed_site_connector_attempt_owner_request_unique').on(table.ownerUserId, table.requestFingerprint),
   index('managed_site_connector_attempt_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status),
@@ -2155,9 +2280,9 @@ export const managedSiteConnectorReceipts = mysqlTable('managedSiteConnectorRece
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').references(() => managedSiteProjects.id),
-  draftOrderId: int('draftOrderId').references(() => managedSiteDraftOrders.id),
-  releaseId: int('releaseId').references(() => managedSiteReleaseProjections.id),
-  attemptId: int('attemptId').references(() => managedSiteConnectorAttempts.id),
+  draftOrderId: int('draftOrderId'),
+  releaseId: int('releaseId'),
+  attemptId: int('attemptId'),
   capability: mysqlEnum('capability', ['website_generator', 'payment', 'domain_registration', 'dns_tls', 'deployment']).notNull(),
   providerKey: varchar('providerKey', { length: 96 }).notNull(),
   providerEventId: varchar('providerEventId', { length: 160 }).notNull(),
@@ -2172,6 +2297,10 @@ export const managedSiteConnectorReceipts = mysqlTable('managedSiteConnectorRece
   receiptFingerprint: varchar('receiptFingerprint', { length: 128 }).notNull(),
   verifiedAt: timestamp('verifiedAt').notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_connector_r_draft_order_id_4d9c41abdc', columns: [table.draftOrderId], foreignColumns: [managedSiteDraftOrders.id] }),
+  foreignKey({ name: 'fk_managed_site_connector_r_release_id_5ea262c407', columns: [table.releaseId], foreignColumns: [managedSiteReleaseProjections.id] }),
+  foreignKey({ name: 'fk_managed_site_connector_r_attempt_id_f09d20ace0', columns: [table.attemptId], foreignColumns: [managedSiteConnectorAttempts.id] }),
+
   uniqueIndex('managed_site_connector_receipt_provider_event_unique').on(table.providerKey, table.providerEventId),
   uniqueIndex('managed_site_connector_receipt_owner_fingerprint_unique').on(table.ownerUserId, table.receiptFingerprint),
   index('managed_site_connector_receipt_owner_project_idx').on(table.ownerUserId, table.projectId, table.verifiedAt),
@@ -2219,8 +2348,8 @@ export type ManagedSiteIntegration = typeof managedSiteIntegrations.$inferSelect
 export const managedSiteShopifyAuthorizations = mysqlTable('managedSiteShopifyAuthorizations', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
-  integrationId: int('integrationId').notNull().references(() => managedSiteIntegrations.id),
+  projectId: int('projectId').notNull(),
+  integrationId: int('integrationId').notNull(),
   stateHash: varchar('stateHash', { length: 128 }).notNull(),
   nonceHash: varchar('nonceHash', { length: 128 }),
   codeVerifierHash: varchar('codeVerifierHash', { length: 128 }),
@@ -2231,6 +2360,9 @@ export const managedSiteShopifyAuthorizations = mysqlTable('managedSiteShopifyAu
   consumedAt: timestamp('consumedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_shopify_aut_project_id_facf3136be', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_shopify_aut_integration_id_e0f0d99f89', columns: [table.integrationId], foreignColumns: [managedSiteIntegrations.id] }),
+
   uniqueIndex('managed_site_shopify_authorizations_state_unique').on(table.stateHash),
   index('managed_site_shopify_authorizations_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status, table.expiresAt),
 ])
@@ -2240,7 +2372,7 @@ export const managedSiteShopifyWebhooks = mysqlTable('managedSiteShopifyWebhooks
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
-  integrationId: int('integrationId').notNull().references(() => managedSiteIntegrations.id),
+  integrationId: int('integrationId').notNull(),
   shopDomain: varchar('shopDomain', { length: 253 }).notNull(),
   webhookId: varchar('webhookId', { length: 160 }).notNull(),
   topic: varchar('topic', { length: 160 }).notNull(),
@@ -2250,6 +2382,8 @@ export const managedSiteShopifyWebhooks = mysqlTable('managedSiteShopifyWebhooks
   eventFingerprint: varchar('eventFingerprint', { length: 128 }).notNull(),
   receivedAt: timestamp('receivedAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_managed_site_shopify_web_integration_id_1dbcb36d97', columns: [table.integrationId], foreignColumns: [managedSiteIntegrations.id] }),
+
   uniqueIndex('managed_site_shopify_webhooks_integration_event_unique').on(table.integrationId, table.webhookId),
   uniqueIndex('managed_site_shopify_webhooks_fingerprint_unique').on(table.ownerUserId, table.eventFingerprint),
   index('managed_site_shopify_webhooks_owner_project_idx').on(table.ownerUserId, table.projectId, table.receivedAt),
@@ -2288,7 +2422,7 @@ export const geoOutcomeObservationRuns = mysqlTable('geoOutcomeObservationRuns',
 export const geoOutcomeObservationCandidates = mysqlTable('geoOutcomeObservationCandidates', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  observationRunId: int('observationRunId').notNull().references(() => geoOutcomeObservationRuns.id),
+  observationRunId: int('observationRunId').notNull(),
   websiteIdentityHash: varchar('websiteIdentityHash', { length: 128 }).notNull(),
   queryIdentityHash: varchar('queryIdentityHash', { length: 128 }).notNull(),
   normalizedQueryHash: varchar('normalizedQueryHash', { length: 128 }).notNull(),
@@ -2318,6 +2452,8 @@ export const geoOutcomeObservationCandidates = mysqlTable('geoOutcomeObservation
   revokedAt: timestamp('revokedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_geo_outcome_observation__observation_run_id_31c51a97f4', columns: [table.observationRunId], foreignColumns: [geoOutcomeObservationRuns.id] }),
+
   uniqueIndex('geo_outcome_candidates_owner_identity_unique').on(table.ownerUserId, table.observationRunId, table.candidatePageIdentityHash),
   uniqueIndex('geo_outcome_candidates_fingerprint_unique').on(table.ownerUserId, table.observationFingerprint),
   index('geo_outcome_candidates_owner_query_idx').on(table.ownerUserId, table.normalizedQueryHash, table.observationRunId),
@@ -2358,7 +2494,7 @@ export const geoOutcomeDatasetManifests = mysqlTable('geoOutcomeDatasetManifests
 export const geoOutcomeDatasetMembers = mysqlTable('geoOutcomeDatasetMembers', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  datasetManifestId: int('datasetManifestId').notNull().references(() => geoOutcomeDatasetManifests.id),
+  datasetManifestId: int('datasetManifestId').notNull(),
   observationFingerprint: varchar('observationFingerprint', { length: 128 }).notNull(),
   websiteIdentityHash: varchar('websiteIdentityHash', { length: 128 }).notNull(),
   normalizedQueryHash: varchar('normalizedQueryHash', { length: 128 }).notNull(),
@@ -2372,6 +2508,8 @@ export const geoOutcomeDatasetMembers = mysqlTable('geoOutcomeDatasetMembers', {
   featureVector: json('featureVector').notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_geo_outcome_dataset_memb_dataset_manifest_i_103bf1da95', columns: [table.datasetManifestId], foreignColumns: [geoOutcomeDatasetManifests.id] }),
+
   uniqueIndex('geo_outcome_members_manifest_observation_unique').on(table.datasetManifestId, table.observationFingerprint),
   index('geo_outcome_members_owner_query_idx').on(table.ownerUserId, table.normalizedQueryHash),
 ])
@@ -2381,7 +2519,7 @@ export const geoOutcomeDatasetDecisions = mysqlTable('geoOutcomeDatasetDecisions
   id: int('id').autoincrement().primaryKey(),
   decisionId: varchar('decisionId', { length: 160 }).notNull().unique(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  datasetManifestId: int('datasetManifestId').notNull().references(() => geoOutcomeDatasetManifests.id),
+  datasetManifestId: int('datasetManifestId').notNull(),
   reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
   previousStatus: varchar('previousStatus', { length: 96 }).notNull(),
   newStatus: varchar('newStatus', { length: 96 }).notNull(),
@@ -2389,6 +2527,8 @@ export const geoOutcomeDatasetDecisions = mysqlTable('geoOutcomeDatasetDecisions
   manifestFingerprint: varchar('manifestFingerprint', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_geo_outcome_dataset_deci_dataset_manifest_i_4255ddaa11', columns: [table.datasetManifestId], foreignColumns: [geoOutcomeDatasetManifests.id] }),
+
   index('geo_outcome_dataset_decisions_owner_manifest_idx').on(table.ownerUserId, table.datasetManifestId, table.createdAt),
 ])
 
@@ -2396,7 +2536,7 @@ export const geoOutcomeTrainingRuns = mysqlTable('geoOutcomeTrainingRuns', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   trainingRunId: varchar('trainingRunId', { length: 160 }).notNull(),
-  datasetManifestId: int('datasetManifestId').notNull().references(() => geoOutcomeDatasetManifests.id),
+  datasetManifestId: int('datasetManifestId').notNull(),
   modelFamily: mysqlEnum('modelFamily', ['regularized_logistic_baseline_v1', 'pairwise_logistic_ranker_v1']).notNull(),
   status: mysqlEnum('status', ['queued', 'running', 'completed', 'blocked', 'failed']).default('queued').notNull(),
   startedAt: timestamp('startedAt'),
@@ -2411,6 +2551,8 @@ export const geoOutcomeTrainingRuns = mysqlTable('geoOutcomeTrainingRuns', {
   reason: varchar('reason', { length: 500 }),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_geo_outcome_training_run_dataset_manifest_i_0df694f82e', columns: [table.datasetManifestId], foreignColumns: [geoOutcomeDatasetManifests.id] }),
+
   uniqueIndex('geo_outcome_training_owner_id_unique').on(table.ownerUserId, table.trainingRunId),
   index('geo_outcome_training_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
 ])
@@ -2451,7 +2593,7 @@ export const geoOutcomeModelDecisions = mysqlTable('geoOutcomeModelDecisions', {
   id: int('id').autoincrement().primaryKey(),
   decisionId: varchar('decisionId', { length: 160 }).notNull().unique(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  modelArtifactId: int('modelArtifactId').notNull().references(() => geoOutcomeModelArtifacts.id),
+  modelArtifactId: int('modelArtifactId').notNull(),
   previousStatus: varchar('previousStatus', { length: 96 }).notNull(),
   newStatus: varchar('newStatus', { length: 96 }).notNull(),
   reviewerUserId: int('reviewerUserId').references(() => users.id),
@@ -2460,6 +2602,8 @@ export const geoOutcomeModelDecisions = mysqlTable('geoOutcomeModelDecisions', {
   datasetManifestHash: varchar('datasetManifestHash', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_geo_outcome_model_decisi_model_artifact_id_fb788115d0', columns: [table.modelArtifactId], foreignColumns: [geoOutcomeModelArtifacts.id] }),
+
   index('geo_outcome_decisions_owner_artifact_idx').on(table.ownerUserId, table.modelArtifactId, table.createdAt),
 ])
 
@@ -2518,10 +2662,10 @@ export const geoOutcomeCandidateSetDecisions = mysqlTable('geoOutcomeCandidateSe
   id: int('id').autoincrement().primaryKey(),
   decisionId: varchar('decisionId', { length: 160 }).notNull(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  sourceObservationId: int('sourceObservationId').notNull().references(() => llmVisibilityObservations.id),
-  sourceProjectId: int('sourceProjectId').notNull().references(() => llmVisibilityProjects.id),
-  sourceQueryId: int('sourceQueryId').notNull().references(() => llmVisibilityQueries.id),
-  sourceRunId: int('sourceRunId').notNull().references(() => llmVisibilityRuns.id),
+  sourceObservationId: int('sourceObservationId').notNull(),
+  sourceProjectId: int('sourceProjectId').notNull(),
+  sourceQueryId: int('sourceQueryId').notNull(),
+  sourceRunId: int('sourceRunId').notNull(),
   sourceCitationSetFingerprint: varchar('sourceCitationSetFingerprint', { length: 128 }).notNull(),
   reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
@@ -2533,6 +2677,11 @@ export const geoOutcomeCandidateSetDecisions = mysqlTable('geoOutcomeCandidateSe
   decisionFingerprint: varchar('decisionFingerprint', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_geo_outcome_candidate_se_source_observation_e0c81fd59e', columns: [table.sourceObservationId], foreignColumns: [llmVisibilityObservations.id] }),
+  foreignKey({ name: 'fk_geo_outcome_candidate_se_source_project_id_efbe5b4fce', columns: [table.sourceProjectId], foreignColumns: [llmVisibilityProjects.id] }),
+  foreignKey({ name: 'fk_geo_outcome_candidate_se_source_query_id_ba67e6445f', columns: [table.sourceQueryId], foreignColumns: [llmVisibilityQueries.id] }),
+  foreignKey({ name: 'fk_geo_outcome_candidate_se_source_run_id_b3b875d82f', columns: [table.sourceRunId], foreignColumns: [llmVisibilityRuns.id] }),
+
   uniqueIndex('geo_outcome_candidate_sets_decision_unique').on(table.decisionId),
   uniqueIndex('geo_outcome_candidate_sets_owner_key_unique').on(table.ownerUserId, table.idempotencyKey),
   uniqueIndex('geo_outcome_candidate_sets_owner_source_set_decision_unique').on(table.ownerUserId, table.sourceObservationId, table.candidateSetFingerprint, table.decisionType),
@@ -2543,10 +2692,10 @@ export const geoOutcomeCandidateSetDecisions = mysqlTable('geoOutcomeCandidateSe
 export const geoOutcomeCandidateAuthorities = mysqlTable('geoOutcomeCandidateAuthorities', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
-  candidateSetDecisionId: int('candidateSetDecisionId').notNull().references(() => geoOutcomeCandidateSetDecisions.id),
-  sourceObservationId: int('sourceObservationId').notNull().references(() => llmVisibilityObservations.id),
-  projectId: int('projectId').notNull().references(() => llmVisibilityProjects.id),
-  queryId: int('queryId').notNull().references(() => llmVisibilityQueries.id),
+  candidateSetDecisionId: int('candidateSetDecisionId').notNull(),
+  sourceObservationId: int('sourceObservationId').notNull(),
+  projectId: int('projectId').notNull(),
+  queryId: int('queryId').notNull(),
   runId: int('runId').notNull().references(() => llmVisibilityRuns.id),
   canonicalCandidateUrlHash: varchar('canonicalCandidateUrlHash', { length: 128 }).notNull(),
   canonicalPageHash: varchar('canonicalPageHash', { length: 128 }).notNull(),
@@ -2565,6 +2714,11 @@ export const geoOutcomeCandidateAuthorities = mysqlTable('geoOutcomeCandidateAut
   candidateSetFingerprint: varchar('candidateSetFingerprint', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_geo_outcome_candidate_au_candidate_set_deci_0d82681797', columns: [table.candidateSetDecisionId], foreignColumns: [geoOutcomeCandidateSetDecisions.id] }),
+  foreignKey({ name: 'fk_geo_outcome_candidate_au_source_observation_b86bb57cf5', columns: [table.sourceObservationId], foreignColumns: [llmVisibilityObservations.id] }),
+  foreignKey({ name: 'fk_geo_outcome_candidate_au_project_id_11711cc81a', columns: [table.projectId], foreignColumns: [llmVisibilityProjects.id] }),
+  foreignKey({ name: 'fk_geo_outcome_candidate_au_query_id_6e9aef239a', columns: [table.queryId], foreignColumns: [llmVisibilityQueries.id] }),
+
   uniqueIndex('geo_outcome_candidate_authority_set_url_unique').on(table.candidateSetDecisionId, table.canonicalCandidateUrlHash),
   uniqueIndex('geo_outcome_candidate_authority_set_identity_unique').on(table.candidateSetDecisionId, table.candidatePageIdentityHash),
   index('geo_outcome_candidate_authority_source_idx').on(table.ownerUserId, table.sourceObservationId, table.candidateSetFingerprint),
@@ -2578,13 +2732,13 @@ export const geoOutcomeEvidenceLocators = mysqlTable('geoOutcomeEvidenceLocators
   evidenceLocatorHash: varchar('evidenceLocatorHash', { length: 128 }).notNull(),
   purpose: mysqlEnum('purpose', ['geo_outcome_verification']).notNull(),
   sourceKind: mysqlEnum('sourceKind', ['llm_visibility_observation']).notNull(),
-  sourceRecordId: int('sourceRecordId').notNull().references(() => llmVisibilityObservations.id),
-  sourceProjectId: int('sourceProjectId').notNull().references(() => llmVisibilityProjects.id),
-  sourceQueryId: int('sourceQueryId').notNull().references(() => llmVisibilityQueries.id),
+  sourceRecordId: int('sourceRecordId').notNull(),
+  sourceProjectId: int('sourceProjectId').notNull(),
+  sourceQueryId: int('sourceQueryId').notNull(),
   sourceRunId: int('sourceRunId').notNull().references(() => llmVisibilityRuns.id),
   sourceResponseHash: varchar('sourceResponseHash', { length: 64 }).notNull(),
   sourceCitationSetFingerprint: varchar('sourceCitationSetFingerprint', { length: 128 }).notNull(),
-  candidateAuthorityId: int('candidateAuthorityId').notNull().references(() => geoOutcomeCandidateAuthorities.id),
+  candidateAuthorityId: int('candidateAuthorityId').notNull(),
   candidateAuthorityFingerprint: varchar('candidateAuthorityFingerprint', { length: 128 }).notNull(),
   candidateSetFingerprint: varchar('candidateSetFingerprint', { length: 128 }).notNull(),
   canonicalCandidateUrlHash: varchar('canonicalCandidateUrlHash', { length: 128 }).notNull(),
@@ -2594,6 +2748,11 @@ export const geoOutcomeEvidenceLocators = mysqlTable('geoOutcomeEvidenceLocators
   sourceObservedAt: timestamp('sourceObservedAt').notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_geo_outcome_evidence_loc_source_record_id_f8799fa069', columns: [table.sourceRecordId], foreignColumns: [llmVisibilityObservations.id] }),
+  foreignKey({ name: 'fk_geo_outcome_evidence_loc_source_project_id_ae0cf5937c', columns: [table.sourceProjectId], foreignColumns: [llmVisibilityProjects.id] }),
+  foreignKey({ name: 'fk_geo_outcome_evidence_loc_source_query_id_1a9420ef37', columns: [table.sourceQueryId], foreignColumns: [llmVisibilityQueries.id] }),
+  foreignKey({ name: 'fk_geo_outcome_evidence_loc_candidate_authorit_fcd357368f', columns: [table.candidateAuthorityId], foreignColumns: [geoOutcomeCandidateAuthorities.id] }),
+
   uniqueIndex('geo_outcome_evidence_binding_unique').on(table.ownerUserId, table.observationFingerprint),
   index('geo_outcome_evidence_observation_idx').on(table.ownerUserId, table.observationFingerprint),
 ])
@@ -2733,3 +2892,196 @@ export type GeoOutcomeModelopsCycle = typeof geoOutcomeModelopsCycles.$inferSele
 export type GeoOutcomeModelopsEvent = typeof geoOutcomeModelopsEvents.$inferSelect
 export type GeoOutcomeModelopsShadowEvaluation = typeof geoOutcomeModelopsShadowEvaluations.$inferSelect
 export type GeoOutcomeModelopsRollbackDecision = typeof geoOutcomeModelopsRollbackDecisions.$inferSelect
+
+/** Canonical owner/client/site identity for one governed system. Commerce authority stays in Managed Site tables. */
+export const systemSpecs = mysqlTable('systemSpecs', {
+  id: int('id').autoincrement().primaryKey(),
+  specId: varchar('specId', { length: 128 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  websiteId: varchar('websiteId', { length: 128 }),
+  managedSiteProjectId: int('managedSiteProjectId').references(() => managedSiteProjects.id),
+  activeVersionId: int('activeVersionId'),
+  status: mysqlEnum('status', ['draft', 'preview_ready', 'quote_ready', 'awaiting_payment', 'payment_verified', 'provisioning_planned', 'provisioning', 'health_checking', 'invitation_pending', 'active', 'failed', 'retry_wait', 'suspended', 'deprovision_pending', 'deprovisioned']).default('draft').notNull(),
+  identityFingerprint: varchar('identityFingerprint', { length: 64 }).notNull(),
+  creationIdempotencyKey: varchar('creationIdempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('system_specs_owner_spec_unique').on(table.ownerUserId, table.specId),
+  uniqueIndex('system_specs_owner_identity_unique').on(table.ownerUserId, table.identityFingerprint),
+  uniqueIndex('system_specs_owner_creation_key_unique').on(table.ownerUserId, table.creationIdempotencyKey),
+  index('system_specs_owner_updated_idx').on(table.ownerUserId, table.updatedAt, table.id),
+  index('system_specs_owner_managed_site_idx').on(table.ownerUserId, table.managedSiteProjectId, table.id),
+  index('system_specs_owner_client_status_idx').on(table.ownerUserId, table.clientId, table.status),
+])
+
+/** Immutable normalized SystemSpec versions and exact compiler lineage. */
+export const systemSpecVersions = mysqlTable('systemSpecVersions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  systemSpecId: int('systemSpecId').notNull().references(() => systemSpecs.id),
+  version: int('version').notNull(),
+  parentVersionId: int('parentVersionId'),
+  parentFingerprint: varchar('parentFingerprint', { length: 64 }),
+  schemaVersion: varchar('schemaVersion', { length: 64 }).notNull(),
+  compilerVersion: varchar('compilerVersion', { length: 64 }).notNull(),
+  normalizedSpec: json('normalizedSpec').notNull(),
+  compiledPlan: json('compiledPlan').notNull(),
+  specFingerprint: varchar('specFingerprint', { length: 64 }).notNull(),
+  compiledPlanFingerprint: varchar('compiledPlanFingerprint', { length: 64 }).notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdByAuthority: varchar('createdByAuthority', { length: 96 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('system_spec_versions_spec_version_unique').on(table.systemSpecId, table.version),
+  uniqueIndex('system_spec_versions_spec_fingerprint_unique').on(table.systemSpecId, table.specFingerprint),
+  uniqueIndex('system_spec_versions_owner_key_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('system_spec_versions_owner_spec_idx').on(table.ownerUserId, table.systemSpecId, table.createdAt),
+])
+
+/** Append-only synthetic interactive previews; Managed Site preview/order lineage remains canonical commerce authority. */
+export const systemPreviews = mysqlTable('systemPreviews', {
+  id: int('id').autoincrement().primaryKey(),
+  previewId: varchar('previewId', { length: 128 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  systemSpecId: int('systemSpecId').notNull().references(() => systemSpecs.id),
+  systemSpecVersionId: int('systemSpecVersionId').notNull().references(() => systemSpecVersions.id),
+  managedSitePreviewId: int('managedSitePreviewId').references(() => managedSitePreviews.id),
+  version: int('version').notNull(),
+  parentPreviewId: int('parentPreviewId'),
+  specFingerprint: varchar('specFingerprint', { length: 64 }).notNull(),
+  fixtureFingerprint: varchar('fixtureFingerprint', { length: 64 }).notNull(),
+  compiledPlanFingerprint: varchar('compiledPlanFingerprint', { length: 64 }).notNull(),
+  fixtureProjection: json('fixtureProjection').notNull(),
+  status: mysqlEnum('status', ['preview_ready', 'superseded', 'expired']).default('preview_ready').notNull(),
+  noProductionData: boolean('noProductionData').default(true).notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('system_previews_public_id_unique').on(table.previewId),
+  uniqueIndex('system_previews_spec_version_unique').on(table.systemSpecId, table.version),
+  uniqueIndex('system_previews_spec_fixture_unique').on(table.systemSpecVersionId, table.fixtureFingerprint),
+  index('system_previews_owner_status_idx').on(table.ownerUserId, table.status, table.expiresAt),
+])
+
+/** Isolated Frappe site projection. No Administrator secret, host credential, or connection URL is stored. */
+export const systemTenants = mysqlTable('systemTenants', {
+  id: int('id').autoincrement().primaryKey(),
+  systemTenantId: varchar('systemTenantId', { length: 128 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  systemSpecId: int('systemSpecId').notNull().references(() => systemSpecs.id),
+  systemSpecVersionId: int('systemSpecVersionId').notNull().references(() => systemSpecVersions.id),
+  siteNameHash: varchar('siteNameHash', { length: 64 }).notNull(),
+  state: mysqlEnum('state', ['draft', 'preview_ready', 'quote_ready', 'awaiting_payment', 'payment_verified', 'provisioning_planned', 'provisioning', 'health_checking', 'invitation_pending', 'active', 'failed', 'retry_wait', 'suspended', 'deprovision_pending', 'deprovisioned']).default('draft').notNull(),
+  stateVersion: int('stateVersion').default(1).notNull(),
+  specFingerprint: varchar('specFingerprint', { length: 64 }).notNull(),
+  compiledPlanFingerprint: varchar('compiledPlanFingerprint', { length: 64 }).notNull(),
+  verifiedPaymentReceiptFingerprint: varchar('verifiedPaymentReceiptFingerprint', { length: 64 }),
+  healthyReceiptFingerprint: varchar('healthyReceiptFingerprint', { length: 64 }),
+  invitationReceiptFingerprint: varchar('invitationReceiptFingerprint', { length: 64 }),
+  projectionFingerprint: varchar('projectionFingerprint', { length: 64 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+  deprovisionedAt: timestamp('deprovisionedAt'),
+}, table => [
+  uniqueIndex('system_tenants_public_id_unique').on(table.systemTenantId),
+  uniqueIndex('system_tenants_spec_unique').on(table.systemSpecId),
+  uniqueIndex('system_tenants_owner_site_hash_unique').on(table.ownerUserId, table.siteNameHash),
+  index('system_tenants_owner_client_state_idx').on(table.ownerUserId, table.clientId, table.state),
+])
+
+/** Non-forgeable lineage binding to existing website, Managed Site, order and payment authorities. */
+export const systemTenantBindings = mysqlTable('systemTenantBindings', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id),
+  clientId: int('clientId').notNull().references(() => contentOperationClients.id),
+  websiteId: varchar('websiteId', { length: 128 }),
+  managedSiteProjectId: int('managedSiteProjectId'),
+  managedSitePreviewId: int('managedSitePreviewId'),
+  managedSiteQuoteId: int('managedSiteQuoteId').references(() => managedSiteQuotes.id),
+  managedSiteDraftOrderId: int('managedSiteDraftOrderId'),
+  managedSitePaymentEventId: int('managedSitePaymentEventId'),
+  bindingFingerprint: varchar('bindingFingerprint', { length: 64 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  uniqueIndex('system_tenant_bindings_tenant_unique').on(table.systemTenantId),
+  uniqueIndex('system_tenant_bindings_owner_fingerprint_unique').on(table.ownerUserId, table.bindingFingerprint),
+  index('system_tenant_bindings_commerce_idx').on(table.managedSiteDraftOrderId, table.managedSitePaymentEventId),
+  foreignKey({ name: 'stb_managed_project_fk', columns: [table.managedSiteProjectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'stb_managed_preview_fk', columns: [table.managedSitePreviewId], foreignColumns: [managedSitePreviews.id] }),
+  foreignKey({ name: 'stb_draft_order_fk', columns: [table.managedSiteDraftOrderId], foreignColumns: [managedSiteDraftOrders.id] }),
+  foreignKey({ name: 'stb_payment_event_fk', columns: [table.managedSitePaymentEventId], foreignColumns: [managedSitePaymentEvents.id] }),
+])
+
+/** Reviewed immutable plan. A dry-run receipt is never treated as provisioning success. */
+export const systemProvisioningPlans = mysqlTable('systemProvisioningPlans', {
+  id: int('id').autoincrement().primaryKey(),
+  planId: varchar('planId', { length: 128 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id),
+  systemSpecVersionId: int('systemSpecVersionId').notNull(),
+  planFingerprint: varchar('planFingerprint', { length: 64 }).notNull(),
+  steps: json('steps').notNull(),
+  status: mysqlEnum('status', ['planned', 'running', 'retry_wait', 'failed', 'health_checking', 'invitation_pending', 'completed', 'cancelled']).default('planned').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex('system_provisioning_plans_public_id_unique').on(table.planId), uniqueIndex('system_provisioning_plans_owner_key_unique').on(table.ownerUserId, table.idempotencyKey), uniqueIndex('system_provisioning_plans_tenant_fingerprint_unique').on(table.systemTenantId, table.planFingerprint), index('system_provisioning_plans_owner_status_idx').on(table.ownerUserId, table.status), foreignKey({ name: 'spp_spec_version_fk', columns: [table.systemSpecVersionId], foreignColumns: [systemSpecVersions.id] })])
+
+/** Leased workflow run with bounded attempts and stale-lease recovery. */
+export const systemProvisioningRuns = mysqlTable('systemProvisioningRuns', {
+  id: int('id').autoincrement().primaryKey(), runId: varchar('runId', { length: 128 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), planId: int('planId').notNull().references(() => systemProvisioningPlans.id), status: mysqlEnum('status', ['queued', 'processing', 'retry_wait', 'failed', 'blocked', 'completed']).default('queued').notNull(), attempt: int('attempt').default(0).notNull(), maxAttempts: int('maxAttempts').default(3).notNull(), leaseOwner: varchar('leaseOwner', { length: 128 }), leaseExpiresAt: timestamp('leaseExpiresAt'), retryEligibleAt: timestamp('retryEligibleAt'), inputFingerprint: varchar('inputFingerprint', { length: 64 }).notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(), completedAt: timestamp('completedAt'),
+}, table => [uniqueIndex('system_provisioning_runs_public_id_unique').on(table.runId), uniqueIndex('system_provisioning_runs_owner_key_unique').on(table.ownerUserId, table.idempotencyKey), index('system_provisioning_runs_retry_eligible_idx').on(table.status, table.retryEligibleAt, table.systemTenantId, table.id), index('system_provisioning_runs_lease_eligible_idx').on(table.status, table.leaseExpiresAt, table.systemTenantId, table.id)])
+
+/** One bounded fixed-operation attempt. User-controlled command text is deliberately absent. */
+export const systemProvisioningAttempts = mysqlTable('systemProvisioningAttempts', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), runId: int('runId').notNull().references(() => systemProvisioningRuns.id), operation: mysqlEnum('operation', ['create_site', 'install_app', 'apply_compiled_spec', 'create_roles_permissions', 'configure_modules', 'health_check', 'create_admin_invitation', 'suspend_site', 'reactivate_site', 'deprovision_site']).notNull(), attemptNumber: int('attemptNumber').notNull(), status: mysqlEnum('status', ['processing', 'succeeded', 'retry_wait', 'failed', 'blocked']).notNull(), timeoutMs: int('timeoutMs').notNull(), requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(), responseFingerprint: varchar('responseFingerprint', { length: 64 }), exactResponseIdentity: varchar('exactResponseIdentity', { length: 256 }), errorCode: varchar('errorCode', { length: 96 }), errorSummary: varchar('errorSummary', { length: 500 }), createdAt: timestamp('createdAt').defaultNow().notNull(), completedAt: timestamp('completedAt'),
+}, table => [uniqueIndex('system_provisioning_attempt_run_operation_unique').on(table.runId, table.operation, table.attemptNumber), index('system_provisioning_attempt_tenant_status_idx').on(table.ownerUserId, table.systemTenantId, table.status)])
+
+/** Append-only verified state event ledger. */
+export const systemEvents = mysqlTable('systemEvents', {
+  id: int('id').autoincrement().primaryKey(), eventId: varchar('eventId', { length: 160 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), previousState: varchar('previousState', { length: 48 }).notNull(), nextState: varchar('nextState', { length: 48 }).notNull(), eventType: varchar('eventType', { length: 96 }).notNull(), authorityFingerprint: varchar('authorityFingerprint', { length: 64 }).notNull(), payloadFingerprint: varchar('payloadFingerprint', { length: 64 }).notNull(), eventFingerprint: varchar('eventFingerprint', { length: 64 }).notNull(), occurredAt: timestamp('occurredAt').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('system_events_public_id_unique').on(table.eventId), uniqueIndex('system_events_fingerprint_unique').on(table.eventFingerprint), index('system_events_tenant_created_idx').on(table.ownerUserId, table.systemTenantId, table.createdAt)])
+
+/** Append-only, secret-free exact operation receipts. */
+export const systemReceipts = mysqlTable('systemReceipts', {
+  id: int('id').autoincrement().primaryKey(), receiptId: varchar('receiptId', { length: 160 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), runId: int('runId').references(() => systemProvisioningRuns.id), receiptType: varchar('receiptType', { length: 96 }).notNull(), status: mysqlEnum('status', ['verified', 'failed', 'blocked', 'rolled_back', 'replayed']).notNull(), requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(), responseFingerprint: varchar('responseFingerprint', { length: 64 }), exactResponseIdentity: varchar('exactResponseIdentity', { length: 256 }), metadata: json('metadata').notNull(), receiptFingerprint: varchar('receiptFingerprint', { length: 64 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('system_receipts_public_id_unique').on(table.receiptId), uniqueIndex('system_receipts_fingerprint_unique').on(table.ownerUserId, table.receiptFingerprint), index('system_receipts_tenant_created_idx').on(table.ownerUserId, table.systemTenantId, table.createdAt)])
+
+/** One-time tenant admin invitation. Only token hashes are persisted. */
+export const systemAdminInvitations = mysqlTable('systemAdminInvitations', {
+  id: int('id').autoincrement().primaryKey(), invitationId: varchar('invitationId', { length: 128 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), principalEmailHash: varchar('principalEmailHash', { length: 64 }).notNull(), tokenHash: varchar('tokenHash', { length: 64 }).notNull(), roleKey: varchar('roleKey', { length: 64 }).notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(), status: mysqlEnum('status', ['pending', 'accepted', 'expired', 'revoked']).default('pending').notNull(), expiresAt: timestamp('expiresAt').notNull(), acceptedAt: timestamp('acceptedAt'), revokedAt: timestamp('revokedAt'), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('system_admin_invitations_public_id_unique').on(table.invitationId), uniqueIndex('system_admin_invitations_token_hash_unique').on(table.tokenHash), uniqueIndex('system_admin_invitations_owner_key_unique').on(table.ownerUserId, table.idempotencyKey), index('system_admin_invitations_tenant_status_idx').on(table.ownerUserId, table.systemTenantId, table.status, table.expiresAt)])
+
+/** Opaque server-side connection references; secret values and Administrator credentials are excluded. */
+export const systemConnectionRefs = mysqlTable('systemConnectionRefs', {
+  id: int('id').autoincrement().primaryKey(), connectionRefId: varchar('connectionRefId', { length: 128 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), purpose: mysqlEnum('purpose', ['frappe_internal_hmac', 'frappe_site_admin', 'backup_storage', 'email', 'calendar', 'content_projection']).notNull(), opaqueReference: varchar('opaqueReference', { length: 192 }).notNull(), status: mysqlEnum('status', ['active', 'revoked', 'unavailable']).default('active').notNull(), referenceFingerprint: varchar('referenceFingerprint', { length: 64 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(), revokedAt: timestamp('revokedAt'),
+}, table => [uniqueIndex('system_connection_refs_public_id_unique').on(table.connectionRefId), uniqueIndex('system_connection_refs_tenant_purpose_unique').on(table.systemTenantId, table.purpose), uniqueIndex('system_connection_refs_owner_fingerprint_unique').on(table.ownerUserId, table.referenceFingerprint)])
+
+/** Reviewed upgrade intent; never a remote self-updater. */
+export const systemUpgradeIntents = mysqlTable('systemUpgradeIntents', {
+  id: int('id').autoincrement().primaryKey(), upgradeIntentId: varchar('upgradeIntentId', { length: 128 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), fromVersionLockHash: varchar('fromVersionLockHash', { length: 64 }).notNull(), toVersionLockHash: varchar('toVersionLockHash', { length: 64 }).notNull(), reviewedByUserId: int('reviewedByUserId').notNull().references(() => users.id), status: mysqlEnum('status', ['draft', 'reviewed', 'planned', 'running', 'completed', 'failed', 'rolled_back', 'cancelled']).default('draft').notNull(), intentFingerprint: varchar('intentFingerprint', { length: 64 }).notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex('system_upgrade_intents_public_id_unique').on(table.upgradeIntentId), uniqueIndex('system_upgrade_intents_owner_key_unique').on(table.ownerUserId, table.idempotencyKey), uniqueIndex('system_upgrade_intents_tenant_fingerprint_unique').on(table.systemTenantId, table.intentFingerprint), index('system_upgrade_intents_owner_tenant_created_idx').on(table.ownerUserId, table.systemTenantId, table.createdAt)])
+
+export const systemUpgradeRuns = mysqlTable('systemUpgradeRuns', {
+  id: int('id').autoincrement().primaryKey(), upgradeRunId: varchar('upgradeRunId', { length: 128 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), upgradeIntentId: int('upgradeIntentId').notNull().references(() => systemUpgradeIntents.id), status: mysqlEnum('status', ['queued', 'backing_up', 'applying', 'verifying', 'completed', 'failed', 'rolling_back', 'rolled_back']).default('queued').notNull(), attempt: int('attempt').default(0).notNull(), leaseOwner: varchar('leaseOwner', { length: 128 }), leaseExpiresAt: timestamp('leaseExpiresAt'), backupReceiptFingerprint: varchar('backupReceiptFingerprint', { length: 64 }), rollbackReceiptFingerprint: varchar('rollbackReceiptFingerprint', { length: 64 }), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(), completedAt: timestamp('completedAt'),
+}, table => [uniqueIndex('system_upgrade_runs_public_id_unique').on(table.upgradeRunId), index('system_upgrade_runs_tenant_created_idx').on(table.ownerUserId, table.systemTenantId, table.createdAt), index('system_upgrade_runs_lease_idx').on(table.status, table.leaseExpiresAt)])
+
+export const systemUpgradeReceipts = mysqlTable('systemUpgradeReceipts', {
+  id: int('id').autoincrement().primaryKey(), receiptId: varchar('receiptId', { length: 160 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), systemTenantId: int('systemTenantId').notNull().references(() => systemTenants.id), upgradeRunId: int('upgradeRunId').notNull().references(() => systemUpgradeRuns.id), step: mysqlEnum('step', ['plan', 'backup', 'apply', 'verify', 'rollback']).notNull(), status: mysqlEnum('status', ['verified', 'failed', 'rolled_back']).notNull(), artifactFingerprint: varchar('artifactFingerprint', { length: 64 }), receiptFingerprint: varchar('receiptFingerprint', { length: 64 }).notNull(), exactResponseIdentity: varchar('exactResponseIdentity', { length: 256 }), metadata: json('metadata').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('system_upgrade_receipts_public_id_unique').on(table.receiptId), uniqueIndex('system_upgrade_receipts_fingerprint_unique').on(table.ownerUserId, table.receiptFingerprint), index('system_upgrade_receipts_owner_tenant_created_idx').on(table.ownerUserId, table.systemTenantId, table.createdAt), index('system_upgrade_receipts_run_step_idx').on(table.upgradeRunId, table.step, table.createdAt)])
+
+export type SystemSpecRecord = typeof systemSpecs.$inferSelect
+export type SystemSpecVersionRecord = typeof systemSpecVersions.$inferSelect
+export type SystemPreviewRecord = typeof systemPreviews.$inferSelect
+export type SystemTenantRecord = typeof systemTenants.$inferSelect
+export type SystemTenantBindingRecord = typeof systemTenantBindings.$inferSelect
+export type SystemProvisioningPlanRecord = typeof systemProvisioningPlans.$inferSelect
+export type SystemProvisioningRunRecord = typeof systemProvisioningRuns.$inferSelect
+export type SystemReceiptRecord = typeof systemReceipts.$inferSelect
+export type SystemAdminInvitationRecord = typeof systemAdminInvitations.$inferSelect
+export type SystemConnectionRefRecord = typeof systemConnectionRefs.$inferSelect
