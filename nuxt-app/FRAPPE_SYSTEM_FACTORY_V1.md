@@ -53,7 +53,7 @@ Upgrades are reviewed version-lock intents, never a remote self-updater. Backup 
 
 ## Tables and migration
 
-Migration `0031_pale_the_fury.sql` creates `systemSpecs`, `systemSpecVersions`, `systemPreviews`, `systemTenants`, `systemTenantBindings`, `systemProvisioningPlans`, `systemProvisioningRuns`, `systemProvisioningAttempts`, `systemEvents`, `systemReceipts`, `systemAdminInvitations`, `systemConnectionRefs`, `systemUpgradeIntents`, `systemUpgradeRuns`, and `systemUpgradeReceipts`. It is generated repository evidence only; it is not applied to production in this work.
+Migration `0031_spooky_rocket_racer.sql` creates `systemSpecs`, `systemSpecVersions`, `systemPreviews`, `systemTenants`, `systemTenantBindings`, `systemProvisioningPlans`, `systemProvisioningRuns`, `systemProvisioningAttempts`, `systemEvents`, `systemReceipts`, `systemAdminInvitations`, `systemConnectionRefs`, `systemUpgradeIntents`, `systemUpgradeRuns`, and `systemUpgradeReceipts`. The official `0000`–`0031` chain is disposable-runtime validated from a truly empty MariaDB database; production migration remains not applied. Historical overlong FK identifiers were corrected before production use with the deterministic map in `server/database/migrations/mysql-identifier-map.json`, without changing relational semantics. Because MariaDB/MySQL DDL can implicit-commit, failed bootstrap is not described as transactionally rolled back: identifier preflight runs first, and a failed disposable bootstrap is discarded rather than retried in place.
 
 ## Owner and customer surfaces
 

@@ -1211,8 +1211,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationAutopilotPolicies_clientId_contentOperationClients_id_fk": {
-          "name": "contentOperationAutopilotPolicies_clientId_contentOperationClients_id_fk",
+        "fk_content_operation_autopi_client_id_19d1865ec4": {
+          "name": "fk_content_operation_autopi_client_id_19d1865ec4",
           "tableFrom": "contentOperationAutopilotPolicies",
           "tableTo": "contentOperationClients",
           "columnsFrom": [
@@ -1224,8 +1224,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationAutopilotPolicies_publicationTargetId_contentOperationPublicationTargets_id_fk": {
-          "name": "contentOperationAutopilotPolicies_publicationTargetId_contentOperationPublicationTargets_id_fk",
+        "fk_content_operation_autopi_publication_target_1f95300e37": {
+          "name": "fk_content_operation_autopi_publication_target_1f95300e37",
           "tableFrom": "contentOperationAutopilotPolicies",
           "tableTo": "contentOperationPublicationTargets",
           "columnsFrom": [
@@ -1237,8 +1237,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationAutopilotPolicies_authorizedByOwnerUserId_users_id_fk": {
-          "name": "contentOperationAutopilotPolicies_authorizedByOwnerUserId_users_id_fk",
+        "fk_content_operation_autopi_authorized_by_owne_976f4633f8": {
+          "name": "fk_content_operation_autopi_authorized_by_owne_976f4633f8",
           "tableFrom": "contentOperationAutopilotPolicies",
           "tableTo": "users",
           "columnsFrom": [
@@ -1530,8 +1530,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationCalendarEntries_calendarId_contentOperationCalendars_id_fk": {
-          "name": "contentOperationCalendarEntries_calendarId_contentOperationCalendars_id_fk",
+        "fk_content_operation_calend_calendar_id_c72ad0a558": {
+          "name": "fk_content_operation_calend_calendar_id_c72ad0a558",
           "tableFrom": "contentOperationCalendarEntries",
           "tableTo": "contentOperationCalendars",
           "columnsFrom": [
@@ -1543,8 +1543,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationCalendarEntries_productionDeliverableId_seoGeoProductionDeliverables_id_fk": {
-          "name": "contentOperationCalendarEntries_productionDeliverableId_seoGeoProductionDeliverables_id_fk",
+        "fk_content_operation_calend_production_deliver_cbdb622479": {
+          "name": "fk_content_operation_calend_production_deliver_cbdb622479",
           "tableFrom": "contentOperationCalendarEntries",
           "tableTo": "seoGeoProductionDeliverables",
           "columnsFrom": [
@@ -1556,8 +1556,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationCalendarEntries_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk": {
-          "name": "contentOperationCalendarEntries_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk",
+        "fk_content_operation_calend_strategy_recommend_03ed594f59": {
+          "name": "fk_content_operation_calend_strategy_recommend_03ed594f59",
           "tableFrom": "contentOperationCalendarEntries",
           "tableTo": "seoGeoStrategyRecommendations",
           "columnsFrom": [
@@ -1582,8 +1582,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationCalendarEntries_draftId_seoGeoContentDrafts_id_fk": {
-          "name": "contentOperationCalendarEntries_draftId_seoGeoContentDrafts_id_fk",
+        "fk_content_operation_calend_draft_id_8868b4ffaf": {
+          "name": "fk_content_operation_calend_draft_id_8868b4ffaf",
           "tableFrom": "contentOperationCalendarEntries",
           "tableTo": "seoGeoContentDrafts",
           "columnsFrom": [
@@ -1595,8 +1595,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationCalendarEntries_reviewId_seoGeoContentReviews_id_fk": {
-          "name": "contentOperationCalendarEntries_reviewId_seoGeoContentReviews_id_fk",
+        "fk_content_operation_calend_review_id_e20eb7911f": {
+          "name": "fk_content_operation_calend_review_id_e20eb7911f",
           "tableFrom": "contentOperationCalendarEntries",
           "tableTo": "seoGeoContentReviews",
           "columnsFrom": [
@@ -1608,8 +1608,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationCalendarEntries_publicationTargetId_contentOperationPublicationTargets_id_fk": {
-          "name": "contentOperationCalendarEntries_publicationTargetId_contentOperationPublicationTargets_id_fk",
+        "fk_content_operation_calend_publication_target_9de1ce9f59": {
+          "name": "fk_content_operation_calend_publication_target_9de1ce9f59",
           "tableFrom": "contentOperationCalendarEntries",
           "tableTo": "contentOperationPublicationTargets",
           "columnsFrom": [
@@ -1736,8 +1736,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationCalendarEntryTargets_clientId_contentOperationClients_id_fk": {
-          "name": "contentOperationCalendarEntryTargets_clientId_contentOperationClients_id_fk",
+        "fk_content_operation_calend_client_id_03ac90030a": {
+          "name": "fk_content_operation_calend_client_id_03ac90030a",
           "tableFrom": "contentOperationCalendarEntryTargets",
           "tableTo": "contentOperationClients",
           "columnsFrom": [
@@ -1749,8 +1749,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationCalendarEntryTargets_entryId_contentOperationCalendarEntries_id_fk": {
-          "name": "contentOperationCalendarEntryTargets_entryId_contentOperationCalendarEntries_id_fk",
+        "fk_content_operation_calend_entry_id_82d007b891": {
+          "name": "fk_content_operation_calend_entry_id_82d007b891",
           "tableFrom": "contentOperationCalendarEntryTargets",
           "tableTo": "contentOperationCalendarEntries",
           "columnsFrom": [
@@ -1762,8 +1762,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationCalendarEntryTargets_targetId_contentOperationPublicationTargets_id_fk": {
-          "name": "contentOperationCalendarEntryTargets_targetId_contentOperationPublicationTargets_id_fk",
+        "fk_content_operation_calend_target_id_dcd23157bb": {
+          "name": "fk_content_operation_calend_target_id_dcd23157bb",
           "tableFrom": "contentOperationCalendarEntryTargets",
           "tableTo": "contentOperationPublicationTargets",
           "columnsFrom": [
@@ -2023,8 +2023,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationCalendars_productionPlanId_seoGeoProductionPlans_id_fk": {
-          "name": "contentOperationCalendars_productionPlanId_seoGeoProductionPlans_id_fk",
+        "fk_content_operation_calend_production_plan_id_b42f43cf58": {
+          "name": "fk_content_operation_calend_production_plan_id_b42f43cf58",
           "tableFrom": "contentOperationCalendars",
           "tableTo": "seoGeoProductionPlans",
           "columnsFrom": [
@@ -2411,8 +2411,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationEvents_calendarId_contentOperationCalendars_id_fk": {
-          "name": "contentOperationEvents_calendarId_contentOperationCalendars_id_fk",
+        "fk_content_operation_events_calendar_id_d06bc3e5a5": {
+          "name": "fk_content_operation_events_calendar_id_d06bc3e5a5",
           "tableFrom": "contentOperationEvents",
           "tableTo": "contentOperationCalendars",
           "columnsFrom": [
@@ -2424,8 +2424,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationEvents_entryId_contentOperationCalendarEntries_id_fk": {
-          "name": "contentOperationEvents_entryId_contentOperationCalendarEntries_id_fk",
+        "fk_content_operation_events_entry_id_daf7597de3": {
+          "name": "fk_content_operation_events_entry_id_daf7597de3",
           "tableFrom": "contentOperationEvents",
           "tableTo": "contentOperationCalendarEntries",
           "columnsFrom": [
@@ -2450,8 +2450,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationEvents_deliverableId_seoGeoProductionDeliverables_id_fk": {
-          "name": "contentOperationEvents_deliverableId_seoGeoProductionDeliverables_id_fk",
+        "fk_content_operation_events_deliverable_id_afdfcd6132": {
+          "name": "fk_content_operation_events_deliverable_id_afdfcd6132",
           "tableFrom": "contentOperationEvents",
           "tableTo": "seoGeoProductionDeliverables",
           "columnsFrom": [
@@ -2707,8 +2707,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationMeasurementConnections_clientId_contentOperationClients_id_fk": {
-          "name": "contentOperationMeasurementConnections_clientId_contentOperationClients_id_fk",
+        "fk_content_operation_measur_client_id_1c83d5c87a": {
+          "name": "fk_content_operation_measur_client_id_1c83d5c87a",
           "tableFrom": "contentOperationMeasurementConnections",
           "tableTo": "contentOperationClients",
           "columnsFrom": [
@@ -2720,8 +2720,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationMeasurementConnections_publicationTargetId_contentOperationPublicationTargets_id_fk": {
-          "name": "contentOperationMeasurementConnections_publicationTargetId_contentOperationPublicationTargets_id_fk",
+        "fk_content_operation_measur_publication_target_e132211c28": {
+          "name": "fk_content_operation_measur_publication_target_e132211c28",
           "tableFrom": "contentOperationMeasurementConnections",
           "tableTo": "contentOperationPublicationTargets",
           "columnsFrom": [
@@ -2733,8 +2733,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationMeasurementConnections_llmVisibilityProjectId_llmVisibilityProjects_id_fk": {
-          "name": "contentOperationMeasurementConnections_llmVisibilityProjectId_llmVisibilityProjects_id_fk",
+        "fk_content_operation_measur_llm_visibility_pro_68a85804ca": {
+          "name": "fk_content_operation_measur_llm_visibility_pro_68a85804ca",
           "tableFrom": "contentOperationMeasurementConnections",
           "tableTo": "llmVisibilityProjects",
           "columnsFrom": [
@@ -3072,8 +3072,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationMeasurementRuns_clientId_contentOperationClients_id_fk": {
-          "name": "contentOperationMeasurementRuns_clientId_contentOperationClients_id_fk",
+        "fk_content_operation_measur_client_id_7c3a0db31b": {
+          "name": "fk_content_operation_measur_client_id_7c3a0db31b",
           "tableFrom": "contentOperationMeasurementRuns",
           "tableTo": "contentOperationClients",
           "columnsFrom": [
@@ -3085,8 +3085,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationMeasurementRuns_connectionId_contentOperationMeasurementConnections_id_fk": {
-          "name": "contentOperationMeasurementRuns_connectionId_contentOperationMeasurementConnections_id_fk",
+        "fk_content_operation_measur_connection_id_641abb194f": {
+          "name": "fk_content_operation_measur_connection_id_641abb194f",
           "tableFrom": "contentOperationMeasurementRuns",
           "tableTo": "contentOperationMeasurementConnections",
           "columnsFrom": [
@@ -3098,8 +3098,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationMeasurementRuns_entryId_contentOperationCalendarEntries_id_fk": {
-          "name": "contentOperationMeasurementRuns_entryId_contentOperationCalendarEntries_id_fk",
+        "fk_content_operation_measur_entry_id_013f78a580": {
+          "name": "fk_content_operation_measur_entry_id_013f78a580",
           "tableFrom": "contentOperationMeasurementRuns",
           "tableTo": "contentOperationCalendarEntries",
           "columnsFrom": [
@@ -3111,8 +3111,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationMeasurementRuns_targetId_contentOperationPublicationTargets_id_fk": {
-          "name": "contentOperationMeasurementRuns_targetId_contentOperationPublicationTargets_id_fk",
+        "fk_content_operation_measur_target_id_9f6e02f2b0": {
+          "name": "fk_content_operation_measur_target_id_9f6e02f2b0",
           "tableFrom": "contentOperationMeasurementRuns",
           "tableTo": "contentOperationPublicationTargets",
           "columnsFrom": [
@@ -3308,8 +3308,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationMeasurementSnapshots_runId_contentOperationMeasurementRuns_id_fk": {
-          "name": "contentOperationMeasurementSnapshots_runId_contentOperationMeasurementRuns_id_fk",
+        "fk_content_operation_measur_run_id_96920fa3da": {
+          "name": "fk_content_operation_measur_run_id_96920fa3da",
           "tableFrom": "contentOperationMeasurementSnapshots",
           "tableTo": "contentOperationMeasurementRuns",
           "columnsFrom": [
@@ -3321,8 +3321,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationMeasurementSnapshots_entryId_contentOperationCalendarEntries_id_fk": {
-          "name": "contentOperationMeasurementSnapshots_entryId_contentOperationCalendarEntries_id_fk",
+        "fk_content_operation_measur_entry_id_f920c00179": {
+          "name": "fk_content_operation_measur_entry_id_f920c00179",
           "tableFrom": "contentOperationMeasurementSnapshots",
           "tableTo": "contentOperationCalendarEntries",
           "columnsFrom": [
@@ -3334,8 +3334,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationMeasurementSnapshots_targetId_contentOperationPublicationTargets_id_fk": {
-          "name": "contentOperationMeasurementSnapshots_targetId_contentOperationPublicationTargets_id_fk",
+        "fk_content_operation_measur_target_id_de4fc33e99": {
+          "name": "fk_content_operation_measur_target_id_de4fc33e99",
           "tableFrom": "contentOperationMeasurementSnapshots",
           "tableTo": "contentOperationPublicationTargets",
           "columnsFrom": [
@@ -3529,8 +3529,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationOutcomeAssessments_entryId_contentOperationCalendarEntries_id_fk": {
-          "name": "contentOperationOutcomeAssessments_entryId_contentOperationCalendarEntries_id_fk",
+        "fk_content_operation_outcom_entry_id_d4105827c1": {
+          "name": "fk_content_operation_outcom_entry_id_d4105827c1",
           "tableFrom": "contentOperationOutcomeAssessments",
           "tableTo": "contentOperationCalendarEntries",
           "columnsFrom": [
@@ -3542,8 +3542,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationOutcomeAssessments_runId_contentOperationRuns_id_fk": {
-          "name": "contentOperationOutcomeAssessments_runId_contentOperationRuns_id_fk",
+        "fk_content_operation_outcom_run_id_460792842c": {
+          "name": "fk_content_operation_outcom_run_id_460792842c",
           "tableFrom": "contentOperationOutcomeAssessments",
           "tableTo": "contentOperationRuns",
           "columnsFrom": [
@@ -3555,8 +3555,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationOutcomeAssessments_targetId_contentOperationPublicationTargets_id_fk": {
-          "name": "contentOperationOutcomeAssessments_targetId_contentOperationPublicationTargets_id_fk",
+        "fk_content_operation_outcom_target_id_5183c5f472": {
+          "name": "fk_content_operation_outcom_target_id_5183c5f472",
           "tableFrom": "contentOperationOutcomeAssessments",
           "tableTo": "contentOperationPublicationTargets",
           "columnsFrom": [
@@ -3568,8 +3568,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationOutcomeAssessments_draftId_seoGeoContentDrafts_id_fk": {
-          "name": "contentOperationOutcomeAssessments_draftId_seoGeoContentDrafts_id_fk",
+        "fk_content_operation_outcom_draft_id_28ea2a8e88": {
+          "name": "fk_content_operation_outcom_draft_id_28ea2a8e88",
           "tableFrom": "contentOperationOutcomeAssessments",
           "tableTo": "seoGeoContentDrafts",
           "columnsFrom": [
@@ -3884,8 +3884,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationPublicationAttempts_clientId_contentOperationClients_id_fk": {
-          "name": "contentOperationPublicationAttempts_clientId_contentOperationClients_id_fk",
+        "fk_content_operation_public_client_id_027a21ff01": {
+          "name": "fk_content_operation_public_client_id_027a21ff01",
           "tableFrom": "contentOperationPublicationAttempts",
           "tableTo": "contentOperationClients",
           "columnsFrom": [
@@ -3897,8 +3897,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationPublicationAttempts_entryId_contentOperationCalendarEntries_id_fk": {
-          "name": "contentOperationPublicationAttempts_entryId_contentOperationCalendarEntries_id_fk",
+        "fk_content_operation_public_entry_id_659198ccde": {
+          "name": "fk_content_operation_public_entry_id_659198ccde",
           "tableFrom": "contentOperationPublicationAttempts",
           "tableTo": "contentOperationCalendarEntries",
           "columnsFrom": [
@@ -3910,8 +3910,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationPublicationAttempts_runId_contentOperationRuns_id_fk": {
-          "name": "contentOperationPublicationAttempts_runId_contentOperationRuns_id_fk",
+        "fk_content_operation_public_run_id_a44c615966": {
+          "name": "fk_content_operation_public_run_id_a44c615966",
           "tableFrom": "contentOperationPublicationAttempts",
           "tableTo": "contentOperationRuns",
           "columnsFrom": [
@@ -3923,8 +3923,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationPublicationAttempts_targetId_contentOperationPublicationTargets_id_fk": {
-          "name": "contentOperationPublicationAttempts_targetId_contentOperationPublicationTargets_id_fk",
+        "fk_content_operation_public_target_id_a2709a68bc": {
+          "name": "fk_content_operation_public_target_id_a2709a68bc",
           "tableFrom": "contentOperationPublicationAttempts",
           "tableTo": "contentOperationPublicationTargets",
           "columnsFrom": [
@@ -4214,8 +4214,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationPublicationTargets_clientId_contentOperationClients_id_fk": {
-          "name": "contentOperationPublicationTargets_clientId_contentOperationClients_id_fk",
+        "fk_content_operation_public_client_id_77ba8ff867": {
+          "name": "fk_content_operation_public_client_id_77ba8ff867",
           "tableFrom": "contentOperationPublicationTargets",
           "tableTo": "contentOperationClients",
           "columnsFrom": [
@@ -4415,8 +4415,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "contentOperationRuns_entryId_contentOperationCalendarEntries_id_fk": {
-          "name": "contentOperationRuns_entryId_contentOperationCalendarEntries_id_fk",
+        "fk_content_operation_runs_entry_id_ae4a0120d9": {
+          "name": "fk_content_operation_runs_entry_id_ae4a0120d9",
           "tableFrom": "contentOperationRuns",
           "tableTo": "contentOperationCalendarEntries",
           "columnsFrom": [
@@ -5829,8 +5829,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "managedSiteDomainIntents_draftOrderId_managedSiteDraftOrders_id_fk": {
-          "name": "managedSiteDomainIntents_draftOrderId_managedSiteDraftOrders_id_fk",
+        "fk_managed_site_domain_inte_draft_order_id_a0bedc94c0": {
+          "name": "fk_managed_site_domain_inte_draft_order_id_a0bedc94c0",
           "tableFrom": "managedSiteDomainIntents",
           "tableTo": "managedSiteDraftOrders",
           "columnsFrom": [
@@ -6609,8 +6609,8 @@
         }
       },
       "foreignKeys": {
-        "managedSitePaymentEvents_draftOrderId_managedSiteDraftOrders_id_fk": {
-          "name": "managedSitePaymentEvents_draftOrderId_managedSiteDraftOrders_id_fk",
+        "fk_managed_site_payment_eve_draft_order_id_3b2b4659e3": {
+          "name": "fk_managed_site_payment_eve_draft_order_id_3b2b4659e3",
           "tableFrom": "managedSitePaymentEvents",
           "tableTo": "managedSiteDraftOrders",
           "columnsFrom": [
@@ -6966,8 +6966,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "managedSiteProjects_contentOperationClientId_contentOperationClients_id_fk": {
-          "name": "managedSiteProjects_contentOperationClientId_contentOperationClients_id_fk",
+        "fk_managed_site_projects_content_operation__50e755d3c5": {
+          "name": "fk_managed_site_projects_content_operation__50e755d3c5",
           "tableFrom": "managedSiteProjects",
           "tableTo": "contentOperationClients",
           "columnsFrom": [
@@ -7120,8 +7120,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "managedSiteProvisioningEvents_projectId_managedSiteProjects_id_fk": {
-          "name": "managedSiteProvisioningEvents_projectId_managedSiteProjects_id_fk",
+        "fk_managed_site_provisionin_project_id_7972f5fd7e": {
+          "name": "fk_managed_site_provisionin_project_id_7972f5fd7e",
           "tableFrom": "managedSiteProvisioningEvents",
           "tableTo": "managedSiteProjects",
           "columnsFrom": [
@@ -7133,8 +7133,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "managedSiteProvisioningEvents_planId_managedSiteProvisioningPlans_id_fk": {
-          "name": "managedSiteProvisioningEvents_planId_managedSiteProvisioningPlans_id_fk",
+        "fk_managed_site_provisionin_plan_id_6c4258c2d1": {
+          "name": "fk_managed_site_provisionin_plan_id_6c4258c2d1",
           "tableFrom": "managedSiteProvisioningEvents",
           "tableTo": "managedSiteProvisioningPlans",
           "columnsFrom": [
@@ -7146,8 +7146,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "managedSiteProvisioningEvents_stepId_managedSiteProvisioningSteps_id_fk": {
-          "name": "managedSiteProvisioningEvents_stepId_managedSiteProvisioningSteps_id_fk",
+        "fk_managed_site_provisionin_step_id_5d821624ce": {
+          "name": "fk_managed_site_provisionin_step_id_5d821624ce",
           "tableFrom": "managedSiteProvisioningEvents",
           "tableTo": "managedSiteProvisioningSteps",
           "columnsFrom": [
@@ -7397,8 +7397,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "managedSiteProvisioningPlans_domainIntentId_managedSiteDomainIntents_id_fk": {
-          "name": "managedSiteProvisioningPlans_domainIntentId_managedSiteDomainIntents_id_fk",
+        "fk_managed_site_provisionin_domain_intent_id_35a0f6e70c": {
+          "name": "fk_managed_site_provisionin_domain_intent_id_35a0f6e70c",
           "tableFrom": "managedSiteProvisioningPlans",
           "tableTo": "managedSiteDomainIntents",
           "columnsFrom": [
@@ -7596,8 +7596,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "managedSiteProvisioningSteps_planId_managedSiteProvisioningPlans_id_fk": {
-          "name": "managedSiteProvisioningSteps_planId_managedSiteProvisioningPlans_id_fk",
+        "fk_managed_site_provisionin_plan_id_d8f05090c1": {
+          "name": "fk_managed_site_provisionin_plan_id_d8f05090c1",
           "tableFrom": "managedSiteProvisioningSteps",
           "tableTo": "managedSiteProvisioningPlans",
           "columnsFrom": [
@@ -8219,8 +8219,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "managedSiteSubscriptionIntents_projectId_managedSiteProjects_id_fk": {
-          "name": "managedSiteSubscriptionIntents_projectId_managedSiteProjects_id_fk",
+        "fk_managed_site_subscriptio_project_id_7b2e347c92": {
+          "name": "fk_managed_site_subscriptio_project_id_7b2e347c92",
           "tableFrom": "managedSiteSubscriptionIntents",
           "tableTo": "managedSiteProjects",
           "columnsFrom": [
@@ -8826,8 +8826,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "modelImprovementCandidates_collectionRunId_modelImprovementCollectionRuns_id_fk": {
-          "name": "modelImprovementCandidates_collectionRunId_modelImprovementCollectionRuns_id_fk",
+        "fk_model_improvement_candid_collection_run_id_04a0139065": {
+          "name": "fk_model_improvement_candid_collection_run_id_04a0139065",
           "tableFrom": "modelImprovementCandidates",
           "tableTo": "modelImprovementCollectionRuns",
           "columnsFrom": [
@@ -8852,8 +8852,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "modelImprovementCandidates_publicSourceId_publicIntelligenceSources_id_fk": {
-          "name": "modelImprovementCandidates_publicSourceId_publicIntelligenceSources_id_fk",
+        "fk_model_improvement_candid_public_source_id_05804cf05a": {
+          "name": "fk_model_improvement_candid_public_source_id_05804cf05a",
           "tableFrom": "modelImprovementCandidates",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -8865,8 +8865,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "modelImprovementCandidates_publicArtifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "modelImprovementCandidates_publicArtifactId_publicIntelligenceArtifacts_id_fk",
+        "fk_model_improvement_candid_public_artifact_id_15d483e187": {
+          "name": "fk_model_improvement_candid_public_artifact_id_15d483e187",
           "tableFrom": "modelImprovementCandidates",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -9309,8 +9309,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceArtifacts_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceArtifacts_sourceId_publicIntelligenceSources_id_fk",
+        "pia_source_fk": {
+          "name": "pia_source_fk",
           "tableFrom": "publicIntelligenceArtifacts",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -9591,8 +9591,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceDatasetMembers_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk": {
-          "name": "publicIntelligenceDatasetMembers_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk",
+        "pidm_build_fk": {
+          "name": "pidm_build_fk",
           "tableFrom": "publicIntelligenceDatasetMembers",
           "tableTo": "publicIntelligenceDatasetBuilds",
           "columnsFrom": [
@@ -9604,8 +9604,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceDatasetMembers_artifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "publicIntelligenceDatasetMembers_artifactId_publicIntelligenceArtifacts_id_fk",
+        "pidm_artifact_fk": {
+          "name": "pidm_artifact_fk",
           "tableFrom": "publicIntelligenceDatasetMembers",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -9770,8 +9770,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceInferences_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceInferences_sourceId_publicIntelligenceSources_id_fk",
+        "piii_source_fk": {
+          "name": "piii_source_fk",
           "tableFrom": "publicIntelligenceInferences",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -9783,8 +9783,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceInferences_ingestionJobId_publicIntelligenceIngestionJobs_id_fk": {
-          "name": "publicIntelligenceInferences_ingestionJobId_publicIntelligenceIngestionJobs_id_fk",
+        "piii_job_fk": {
+          "name": "piii_job_fk",
           "tableFrom": "publicIntelligenceInferences",
           "tableTo": "publicIntelligenceIngestionJobs",
           "columnsFrom": [
@@ -10053,8 +10053,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceIngestionJobs_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceIngestionJobs_sourceId_publicIntelligenceSources_id_fk",
+        "piij_source_fk": {
+          "name": "piij_source_fk",
           "tableFrom": "publicIntelligenceIngestionJobs",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -10066,8 +10066,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceIngestionJobs_primaryArtifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "publicIntelligenceIngestionJobs_primaryArtifactId_publicIntelligenceArtifacts_id_fk",
+        "piij_artifact_fk": {
+          "name": "piij_artifact_fk",
           "tableFrom": "publicIntelligenceIngestionJobs",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -10184,8 +10184,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceSourceReviews_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceSourceReviews_sourceId_publicIntelligenceSources_id_fk",
+        "pisr_source_fk": {
+          "name": "pisr_source_fk",
           "tableFrom": "publicIntelligenceSourceReviews",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -10741,8 +10741,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceTrainingRuns_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk": {
-          "name": "publicIntelligenceTrainingRuns_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk",
+        "fk_public_intelligence_trai_dataset_build_id_43cf8ee54e": {
+          "name": "fk_public_intelligence_trai_dataset_build_id_43cf8ee54e",
           "tableFrom": "publicIntelligenceTrainingRuns",
           "tableTo": "publicIntelligenceDatasetBuilds",
           "columnsFrom": [
@@ -10966,8 +10966,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoContentBriefs_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk": {
-          "name": "seoGeoContentBriefs_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk",
+        "fk_seo_geo_content_briefs_strategy_recommend_d62f22f8bd": {
+          "name": "fk_seo_geo_content_briefs_strategy_recommend_d62f22f8bd",
           "tableFrom": "seoGeoContentBriefs",
           "tableTo": "seoGeoStrategyRecommendations",
           "columnsFrom": [
@@ -11341,8 +11341,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoContentJobs_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk": {
-          "name": "seoGeoContentJobs_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk",
+        "fk_seo_geo_content_jobs_strategy_recommend_08ca8121f8": {
+          "name": "fk_seo_geo_content_jobs_strategy_recommend_08ca8121f8",
           "tableFrom": "seoGeoContentJobs",
           "tableTo": "seoGeoStrategyRecommendations",
           "columnsFrom": [
@@ -11354,8 +11354,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoContentJobs_productionDeliverableId_seoGeoProductionDeliverables_id_fk": {
-          "name": "seoGeoContentJobs_productionDeliverableId_seoGeoProductionDeliverables_id_fk",
+        "fk_seo_geo_content_jobs_production_deliver_4d34f48e9a": {
+          "name": "fk_seo_geo_content_jobs_production_deliver_4d34f48e9a",
           "tableFrom": "seoGeoContentJobs",
           "tableTo": "seoGeoProductionDeliverables",
           "columnsFrom": [
@@ -11746,8 +11746,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoDeliveryAttempts_approvalReviewId_seoGeoContentReviews_id_fk": {
-          "name": "seoGeoDeliveryAttempts_approvalReviewId_seoGeoContentReviews_id_fk",
+        "fk_seo_geo_delivery_attempt_approval_review_id_b332f1ba8e": {
+          "name": "fk_seo_geo_delivery_attempt_approval_review_id_b332f1ba8e",
           "tableFrom": "seoGeoDeliveryAttempts",
           "tableTo": "seoGeoContentReviews",
           "columnsFrom": [
@@ -12201,8 +12201,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoEvidenceApprovals_artifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "seoGeoEvidenceApprovals_artifactId_publicIntelligenceArtifacts_id_fk",
+        "fk_seo_geo_evidence_approva_artifact_id_359e42c610": {
+          "name": "fk_seo_geo_evidence_approva_artifact_id_359e42c610",
           "tableFrom": "seoGeoEvidenceApprovals",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -12433,8 +12433,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoProductionDeliverables_selectionId_seoGeoProductionPlanSelections_id_fk": {
-          "name": "seoGeoProductionDeliverables_selectionId_seoGeoProductionPlanSelections_id_fk",
+        "fk_seo_geo_production_deliv_selection_id_e7f45572e6": {
+          "name": "fk_seo_geo_production_deliv_selection_id_e7f45572e6",
           "tableFrom": "seoGeoProductionDeliverables",
           "tableTo": "seoGeoProductionPlanSelections",
           "columnsFrom": [
@@ -12590,8 +12590,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoProductionPlanSelections_planId_seoGeoProductionPlans_id_fk": {
-          "name": "seoGeoProductionPlanSelections_planId_seoGeoProductionPlans_id_fk",
+        "fk_seo_geo_production_plan__plan_id_574d8970df": {
+          "name": "fk_seo_geo_production_plan__plan_id_574d8970df",
           "tableFrom": "seoGeoProductionPlanSelections",
           "tableTo": "seoGeoProductionPlans",
           "columnsFrom": [
@@ -12603,8 +12603,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoProductionPlanSelections_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk": {
-          "name": "seoGeoProductionPlanSelections_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk",
+        "fk_seo_geo_production_plan__strategy_recommend_a4438b1735": {
+          "name": "fk_seo_geo_production_plan__strategy_recommend_a4438b1735",
           "tableFrom": "seoGeoProductionPlanSelections",
           "tableTo": "seoGeoStrategyRecommendations",
           "columnsFrom": [

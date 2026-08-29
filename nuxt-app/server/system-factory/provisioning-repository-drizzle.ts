@@ -14,25 +14,29 @@ function rowId(result: any): number { const value = Number(result?.[0]?.insertId
 function exactSteps(value: unknown): boolean { return Array.isArray(value) && value.length === PROVISIONING_OPERATIONS.length && value.every((step, index) => step && typeof step === 'object' && (step as any).operation === PROVISIONING_OPERATIONS[index] && (step as any).ordinal === index + 1) }
 function duplicateEntry(error: unknown): boolean { const value = error as { code?: unknown; errno?: unknown }; return value?.code === 'ER_DUP_ENTRY' || Number(value?.errno) === 1062 }
 
+export function eligibleProvisioningRunsQuery(now: Date, limit: number) {
+  const boundedLimit = Math.max(1, Math.min(limit, 20))
+  return sql`
+    SELECT MIN(candidate.runRowId) AS runRowId, candidate.tenantRowId
+    FROM (
+      (SELECT MIN(id) AS runRowId, systemTenantId AS tenantRowId FROM systemProvisioningRuns WHERE status = 'queued' GROUP BY systemTenantId)
+      UNION ALL
+      (SELECT MIN(id), systemTenantId FROM systemProvisioningRuns WHERE status = 'retry_wait' AND retryEligibleAt <= ${sql.param(now, schema.systemProvisioningRuns.retryEligibleAt)} GROUP BY systemTenantId)
+      UNION ALL
+      (SELECT MIN(id), systemTenantId FROM systemProvisioningRuns WHERE status = 'processing' AND leaseExpiresAt <= ${sql.param(now, schema.systemProvisioningRuns.leaseExpiresAt)} GROUP BY systemTenantId)
+    ) candidate
+    GROUP BY candidate.tenantRowId
+    ORDER BY MIN(candidate.runRowId), candidate.tenantRowId
+    LIMIT ${boundedLimit}
+  `
+}
+
 export class DrizzleProvisioningRepository implements DurableProvisioningRepositoryPort {
   constructor(private readonly db: Db, private readonly authority: SystemFactoryRuntimeAuthority) {}
   async listEligible(now: Date, limit: number) {
-    const boundedLimit = Math.max(1, Math.min(limit, 20))
     // Three covering range scans avoid the OR/index-merge table lookups seen
     // on MariaDB while retaining one round trip and one earliest run/tenant.
-    const [rows] = await this.db.execute(sql`
-      SELECT MIN(candidate.runRowId) AS runRowId, candidate.tenantRowId
-      FROM (
-        (SELECT MIN(id) AS runRowId, systemTenantId AS tenantRowId FROM systemProvisioningRuns WHERE status = 'queued' GROUP BY systemTenantId)
-        UNION ALL
-        (SELECT MIN(id), systemTenantId FROM systemProvisioningRuns WHERE status = 'retry_wait' AND retryEligibleAt <= ${sql.param(now, schema.systemProvisioningRuns.retryEligibleAt)} GROUP BY systemTenantId)
-        UNION ALL
-        (SELECT MIN(id), systemTenantId FROM systemProvisioningRuns WHERE status = 'processing' AND leaseExpiresAt <= ${sql.param(now, schema.systemProvisioningRuns.leaseExpiresAt)} GROUP BY systemTenantId)
-      ) candidate
-      GROUP BY candidate.tenantRowId
-      ORDER BY MIN(candidate.runRowId), candidate.tenantRowId
-      LIMIT ${boundedLimit}
-    `) as unknown as [{ runRowId: number | string; tenantRowId: number }[], unknown]
+    const [rows] = await this.db.execute(eligibleProvisioningRunsQuery(now, limit)) as unknown as [{ runRowId: number | string; tenantRowId: number }[], unknown]
     return rows.map(row => ({ runRowId: Number(row.runRowId), tenantRowId: row.tenantRowId })).filter(row => Number.isSafeInteger(row.runRowId) && row.runRowId > 0)
   }
   async claim(runRowId: number, leaseOwner: string, now: Date, leaseExpiresAt: Date) {

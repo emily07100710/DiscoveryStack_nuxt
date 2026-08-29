@@ -18,9 +18,9 @@ function sha256(path: URL): string {
 }
 
 const legacyMigrationHashes: Record<string, string> = {
-  '0021_omniscient_sebastian_shaw.sql': 'added83db22a1f55e2e8b2464a503a51b828068f581a99ae7baa3a322d1098ca',
-  '0022_even_tiger_shark.sql': 'a1b1354ddfb18787b703394b150fa595c6e78866e8e43a84bec4fa9df0e79f0f',
-  '0023_smooth_spot.sql': '29846e6aa6e9a3c61780e68a38f6139b02938eb383eaa7d7bda4509338452e5c',
+  '0021_omniscient_sebastian_shaw.sql': '0aaa6d9ad3dc4dca74b6a2770115d0fb682075419c80f79518cc7e9c42a6122d',
+  '0022_even_tiger_shark.sql': '76b4748b234f50c53a7a459011d9a1c2de243abfaf7ecc46edacc7c72d214c1d',
+  '0023_smooth_spot.sql': 'a3f1661e5bf9440f7382171f24e486c195afe2d513a986584d7fd60d68aea28a',
   '0024_nice_obadiah_stane.sql': 'df7032887970a4f2aca67b3bb9ad79ef324a63f4e48dc5ad273c4555fb14a0e8',
 }
 
@@ -92,7 +92,7 @@ describe('managed-site migration 0025 compatibility contract', () => {
     expect(sql).not.toContain('ADD CONSTRAINT `managed_site_integrations_idempotency_unique`')
   })
 
-  it('does not modify 0021-0024 byte-for-byte from the fourth-round base', () => {
+  it('freezes 0021-0024 after the pre-production identifier correction', () => {
     for (const [filename, expectedHash] of Object.entries(legacyMigrationHashes)) {
       const path = new URL(`../server/database/migrations/${filename}`, import.meta.url)
       expect(sha256(path), filename).toBe(expectedHash)

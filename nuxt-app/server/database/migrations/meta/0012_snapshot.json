@@ -1509,8 +1509,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "modelImprovementCandidates_collectionRunId_modelImprovementCollectionRuns_id_fk": {
-          "name": "modelImprovementCandidates_collectionRunId_modelImprovementCollectionRuns_id_fk",
+        "fk_model_improvement_candid_collection_run_id_04a0139065": {
+          "name": "fk_model_improvement_candid_collection_run_id_04a0139065",
           "tableFrom": "modelImprovementCandidates",
           "tableTo": "modelImprovementCollectionRuns",
           "columnsFrom": [
@@ -1535,8 +1535,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "modelImprovementCandidates_publicSourceId_publicIntelligenceSources_id_fk": {
-          "name": "modelImprovementCandidates_publicSourceId_publicIntelligenceSources_id_fk",
+        "fk_model_improvement_candid_public_source_id_05804cf05a": {
+          "name": "fk_model_improvement_candid_public_source_id_05804cf05a",
           "tableFrom": "modelImprovementCandidates",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -1548,8 +1548,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "modelImprovementCandidates_publicArtifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "modelImprovementCandidates_publicArtifactId_publicIntelligenceArtifacts_id_fk",
+        "fk_model_improvement_candid_public_artifact_id_15d483e187": {
+          "name": "fk_model_improvement_candid_public_artifact_id_15d483e187",
           "tableFrom": "modelImprovementCandidates",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -1992,8 +1992,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceArtifacts_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceArtifacts_sourceId_publicIntelligenceSources_id_fk",
+        "pia_source_fk": {
+          "name": "pia_source_fk",
           "tableFrom": "publicIntelligenceArtifacts",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -2274,8 +2274,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceDatasetMembers_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk": {
-          "name": "publicIntelligenceDatasetMembers_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk",
+        "pidm_build_fk": {
+          "name": "pidm_build_fk",
           "tableFrom": "publicIntelligenceDatasetMembers",
           "tableTo": "publicIntelligenceDatasetBuilds",
           "columnsFrom": [
@@ -2287,8 +2287,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceDatasetMembers_artifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "publicIntelligenceDatasetMembers_artifactId_publicIntelligenceArtifacts_id_fk",
+        "pidm_artifact_fk": {
+          "name": "pidm_artifact_fk",
           "tableFrom": "publicIntelligenceDatasetMembers",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -2453,8 +2453,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceInferences_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceInferences_sourceId_publicIntelligenceSources_id_fk",
+        "piii_source_fk": {
+          "name": "piii_source_fk",
           "tableFrom": "publicIntelligenceInferences",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -2466,8 +2466,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceInferences_ingestionJobId_publicIntelligenceIngestionJobs_id_fk": {
-          "name": "publicIntelligenceInferences_ingestionJobId_publicIntelligenceIngestionJobs_id_fk",
+        "piii_job_fk": {
+          "name": "piii_job_fk",
           "tableFrom": "publicIntelligenceInferences",
           "tableTo": "publicIntelligenceIngestionJobs",
           "columnsFrom": [
@@ -2736,8 +2736,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceIngestionJobs_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceIngestionJobs_sourceId_publicIntelligenceSources_id_fk",
+        "piij_source_fk": {
+          "name": "piij_source_fk",
           "tableFrom": "publicIntelligenceIngestionJobs",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -2749,8 +2749,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceIngestionJobs_primaryArtifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "publicIntelligenceIngestionJobs_primaryArtifactId_publicIntelligenceArtifacts_id_fk",
+        "piij_artifact_fk": {
+          "name": "piij_artifact_fk",
           "tableFrom": "publicIntelligenceIngestionJobs",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -2867,8 +2867,8 @@
         }
       },
       "foreignKeys": {
-        "publicIntelligenceSourceReviews_sourceId_publicIntelligenceSources_id_fk": {
-          "name": "publicIntelligenceSourceReviews_sourceId_publicIntelligenceSources_id_fk",
+        "pisr_source_fk": {
+          "name": "pisr_source_fk",
           "tableFrom": "publicIntelligenceSourceReviews",
           "tableTo": "publicIntelligenceSources",
           "columnsFrom": [
@@ -3424,8 +3424,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "publicIntelligenceTrainingRuns_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk": {
-          "name": "publicIntelligenceTrainingRuns_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk",
+        "fk_public_intelligence_trai_dataset_build_id_43cf8ee54e": {
+          "name": "fk_public_intelligence_trai_dataset_build_id_43cf8ee54e",
           "tableFrom": "publicIntelligenceTrainingRuns",
           "tableTo": "publicIntelligenceDatasetBuilds",
           "columnsFrom": [
@@ -3649,8 +3649,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoContentBriefs_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk": {
-          "name": "seoGeoContentBriefs_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk",
+        "fk_seo_geo_content_briefs_strategy_recommend_d62f22f8bd": {
+          "name": "fk_seo_geo_content_briefs_strategy_recommend_d62f22f8bd",
           "tableFrom": "seoGeoContentBriefs",
           "tableTo": "seoGeoStrategyRecommendations",
           "columnsFrom": [
@@ -4024,8 +4024,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoContentJobs_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk": {
-          "name": "seoGeoContentJobs_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk",
+        "fk_seo_geo_content_jobs_strategy_recommend_08ca8121f8": {
+          "name": "fk_seo_geo_content_jobs_strategy_recommend_08ca8121f8",
           "tableFrom": "seoGeoContentJobs",
           "tableTo": "seoGeoStrategyRecommendations",
           "columnsFrom": [
@@ -4037,8 +4037,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoContentJobs_productionDeliverableId_seoGeoProductionDeliverables_id_fk": {
-          "name": "seoGeoContentJobs_productionDeliverableId_seoGeoProductionDeliverables_id_fk",
+        "fk_seo_geo_content_jobs_production_deliver_4d34f48e9a": {
+          "name": "fk_seo_geo_content_jobs_production_deliver_4d34f48e9a",
           "tableFrom": "seoGeoContentJobs",
           "tableTo": "seoGeoProductionDeliverables",
           "columnsFrom": [
@@ -4429,8 +4429,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoDeliveryAttempts_approvalReviewId_seoGeoContentReviews_id_fk": {
-          "name": "seoGeoDeliveryAttempts_approvalReviewId_seoGeoContentReviews_id_fk",
+        "fk_seo_geo_delivery_attempt_approval_review_id_b332f1ba8e": {
+          "name": "fk_seo_geo_delivery_attempt_approval_review_id_b332f1ba8e",
           "tableFrom": "seoGeoDeliveryAttempts",
           "tableTo": "seoGeoContentReviews",
           "columnsFrom": [
@@ -4884,8 +4884,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoEvidenceApprovals_artifactId_publicIntelligenceArtifacts_id_fk": {
-          "name": "seoGeoEvidenceApprovals_artifactId_publicIntelligenceArtifacts_id_fk",
+        "fk_seo_geo_evidence_approva_artifact_id_359e42c610": {
+          "name": "fk_seo_geo_evidence_approva_artifact_id_359e42c610",
           "tableFrom": "seoGeoEvidenceApprovals",
           "tableTo": "publicIntelligenceArtifacts",
           "columnsFrom": [
@@ -5116,8 +5116,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoProductionDeliverables_selectionId_seoGeoProductionPlanSelections_id_fk": {
-          "name": "seoGeoProductionDeliverables_selectionId_seoGeoProductionPlanSelections_id_fk",
+        "fk_seo_geo_production_deliv_selection_id_e7f45572e6": {
+          "name": "fk_seo_geo_production_deliv_selection_id_e7f45572e6",
           "tableFrom": "seoGeoProductionDeliverables",
           "tableTo": "seoGeoProductionPlanSelections",
           "columnsFrom": [
@@ -5273,8 +5273,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoProductionPlanSelections_planId_seoGeoProductionPlans_id_fk": {
-          "name": "seoGeoProductionPlanSelections_planId_seoGeoProductionPlans_id_fk",
+        "fk_seo_geo_production_plan__plan_id_574d8970df": {
+          "name": "fk_seo_geo_production_plan__plan_id_574d8970df",
           "tableFrom": "seoGeoProductionPlanSelections",
           "tableTo": "seoGeoProductionPlans",
           "columnsFrom": [
@@ -5286,8 +5286,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "seoGeoProductionPlanSelections_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk": {
-          "name": "seoGeoProductionPlanSelections_strategyRecommendationId_seoGeoStrategyRecommendations_id_fk",
+        "fk_seo_geo_production_plan__strategy_recommend_a4438b1735": {
+          "name": "fk_seo_geo_production_plan__strategy_recommend_a4438b1735",
           "tableFrom": "seoGeoProductionPlanSelections",
           "tableTo": "seoGeoStrategyRecommendations",
           "columnsFrom": [

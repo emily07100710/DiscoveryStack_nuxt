@@ -42,7 +42,8 @@ DISCOVERYSTACK_PUBLIC_SITE_ORIGIN=http://localhost:4321 pnpm dev
 | `pnpm test:safe` | 依序執行 `typecheck → NODE_OPTIONS/NITRO_PRESET production build → full Vitest`；所有 provider、credential與publication transport均使用 injected mocks，不發出第三方 request。 |
 | `pnpm test:external-credentials` | 明確 opt-in 後執行 read-only Firecrawl/Hugging Face credential tests；需要部署環境注入對應 secrets，未執行或 skipped 絕不代表 provider validation passed。 |
 | `pnpm build` | 建立 Nuxt/Nitro private server artifact；不產生 public static website。 |
-| `pnpm db:generate` | 只產生 Drizzle migration SQL；必須另行審查及受控套用，本次 split 不執行 migration。 |
+| `pnpm db:generate` | 只產生 Drizzle migration SQL；必須另行審查及受控套用。 |
+| `pnpm db:check-identifiers` | 掃描完整 migration chain 的 MariaDB/MySQL identifier byte 長度、唯一性、歷史短名映射、current snapshot 與 schema naming policy。 |
 
 ## Private routes and authentication
 
@@ -58,7 +59,13 @@ Owner revision 的有效路徑為 `owner_revision_input → canonical selected-r
 
 ## Data and migration boundary
 
-Schema 由 `server/database/schema.ts` 管理；本次 Astro split 沒有新增或修改 migration，亦未執行任何 migration。Secrets 只能由部署平台注入，不得提交 `.env`、database URL、token、session secret、dataset、dump 或 model weights。`DISCOVERYSTACK_PUBLIC_SITE_ORIGIN` 的 CORS allowlist 值只由 Nuxt server middleware 使用；同一個非敏感 origin 只以 public runtime mirror 提供 owner layout 的退出連結。
+Schema 由 `server/database/schema.ts` 管理。Migration `0000`–`0031` 尚未套用 production；在 pre-production fresh-bootstrap 驗證中，歷史 Drizzle 自動產生且超過 MariaDB/MySQL 64-byte 上限的 FK identifier，依 `server/database/migrations/mysql-identifier-map.json` 做了 deterministic 短名修正。修正只改 constraint identity，不改 table、column、type、nullability、FK target 或 referential action。所有受影響歷史 snapshot 與目前 schema 使用同一映射；既有 bounded implicit FK 集合以 fingerprint 凍結，新 FK 必須使用 `foreignKey({ name })` 明確提供 bounded name。
+
+Full-chain runtime gate 必須從 `SHOW TABLES` 為空、且連 Drizzle ledger 都不存在的 disposable database 開始，直接將正式 `server/database/migrations` 套用為 32 筆 ledger，再在同一 database 重跑確認 no-op。`tests/system-factory-full-migration-mariadb.integration.test.ts` 是這個 gate；`tests/system-factory-mariadb.integration.test.ts` 則刻意只隔離驗證 `0031`、10,000-run scheduler query、concurrency 與 EXPLAIN contract，不能稱為 full-chain proof。MariaDB/MySQL DDL 可能 implicit commit；preflight 或 migration 失敗後不可宣稱 Drizzle transaction 完整 rollback，也不可在留下部分 tables/ledger 的 database 上直接重試。Fresh bootstrap 必須先通過 identifier preflight，失敗環境應丟棄並用全新空 database 重建。
+
+本機 disposable 10,000 runs／1,000 tenants 基準中，scheduler 三個 base scans 分別採 `ref`／`range`，使用 retry/lease covering indexes 且 `using_index=true`；bounded derived set 約 1,500 rows，priority-queue sort 約 0.03 ms，總時間約 1.85–1.87 ms。Owner keyset query 使用 `system_specs_owner_updated_idx`，不使用 deep OFFSET。這些數字只是單機 disposable evidence，不是 production latency SLA；永久測試只禁止 base-table `ALL` scan並核對實際 index，不錯誤禁止 bounded derived rows 的 `ALL`/filesort。
+
+Secrets 只能由部署平台注入，不得提交 `.env`、database URL、token、session secret、dataset、dump 或 model weights。`DISCOVERYSTACK_PUBLIC_SITE_ORIGIN` 的 CORS allowlist 值只由 Nuxt server middleware 使用；同一個非敏感 origin 只以 public runtime mirror 提供 owner layout 的退出連結。
 
 模型改善仍需獨立 consent、版本化 receipt、去識別、品質與 PII gate、owner approval、held-out evaluation 與可撤回流程；公開網站快檢不是模型預測，也不是排名、流量、轉換或 ROI 保證。
 

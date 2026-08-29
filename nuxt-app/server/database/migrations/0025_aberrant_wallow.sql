@@ -381,15 +381,15 @@ ALTER TABLE `managedSitePaymentEvents` ADD CONSTRAINT `managedSitePaymentEvents_
 --> statement-breakpoint
 ALTER TABLE `managedSiteShopifyAuthorizations` ADD CONSTRAINT `managedSiteShopifyAuthorizations_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `managedSiteShopifyAuthorizations` ADD CONSTRAINT `managedSiteShopifyAuthorizations_projectId_managedSiteProjects_id_fk` FOREIGN KEY (`projectId`) REFERENCES `managedSiteProjects`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `managedSiteShopifyAuthorizations` ADD CONSTRAINT `fk_managed_site_shopify_aut_project_id_facf3136be` FOREIGN KEY (`projectId`) REFERENCES `managedSiteProjects`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `managedSiteShopifyAuthorizations` ADD CONSTRAINT `managedSiteShopifyAuthorizations_integrationId_managedSiteIntegrations_id_fk` FOREIGN KEY (`integrationId`) REFERENCES `managedSiteIntegrations`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `managedSiteShopifyAuthorizations` ADD CONSTRAINT `fk_managed_site_shopify_aut_integration_id_e0f0d99f89` FOREIGN KEY (`integrationId`) REFERENCES `managedSiteIntegrations`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE `managedSiteShopifyWebhooks` ADD CONSTRAINT `managedSiteShopifyWebhooks_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE `managedSiteShopifyWebhooks` ADD CONSTRAINT `managedSiteShopifyWebhooks_projectId_managedSiteProjects_id_fk` FOREIGN KEY (`projectId`) REFERENCES `managedSiteProjects`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `managedSiteShopifyWebhooks` ADD CONSTRAINT `managedSiteShopifyWebhooks_integrationId_managedSiteIntegrations_id_fk` FOREIGN KEY (`integrationId`) REFERENCES `managedSiteIntegrations`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `managedSiteShopifyWebhooks` ADD CONSTRAINT `fk_managed_site_shopify_web_integration_id_1dbcb36d97` FOREIGN KEY (`integrationId`) REFERENCES `managedSiteIntegrations`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 /* Only now can obsolete global keys be removed; replacements already exist. */
 ALTER TABLE `managedSiteDraftOrders` DROP INDEX `managed_site_draft_orders_idempotency_unique`;

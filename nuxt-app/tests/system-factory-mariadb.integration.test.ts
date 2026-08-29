@@ -2,11 +2,12 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { drizzle } from 'drizzle-orm/mysql2'
+import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/mysql2/migrator'
 import mysql from 'mysql2/promise'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as schema from '../server/database/schema'
-import { DrizzleProvisioningRepository } from '../server/system-factory/provisioning-repository-drizzle'
+import { DrizzleProvisioningRepository, eligibleProvisioningRunsQuery } from '../server/system-factory/provisioning-repository-drizzle'
 import { testRuntimeAuthority } from '../server/system-factory/runtime-authority'
 
 const enabled = process.env.DS_RUN_SYSTEM_FACTORY_DB_INTEGRATION === '1'
@@ -17,7 +18,16 @@ let migrationDirectory = ''
 
 function sha(value: number) { return value.toString(16).padStart(64, '0').slice(-64) }
 
-suite('System Factory disposable MariaDB runtime', () => {
+function planTableNodes(value: unknown, output: Array<Record<string, unknown>> = []): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) { for (const child of value) planTableNodes(child, output); return output }
+  if (!value || typeof value !== 'object') return output
+  const record = value as Record<string, unknown>
+  if (typeof record.table_name === 'string') output.push(record)
+  for (const child of Object.values(record)) planTableNodes(child, output)
+  return output
+}
+
+suite('System Factory 0031-only disposable MariaDB runtime and query plan', () => {
   beforeAll(async () => {
     const parsed = new URL(databaseUrl)
     if (parsed.pathname !== '/discoverystack_system_factory_test') throw new Error('Disposable System Factory database name is required.')
@@ -53,6 +63,14 @@ suite('System Factory disposable MariaDB runtime', () => {
       await connection.query('INSERT INTO systemTenants (id,systemTenantId,ownerUserId,clientId,systemSpecId,systemSpecVersionId,siteNameHash,state,stateVersion,specFingerprint,compiledPlanFingerprint,projectionFingerprint,createdAt,updatedAt) VALUES ?', [tenants])
       await connection.query('INSERT INTO systemProvisioningPlans (id,planId,ownerUserId,systemTenantId,systemSpecVersionId,planFingerprint,steps,status,idempotencyKey,createdAt,updatedAt) VALUES ?', [plans])
     }
+    for (let start = 1000; start < 10000; start += 500) {
+      const specs = []
+      for (let offset = start; offset < start + 500; offset++) {
+        const id = offset + 1; const clientId = offset % 1000 + 1
+        specs.push([id, `spec-${id}`, 1, clientId, 'draft', sha(id), `draft-${id}`, now, now])
+      }
+      await connection.query('INSERT INTO systemSpecs (id,specId,ownerUserId,clientId,status,identityFingerprint,creationIdempotencyKey,createdAt,updatedAt) VALUES ?', [specs])
+    }
     for (let start = 0; start < 10000; start += 500) {
       const runs = []
       for (let offset = start; offset < start + 500; offset++) {
@@ -68,7 +86,7 @@ suite('System Factory disposable MariaDB runtime', () => {
 
   afterAll(async () => { await connection?.end(); if (migrationDirectory) rmSync(migrationDirectory, { recursive: true, force: true }) })
 
-  it('applies generated 0031 and selects one earliest eligible run for 20 distinct tenants', async () => {
+  it('applies only generated 0031 and selects one earliest eligible run for 20 distinct tenants', async () => {
     const repository = new DrizzleProvisioningRepository(drizzle(databaseUrl, { schema, mode: 'default' }), testRuntimeAuthority('mariadb-runtime'))
     const rows = await repository.listEligible(new Date('2030-01-01T00:00:00.000Z'), 20)
     expect(rows).toHaveLength(20); expect(new Set(rows.map(row => row.tenantRowId)).size).toBe(20)
@@ -76,6 +94,33 @@ suite('System Factory disposable MariaDB runtime', () => {
     expect(new Set(selected.map(row => row.status))).toEqual(new Set(['queued', 'retry_wait', 'processing']))
     const [count] = await connection.query<mysql.RowDataPacket[]>('SELECT COUNT(*) AS count FROM systemProvisioningRuns')
     expect(Number(count[0]?.count)).toBe(10_000)
+  })
+
+  it('uses covering range/ref scans for scheduler selection and the owner keyset index', async () => {
+    const database = drizzle(databaseUrl, { schema, mode: 'default' })
+    const now = new Date('2030-01-01T00:00:00.000Z')
+    const [schedulerRows] = await database.execute(sql`EXPLAIN FORMAT=JSON ${eligibleProvisioningRunsQuery(now, 20)}`) as unknown as [mysql.RowDataPacket[], unknown]
+    const schedulerPlan = JSON.parse(String(schedulerRows[0]?.EXPLAIN))
+    const runNodes = planTableNodes(schedulerPlan).filter(node => node.table_name === 'systemProvisioningRuns')
+    expect(runNodes).toHaveLength(3)
+    expect(runNodes.every(node => node.access_type !== 'ALL')).toBe(true)
+    expect(runNodes.every(node => node.using_index === true)).toBe(true)
+    expect(runNodes.filter(node => node.key === 'system_provisioning_runs_retry_eligible_idx')).toHaveLength(2)
+    expect(runNodes.filter(node => node.key === 'system_provisioning_runs_lease_eligible_idx')).toHaveLength(1)
+    expect(new Set(runNodes.map(node => node.access_type))).toEqual(new Set(['ref', 'range']))
+
+    const [ownerRows] = await connection.query<mysql.RowDataPacket[]>(
+      `EXPLAIN FORMAT=JSON SELECT id,specId,clientId,websiteId,managedSiteProjectId,status,identityFingerprint,createdAt,updatedAt
+         FROM systemSpecs
+        WHERE ownerUserId = ? AND (updatedAt < ? OR (updatedAt = ? AND id < ?))
+        ORDER BY updatedAt DESC, id DESC LIMIT 51`,
+      [1, now, now, 9500],
+    )
+    const ownerPlan = JSON.parse(String(ownerRows[0]?.EXPLAIN))
+    const ownerNode = planTableNodes(ownerPlan).find(node => node.table_name === 'systemSpecs')
+    expect(ownerNode).toBeTruthy()
+    expect(ownerNode?.access_type).not.toBe('ALL')
+    expect(ownerNode?.key).toBe('system_specs_owner_updated_idx')
   })
 
   it('permits only one concurrent lease and one concurrent operation attempt', async () => {
