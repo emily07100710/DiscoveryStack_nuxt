@@ -445,7 +445,12 @@ def _materialize_workspace(unit, tenant_id, plan, targets):
     shortcuts.sort(key=lambda item: (item["type"], item["link_to"]))
     cards = sorted(_kpi_runtime_names(tenant_id, key, plan)[0] for key in unit["definition"]["kpiKeys"])
     charts = sorted(_kpi_runtime_names(tenant_id, key, plan)[1] for key in unit["definition"]["kpiKeys"])
-    expected = {"workspace": name, "label": name, "public": 0, "module": "Discovery Stack", "roles": roles, "shortcuts": shortcuts, "number_cards": cards, "charts": charts}
+    # Frappe mutates child-table dictionaries passed to get_doc() by adding
+    # framework metadata such as ``doctype``.  Keep the comparison projection
+    # detached so a create followed by an idempotent replay compares only the
+    # governed fields that belong to this contract.
+    expected_shortcuts = [{"label": item["label"], "type": item["type"], "link_to": item["link_to"]} for item in shortcuts]
+    expected = {"workspace": name, "label": name, "public": 0, "module": "Discovery Stack", "roles": roles, "shortcuts": expected_shortcuts, "number_cards": cards, "charts": charts}
     if not frappe.db.exists("Workspace", name):
         frappe.get_doc({"doctype": "Workspace", "label": name, "title": name, "module": "Discovery Stack", "public": 0, "is_hidden": 1, "content": "[]", "roles": [{"role": role} for role in roles], "shortcuts": shortcuts, "number_cards": [{"number_card_name": card} for card in cards], "charts": [{"chart_name": chart} for chart in charts]}).insert(ignore_permissions=True)
     actual = _workspace_projection(tenant_id, plan)
