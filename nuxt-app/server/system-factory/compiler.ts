@@ -17,7 +17,7 @@ export type CompiledUnit = MaterializationBase & (
   | { kind: 'view'; definition: SystemSpec['views'][number] & { materialization: 'desk_ready' | 'registry_only' } }
   | { kind: 'report'; definition: SystemSpec['reports'][number] }
   | { kind: 'kpi'; definition: SystemSpec['kpis'][number] }
-  | { kind: 'workspace'; definition: { viewKeys: string[]; reportKeys: string[]; kpiKeys: string[]; roleKeys: string[] } }
+  | { kind: 'workspace'; definition: { entityKeys: string[]; viewKeys: string[]; reportKeys: string[]; kpiKeys: string[]; roleKeys: string[] } }
   | { kind: 'notification_intent'; definition: SystemSpec['notificationIntents'][number] & { effectiveEnabled: false } }
   | { kind: 'integration_intent'; definition: SystemSpec['integrationIntents'][number] & { effectiveEnabled: false } }
 )
@@ -49,7 +49,7 @@ export function compileSystemSpec(input: unknown): CompiledSystemPlan {
   for (const view of spec.views) units.push(unit({ kind: 'view', key: view.key, definition: { ...view, materialization: view.kind === 'list' || view.kind === 'form' ? 'desk_ready' : 'registry_only' } }))
   for (const report of spec.reports) units.push(unit({ kind: 'report', key: report.key, definition: report }))
   for (const kpi of spec.kpis) units.push(unit({ kind: 'kpi', key: kpi.key, definition: kpi }))
-  units.push(unit({ kind: 'workspace', key: 'tenant_workspace', definition: { viewKeys: spec.views.map(item => item.key).sort(), reportKeys: spec.reports.map(item => item.key).sort(), kpiKeys: spec.kpis.map(item => item.key).sort(), roleKeys: spec.roles.map(item => item.key).sort() } }))
+  units.push(unit({ kind: 'workspace', key: 'tenant_workspace', definition: { entityKeys: spec.entities.map(item => item.key).sort(), viewKeys: spec.views.map(item => item.key).sort(), reportKeys: spec.reports.map(item => item.key).sort(), kpiKeys: spec.kpis.map(item => item.key).sort(), roleKeys: spec.roles.map(item => item.key).sort() } }))
   for (const notification of spec.notificationIntents) units.push(unit({ kind: 'notification_intent', key: notification.key, definition: { ...notification, effectiveEnabled: false } }))
   for (const integration of spec.integrationIntents) units.push(unit({ kind: 'integration_intent', key: integration.key, definition: { ...integration, effectiveEnabled: false } }))
   const order: Record<CompiledUnit['kind'], number> = { module: 1, doctype: 2, status: 3, role: 4, workflow: 5, view: 6, report: 7, kpi: 8, workspace: 9, notification_intent: 10, integration_intent: 11 }

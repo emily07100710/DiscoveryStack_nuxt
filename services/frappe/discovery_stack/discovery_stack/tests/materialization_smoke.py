@@ -73,12 +73,9 @@ def _assert_materialized(plan, expected):
     view = next(item for item in units if item["kind"] == "view"); view_name = frappe.db.get_value("DiscoveryStack View Definition", {"system_tenant_id": tenant, "view_key": view["key"], "view_kind": expected["view"]}, "name"); assert view_name; view_doc = frappe.get_doc("DiscoveryStack View Definition", view_name); assert view_doc.materialization_status == ("desk_ready" if expected["view"] in {"list", "form"} else "registry_only")
     kpi = next(item for item in units if item["kind"] == "kpi"); card, chart = _kpi_runtime_names(tenant, kpi["key"], plan); assert frappe.db.exists("Number Card", card); assert frappe.db.exists("Dashboard Chart", chart)
     workspace = next(item["target"] for item in first["units"] if item["kind"] == "workspace"); workspace_doc = frappe.get_doc("Workspace", workspace); assert not workspace_doc.public and not workspace_doc.is_hidden; assert role in [row.role for row in workspace_doc.roles]; assert report in [row.link_to for row in workspace_doc.shortcuts]; assert card in [row.number_card_name for row in workspace_doc.number_cards]; assert chart in [row.chart_name for row in workspace_doc.charts]
-    if expected["view"] in {"calendar", "kanban"}: assert targets_absent(workspace_doc.shortcuts, next(item["target"] for item in first["units"] if item["kind"] == "doctype" and item["key"] == view["definition"]["entity"]))
+    entity_target = next(item["target"] for item in first["units"] if item["kind"] == "doctype" and item["key"] == view["definition"]["entity"])
+    assert entity_target in [row.link_to for row in workspace_doc.shortcuts if row.type == "DocType"]
     return first
-
-
-def targets_absent(shortcuts, target):
-    return target not in [row.link_to for row in shortcuts if row.type == "DocType"]
 
 
 def _assert_custom_crud_and_isolation(booking, custom):

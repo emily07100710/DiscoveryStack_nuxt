@@ -54,7 +54,7 @@ def compile_spec(spec):
         units.append(_unit({"kind": "report", "key": report["key"], "definition": report}))
     for kpi in sorted(spec.get("kpis", []), key=lambda item: item["key"]):
         units.append(_unit({"kind": "kpi", "key": kpi["key"], "definition": kpi}))
-    units.append(_unit({"kind": "workspace", "key": "tenant_workspace", "definition": {"viewKeys": sorted(item["key"] for item in spec.get("views", [])), "reportKeys": sorted(item["key"] for item in spec.get("reports", [])), "kpiKeys": sorted(item["key"] for item in spec.get("kpis", [])), "roleKeys": sorted(item["key"] for item in spec.get("roles", []))}}))
+    units.append(_unit({"kind": "workspace", "key": "tenant_workspace", "definition": {"entityKeys": sorted(item["key"] for item in spec.get("entities", [])), "viewKeys": sorted(item["key"] for item in spec.get("views", [])), "reportKeys": sorted(item["key"] for item in spec.get("reports", [])), "kpiKeys": sorted(item["key"] for item in spec.get("kpis", [])), "roleKeys": sorted(item["key"] for item in spec.get("roles", []))}}))
     for notification in sorted(spec.get("notificationIntents", []), key=lambda item: item["key"]):
         units.append(_unit({"kind": "notification_intent", "key": notification["key"], "definition": {**notification, "effectiveEnabled": False}}))
     for integration in sorted(spec.get("integrationIntents", []), key=lambda item: item["key"]):

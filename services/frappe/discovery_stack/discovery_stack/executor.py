@@ -169,7 +169,7 @@ def validate_compiled_plan(plan):
             raise ValueError("KPI materialization is invalid.")
         if unit["kind"] == "workspace":
             definition = unit.get("definition", {})
-            if set(definition) != {"viewKeys", "reportKeys", "kpiKeys", "roleKeys"} or set(definition["viewKeys"]) != view_keys or set(definition["reportKeys"]) != report_keys or set(definition["kpiKeys"]) != kpi_keys or set(definition["roleKeys"]) != role_keys:
+            if set(definition) != {"entityKeys", "viewKeys", "reportKeys", "kpiKeys", "roleKeys"} or set(definition["entityKeys"]) != entity_keys or set(definition["viewKeys"]) != view_keys or set(definition["reportKeys"]) != report_keys or set(definition["kpiKeys"]) != kpi_keys or set(definition["roleKeys"]) != role_keys:
                 raise ValueError("Workspace authority is incomplete or mismatched.")
         if unit["kind"] == "notification_intent" and unit.get("definition", {}).get("recipientRole") not in role_keys:
             raise ValueError("Notification role authority is invalid.")
@@ -435,10 +435,10 @@ def _materialize_workspace(unit, tenant_id, plan, targets):
     units = plan["materializationManifest"]["units"]
     name = _target_name(tenant_id, "workspace", f"system_{plan['planFingerprint'][:8]}")
     roles = sorted(_target_name(tenant_id, "role", key) for key in unit["definition"]["roleKeys"])
-    shortcuts = []
+    shortcuts = [{"label": key.replace("_", " ").title(), "type": "DocType", "link_to": targets[key]} for key in unit["definition"]["entityKeys"]]
     for view_key in unit["definition"]["viewKeys"]:
         view = next(candidate for candidate in units if candidate["kind"] == "view" and candidate["key"] == view_key)
-        if view["definition"]["materialization"] == "desk_ready":
+        if view["definition"]["materialization"] == "desk_ready" and targets[view["definition"]["entity"]] not in {item["link_to"] for item in shortcuts if item["type"] == "DocType"}:
             shortcuts.append({"label": view_key.replace("_", " ").title(), "type": "DocType", "link_to": targets[view["definition"]["entity"]]})
     for report_key in unit["definition"]["reportKeys"]:
         shortcuts.append({"label": report_key.replace("_", " ").title(), "type": "Report", "link_to": _target_name(tenant_id, "report", report_key)})
