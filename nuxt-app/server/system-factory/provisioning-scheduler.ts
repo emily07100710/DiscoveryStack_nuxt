@@ -58,8 +58,9 @@ export async function runProvisioningTick(input: { repository: DurableProvisioni
     claimed++
     let context: ProvisioningRunContext
     try { context = await input.repository.loadContext(claim) } catch (error) { await input.repository.blockClaim(claim, error instanceof SystemFactoryError ? error.code : 'CONTEXT_LOAD_FAILED', clock()); blocked++; continue }
+    const completedOperations = new Set(await input.repository.completedOperations(claim))
     for (let ordinal = 0; (stepsByTenant.get(candidate.tenantRowId) || 0) < maxStepsPerTenant && executed < maxTotalSteps; ordinal++) {
-      const done = await input.repository.completedOperations(claim); const operation = PROVISIONING_OPERATIONS.find(item => !done.includes(item)); if (!operation) break
+      const operation = PROVISIONING_OPERATIONS.find(item => !completedOperations.has(item)); if (!operation) break
       const operationStartedAt = clock(); const timeoutMs = OPERATION_TIMEOUT_MS[operation]; const renewed = await input.repository.renewLease(claim, operationStartedAt, new Date(operationStartedAt.getTime() + timeoutMs + LEASE_SAFETY_MARGIN_MS + LEASE_EXPIRY_GUARD_MS)); if (!renewed) { blocked++; break }; claim = renewed
       const requestFingerprint = fingerprint({ schemaVersion: 'provisioning-step-request-v1', operation, runId: context.runPublicId, tenant: context.systemTenantId, plan: context.planFingerprint, compiledPlan: context.compiledPlan.planFingerprint, authority: context.runtimeAuthority.authorityFingerprint })
       let attempt: ProvisioningAttempt
@@ -68,6 +69,7 @@ export async function runProvisioningTick(input: { repository: DurableProvisioni
       try {
         const method = METHODS[operation]; const receipt = await (input.provisioner[method] as (value: ProvisionContext) => Promise<OperationReceipt>)({ ...context, idempotencyKey: `${context.runPublicId}:${operation}` }); assertReceipt(context, operation, receipt)
         const terminal = operation === PROVISIONING_OPERATIONS.at(-1); await input.repository.commitSuccess(claim, context, attempt, receipt, clock(), terminal)
+        completedOperations.add(operation)
         if (terminal) { completed++; break }
       } catch (error) {
         const failedAt = clock(); const failure = classify(error, attempt.attemptNumber, context.maxAttempts, failedAt); await input.repository.commitFailure(claim, context, attempt, failure, failedAt); if (failure.retryable) retryWait++; else blocked++; break

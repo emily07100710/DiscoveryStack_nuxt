@@ -2,7 +2,9 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const migration = readFileSync(join(process.cwd(), 'server/database/migrations/0031_pale_the_fury.sql'), 'utf8')
+const migrationName = readdirSync(join(process.cwd(), 'server/database/migrations')).find(name => /^0031_.*\.sql$/u.test(name))
+if (!migrationName) throw new Error('System Factory 0031 migration is missing.')
+const migration = readFileSync(join(process.cwd(), 'server/database/migrations', migrationName), 'utf8')
 const expectedTables = ['systemSpecs', 'systemSpecVersions', 'systemPreviews', 'systemTenants', 'systemTenantBindings', 'systemProvisioningPlans', 'systemProvisioningRuns', 'systemProvisioningAttempts', 'systemEvents', 'systemReceipts', 'systemAdminInvitations', 'systemConnectionRefs', 'systemUpgradeIntents', 'systemUpgradeRuns', 'systemUpgradeReceipts']
 
 function files(directory: string): string[] { return readdirSync(directory).flatMap(entry => { const path = join(directory, entry); return statSync(path).isDirectory() ? files(path) : path.endsWith('.ts') ? [path] : [] }) }

@@ -34,3 +34,16 @@ export function boundedPage(value: unknown): { limit: number; offset: number } {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0 || offset > 100_000) throw createError({ statusCode: 422, statusMessage: 'Pagination is outside the allowed bound.' })
   return { limit, offset }
 }
+
+export function boundedKeysetPage(value: unknown): { limit: number; cursor: { updatedAt: Date; id: number } | null } {
+  const input = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const limit = Number(input.limit ?? 50); if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw createError({ statusCode: 422, statusMessage: 'Pagination is outside the allowed bound.' })
+  if (input.offset !== undefined) throw createError({ statusCode: 422, statusMessage: 'System workspace pagination requires a stable cursor; offset is not accepted.' })
+  if (input.cursor === undefined || input.cursor === '') return { limit, cursor: null }
+  try {
+    const decoded = JSON.parse(Buffer.from(String(input.cursor), 'base64url').toString('utf8')) as { updatedAt?: unknown; id?: unknown }
+    const updatedAt = new Date(String(decoded.updatedAt || '')); const id = Number(decoded.id)
+    if (!Number.isSafeInteger(id) || id < 1 || Number.isNaN(updatedAt.getTime()) || updatedAt.toISOString() !== decoded.updatedAt) throw new Error('invalid')
+    return { limit, cursor: { updatedAt, id } }
+  } catch { throw createError({ statusCode: 422, statusMessage: 'System workspace cursor is invalid.' }) }
+}

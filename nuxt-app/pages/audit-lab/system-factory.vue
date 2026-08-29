@@ -11,7 +11,7 @@ const templatesData = ref<any>({ templates: [] }); const systemsData = ref<any>(
 const pending = ref(true); const error = ref<any>(null); const workspacePending = ref(false); const workspaceError = ref<any>(null)
 const systems = computed(() => systemsData.value?.systems || [])
 const selected = computed<any>(() => workspace.value as any)
-const templatesEndpoint: string = '/api/system-factory/templates'; const systemsEndpoint: string = '/api/system-factory/systems?limit=50&offset=0'; const draftsEndpoint: string = '/api/system-factory/drafts'
+const templatesEndpoint: string = '/api/system-factory/templates'; const systemsEndpoint: string = '/api/system-factory/systems?limit=50'; const draftsEndpoint: string = '/api/system-factory/drafts'
 
 async function refresh() { pending.value = true; error.value = null; try { systemsData.value = await $fetch<any>(systemsEndpoint) } catch (caught) { error.value = caught } finally { pending.value = false } }
 async function refreshWorkspace() { if (!selectedSystemId.value) { workspace.value = null; return }; workspacePending.value = true; workspaceError.value = null; try { const endpoint: string = `/api/system-factory/systems/${selectedSystemId.value}`; workspace.value = await $fetch<any>(endpoint) } catch (caught) { workspaceError.value = caught; workspace.value = null } finally { workspacePending.value = false } }

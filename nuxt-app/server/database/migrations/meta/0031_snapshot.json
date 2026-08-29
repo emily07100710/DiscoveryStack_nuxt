@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "658857da-5199-48b8-904c-3a2d3cca68c2",
+  "id": "510cee0c-60ab-4964-abfa-8b5efb80d26a",
   "prevId": "7e25560d-00b6-431a-8158-91b261d8b5f8",
   "tables": {
     "auditEvidenceLedger": {
@@ -19573,6 +19573,20 @@
           "notNull": true,
           "autoincrement": false
         },
+        "idempotencyKey": {
+          "name": "idempotencyKey",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "requestFingerprint": {
+          "name": "requestFingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "status": {
           "name": "status",
           "type": "enum('pending','accepted','expired','revoked')",
@@ -19623,6 +19637,14 @@
           "name": "system_admin_invitations_token_hash_unique",
           "columns": [
             "tokenHash"
+          ],
+          "isUnique": true
+        },
+        "system_admin_invitations_owner_key_unique": {
+          "name": "system_admin_invitations_owner_key_unique",
+          "columns": [
+            "ownerUserId",
+            "idempotencyKey"
           ],
           "isUnique": true
         },
@@ -20686,12 +20708,23 @@
           ],
           "isUnique": true
         },
-        "system_provisioning_runs_lease_idx": {
-          "name": "system_provisioning_runs_lease_idx",
+        "system_provisioning_runs_retry_eligible_idx": {
+          "name": "system_provisioning_runs_retry_eligible_idx",
+          "columns": [
+            "status",
+            "retryEligibleAt",
+            "systemTenantId",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "system_provisioning_runs_lease_eligible_idx": {
+          "name": "system_provisioning_runs_lease_eligible_idx",
           "columns": [
             "status",
             "leaseExpiresAt",
-            "retryEligibleAt"
+            "systemTenantId",
+            "id"
           ],
           "isUnique": false
         }
@@ -21229,6 +21262,24 @@
             "creationIdempotencyKey"
           ],
           "isUnique": true
+        },
+        "system_specs_owner_updated_idx": {
+          "name": "system_specs_owner_updated_idx",
+          "columns": [
+            "ownerUserId",
+            "updatedAt",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "system_specs_owner_managed_site_idx": {
+          "name": "system_specs_owner_managed_site_idx",
+          "columns": [
+            "ownerUserId",
+            "managedSiteProjectId",
+            "id"
+          ],
+          "isUnique": false
         },
         "system_specs_owner_client_status_idx": {
           "name": "system_specs_owner_client_status_idx",
@@ -21871,6 +21922,15 @@
             "intentFingerprint"
           ],
           "isUnique": true
+        },
+        "system_upgrade_intents_owner_tenant_created_idx": {
+          "name": "system_upgrade_intents_owner_tenant_created_idx",
+          "columns": [
+            "ownerUserId",
+            "systemTenantId",
+            "createdAt"
+          ],
+          "isUnique": false
         }
       },
       "foreignKeys": {
@@ -22029,6 +22089,15 @@
             "receiptFingerprint"
           ],
           "isUnique": true
+        },
+        "system_upgrade_receipts_owner_tenant_created_idx": {
+          "name": "system_upgrade_receipts_owner_tenant_created_idx",
+          "columns": [
+            "ownerUserId",
+            "systemTenantId",
+            "createdAt"
+          ],
+          "isUnique": false
         },
         "system_upgrade_receipts_run_step_idx": {
           "name": "system_upgrade_receipts_run_step_idx",
@@ -22207,12 +22276,12 @@
           ],
           "isUnique": true
         },
-        "system_upgrade_runs_tenant_status_idx": {
-          "name": "system_upgrade_runs_tenant_status_idx",
+        "system_upgrade_runs_tenant_created_idx": {
+          "name": "system_upgrade_runs_tenant_created_idx",
           "columns": [
             "ownerUserId",
             "systemTenantId",
-            "status"
+            "createdAt"
           ],
           "isUnique": false
         },

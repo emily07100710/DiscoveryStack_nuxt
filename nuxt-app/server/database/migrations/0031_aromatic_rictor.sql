@@ -6,6 +6,8 @@ CREATE TABLE `systemAdminInvitations` (
 	`principalEmailHash` varchar(64) NOT NULL,
 	`tokenHash` varchar(64) NOT NULL,
 	`roleKey` varchar(64) NOT NULL,
+	`idempotencyKey` varchar(128) NOT NULL,
+	`requestFingerprint` varchar(64) NOT NULL,
 	`status` enum('pending','accepted','expired','revoked') NOT NULL DEFAULT 'pending',
 	`expiresAt` timestamp NOT NULL,
 	`acceptedAt` timestamp,
@@ -13,7 +15,8 @@ CREATE TABLE `systemAdminInvitations` (
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	CONSTRAINT `systemAdminInvitations_id` PRIMARY KEY(`id`),
 	CONSTRAINT `system_admin_invitations_public_id_unique` UNIQUE(`invitationId`),
-	CONSTRAINT `system_admin_invitations_token_hash_unique` UNIQUE(`tokenHash`)
+	CONSTRAINT `system_admin_invitations_token_hash_unique` UNIQUE(`tokenHash`),
+	CONSTRAINT `system_admin_invitations_owner_key_unique` UNIQUE(`ownerUserId`,`idempotencyKey`)
 );
 --> statement-breakpoint
 CREATE TABLE `systemConnectionRefs` (
@@ -348,12 +351,17 @@ CREATE INDEX `system_events_tenant_created_idx` ON `systemEvents` (`ownerUserId`
 CREATE INDEX `system_previews_owner_status_idx` ON `systemPreviews` (`ownerUserId`,`status`,`expiresAt`);--> statement-breakpoint
 CREATE INDEX `system_provisioning_attempt_tenant_status_idx` ON `systemProvisioningAttempts` (`ownerUserId`,`systemTenantId`,`status`);--> statement-breakpoint
 CREATE INDEX `system_provisioning_plans_owner_status_idx` ON `systemProvisioningPlans` (`ownerUserId`,`status`);--> statement-breakpoint
-CREATE INDEX `system_provisioning_runs_lease_idx` ON `systemProvisioningRuns` (`status`,`leaseExpiresAt`,`retryEligibleAt`);--> statement-breakpoint
+CREATE INDEX `system_provisioning_runs_retry_eligible_idx` ON `systemProvisioningRuns` (`status`,`retryEligibleAt`,`systemTenantId`,`id`);--> statement-breakpoint
+CREATE INDEX `system_provisioning_runs_lease_eligible_idx` ON `systemProvisioningRuns` (`status`,`leaseExpiresAt`,`systemTenantId`,`id`);--> statement-breakpoint
 CREATE INDEX `system_receipts_tenant_created_idx` ON `systemReceipts` (`ownerUserId`,`systemTenantId`,`createdAt`);--> statement-breakpoint
 CREATE INDEX `system_spec_versions_owner_spec_idx` ON `systemSpecVersions` (`ownerUserId`,`systemSpecId`,`createdAt`);--> statement-breakpoint
+CREATE INDEX `system_specs_owner_updated_idx` ON `systemSpecs` (`ownerUserId`,`updatedAt`,`id`);--> statement-breakpoint
+CREATE INDEX `system_specs_owner_managed_site_idx` ON `systemSpecs` (`ownerUserId`,`managedSiteProjectId`,`id`);--> statement-breakpoint
 CREATE INDEX `system_specs_owner_client_status_idx` ON `systemSpecs` (`ownerUserId`,`clientId`,`status`);--> statement-breakpoint
 CREATE INDEX `system_tenant_bindings_commerce_idx` ON `systemTenantBindings` (`managedSiteDraftOrderId`,`managedSitePaymentEventId`);--> statement-breakpoint
 CREATE INDEX `system_tenants_owner_client_state_idx` ON `systemTenants` (`ownerUserId`,`clientId`,`state`);--> statement-breakpoint
+CREATE INDEX `system_upgrade_intents_owner_tenant_created_idx` ON `systemUpgradeIntents` (`ownerUserId`,`systemTenantId`,`createdAt`);--> statement-breakpoint
+CREATE INDEX `system_upgrade_receipts_owner_tenant_created_idx` ON `systemUpgradeReceipts` (`ownerUserId`,`systemTenantId`,`createdAt`);--> statement-breakpoint
 CREATE INDEX `system_upgrade_receipts_run_step_idx` ON `systemUpgradeReceipts` (`upgradeRunId`,`step`,`createdAt`);--> statement-breakpoint
-CREATE INDEX `system_upgrade_runs_tenant_status_idx` ON `systemUpgradeRuns` (`ownerUserId`,`systemTenantId`,`status`);--> statement-breakpoint
+CREATE INDEX `system_upgrade_runs_tenant_created_idx` ON `systemUpgradeRuns` (`ownerUserId`,`systemTenantId`,`createdAt`);--> statement-breakpoint
 CREATE INDEX `system_upgrade_runs_lease_idx` ON `systemUpgradeRuns` (`status`,`leaseExpiresAt`);
