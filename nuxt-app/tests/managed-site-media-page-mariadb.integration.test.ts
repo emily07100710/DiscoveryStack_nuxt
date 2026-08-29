@@ -85,6 +85,8 @@ suite('Managed media and page repository disposable MariaDB integration', () => 
     const repository = makeDrizzleMediaVaultRepository(drizzle(databaseUrl, { schema, mode: 'default' }))
     const asset = await repository.findAsset({ ownerUserId: 1, projectId: 10 }, 'asset-00001')
     expect(asset).toMatchObject({ version: 1, originalObjectKey: 'tenant/1/project/10/assets/asset-00001/v1/original.png', sha256: sha(1) })
+    await expect(repository.findReadyAssetByHash({ ownerUserId: 1, projectId: 10 }, sha(1))).resolves.toMatchObject({ assetId: 'asset-00001', version: 1, sha256: sha(1) })
+    await expect(repository.findReadyAssetByHash({ ownerUserId: 1, projectId: 10 }, sha(30_001))).resolves.toBeNull()
     await expect(repository.findAsset({ ownerUserId: 2, projectId: 20 }, 'asset-00001')).resolves.toBeNull()
     const first = await repository.listAssets({ ownerUserId: 1, projectId: 10 }, { limit: 100 })
     expect(first).toHaveLength(100)

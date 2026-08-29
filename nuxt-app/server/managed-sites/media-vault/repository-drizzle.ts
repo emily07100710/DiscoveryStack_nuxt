@@ -968,6 +968,10 @@ export function makeDrizzleMediaVaultRepository(
               managedSiteMediaAssets.assetId,
               managedSiteMediaAssetVersions.assetId
             ),
+            eq(
+              managedSiteMediaAssets.currentVersionId,
+              managedSiteMediaAssetVersions.id
+            ),
             eq(managedSiteMediaAssets.status, "ready")
           )
         )
