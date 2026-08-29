@@ -542,7 +542,9 @@ def validate_record_semantics(record: Mapping[str, Any], run_dir: Path) -> None:
         fail("replay metadata hash fields inconsistent")
 
 
-def validate_run(run_dir: Path, schema_path: Path) -> dict[str, Any]:
+def validate_run(
+    run_dir: Path, schema_path: Path, *, require_complete: bool = True
+) -> dict[str, Any]:
     run_dir = Path(run_dir)
     if run_dir.is_symlink() or not run_dir.is_dir():
         fail("run directory must be a regular non-symlink directory", str(run_dir))
@@ -574,10 +576,15 @@ def validate_run(run_dir: Path, schema_path: Path) -> dict[str, Any]:
         "parentManifestHash",
         "parentDatasetDigest",
         "configDigest",
+        "selectionFingerprint",
+        "ownerAuthorityFingerprint",
+        "collectorSourceHash",
         "collectorVersion",
+        "state",
         "createdAt",
         "retentionDays",
         "deleteAfter",
+        "retentionUntil",
         "replay",
     }
     if not isinstance(metadata, dict) or set(metadata) != required_metadata:
@@ -587,11 +594,18 @@ def validate_run(run_dir: Path, schema_path: Path) -> dict[str, Any]:
         "parentManifestHash",
         "parentDatasetDigest",
         "configDigest",
+        "selectionFingerprint",
+        "ownerAuthorityFingerprint",
+        "collectorSourceHash",
     ):
         if not isinstance(metadata[field], str) or not SHA256_RE.fullmatch(
             metadata[field]
         ):
             fail(f"metadata {field} is not sha256")
+    if metadata["state"] not in {"in_progress", "complete"}:
+        fail("metadata state is invalid")
+    if require_complete and metadata["state"] != "complete":
+        fail("run is not complete and cannot be eligible")
     if (
         not isinstance(metadata["retentionDays"], int)
         or not 1 <= metadata["retentionDays"] <= 30
@@ -604,12 +618,17 @@ def validate_run(run_dir: Path, schema_path: Path) -> dict[str, Any]:
         delete_after = datetime.fromisoformat(
             metadata["deleteAfter"].replace("Z", "+00:00")
         )
+        retention_until = datetime.fromisoformat(
+            metadata["retentionUntil"].replace("Z", "+00:00")
+        )
     except (AttributeError, ValueError) as exc:
         raise ValidationError("run metadata timestamps are invalid") from exc
     if created_at.tzinfo is None or delete_after.tzinfo is None:
         fail("run metadata timestamps require timezone")
     if delete_after != created_at + timedelta(days=metadata["retentionDays"]):
         fail("deleteAfter does not exactly implement retentionDays")
+    if retention_until != delete_after:
+        fail("retentionUntil must exactly equal deleteAfter")
     seen_rows: set[int] = set()
     seen_artifact_paths: set[str] = set()
     expected_lineage = {
@@ -637,6 +656,30 @@ def validate_run(run_dir: Path, schema_path: Path) -> dict[str, Any]:
         for key, expected in expected_lineage.items():
             if record["parentLineage"][key] != expected:
                 fail(f"record lineage mismatch: {key}")
+        mapping = record["mapping"]
+        if mapping["ownerAuthorityFingerprint"] != metadata[
+            "ownerAuthorityFingerprint"
+        ]:
+            fail("record owner authority mismatch")
+        expected_mapping_fingerprint = sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "rowId": record["rowId"],
+                    "split": record["split"],
+                    "urlHash": mapping["urlHash"],
+                    "method": mapping["method"],
+                    "mappedByHash": mapping["mappedByHash"],
+                    "mappedAt": mapping["mappedAt"],
+                    "evidenceRefHash": mapping["evidenceRefHash"],
+                    "robotsDecision": mapping["robotsDecision"],
+                    "ownerAuthorityFingerprint": mapping[
+                        "ownerAuthorityFingerprint"
+                    ],
+                }
+            )
+        )
+        if mapping["mappingFingerprint"] != expected_mapping_fingerprint:
+            fail("record mapping fingerprint mismatch")
         if (
             projection["rowId"] != record["rowId"]
             or projection["split"] != record["split"]
@@ -657,6 +700,61 @@ def validate_run(run_dir: Path, schema_path: Path) -> dict[str, Any]:
         "run_metadata.json",
         *seen_artifact_paths,
     }
+    completion_path = run_dir / "run_complete.json"
+    if metadata["state"] == "complete":
+        if not completion_path.is_file() or completion_path.is_symlink():
+            fail("complete run requires an atomic completion marker")
+        ensure_private_mode(completion_path, 0o600)
+        try:
+            completion = json.loads(completion_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValidationError("completion marker is not valid JSON") from exc
+        required_completion = {
+            "contractVersion",
+            "runId",
+            "completedAt",
+            "metadataHash",
+            "evidenceManifestHash",
+            "modelProjectionHash",
+            "selectionFingerprint",
+            "ownerAuthorityFingerprint",
+        }
+        if not isinstance(completion, dict) or set(completion) != required_completion:
+            fail("completion marker schema mismatch")
+        if (
+            completion["contractVersion"] != "page-evidence-completion-v1"
+            or completion["runId"] != metadata["runId"]
+            or completion["selectionFingerprint"] != metadata["selectionFingerprint"]
+            or completion["ownerAuthorityFingerprint"]
+            != metadata["ownerAuthorityFingerprint"]
+        ):
+            fail("completion marker authority mismatch")
+        try:
+            completed_at = datetime.fromisoformat(
+                completion["completedAt"].replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise ValidationError("completion timestamp is invalid") from exc
+        if completed_at.tzinfo is None or completed_at < created_at:
+            fail("completion timestamp must be timezone-aware and monotonic")
+        for field in (
+            "metadataHash",
+            "evidenceManifestHash",
+            "modelProjectionHash",
+        ):
+            if not isinstance(completion[field], str) or not SHA256_RE.fullmatch(
+                completion[field]
+            ):
+                fail(f"completion {field} is not sha256")
+        if completion["metadataHash"] != sha256_file(metadata_path):
+            fail("completion metadata hash mismatch")
+        if completion["evidenceManifestHash"] != sha256_file(manifest_path):
+            fail("completion evidence manifest hash mismatch")
+        if completion["modelProjectionHash"] != sha256_file(projection_path):
+            fail("completion model projection hash mismatch")
+        expected_files.add("run_complete.json")
+    elif completion_path.exists():
+        fail("in-progress run cannot carry completion marker")
     actual_files = {
         str(path.relative_to(run_dir).as_posix())
         for path in run_dir.rglob("*")
@@ -684,6 +782,9 @@ def validate_run(run_dir: Path, schema_path: Path) -> dict[str, Any]:
             "parentDatasetDigest",
             "configDigest",
             "collectorVersion",
+            "selectionFingerprint",
+            "ownerAuthorityFingerprint",
+            "collectorSourceHash",
         ):
             if source.get(key) != metadata.get(key):
                 fail(f"replay is not exact: {key}")
@@ -696,6 +797,7 @@ def validate_run(run_dir: Path, schema_path: Path) -> dict[str, Any]:
         "realUrlCollectionRun": False,
         "adjudicationRun": False,
         "trainingRun": False,
+        "eligible": metadata["state"] == "complete",
     }
 
 

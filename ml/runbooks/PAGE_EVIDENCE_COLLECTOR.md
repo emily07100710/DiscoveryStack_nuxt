@@ -11,9 +11,9 @@ Live browser collection is blocked unless both of these are explicit:
 1. `DISCOVERYSTACK_PRIVATE_EVIDENCE_DEV=1` and `--development-only`;
 2. `--network-sandbox-attested`, meaning the process is inside a container or namespace with no route to private, loopback, link-local, metadata, or other internal networks, and outbound traffic is independently enforced by an egress proxy or equivalent control.
 
-Playwright routing re-resolves and validates every document, redirect, and subresource request, and allows only GET/HEAD. Service workers are disabled. An init script disables WebSocket, EventSource, and `sendBeacon`; a listener on each actual Playwright `Page` also treats every observed WebSocket as a hard policy violation. Any blocked request or WebSocket makes that viewport and the whole record `blocked_policy`, keeps every projected signal `unknown`, and prevents general evidence/adjudication eligibility. Any already-collected artifacts are private policy quarantine only. Bounded reason codes and blocked-request counts never include raw URLs, query strings, bodies, stack traces, or exception messages. Browser interception is still not a complete defense against DNS rebinding or unroutable-channel races. Therefore the no-internal-route sandbox is a hard blocker, not an optional recommendation. Without attestation, records are written only as `sandbox_required` and no browser starts.
+Playwright routing re-resolves and validates every document, redirect, and subresource request, requires every request host to be the exact authorized host or one of its subdomains, and allows only GET/HEAD. The final document URL is checked against the same immutable host scope before artifacts are written. Service workers are disabled. An init script disables WebSocket, EventSource, and `sendBeacon`; a listener on each actual Playwright `Page` also treats every observed WebSocket as a hard policy violation. Any blocked request or WebSocket makes that viewport and the whole record `blocked_policy`, keeps every projected signal `unknown`, and prevents general evidence/adjudication eligibility. Any already-collected artifacts are private policy quarantine only. Bounded reason codes and blocked-request counts never include raw URLs, query strings, bodies, stack traces, or exception messages. Browser interception is still not a complete defense against DNS rebinding or unroutable-channel races. Therefore the no-internal-route sandbox is a hard blocker, not an optional recommendation. Without attestation, records are written only as `sandbox_required`; no DNS resolution or browser starts.
 
-Lighthouse cannot use Playwright request routing. It is therefore allowed only behind the same independently enforced network sandbox. The collector never invokes `npx`, downloads packages, or searches `PATH` for an arbitrary version. `--lighthouse-binary` must be an absolute, non-symlink, preinstalled executable whose `--version` output is exactly `12.8.2`; missing or mismatched runtime produces `runtime_unavailable`. Lighthouse is opt-in with `--run-lighthouse` and is not run by default.
+Lighthouse cannot use Playwright request routing. It is therefore allowed only behind the same independently enforced network sandbox. The collector never invokes `npx`, downloads packages, or searches `PATH` for an arbitrary version. `--lighthouse-binary` must be an absolute, non-symlink, preinstalled executable whose `--version` output is exactly `12.8.2`; Chromium and Lighthouse resolved paths, versions, and binary SHA-256 values are bound into replay identity. Missing or mismatched runtime produces `runtime_unavailable`. Lighthouse is opt-in with `--run-lighthouse` and is not run by default.
 
 ## Exact parent mapping and authority
 
@@ -27,7 +27,7 @@ The target bundle is one private JSON document, stored outside every Git worktre
 
 `robotsDecision` is an owner/caller attestation supplied with the exact mapping. The collector does **not** fetch `robots.txt` in real time and does not independently verify that attestation.
 
-Unknown or extra fields fail closed. Domain hashes, semantic search, artifact strings, source-family fields, and candidate labels cannot supply or guess a URL. A missing exact mapping cannot bind evidence back to an old row. Login, cookie/session reuse, CAPTCHA/WAF bypass, robots bypass, payment, checkout, booking, and form submission are outside V1.
+Unknown or extra fields fail closed. `mappedBy` must exactly equal `authorization.ownerId`; approval and mapping timestamps must be timezone-aware, non-future, ordered, and inside the authorization interval. Records retain only non-PII owner-authority and mapping fingerprints. Domain hashes, semantic search, artifact strings, source-family fields, and candidate labels cannot supply or guess a URL. A missing exact mapping cannot bind evidence back to an old row. Login, cookie/session reuse, CAPTCHA/WAF bypass, robots bypass, payment, checkout, booking, and form submission are outside V1.
 
 Example shape (illustrative only; do not commit a populated copy):
 
@@ -71,11 +71,11 @@ Example shape (illustrative only; do not commit a populated copy):
 ## URL and egress policy
 
 - Missing schemes canonicalize to HTTPS. HTTP is off by default and requires the explicit development-only `--allow-http` flag.
-- Userinfo, malformed/nonstandard ports, fragments, localhost, single-label and special-use names are rejected.
+- Userinfo, malformed/nonstandard ports, fragments, localhost, single-label and special-use names are rejected. Decoded and repeatedly percent-decoded query keys and values are screened for token, secret, API-key, authorization, session, cookie, signature, JWT, password, and credential markers before DNS, browser, Lighthouse, or logging boundaries.
 - Hostnames are NFC/IDNA canonicalized before authorization and DNS checks.
 - DNS runs through a bounded asynchronous resolver with a fixed short timeout. Timeout, resolver exception, failure, or an empty answer is blocked. Every A/AAAA answer must be globally routable. A mixed public/private answer fails the whole request.
 - Private, loopback, link-local, reserved, multicast, unspecified, and IPv4-mapped IPv6 addresses are rejected.
-- The guard runs for every Playwright request; redirects and subresources do not inherit trust from the first URL.
+- The guard runs for every Playwright request; redirects and subresources do not inherit trust from the first URL or from another public host.
 - Collection is sequential. A per-host delay of at least one second, a maximum request count, and bounded `Retry-After` handling are mandatory.
 
 DNS can change between policy resolution and the actual socket connection. The independently enforced no-internal-route sandbox/egress proxy is required to contain that rebinding risk.
@@ -94,7 +94,14 @@ Raw URLs remain only in the external private target bundle. Raw page text, scree
 
 Text regexes cannot guarantee detection of visual PII rendered only inside a screenshot. Screenshots are therefore always written as private quarantine evidence (including otherwise-clear pages), never general evidence, Git content, or model-projection content. Sensitive and policy-blocked runs move them into the corresponding stricter quarantine. Formal use still requires the controlled no-internal-route environment, retention enforcement, and human privacy governance.
 
-Retention is recorded in `run_metadata.json` with `retentionDays` and `deleteAfter`. The owner/operator is responsible for deletion at that deadline; this V1 collector deliberately does not run a background deletion service.
+Retention is recorded in `run_metadata.json` with `retentionDays`, `deleteAfter`, and identical `retentionUntil`. Runs start as `in_progress`; only after every record passes schema, lineage, artifact, quarantine, and projection validation is metadata atomically promoted to `complete`, a hash-bound `run_complete.json` marker written, and the finished run validated again. Missing or invalid completion markers are never eligible.
+
+Cleanup is dry-run by default. It accepts only an absolute private output root outside Git, validates every expired completed run, rejects traversal, symlinks and unexpected entries, and writes only a reduced hash-based receipt after explicit deletion:
+
+```bash
+python3 ml/tools/cleanup_page_evidence_retention.py --output-root /private/outside-git/page-evidence-runs
+python3 ml/tools/cleanup_page_evidence_retention.py --output-root /private/outside-git/page-evidence-runs --confirm-delete
+```
 
 ## Invocation
 
@@ -112,7 +119,7 @@ DISCOVERYSTACK_PRIVATE_EVIDENCE_DEV=1 python3 ml/tools/private_page_evidence_col
   --chromium-binary /opt/pinned/chromium
 ```
 
-Lighthouse additionally requires `--run-lighthouse --lighthouse-binary /opt/pinned/lighthouse`. A replay uses a new run ID plus `--replay-of <old-run-id>`; the collector verifies identical target-bundle, parent, configuration, and collector-version digests and refuses drift or overwrite.
+Lighthouse additionally requires `--run-lighthouse --lighthouse-binary /opt/pinned/lighthouse`. A replay uses a new run ID plus `--replay-of <old-run-id>`; the collector verifies the target bundle, selected row order/subset, parent lineage, owner authority, limits, source hash/version, and Chromium/Lighthouse runtime authority. Any drift refuses exact replay or overwrite. `--max-run-bytes` has a 1 GiB hard cap, and a pessimistic capacity check runs before output creation.
 
 Validate a private run with:
 

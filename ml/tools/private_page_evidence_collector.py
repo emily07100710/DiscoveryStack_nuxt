@@ -28,12 +28,12 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
-from urllib.parse import SplitResult, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qsl, unquote, urlsplit, urlunsplit
 
 CONTRACT_VERSION = "page-evidence-v1"
 TARGET_CONTRACT_VERSION = "page-evidence-targets-v1"
 PROJECTION_VERSION = "page-evidence-model-projection-v1"
-COLLECTOR_VERSION = "1.0.0"
+COLLECTOR_VERSION = "1.1.0"
 LIGHTHOUSE_VERSION = "12.8.2"
 
 RUN_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
@@ -99,6 +99,14 @@ POLICY_REASON_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 MAX_QUERY_TEXT_BYTES = 8192
 MAX_QUERY_INTENT_BYTES = 1024
 MAX_PAGE_PURPOSE_BYTES = 4096
+MAX_RUN_BYTES_HARD_LIMIT = 1024 * 1024 * 1024
+QUERY_CREDENTIAL_RE = re.compile(
+    r"(?:^|[^a-z0-9])(?:token|secret|api[_-]?key|apikey|key|auth|authorization|bearer|credential|password|session|cookie|signature|sig|jwt)(?:$|[^a-z0-9])",
+    re.I,
+)
+STRICT_TIMESTAMP_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 
 class PolicyError(ValueError):
@@ -232,6 +240,14 @@ def is_special_use_hostname(host: str) -> bool:
     )
 
 
+def host_is_authorized(host: str, allowed_hosts: frozenset[str]) -> bool:
+    canonical = canonical_hostname(host)
+    return any(
+        canonical == allowed or canonical.endswith(f".{allowed}")
+        for allowed in allowed_hosts
+    )
+
+
 def public_ip_or_error(raw: str) -> str:
     try:
         address = ipaddress.ip_address(raw.split("%", 1)[0])
@@ -304,6 +320,9 @@ class PublicURLPolicy:
             raise PolicyError("https_required")
         if parsed.username is not None or parsed.password is not None:
             raise PolicyError("userinfo_blocked")
+        if parsed.fragment:
+            raise PolicyError("fragment_blocked")
+        self._validate_query(parsed.query)
         if not parsed.hostname:
             raise PolicyError("missing_host")
         try:
@@ -323,6 +342,36 @@ class PublicURLPolicy:
         if literal is None and is_special_use_hostname(host):
             raise PolicyError("special_use_host_blocked")
         return scheme, host, port, parsed, literal
+
+    @staticmethod
+    def _decode_query_component(value: str) -> str:
+        decoded = value
+        for _ in range(3):
+            if re.search(r"%(?![0-9a-fA-F]{2})", decoded):
+                raise PolicyError("malformed_query_encoding")
+            next_value = unquote(decoded, errors="strict")
+            if next_value == decoded:
+                break
+            decoded = next_value
+        if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
+            raise PolicyError("query_control_character_blocked")
+        return unicodedata.normalize("NFKC", decoded)
+
+    @classmethod
+    def _validate_query(cls, query: str) -> None:
+        if not query:
+            return
+        if len(query.encode("utf-8")) > 8192:
+            raise PolicyError("query_too_large")
+        try:
+            pairs = parse_qsl(query, keep_blank_values=True, max_num_fields=100)
+        except (ValueError, UnicodeError) as exc:
+            raise PolicyError("malformed_query") from exc
+        for raw_key, raw_value in pairs:
+            key = cls._decode_query_component(raw_key)
+            value = cls._decode_query_component(raw_value)
+            if QUERY_CREDENTIAL_RE.search(key) or QUERY_CREDENTIAL_RE.search(value):
+                raise PolicyError("credential_query_blocked")
 
     def _finish(
         self,
@@ -367,6 +416,20 @@ class PublicURLPolicy:
             parsed=parsed,
             raw_addresses=raw_addresses,
         )
+
+    def validate_syntax_without_dns(self, raw: Any) -> ValidatedURL:
+        """Canonicalize an inert target without causing a resolver/network call."""
+        scheme, host, port, parsed, literal = self._prepare(raw)
+        addresses: tuple[str, ...] = ()
+        if literal is not None:
+            addresses = (public_ip_or_error(host),)
+        display_host = f"[{host}]" if ":" in host else host
+        default_port = 443 if scheme == "https" else 80
+        netloc = display_host if port == default_port else f"{display_host}:{port}"
+        canonical = urlunsplit(
+            SplitResult(scheme, netloc, parsed.path or "/", parsed.query, "")
+        )
+        return ValidatedURL(canonical, host, port, addresses)
 
     async def validate_async(self, raw: Any) -> ValidatedURL:
         scheme, host, port, parsed, literal = self._prepare(raw)
@@ -541,6 +604,32 @@ class PrivateRunStore:
             relative, canonical_json_bytes(value) + b"\n", max_bytes=max_bytes
         )
 
+    def replace_json_atomic(
+        self, relative: str, value: Any, *, max_bytes: int
+    ) -> dict[str, Any]:
+        data = canonical_json_bytes(value) + b"\n"
+        if len(data) > max_bytes:
+            raise FilesystemPolicyError(f"artifact exceeds {max_bytes} bytes")
+        destination = self.resolve(relative)
+        if not destination.is_file() or destination.is_symlink():
+            raise FilesystemPolicyError("replace target must be an existing regular file")
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".atomic-replace-", dir=destination.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb", closefd=True) as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+            os.chmod(destination, 0o600)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+        return {"path": relative, "sha256": sha256_bytes(data), "bytes": len(data)}
+
     def append_jsonl(self, relative: str, value: Mapping[str, Any]) -> None:
         line = canonical_json_bytes(value) + b"\n"
         if len(line) > MAX_MANIFEST_LINE_BYTES:
@@ -712,6 +801,7 @@ class HostRateLimiter:
 @dataclass
 class EgressGuard:
     policy: PublicURLPolicy
+    allowed_hosts: frozenset[str]
     max_requests: int = DEFAULT_MAX_REQUESTS
     request_count: int = 0
     blocked_count: int = 0
@@ -719,6 +809,14 @@ class EgressGuard:
     retry_after_seconds: float = 0.0
     audit: list[dict[str, Any]] = field(default_factory=list)
     policy_reason_codes: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.allowed_hosts, frozenset)
+            or not self.allowed_hosts
+            or any(canonical_hostname(host) != host for host in self.allowed_hosts)
+        ):
+            raise PolicyError("immutable_allowed_host_scope_required")
 
     def _record_violation(self, reason: str) -> str:
         code = reason if POLICY_REASON_CODE_RE.fullmatch(reason) else "policy_violation"
@@ -754,18 +852,21 @@ class EgressGuard:
             except PolicyError as exc:
                 reason = str(exc)
             else:
-                self.audit.append(
-                    {
-                        "sequence": self.request_count,
-                        "method": method,
-                        "urlHash": validated.url_hash,
-                        "host": validated.hostname,
-                        "addressHashes": [
-                            sha256_text(address) for address in validated.addresses
-                        ],
-                        "decision": "allowed",
-                    }
-                )
+                if not host_is_authorized(validated.hostname, self.allowed_hosts):
+                    reason = "host_outside_owner_authority"
+                else:
+                    self.audit.append(
+                        {
+                            "sequence": self.request_count,
+                            "method": method,
+                            "urlHash": validated.url_hash,
+                            "host": validated.hostname,
+                            "addressHashes": [
+                                sha256_text(address) for address in validated.addresses
+                            ],
+                            "decision": "allowed",
+                        }
+                    )
         if reason is not None:
             self.blocked_count += 1
             reason = self._record_violation(reason)
@@ -802,6 +903,43 @@ class EgressGuard:
 class LighthouseRuntime:
     binary: Path
     version: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class ChromiumRuntime:
+    binary: Path
+    version: str
+    sha256: str
+
+
+def verify_chromium_binary(binary: str | None) -> ChromiumRuntime:
+    if not binary:
+        raise RuntimeUnavailable("chromium_binary_missing")
+    path = Path(binary).expanduser()
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise RuntimeUnavailable("chromium_binary_must_be_absolute_regular_file")
+    if not path.stat().st_mode & stat.S_IXUSR:
+        raise RuntimeUnavailable("chromium_binary_not_executable")
+    resolved = path.resolve()
+    digest_before = sha256_file(resolved, max_bytes=1024 * 1024 * 1024)
+    try:
+        completed = subprocess.run(
+            [str(resolved), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            env={"PATH": os.environ.get("PATH", "")},
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeUnavailable("chromium_version_check_failed") from exc
+    version = (completed.stdout or completed.stderr).strip()
+    if completed.returncode != 0 or not version or len(version) > 256:
+        raise RuntimeUnavailable("chromium_version_check_failed")
+    if sha256_file(resolved, max_bytes=1024 * 1024 * 1024) != digest_before:
+        raise RuntimeUnavailable("chromium_binary_changed_during_verification")
+    return ChromiumRuntime(resolved, version, digest_before)
 
 
 def verify_lighthouse_binary(
@@ -815,9 +953,11 @@ def verify_lighthouse_binary(
     mode = path.stat().st_mode
     if not mode & stat.S_IXUSR:
         raise RuntimeUnavailable("lighthouse_binary_not_executable")
+    resolved = path.resolve()
+    digest = sha256_file(resolved, max_bytes=512 * 1024 * 1024)
     try:
         completed = subprocess.run(
-            [str(path), "--version"],
+            [str(resolved), "--version"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -829,7 +969,9 @@ def verify_lighthouse_binary(
     version = (completed.stdout or completed.stderr).strip().lstrip("v")
     if completed.returncode != 0 or version != expected_version:
         raise RuntimeUnavailable("lighthouse_version_mismatch")
-    return LighthouseRuntime(path.resolve(), version)
+    if sha256_file(resolved, max_bytes=512 * 1024 * 1024) != digest:
+        raise RuntimeUnavailable("lighthouse_binary_changed_during_verification")
+    return LighthouseRuntime(resolved, version, digest)
 
 
 def run_lighthouse(
@@ -938,7 +1080,11 @@ def _validate_sha(value: Any, field_name: str) -> str:
 
 
 def _parse_timestamp(value: Any, field_name: str) -> datetime:
-    if not isinstance(value, str):
+    if (
+        not isinstance(value, str)
+        or not STRICT_TIMESTAMP_RE.fullmatch(value)
+        or value.endswith("-00:00")
+    ):
         raise MappingError(f"{field_name} must be an ISO timestamp")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -946,7 +1092,9 @@ def _parse_timestamp(value: Any, field_name: str) -> datetime:
         raise MappingError(f"{field_name} must be an ISO timestamp") from exc
     if parsed.tzinfo is None:
         raise MappingError(f"{field_name} must include timezone")
-    return parsed
+    if parsed.utcoffset() is None or abs(parsed.utcoffset()) > timedelta(hours=14):
+        raise MappingError(f"{field_name} has invalid timezone offset")
+    return parsed.astimezone(timezone.utc)
 
 
 def parent_index(rows: Sequence[Mapping[str, Any]]) -> dict[int, str]:
@@ -972,6 +1120,7 @@ async def validate_target_bundle(
     actual_parent_dataset_digest: str,
     policy: PublicURLPolicy,
     now: datetime | None = None,
+    resolve_dns: bool = True,
 ) -> list[dict[str, Any]]:
     if (
         not isinstance(bundle, dict)
@@ -1022,10 +1171,15 @@ async def validate_target_bundle(
         or not authorization["ownerId"].strip()
     ):
         raise MappingError("ownerId required")
-    _parse_timestamp(authorization.get("approvedAt"), "approvedAt")
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    approved_at = _parse_timestamp(authorization.get("approvedAt"), "approvedAt")
     expires_at = _parse_timestamp(authorization.get("expiresAt"), "expiresAt")
-    if expires_at <= (now or datetime.now(timezone.utc)):
+    if approved_at > current:
+        raise MappingError("authorization approval cannot be in the future")
+    if expires_at <= current:
         raise MappingError("authorization expired")
+    if expires_at <= approved_at:
+        raise MappingError("authorization expiry must follow approval")
     if authorization.get("robotsPolicy") != "respect":
         raise MappingError("robots policy must be respect")
     if authorization.get("allowAuthenticatedAccess") is not False:
@@ -1099,7 +1253,13 @@ async def validate_target_bundle(
             for key in ("mappedBy", "evidenceRef")
         ):
             raise MappingError("mapping provenance is incomplete")
-        _parse_timestamp(provenance.get("mappedAt"), "mappedAt")
+        if provenance.get("mappedBy") != authorization["ownerId"]:
+            raise MappingError("mappedBy must exactly match authorization ownerId")
+        mapped_at = _parse_timestamp(provenance.get("mappedAt"), "mappedAt")
+        if mapped_at > current:
+            raise MappingError("mappedAt cannot be in the future")
+        if mapped_at < approved_at or mapped_at > expires_at:
+            raise MappingError("mappedAt outside authorization interval")
         if provenance.get("robotsDecision") != "allowed":
             raise MappingError("robots-disallowed or unreviewed target blocked")
         page_purpose = validate_private_sidecar_text(
@@ -1146,18 +1306,56 @@ async def validate_target_bundle(
                     "intent": normalized_intent,
                 }
             )
-        validated_url = await policy.validate_async(target.get("url"))
-        if validated_url.hostname not in allowed_hosts:
+        validated_url = (
+            await policy.validate_async(target.get("url"))
+            if resolve_dns
+            else policy.validate_syntax_without_dns(target.get("url"))
+        )
+        immutable_allowed_hosts = frozenset(sorted(allowed_hosts))
+        if not host_is_authorized(validated_url.hostname, immutable_allowed_hosts):
             raise MappingError("target host outside owner authorization scope")
+        owner_authority_fingerprint = sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "scopeId": scope_id,
+                    "ownerId": authorization["ownerId"],
+                    "approvedAt": approved_at.isoformat(),
+                    "expiresAt": expires_at.isoformat(),
+                    "allowedHosts": sorted(immutable_allowed_hosts),
+                    "rightsBasis": authorization["rightsBasis"].strip(),
+                    "robotsPolicy": authorization["robotsPolicy"],
+                    "allowAuthenticatedAccess": False,
+                }
+            )
+        )
+        mapping_fingerprint = sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "rowId": row_id,
+                    "split": split,
+                    "urlHash": validated_url.url_hash,
+                    "method": provenance["method"],
+                    "mappedByHash": sha256_text(provenance["mappedBy"]),
+                    "mappedAt": mapped_at.isoformat(),
+                    "evidenceRefHash": sha256_text(provenance["evidenceRef"]),
+                    "robotsDecision": provenance["robotsDecision"],
+                    "ownerAuthorityFingerprint": owner_authority_fingerprint,
+                }
+            )
+        )
+        normalized_provenance = {**provenance, "mappedAt": mapped_at.isoformat()}
         validated.append(
             {
                 "rowId": row_id,
                 "split": split,
                 "validatedUrl": validated_url,
-                "mappingProvenance": provenance,
+                "mappingProvenance": normalized_provenance,
                 "queryContexts": normalized_queries,
                 "pagePurpose": page_purpose,
                 "authorizationScopeId": scope_id,
+                "allowedHosts": immutable_allowed_hosts,
+                "ownerAuthorityFingerprint": owner_authority_fingerprint,
+                "mappingFingerprint": mapping_fingerprint,
             }
         )
     return validated
@@ -1276,6 +1474,7 @@ async def collect_viewport(
     row_prefix: str,
     max_requests: int,
     policy: PublicURLPolicy,
+    allowed_hosts: frozenset[str],
 ) -> tuple[dict[str, Any], list[str], EgressGuard]:
     context = await browser.new_context(
         viewport={"width": width, "height": height},
@@ -1285,7 +1484,9 @@ async def collect_viewport(
         locale="en-US",
         permissions=[],
     )
-    guard = EgressGuard(policy, max_requests=max_requests)
+    guard = EgressGuard(
+        policy, allowed_hosts=allowed_hosts, max_requests=max_requests
+    )
     await context.add_init_script(DISABLE_UNROUTABLE_CHANNELS_SCRIPT)
     await context.route("**/*", guard.route)
     context.on("response", guard.on_response)
@@ -1305,6 +1506,9 @@ async def collect_viewport(
         snapshot = await page.evaluate(DOM_INSPECTION_SCRIPT)
         guard.raise_if_violated()
         text = str(snapshot.get("bodyText") or "")
+        text_bytes = text.encode("utf-8")
+        if len(text_bytes) > MAX_TEXT_BYTES:
+            raise PolicyError("page_text_budget_exceeded")
         if WAF_CHALLENGE_RE.search(text[:20_000]):
             raise PolicyError("waf_or_human_challenge_blocked")
         forms = snapshot.get("forms") if isinstance(snapshot.get("forms"), list) else []
@@ -1312,8 +1516,12 @@ async def collect_viewport(
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         guard.raise_if_violated()
         screenshot = await page.screenshot(full_page=True, type="png")
+        if len(screenshot) > MAX_SCREENSHOT_BYTES:
+            raise PolicyError("screenshot_budget_exceeded")
         guard.raise_if_violated()
         final_validated = await policy.validate_async(page.url)
+        if not host_is_authorized(final_validated.hostname, allowed_hosts):
+            raise PolicyError("final_host_outside_owner_authority")
         guard.raise_if_violated()
         await context.close()
         context_closed = True
@@ -1333,7 +1541,7 @@ async def collect_viewport(
         store.mkdir(screenshot_prefix)
         text_artifact = store.write_bytes(
             f"{storage_prefix}/page-text-{viewport}.txt",
-            text.encode("utf-8"),
+            text_bytes,
             max_bytes=MAX_TEXT_BYTES,
         )
         screenshot_artifact = store.write_bytes(
@@ -1505,6 +1713,8 @@ def validate_replay(
     parent_manifest_hash: str,
     parent_dataset_digest: str,
     config_digest: str,
+    selection_fingerprint: str,
+    owner_authority_fingerprint: str,
 ) -> dict[str, Any]:
     if replay_of is None:
         return {"replayOf": None, "exactReplay": False, "sourceRunMetadataHash": None}
@@ -1517,6 +1727,8 @@ def validate_replay(
         "parentManifestHash": parent_manifest_hash,
         "parentDatasetDigest": parent_dataset_digest,
         "configDigest": config_digest,
+        "selectionFingerprint": selection_fingerprint,
+        "ownerAuthorityFingerprint": owner_authority_fingerprint,
         "collectorVersion": COLLECTOR_VERSION,
     }
     for key, value in expected.items():
@@ -1527,6 +1739,30 @@ def validate_replay(
         "exactReplay": True,
         "sourceRunMetadataHash": sha256_bytes(canonical_json_bytes(replay_metadata)),
     }
+
+
+def build_selection_fingerprint(targets: Sequence[Mapping[str, Any]]) -> str:
+    return sha256_bytes(
+        canonical_json_bytes(
+            [
+                {
+                    "rowId": target["rowId"],
+                    "split": target["split"],
+                    "urlHash": target["validatedUrl"].url_hash,
+                    "mappingFingerprint": target["mappingFingerprint"],
+                }
+                for target in targets
+            ]
+        )
+    )
+
+
+def estimated_run_capacity_bytes(target_count: int, run_lighthouse: bool) -> int:
+    per_target = 2 * (MAX_TEXT_BYTES + MAX_SCREENSHOT_BYTES)
+    if run_lighthouse:
+        per_target += 2 * MAX_LIGHTHOUSE_BYTES
+    per_target += MAX_QUERY_SIDECAR_BYTES + 2 * MAX_MANIFEST_LINE_BYTES
+    return target_count * per_target + MAX_TARGET_BUNDLE_BYTES
 
 
 async def run_collection(args: argparse.Namespace) -> None:
@@ -1565,11 +1801,41 @@ async def run_collection(args: argparse.Namespace) -> None:
             actual_parent_manifest_hash=parent_manifest_hash,
             actual_parent_dataset_digest=parent_dataset_digest,
             policy=policy,
+            resolve_dns=args.network_sandbox_attested,
         )
         if args.limit is not None:
             if args.limit < 1:
                 raise PolicyError("limit must be positive")
             targets = targets[: args.limit]
+        if not targets:
+            raise PolicyError("target selection is empty")
+        estimated_capacity = estimated_run_capacity_bytes(
+            len(targets), args.run_lighthouse
+        )
+        if estimated_capacity > args.max_run_bytes:
+            raise PolicyError("selected targets exceed declared run capacity")
+        owner_fingerprints = {
+            target["ownerAuthorityFingerprint"] for target in targets
+        }
+        if len(owner_fingerprints) != 1:
+            raise MappingError("mixed owner authority blocked")
+        owner_authority_fingerprint = next(iter(owner_fingerprints))
+        selection_fingerprint = build_selection_fingerprint(targets)
+        chromium_runtime: ChromiumRuntime | None = None
+        lighthouse_runtime: LighthouseRuntime | None = None
+        lighthouse_unavailable_reason: str | None = None
+        if args.network_sandbox_attested:
+            chromium_runtime = verify_chromium_binary(args.chromium_binary)
+            if args.run_lighthouse:
+                try:
+                    lighthouse_runtime = verify_lighthouse_binary(
+                        args.lighthouse_binary
+                    )
+                except RuntimeUnavailable as exc:
+                    lighthouse_unavailable_reason = str(exc)
+        collector_source_hash = sha256_file(
+            Path(__file__).resolve(), max_bytes=4 * 1024 * 1024
+        )
         config = {
             "allowHttp": args.allow_http,
             "hostDelaySeconds": args.host_delay,
@@ -1577,12 +1843,47 @@ async def run_collection(args: argparse.Namespace) -> None:
             "networkSandboxAttested": args.network_sandbox_attested,
             "runLighthouse": args.run_lighthouse,
             "lighthouseVersion": LIGHTHOUSE_VERSION,
+            "limit": args.limit,
+            "maxRunBytes": args.max_run_bytes,
+            "collectorVersion": COLLECTOR_VERSION,
+            "collectorSourceHash": collector_source_hash,
+            "selectionFingerprint": selection_fingerprint,
+            "chromium": (
+                {
+                    "path": str(chromium_runtime.binary),
+                    "version": chromium_runtime.version,
+                    "sha256": chromium_runtime.sha256,
+                }
+                if chromium_runtime
+                else None
+            ),
+            "lighthouse": (
+                {
+                    "path": str(lighthouse_runtime.binary),
+                    "version": lighthouse_runtime.version,
+                    "sha256": lighthouse_runtime.sha256,
+                }
+                if lighthouse_runtime
+                else None
+            ),
         }
         config_digest = sha256_bytes(canonical_json_bytes(config))
         target_bundle_digest = sha256_bytes(bundle_bytes)
         replay_metadata = None
         if args.replay_of:
             replay_path = Path(args.output_dir) / args.replay_of / "run_metadata.json"
+            from validate_page_evidence_contract import ValidationError, validate_run
+
+            try:
+                validate_run(
+                    replay_path.parent,
+                    Path(__file__).resolve().parents[1]
+                    / "schemas"
+                    / "page-evidence-v1.schema.json",
+                    require_complete=True,
+                )
+            except ValidationError as exc:
+                raise MappingError("replay_source_run_invalid") from exc
             replay_metadata = load_json_file(replay_path, MAX_TARGET_BUNDLE_BYTES)
         replay = validate_replay(
             replay_metadata,
@@ -1591,6 +1892,8 @@ async def run_collection(args: argparse.Namespace) -> None:
             parent_manifest_hash=parent_manifest_hash,
             parent_dataset_digest=parent_dataset_digest,
             config_digest=config_digest,
+            selection_fingerprint=selection_fingerprint,
+            owner_authority_fingerprint=owner_authority_fingerprint,
         )
         store = PrivateRunStore(
             Path(args.output_dir), args.run_id, max_total_bytes=args.max_run_bytes
@@ -1602,10 +1905,18 @@ async def run_collection(args: argparse.Namespace) -> None:
             "parentManifestHash": parent_manifest_hash,
             "parentDatasetDigest": parent_dataset_digest,
             "configDigest": config_digest,
+            "selectionFingerprint": selection_fingerprint,
+            "ownerAuthorityFingerprint": owner_authority_fingerprint,
+            "collectorSourceHash": collector_source_hash,
             "collectorVersion": COLLECTOR_VERSION,
+            "state": "in_progress",
             "createdAt": metadata_created_at.isoformat(),
             "retentionDays": bundle["authorization"]["retentionDays"],
             "deleteAfter": (
+                metadata_created_at
+                + timedelta(days=bundle["authorization"]["retentionDays"])
+            ).isoformat(),
+            "retentionUntil": (
                 metadata_created_at
                 + timedelta(days=bundle["authorization"]["retentionDays"])
             ).isoformat(),
@@ -1620,14 +1931,12 @@ async def run_collection(args: argparse.Namespace) -> None:
             "parentRowCount": len(parent_rows),
         }
         limiter = HostRateLimiter(args.host_delay)
-        lighthouse_runtime: LighthouseRuntime | None = None
-        lighthouse_unavailable_reason: str | None = None
         if args.run_lighthouse:
             if not args.network_sandbox_attested:
                 lighthouse_unavailable_reason = "network_sandbox_required"
             else:
                 try:
-                    lighthouse_runtime = verify_lighthouse_binary(
+                    lighthouse_runtime = lighthouse_runtime or verify_lighthouse_binary(
                         args.lighthouse_binary
                     )
                 except RuntimeUnavailable as exc:
@@ -1635,22 +1944,15 @@ async def run_collection(args: argparse.Namespace) -> None:
         browser = None
         playwright_manager = None
         if args.network_sandbox_attested:
-            chromium_path = Path(args.chromium_binary).expanduser()
-            if (
-                not chromium_path.is_absolute()
-                or chromium_path.is_symlink()
-                or not chromium_path.is_file()
-            ):
-                raise RuntimeUnavailable(
-                    "chromium_binary_must_be_absolute_regular_file"
-                )
+            if chromium_runtime is None:
+                raise RuntimeUnavailable("chromium_runtime_unavailable")
             try:
                 from playwright.async_api import async_playwright
             except ImportError as exc:
                 raise RuntimeUnavailable("playwright_runtime_unavailable") from exc
             playwright_manager = await async_playwright().start()
             browser = await playwright_manager.chromium.launch(
-                headless=True, executable_path=args.chromium_binary
+                headless=True, executable_path=str(chromium_runtime.binary)
             )
         try:
             for target in targets:
@@ -1669,7 +1971,12 @@ async def run_collection(args: argparse.Namespace) -> None:
                         target["mappingProvenance"]["mappedBy"]
                     ),
                     "mappedAt": target["mappingProvenance"]["mappedAt"],
+                    "robotsDecision": target["mappingProvenance"]["robotsDecision"],
                     "authorizationScopeId": target["authorizationScopeId"],
+                    "ownerAuthorityFingerprint": target[
+                        "ownerAuthorityFingerprint"
+                    ],
+                    "mappingFingerprint": target["mappingFingerprint"],
                     "pagePurposeHash": (
                         sha256_text(target["pagePurpose"])
                         if target["pagePurpose"] is not None
@@ -1684,7 +1991,7 @@ async def run_collection(args: argparse.Namespace) -> None:
                         split=target["split"],
                         lineage=lineage,
                         mapping=mapping,
-                        queries=queries,
+                        queries=[],
                         status="sandbox_required",
                         reason="no_private_network_egress_sandbox_not_attested",
                         replay=replay,
@@ -1701,6 +2008,7 @@ async def run_collection(args: argparse.Namespace) -> None:
                         row_prefix=row_prefix,
                         max_requests=args.max_requests,
                         policy=policy,
+                        allowed_hosts=target["allowedHosts"],
                     )
                     limiter.register_retry_seconds(
                         validated_url.hostname, desktop_guard.retry_after_seconds
@@ -1716,6 +2024,7 @@ async def run_collection(args: argparse.Namespace) -> None:
                         row_prefix=row_prefix,
                         max_requests=args.max_requests,
                         policy=policy,
+                        allowed_hosts=target["allowedHosts"],
                     )
                     limiter.register_retry_seconds(
                         validated_url.hostname, mobile_guard.retry_after_seconds
@@ -1806,7 +2115,7 @@ async def run_collection(args: argparse.Namespace) -> None:
                         summary, report_bytes = run_lighthouse(
                             lighthouse_runtime,
                             url=validated_url.canonical_url,
-                            chrome_path=Path(args.chromium_binary),
+                            chrome_path=chromium_runtime.binary,
                             preset=preset,
                         )
                         artifact = None
@@ -1914,6 +2223,49 @@ async def run_collection(args: argparse.Namespace) -> None:
                 store.append_jsonl(
                     "model_projection.jsonl", unknown_projection(record, record_hash)
                 )
+            from validate_page_evidence_contract import ValidationError, validate_run
+
+            try:
+                validate_run(
+                    store.run_dir,
+                    Path(__file__).resolve().parents[1]
+                    / "schemas"
+                    / "page-evidence-v1.schema.json",
+                    require_complete=False,
+                )
+            except ValidationError as exc:
+                raise FilesystemPolicyError("run_contract_validation_failed") from exc
+            metadata["state"] = "complete"
+            store.replace_json_atomic(
+                "run_metadata.json", metadata, max_bytes=MAX_TARGET_BUNDLE_BYTES
+            )
+            completion = {
+                "contractVersion": "page-evidence-completion-v1",
+                "runId": args.run_id,
+                "completedAt": utc_now(),
+                "metadataHash": sha256_file(store.run_dir / "run_metadata.json"),
+                "evidenceManifestHash": sha256_file(
+                    store.run_dir / "evidence_manifest.jsonl"
+                ),
+                "modelProjectionHash": sha256_file(
+                    store.run_dir / "model_projection.jsonl"
+                ),
+                "selectionFingerprint": selection_fingerprint,
+                "ownerAuthorityFingerprint": owner_authority_fingerprint,
+            }
+            store.write_json(
+                "run_complete.json", completion, max_bytes=MAX_TARGET_BUNDLE_BYTES
+            )
+            try:
+                validate_run(
+                    store.run_dir,
+                    Path(__file__).resolve().parents[1]
+                    / "schemas"
+                    / "page-evidence-v1.schema.json",
+                    require_complete=True,
+                )
+            except ValidationError as exc:
+                raise FilesystemPolicyError("completed_run_validation_failed") from exc
         finally:
             if browser is not None:
                 await browser.close()
@@ -1946,8 +2298,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--host-delay must be at least 1 second")
     if not 1 <= args.max_requests <= DEFAULT_MAX_REQUESTS:
         parser.error(f"--max-requests must be between 1 and {DEFAULT_MAX_REQUESTS}")
-    if args.max_run_bytes < 1024 * 1024:
-        parser.error("--max-run-bytes must be at least 1 MiB")
+    if not 1024 * 1024 <= args.max_run_bytes <= MAX_RUN_BYTES_HARD_LIMIT:
+        parser.error("--max-run-bytes must be between 1 MiB and 1 GiB")
     if args.network_sandbox_attested and not args.chromium_binary:
         parser.error("--chromium-binary is required for browser collection")
     return args

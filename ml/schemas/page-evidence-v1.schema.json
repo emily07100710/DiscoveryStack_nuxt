@@ -205,7 +205,10 @@
         "evidenceRefHash",
         "mappedByHash",
         "mappedAt",
+        "robotsDecision",
         "authorizationScopeId",
+        "ownerAuthorityFingerprint",
+        "mappingFingerprint",
         "pagePurposeHash"
       ],
       "properties": {
@@ -214,10 +217,13 @@
         "evidenceRefHash": { "$ref": "#/$defs/sha256" },
         "mappedByHash": { "$ref": "#/$defs/sha256" },
         "mappedAt": { "type": "string", "format": "date-time" },
+        "robotsDecision": { "const": "allowed" },
         "authorizationScopeId": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
         },
+        "ownerAuthorityFingerprint": { "$ref": "#/$defs/sha256" },
+        "mappingFingerprint": { "$ref": "#/$defs/sha256" },
         "pagePurposeHash": {
           "anyOf": [
             { "$ref": "#/$defs/sha256" },

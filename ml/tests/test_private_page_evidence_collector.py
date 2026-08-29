@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -17,6 +18,7 @@ sys.path.insert(0, str(TOOLS))
 
 import private_page_evidence_collector as collector  # noqa: E402
 import validate_page_evidence_contract as validator  # noqa: E402
+import cleanup_page_evidence_retention as cleanup  # noqa: E402
 
 
 PUBLIC_V4 = "93.184.216.34"
@@ -329,9 +331,9 @@ class URLPolicyTests(unittest.TestCase):
         self.assertEqual(result.hostname, "xn--bcher-kva.de")
         self.assertEqual(seen, ["xn--bcher-kva.de"])
 
-    def test_23_fragment_is_removed_from_canonical_url(self):
-        result = self.policy().validate("https://example.com/a?q=1#secret")
-        self.assertEqual(result.canonical_url, "https://example.com/a?q=1")
+    def test_23_fragment_is_rejected(self):
+        with self.assertRaisesRegex(collector.PolicyError, "fragment_blocked"):
+            self.policy().validate("https://example.com/a?q=1#secret")
 
     def test_23b_invalid_hostname_characters_are_rejected(self):
         with self.assertRaisesRegex(collector.PolicyError, "invalid_idna_host"):
@@ -661,12 +663,14 @@ class EgressAndSensitiveTests(unittest.TestCase):
         resolver=None,
         websocket=False,
         max_requests=10,
+        final_url=None,
+        allowed_hosts=frozenset({"example.com"}),
     ):
         policy = collector.PublicURLPolicy(
             resolver=resolver or resolver_with(PUBLIC_V4)
         )
         validated = asyncio.run(policy.validate_async("https://example.com/page"))
-        browser = FakeBrowser(requests, websocket=websocket)
+        browser = FakeBrowser(requests, websocket=websocket, final_url=final_url)
         with tempfile.TemporaryDirectory() as directory:
             store = collector.PrivateRunStore(Path(directory), "runtime-test")
             result, sensitive, guard = asyncio.run(
@@ -680,6 +684,7 @@ class EgressAndSensitiveTests(unittest.TestCase):
                     row_prefix="row-1",
                     max_requests=max_requests,
                     policy=policy,
+                    allowed_hosts=allowed_hosts,
                 )
             )
         return result, sensitive, guard, browser
@@ -731,7 +736,8 @@ class EgressAndSensitiveTests(unittest.TestCase):
 
     def test_61_egress_guard_allows_guarded_get(self):
         guard = collector.EgressGuard(
-            collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4))
+            collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4)),
+            allowed_hosts=frozenset({"example.com"}),
         )
         route = FakeRoute()
         asyncio.run(
@@ -744,7 +750,8 @@ class EgressAndSensitiveTests(unittest.TestCase):
 
     def test_62_egress_guard_blocks_post(self):
         guard = collector.EgressGuard(
-            collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4))
+            collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4)),
+            allowed_hosts=frozenset({"example.com"}),
         )
         route = FakeRoute()
         asyncio.run(
@@ -757,7 +764,8 @@ class EgressAndSensitiveTests(unittest.TestCase):
 
     def test_63_egress_guard_checks_subresource_url(self):
         guard = collector.EgressGuard(
-            collector.PublicURLPolicy(resolver=resolver_with("10.0.0.1"))
+            collector.PublicURLPolicy(resolver=resolver_with("10.0.0.1")),
+            allowed_hosts=frozenset({"example.com"}),
         )
         route = FakeRoute()
         asyncio.run(
@@ -771,7 +779,9 @@ class EgressAndSensitiveTests(unittest.TestCase):
 
     def test_64_egress_guard_enforces_request_budget(self):
         guard = collector.EgressGuard(
-            collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4)), max_requests=1
+            collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4)),
+            allowed_hosts=frozenset({"example.com"}),
+            max_requests=1,
         )
         first, second = FakeRoute(), FakeRoute()
         asyncio.run(
@@ -794,7 +804,8 @@ class EgressAndSensitiveTests(unittest.TestCase):
             return next(answers)
 
         guard = collector.EgressGuard(
-            collector.PublicURLPolicy(resolver=changing_resolver)
+            collector.PublicURLPolicy(resolver=changing_resolver),
+            allowed_hosts=frozenset({"example.com"}),
         )
         initial, redirect = FakeRoute(), FakeRoute()
         asyncio.run(
@@ -814,14 +825,16 @@ class EgressAndSensitiveTests(unittest.TestCase):
 
     def test_65_websocket_event_sets_hard_blocker(self):
         guard = collector.EgressGuard(
-            collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4))
+            collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4)),
+            allowed_hosts=frozenset({"example.com"}),
         )
         guard.on_websocket(object())
         self.assertTrue(guard.websocket_seen)
 
     def test_66_response_retry_after_is_recorded(self):
         guard = collector.EgressGuard(
-            collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4))
+            collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4)),
+            allowed_hosts=frozenset({"example.com"}),
         )
         guard.on_response(SimpleNamespace(status=429, headers={"retry-after": "12"}))
         self.assertEqual(guard.retry_after_seconds, 12.0)
@@ -833,6 +846,8 @@ class EgressAndSensitiveTests(unittest.TestCase):
             "parentManifestHash": "b" * 64,
             "parentDatasetDigest": "c" * 64,
             "configDigest": "d" * 64,
+            "selectionFingerprint": "e" * 64,
+            "ownerAuthorityFingerprint": "f" * 64,
             "collectorVersion": collector.COLLECTOR_VERSION,
         }
         replay = collector.validate_replay(
@@ -842,6 +857,8 @@ class EgressAndSensitiveTests(unittest.TestCase):
             parent_manifest_hash="b" * 64,
             parent_dataset_digest="c" * 64,
             config_digest="d" * 64,
+            selection_fingerprint="e" * 64,
+            owner_authority_fingerprint="f" * 64,
         )
         self.assertTrue(replay["exactReplay"])
 
@@ -852,6 +869,8 @@ class EgressAndSensitiveTests(unittest.TestCase):
             "parentManifestHash": "b" * 64,
             "parentDatasetDigest": "c" * 64,
             "configDigest": "x" * 64,
+            "selectionFingerprint": "e" * 64,
+            "ownerAuthorityFingerprint": "f" * 64,
             "collectorVersion": collector.COLLECTOR_VERSION,
         }
         with self.assertRaisesRegex(collector.MappingError, "configDigest"):
@@ -862,6 +881,8 @@ class EgressAndSensitiveTests(unittest.TestCase):
                 parent_manifest_hash="b" * 64,
                 parent_dataset_digest="c" * 64,
                 config_digest="d" * 64,
+                selection_fingerprint="e" * 64,
+                owner_authority_fingerprint="f" * 64,
             )
 
     def test_68b_runtime_post_violation_cannot_complete_or_project(self):
@@ -964,6 +985,34 @@ class ValidatorTests(unittest.TestCase):
         self.temp.cleanup()
 
     def make_record(self, status="sandbox_required"):
+        mapping = {
+            "urlHash": "c" * 64,
+            "method": collector.ALLOWED_MAPPING_METHOD,
+            "evidenceRefHash": "d" * 64,
+            "mappedByHash": "e" * 64,
+            "mappedAt": "2026-08-28T00:00:00+00:00",
+            "robotsDecision": "allowed",
+            "authorizationScopeId": "scope-1",
+            "ownerAuthorityFingerprint": "2" * 64,
+            "pagePurposeHash": None,
+        }
+        mapping["mappingFingerprint"] = collector.sha256_bytes(
+            collector.canonical_json_bytes(
+                {
+                    "rowId": 1,
+                    "split": "train",
+                    "urlHash": mapping["urlHash"],
+                    "method": mapping["method"],
+                    "mappedByHash": mapping["mappedByHash"],
+                    "mappedAt": mapping["mappedAt"],
+                    "evidenceRefHash": mapping["evidenceRefHash"],
+                    "robotsDecision": mapping["robotsDecision"],
+                    "ownerAuthorityFingerprint": mapping[
+                        "ownerAuthorityFingerprint"
+                    ],
+                }
+            )
+        )
         return collector.make_blocked_record(
             run_id="test-run",
             row_id=1,
@@ -973,15 +1022,7 @@ class ValidatorTests(unittest.TestCase):
                 "parentDatasetDigest": "b" * 64,
                 "parentRowCount": 1,
             },
-            mapping={
-                "urlHash": "c" * 64,
-                "method": collector.ALLOWED_MAPPING_METHOD,
-                "evidenceRefHash": "d" * 64,
-                "mappedByHash": "e" * 64,
-                "mappedAt": "2026-08-28T00:00:00+00:00",
-                "authorizationScopeId": "scope-1",
-                "pagePurposeHash": None,
-            },
+            mapping=mapping,
             queries=[],
             status=status,
             reason="sandbox not attested",
@@ -1001,10 +1042,15 @@ class ValidatorTests(unittest.TestCase):
             "parentManifestHash": "a" * 64,
             "parentDatasetDigest": "b" * 64,
             "configDigest": "1" * 64,
+            "selectionFingerprint": "2" * 64,
+            "ownerAuthorityFingerprint": "2" * 64,
+            "collectorSourceHash": "4" * 64,
             "collectorVersion": collector.COLLECTOR_VERSION,
+            "state": "complete",
             "createdAt": "2026-08-28T00:00:00+00:00",
             "retentionDays": 7,
             "deleteAfter": "2026-09-04T00:00:00+00:00",
+            "retentionUntil": "2026-09-04T00:00:00+00:00",
             "replay": {
                 "replayOf": None,
                 "exactReplay": False,
@@ -1017,6 +1063,21 @@ class ValidatorTests(unittest.TestCase):
             record, collector.sha256_bytes(collector.canonical_json_bytes(record))
         )
         store.append_jsonl("model_projection.jsonl", projection)
+        completion = {
+            "contractVersion": "page-evidence-completion-v1",
+            "runId": "test-run",
+            "completedAt": "2026-08-28T00:01:00+00:00",
+            "metadataHash": collector.sha256_file(store.run_dir / "run_metadata.json"),
+            "evidenceManifestHash": collector.sha256_file(
+                store.run_dir / "evidence_manifest.jsonl"
+            ),
+            "modelProjectionHash": collector.sha256_file(
+                store.run_dir / "model_projection.jsonl"
+            ),
+            "selectionFingerprint": "2" * 64,
+            "ownerAuthorityFingerprint": "2" * 64,
+        }
+        store.write_json("run_complete.json", completion, max_bytes=1024 * 1024)
         return store
 
     def collect_complete_record(self):
@@ -1035,6 +1096,7 @@ class ValidatorTests(unittest.TestCase):
                 row_prefix="row-1",
                 max_requests=10,
                 policy=policy,
+                allowed_hosts=frozenset({"example.com"}),
             )
         )
         mobile, mobile_sensitive, mobile_guard = asyncio.run(
@@ -1048,6 +1110,7 @@ class ValidatorTests(unittest.TestCase):
                 row_prefix="row-1",
                 max_requests=10,
                 policy=policy,
+                allowed_hosts=frozenset({"example.com"}),
             )
         )
         self.assertEqual(desktop_sensitive + mobile_sensitive, [])
@@ -1073,7 +1136,10 @@ class ValidatorTests(unittest.TestCase):
                 "evidenceRefHash": "d" * 64,
                 "mappedByHash": "e" * 64,
                 "mappedAt": "2026-08-28T00:00:00+00:00",
+                "robotsDecision": "allowed",
                 "authorizationScopeId": "scope-1",
+                "ownerAuthorityFingerprint": "2" * 64,
+                "mappingFingerprint": "3" * 64,
                 "pagePurposeHash": None,
             },
             "collectionStatus": "complete",
@@ -1130,6 +1196,24 @@ class ValidatorTests(unittest.TestCase):
                 "sourceRunMetadataHash": None,
             },
         }
+        mapping = record["mapping"]
+        mapping["mappingFingerprint"] = collector.sha256_bytes(
+            collector.canonical_json_bytes(
+                {
+                    "rowId": record["rowId"],
+                    "split": record["split"],
+                    "urlHash": mapping["urlHash"],
+                    "method": mapping["method"],
+                    "mappedByHash": mapping["mappedByHash"],
+                    "mappedAt": mapping["mappedAt"],
+                    "evidenceRefHash": mapping["evidenceRefHash"],
+                    "robotsDecision": mapping["robotsDecision"],
+                    "ownerAuthorityFingerprint": mapping[
+                        "ownerAuthorityFingerprint"
+                    ],
+                }
+            )
+        )
         return store, record
 
     def test_69_valid_blocked_run_passes(self):
@@ -1189,10 +1273,15 @@ class ValidatorTests(unittest.TestCase):
             "parentManifestHash": "a" * 64,
             "parentDatasetDigest": "b" * 64,
             "configDigest": "1" * 64,
+            "selectionFingerprint": "2" * 64,
+            "ownerAuthorityFingerprint": "2" * 64,
+            "collectorSourceHash": "4" * 64,
             "collectorVersion": collector.COLLECTOR_VERSION,
+            "state": "in_progress",
             "createdAt": "2026-08-28T00:00:00+00:00",
             "retentionDays": 7,
             "deleteAfter": "2026-09-04T00:00:00+00:00",
+            "retentionUntil": "2026-09-04T00:00:00+00:00",
             "replay": {
                 "replayOf": None,
                 "exactReplay": False,
@@ -1208,7 +1297,7 @@ class ValidatorTests(unittest.TestCase):
             ),
         )
         with self.assertRaisesRegex(validator.ValidationError, "sha256 mismatch"):
-            validator.validate_run(store.run_dir, SCHEMA)
+            validator.validate_run(store.run_dir, SCHEMA, require_complete=False)
 
     def test_75_artifact_symlink_is_rejected(self):
         record = self.make_record(status="failed")
@@ -1234,10 +1323,15 @@ class ValidatorTests(unittest.TestCase):
             "parentManifestHash": "a" * 64,
             "parentDatasetDigest": "b" * 64,
             "configDigest": "1" * 64,
+            "selectionFingerprint": "2" * 64,
+            "ownerAuthorityFingerprint": "2" * 64,
+            "collectorSourceHash": "4" * 64,
             "collectorVersion": collector.COLLECTOR_VERSION,
+            "state": "in_progress",
             "createdAt": "2026-08-28T00:00:00+00:00",
             "retentionDays": 7,
             "deleteAfter": "2026-09-04T00:00:00+00:00",
+            "retentionUntil": "2026-09-04T00:00:00+00:00",
             "replay": {
                 "replayOf": None,
                 "exactReplay": False,
@@ -1253,7 +1347,7 @@ class ValidatorTests(unittest.TestCase):
             ),
         )
         with self.assertRaisesRegex(validator.ValidationError, "symlink"):
-            validator.validate_run(store.run_dir, SCHEMA)
+            validator.validate_run(store.run_dir, SCHEMA, require_complete=False)
 
     def test_76_sensitive_evidence_cannot_stay_in_general_directory(self):
         record = self.make_record(status="quarantined_sensitive")
@@ -1291,10 +1385,15 @@ class ValidatorTests(unittest.TestCase):
             "parentManifestHash": "a" * 64,
             "parentDatasetDigest": "b" * 64,
             "configDigest": "1" * 64,
+            "selectionFingerprint": "2" * 64,
+            "ownerAuthorityFingerprint": "2" * 64,
+            "collectorSourceHash": "4" * 64,
             "collectorVersion": collector.COLLECTOR_VERSION,
+            "state": "in_progress",
             "createdAt": "2026-08-28T00:00:00+00:00",
             "retentionDays": 7,
             "deleteAfter": "2026-09-04T00:00:00+00:00",
+            "retentionUntil": "2026-09-04T00:00:00+00:00",
             "replay": {
                 "replayOf": None,
                 "exactReplay": False,
@@ -1312,7 +1411,7 @@ class ValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(
             validator.ValidationError, "all sensitive-page artifacts"
         ):
-            validator.validate_run(store.run_dir, SCHEMA)
+            validator.validate_run(store.run_dir, SCHEMA, require_complete=False)
 
     def test_77_query_sidecar_hash_is_recomputed(self):
         record = self.make_record(status="failed")
@@ -1342,10 +1441,15 @@ class ValidatorTests(unittest.TestCase):
             "parentManifestHash": "a" * 64,
             "parentDatasetDigest": "b" * 64,
             "configDigest": "1" * 64,
+            "selectionFingerprint": "2" * 64,
+            "ownerAuthorityFingerprint": "2" * 64,
+            "collectorSourceHash": "4" * 64,
             "collectorVersion": collector.COLLECTOR_VERSION,
+            "state": "in_progress",
             "createdAt": "2026-08-28T00:00:00+00:00",
             "retentionDays": 7,
             "deleteAfter": "2026-09-04T00:00:00+00:00",
+            "retentionUntil": "2026-09-04T00:00:00+00:00",
             "replay": {
                 "replayOf": None,
                 "exactReplay": False,
@@ -1361,7 +1465,7 @@ class ValidatorTests(unittest.TestCase):
             ),
         )
         with self.assertRaisesRegex(validator.ValidationError, "query hash mismatch"):
-            validator.validate_run(store.run_dir, SCHEMA)
+            validator.validate_run(store.run_dir, SCHEMA, require_complete=False)
 
     def test_78_schema_requires_complete_mapping_provenance(self):
         record = self.make_record()
@@ -1436,6 +1540,289 @@ class ValidatorTests(unittest.TestCase):
             validator.ValidationError, "duplicate artifact path"
         ):
             validator.validate_run(store.run_dir, SCHEMA)
+
+
+class FinalHardeningTests(unittest.TestCase):
+    def test_83_sensitive_query_keys_and_values_fail_closed(self):
+        policy = collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4))
+        blocked = [
+            "https://example.com/?token=secret-value",
+            "https://example.com/?API_KEY=value",
+            "https://example.com/?next=Bearer%20abcdefghijklmnop",
+            "https://example.com/?%2561pi%255fkey=value",
+            "https://example.com/?next=%2542earer%2520abcdefghijklmnop",
+            "https://example.com/?session=value",
+            "https://example.com/?signature=value",
+        ]
+        for url in blocked:
+            with self.subTest(url=url), self.assertRaisesRegex(
+                collector.PolicyError, "credential_query_blocked"
+            ):
+                policy.validate(url)
+        self.assertEqual(
+            policy.validate("https://example.com/?monkey=banana").hostname,
+            "example.com",
+        )
+
+    def test_84_cross_authority_redirect_and_subresource_are_blocked(self):
+        policy = collector.PublicURLPolicy(resolver=resolver_with(PUBLIC_V4))
+        guard = collector.EgressGuard(
+            policy, allowed_hosts=frozenset({"example.com"})
+        )
+        route = FakeRoute()
+        asyncio.run(
+            guard.route(
+                route,
+                SimpleNamespace(method="GET", url="https://other.com/redirect"),
+            )
+        )
+        self.assertTrue(route.aborted)
+        self.assertIn("host_outside_owner_authority", guard.policy_reason_codes)
+
+        subdomain_guard = collector.EgressGuard(
+            policy, allowed_hosts=frozenset({"example.com"})
+        )
+        subdomain_route = FakeRoute()
+        asyncio.run(
+            subdomain_guard.route(
+                subdomain_route,
+                SimpleNamespace(
+                    method="GET", url="https://assets.example.com/app.js"
+                ),
+            )
+        )
+        self.assertTrue(subdomain_route.continued)
+
+    def test_85_final_redirect_host_cannot_complete(self):
+        suite = EgressAndSensitiveTests()
+        result, _sensitive, guard, _browser = suite.collect_fake_viewport(
+            [("GET", "https://example.com/page")],
+            final_url="https://other.com/final",
+        )
+        self.assertEqual(result["status"], "blocked_policy")
+        self.assertIn("final_host_outside_owner_authority", guard.policy_reason_codes)
+
+    def test_86_owner_actor_and_temporal_lineage_fail_closed(self):
+        bundle = make_bundle()
+        bundle["targets"][0]["mappingProvenance"]["mappedBy"] = "other-owner"
+        with self.assertRaisesRegex(collector.MappingError, "exactly match"):
+            validate_bundle(bundle)
+
+        bundle = make_bundle()
+        bundle["targets"][0]["mappingProvenance"]["mappedAt"] = (
+            "2026-08-27T23:59:59+00:00"
+        )
+        with self.assertRaisesRegex(collector.MappingError, "authorization interval"):
+            validate_bundle(bundle)
+
+        bundle = make_bundle()
+        bundle["authorization"]["approvedAt"] = "2098-01-01T00:00:00+00:00"
+        with self.assertRaisesRegex(collector.MappingError, "future"):
+            validate_bundle(bundle)
+
+    def test_87_mapping_outputs_non_pii_authority_fingerprints(self):
+        target = validate_bundle()[0]
+        self.assertRegex(target["ownerAuthorityFingerprint"], r"^[0-9a-f]{64}$")
+        self.assertRegex(target["mappingFingerprint"], r"^[0-9a-f]{64}$")
+        serialized = collector.canonical_json_bytes(
+            {
+                "ownerAuthorityFingerprint": target["ownerAuthorityFingerprint"],
+                "mappingFingerprint": target["mappingFingerprint"],
+            }
+        ).decode()
+        self.assertNotIn("owner-1", serialized)
+
+    def test_88_replay_rejects_selection_or_owner_drift(self):
+        metadata = {
+            "runId": "source-run",
+            "targetBundleDigest": "a" * 64,
+            "parentManifestHash": "b" * 64,
+            "parentDatasetDigest": "c" * 64,
+            "configDigest": "d" * 64,
+            "selectionFingerprint": "e" * 64,
+            "ownerAuthorityFingerprint": "f" * 64,
+            "collectorVersion": collector.COLLECTOR_VERSION,
+        }
+        with self.assertRaisesRegex(collector.MappingError, "selectionFingerprint"):
+            collector.validate_replay(
+                metadata,
+                replay_of="source-run",
+                target_bundle_digest="a" * 64,
+                parent_manifest_hash="b" * 64,
+                parent_dataset_digest="c" * 64,
+                config_digest="d" * 64,
+                selection_fingerprint="0" * 64,
+                owner_authority_fingerprint="f" * 64,
+            )
+
+    def test_89_capacity_is_bounded(self):
+        self.assertGreater(
+            collector.estimated_run_capacity_bytes(2, True),
+            collector.estimated_run_capacity_bytes(1, False),
+        )
+        with self.assertRaises(SystemExit):
+            collector.parse_args(
+                [
+                    "--targets",
+                    "/tmp/t",
+                    "--parent-dataset",
+                    "/tmp/d",
+                    "--parent-manifest",
+                    "/tmp/m",
+                    "--output-dir",
+                    "/tmp/o",
+                    "--run-id",
+                    "run",
+                    "--max-run-bytes",
+                    str(collector.MAX_RUN_BYTES_HARD_LIMIT + 1),
+                ]
+            )
+
+    def test_90_in_progress_run_is_never_eligible(self):
+        case = ValidatorTests()
+        case.setUp()
+        try:
+            record = case.make_record()
+            store = case.write_run(record)
+            metadata_path = store.run_dir / "run_metadata.json"
+            metadata = json.loads(metadata_path.read_text())
+            metadata["state"] = "in_progress"
+            metadata_path.write_bytes(collector.canonical_json_bytes(metadata) + b"\n")
+            (store.run_dir / "run_complete.json").unlink()
+            with self.assertRaisesRegex(validator.ValidationError, "not complete"):
+                validator.validate_run(store.run_dir, SCHEMA)
+            internal = validator.validate_run(
+                store.run_dir, SCHEMA, require_complete=False
+            )
+            self.assertFalse(internal["eligible"])
+        finally:
+            case.tearDown()
+
+    def test_91_retention_cleanup_is_dry_run_first_and_receipted(self):
+        case = ValidatorTests()
+        case.setUp()
+        try:
+            store = case.write_run(case.make_record())
+            now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+            dry = cleanup.cleanup_expired_runs(
+                case.root, schema_path=SCHEMA, now=now
+            )
+            self.assertEqual(dry[0]["decision"], "would_delete")
+            self.assertTrue(store.run_dir.exists())
+            deleted = cleanup.cleanup_expired_runs(
+                case.root,
+                schema_path=SCHEMA,
+                now=now,
+                confirm_delete=True,
+            )
+            self.assertEqual(deleted[0]["decision"], "deleted")
+            self.assertFalse(store.run_dir.exists())
+            receipt = case.root / cleanup.RECEIPT_NAME
+            self.assertTrue(receipt.is_file())
+            self.assertEqual(stat.S_IMODE(receipt.stat().st_mode), 0o600)
+        finally:
+            case.tearDown()
+
+    def test_92_non_attested_run_never_resolves_or_starts_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "parent.jsonl"
+            parent.write_text('{"rowId":1,"split":"train"}\n', encoding="utf-8")
+            manifest = root / "parent-manifest.json"
+            manifest.write_text("{}\n", encoding="utf-8")
+            bundle = make_bundle()
+            bundle["parentLineage"] = {
+                "parentManifestHash": collector.sha256_file(manifest),
+                "parentDatasetDigest": collector.sha256_file(parent),
+                "parentRowCount": 1,
+            }
+            bundle["authorization"]["approvedAt"] = "2026-08-28T00:00:00+00:00"
+            bundle["authorization"]["expiresAt"] = "2099-01-01T00:00:00+00:00"
+            targets = root / "targets.page-evidence-targets.private.json"
+            targets.write_bytes(collector.canonical_json_bytes(bundle))
+            output = root / "output"
+            args = SimpleNamespace(
+                targets=str(targets),
+                parent_dataset=str(parent),
+                parent_manifest=str(manifest),
+                output_dir=str(output),
+                run_id="sandbox-required-run",
+                development_only=True,
+                network_sandbox_attested=False,
+                allow_http=False,
+                run_lighthouse=False,
+                lighthouse_binary=None,
+                chromium_binary=None,
+                replay_of=None,
+                limit=None,
+                host_delay=1.0,
+                max_requests=10,
+                max_run_bytes=256 * 1024 * 1024,
+            )
+
+            async def forbidden_resolver(_host, _port):
+                raise AssertionError("resolver must not run without sandbox attestation")
+
+            with patch.dict(
+                os.environ, {"DISCOVERYSTACK_PRIVATE_EVIDENCE_DEV": "1"}
+            ), patch.object(
+                collector, "async_system_resolver", forbidden_resolver
+            ):
+                asyncio.run(collector.run_collection(args))
+            run_dir = output / "sandbox-required-run"
+            result = validator.validate_run(run_dir, SCHEMA)
+            self.assertTrue(result["eligible"])
+            record = json.loads(
+                (run_dir / "evidence_manifest.jsonl").read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["collectionStatus"], "sandbox_required")
+            self.assertEqual(record["requestAudit"]["count"], 0)
+
+    def test_93_cleanup_rejects_symlink_without_deleting_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "runs"
+            root.mkdir(mode=0o700)
+            root.chmod(0o700)
+            outside = base / "outside"
+            outside.mkdir()
+            (outside / "keep.txt").write_text("keep", encoding="utf-8")
+            (root / "malicious-run").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(
+                collector.FilesystemPolicyError, "unexpected output-root entry"
+            ):
+                cleanup.cleanup_expired_runs(root, schema_path=SCHEMA)
+            self.assertEqual((outside / "keep.txt").read_text(), "keep")
+
+    def test_94_completion_marker_hash_tamper_is_rejected(self):
+        case = ValidatorTests()
+        case.setUp()
+        try:
+            store = case.write_run(case.make_record())
+            marker = store.run_dir / "run_complete.json"
+            completion = json.loads(marker.read_text(encoding="utf-8"))
+            completion["evidenceManifestHash"] = "0" * 64
+            marker.write_bytes(collector.canonical_json_bytes(completion) + b"\n")
+            with self.assertRaisesRegex(
+                validator.ValidationError, "evidence manifest hash mismatch"
+            ):
+                validator.validate_run(store.run_dir, SCHEMA)
+        finally:
+            case.tearDown()
+
+    def test_95_malformed_completion_marker_fails_closed(self):
+        case = ValidatorTests()
+        case.setUp()
+        try:
+            store = case.write_run(case.make_record())
+            marker = store.run_dir / "run_complete.json"
+            marker.write_text("{not-json\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                validator.ValidationError, "completion marker is not valid JSON"
+            ):
+                validator.validate_run(store.run_dir, SCHEMA)
+        finally:
+            case.tearDown()
 
 
 if __name__ == "__main__":
