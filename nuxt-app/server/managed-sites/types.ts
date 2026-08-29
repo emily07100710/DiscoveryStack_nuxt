@@ -156,8 +156,8 @@ export type ManagedSiteDataExport = {
 }
 
 export const MANAGED_SITE_ROLE_PERMISSIONS: Record<ManagedSiteRole, readonly string[]> = {
-  owner: ['project:read', 'project:write', 'content:read', 'content:write', 'content:review', 'billing:manage', 'domain:manage', 'members:manage', 'data:export'],
-  administrator: ['project:read', 'project:write', 'content:read', 'content:write', 'content:review', 'members:manage', 'data:export'],
+  owner: ['project:read', 'project:write', 'content:read', 'content:write', 'content:review', 'content:publish', 'billing:manage', 'domain:manage', 'members:manage', 'data:export'],
+  administrator: ['project:read', 'project:write', 'content:read', 'content:write', 'content:review', 'content:publish', 'members:manage', 'data:export'],
   editor: ['project:read', 'content:read', 'content:write'],
   reviewer: ['project:read', 'content:read', 'content:review'],
   analyst: ['project:read', 'content:read'],

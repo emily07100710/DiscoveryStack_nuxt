@@ -88,7 +88,7 @@ export async function executeSignedApiPublish(input: FirstPartyAdapterInput, dep
     if (!serverNow.ok) return blocked('INVALID_TIMESTAMP', serverNow.reason)
     if (Math.abs(serverNow.milliseconds - current.milliseconds) > tolerance * 1000) return blocked('INVALID_TIMESTAMP', 'signed request timestamp exceeds the fixed tolerance')
     const signature = buildSignedApiSignature(input, secret, timestamp, nonce)
-    const artifactBytes = `${input.artifact.frontmatter}\n${input.artifact.body}`
+    const artifactBytes = input.artifact.frontmatter ? `${input.artifact.frontmatter}\n${input.artifact.body}` : input.artifact.body
     const body = JSON.stringify({
       commandVersion: input.command.commandVersion,
       targetId: input.target.targetId,

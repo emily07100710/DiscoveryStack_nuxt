@@ -11,6 +11,7 @@ const sqlNames = readdirSync(migrationDirectory).filter(name => /^\d{4}_.+\.sql$
 const snapshotNames = readdirSync(metadataDirectory).filter(name => /^\d{4}_snapshot\.json$/u.test(name)).sort()
 const currentSnapshotName = snapshotNames.at(-1)
 if (!currentSnapshotName) throw new Error('At least one Drizzle snapshot is required.')
+const codeUnitCompare = (left, right) => left < right ? -1 : left > right ? 1 : 0
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex') }
 function snake(value) { return value.replace(/([a-z0-9])([A-Z])/gu, '$1_$2').replace(/[^a-zA-Z0-9]+/gu, '_').replace(/^_+|_+$/gu, '').toLowerCase() }
@@ -130,7 +131,7 @@ if (write) {
     const corrected = Buffer.byteLength(item.corrected, 'utf8') > 64 ? boundedForeignKeyName(item.table, item.column, item.original) : item.corrected
     const migration = sqlNames.includes(item.migration) ? item.migration : sqlNames.find(name => readFileSync(new URL(name, migrationDirectory), 'utf8').includes(`\`${corrected}\``)) || item.migration
     return { ...item, migration, corrected, correctedBytes: Buffer.byteLength(corrected, 'utf8') }
-  }).sort((left, right) => left.migration.localeCompare(right.migration) || left.original.localeCompare(right.original))
+  }).sort((left, right) => codeUnitCompare(left.migration, right.migration) || codeUnitCompare(left.original, right.original))
 }
 
 const replacements = new Map(mapping.corrections.map(item => [item.original, item.corrected]))
@@ -142,7 +143,7 @@ if (write) {
     for (const [original, corrected] of replacements) sql = sql.replaceAll(`\`${original}\``, `\`${corrected}\``)
     writeFileSync(path, sql)
   }
-  for (const snapshot of readdirSync(metadataDirectory).filter(name => /^\d{4}_snapshot\.json$/u.test(name)).sort()) {
+  for (const snapshot of snapshotNames) {
     const path = new URL(snapshot, metadataDirectory)
     const normalized = replaceObjectKeysAndValues(JSON.parse(readFileSync(path, 'utf8')), replacements)
     writeFileSync(path, JSON.stringify(normalized, null, 2))

@@ -1,0 +1,4 @@
+import { assertEditorSameOrigin, readBoundedEditorBody, requireEditorActor } from '../../../../../managed-sites/page-editor/http'
+import { createMediaTransformationVersion } from '../../../../../managed-sites/media-vault/service'
+import { resolveEditorRuntime } from '../../../../../managed-sites/page-editor/runtime'
+export default defineEventHandler(async event => { assertEditorSameOrigin(event); const { mediaActor } = await requireEditorActor(event, 'content:write'); const runtime = await resolveEditorRuntime(mediaActor); const body = await readBoundedEditorBody(event) as any; return createMediaTransformationVersion({ repository: runtime.mediaRepository, storage: runtime.storage, processor: runtime.processor }, mediaActor, { assetId: getRouterParam(event, 'assetId') || '', aspect: body.aspect, focalPoint: body.focalPoint, rotation: body.rotation, expectedAssetVersion: body.expectedAssetVersion, idempotencyKey: body.idempotencyKey }) })

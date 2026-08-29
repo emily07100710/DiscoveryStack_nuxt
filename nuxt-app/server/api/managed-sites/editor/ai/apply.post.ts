@@ -1,0 +1,3 @@
+import { assertEditorSameOrigin, readBoundedEditorBody, requireEditorActor } from '../../../../managed-sites/page-editor/http'
+import { applyStoredAiProposalToDraft } from '../../../../managed-sites/page-editor/ai-repository-drizzle'
+export default defineEventHandler(async event => { assertEditorSameOrigin(event); const { pageActor } = await requireEditorActor(event, 'content:write'); const body = await readBoundedEditorBody(event) as any; if (typeof body.proposalId !== 'string') throw createError({ statusCode: 422, statusMessage: 'Durable AI proposal identity is required.' }); return applyStoredAiProposalToDraft(pageActor, body.proposalId) })

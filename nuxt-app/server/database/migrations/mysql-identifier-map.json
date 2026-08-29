@@ -1332,11 +1332,231 @@
       "originalBytes": 80,
       "corrected": "fk_content_operation_topic__entry_id_56892ad217",
       "correctedBytes": 47
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaAssetVersions",
+      "column": "projectId",
+      "targetTable": "managedSiteProjects",
+      "targetColumn": "id",
+      "original": "managedSiteMediaAssetVersions_projectId_managedSiteProjects_id_fk",
+      "originalBytes": 65,
+      "corrected": "fk_managed_site_media_asset_project_id_c9d1d6836b",
+      "correctedBytes": 49
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaObjects",
+      "column": "assetVersionId",
+      "targetTable": "managedSiteMediaAssetVersions",
+      "targetColumn": "id",
+      "original": "managedSiteMediaObjects_assetVersionId_managedSiteMediaAssetVersions_id_fk",
+      "originalBytes": 74,
+      "corrected": "fk_managed_site_media_objec_asset_version_id_5949ee9b63",
+      "correctedBytes": 55
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaObjects",
+      "column": "connectionId",
+      "targetTable": "managedSiteStorageConnections",
+      "targetColumn": "id",
+      "original": "managedSiteMediaObjects_connectionId_managedSiteStorageConnections_id_fk",
+      "originalBytes": 72,
+      "corrected": "fk_managed_site_media_objec_connection_id_f71b3acea5",
+      "correctedBytes": 52
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaProcessingRuns",
+      "column": "assetVersionId",
+      "targetTable": "managedSiteMediaAssetVersions",
+      "targetColumn": "id",
+      "original": "managedSiteMediaProcessingRuns_assetVersionId_managedSiteMediaAssetVersions_id_fk",
+      "originalBytes": 81,
+      "corrected": "fk_managed_site_media_proce_asset_version_id_16e118f3bc",
+      "correctedBytes": 55
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaProcessingRuns",
+      "column": "projectId",
+      "targetTable": "managedSiteProjects",
+      "targetColumn": "id",
+      "original": "managedSiteMediaProcessingRuns_projectId_managedSiteProjects_id_fk",
+      "originalBytes": 66,
+      "corrected": "fk_managed_site_media_proce_project_id_81f7b4aea5",
+      "correctedBytes": 49
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaQuotaProjections",
+      "column": "projectId",
+      "targetTable": "managedSiteProjects",
+      "targetColumn": "id",
+      "original": "managedSiteMediaQuotaProjections_projectId_managedSiteProjects_id_fk",
+      "originalBytes": 68,
+      "corrected": "fk_managed_site_media_quota_project_id_07b5aa9438",
+      "correctedBytes": 49
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaUploadSessions",
+      "column": "connectionId",
+      "targetTable": "managedSiteStorageConnections",
+      "targetColumn": "id",
+      "original": "managedSiteMediaUploadSessions_connectionId_managedSiteStorageConnections_id_fk",
+      "originalBytes": 79,
+      "corrected": "fk_managed_site_media_uploa_connection_id_9efa170fb5",
+      "correctedBytes": 52
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaUploadSessions",
+      "column": "projectId",
+      "targetTable": "managedSiteProjects",
+      "targetColumn": "id",
+      "original": "managedSiteMediaUploadSessions_projectId_managedSiteProjects_id_fk",
+      "originalBytes": 66,
+      "corrected": "fk_managed_site_media_uploa_project_id_53418513b0",
+      "correctedBytes": 49
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaUsageBindings",
+      "column": "projectId",
+      "targetTable": "managedSiteProjects",
+      "targetColumn": "id",
+      "original": "managedSiteMediaUsageBindings_projectId_managedSiteProjects_id_fk",
+      "originalBytes": 65,
+      "corrected": "fk_managed_site_media_usage_project_id_01b6041018",
+      "correctedBytes": 49
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaVariants",
+      "column": "assetVersionId",
+      "targetTable": "managedSiteMediaAssetVersions",
+      "targetColumn": "id",
+      "original": "managedSiteMediaVariants_assetVersionId_managedSiteMediaAssetVersions_id_fk",
+      "originalBytes": 75,
+      "corrected": "fk_managed_site_media_varia_asset_version_id_e06841b368",
+      "correctedBytes": 55
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteMediaVariants",
+      "column": "mediaObjectId",
+      "targetTable": "managedSiteMediaObjects",
+      "targetColumn": "id",
+      "original": "managedSiteMediaVariants_mediaObjectId_managedSiteMediaObjects_id_fk",
+      "originalBytes": 68,
+      "corrected": "fk_managed_site_media_varia_media_object_id_f5cdd7ea37",
+      "correctedBytes": 54
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSitePagePublicationAttempts",
+      "column": "projectId",
+      "targetTable": "managedSiteProjects",
+      "targetColumn": "id",
+      "original": "managedSitePagePublicationAttempts_projectId_managedSiteProjects_id_fk",
+      "originalBytes": 70,
+      "corrected": "fk_managed_site_page_public_project_id_1d80a8b0aa",
+      "correctedBytes": 49
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSitePagePublicationAttempts",
+      "column": "publicationTargetId",
+      "targetTable": "contentOperationPublicationTargets",
+      "targetColumn": "id",
+      "original": "managedSitePagePublicationAttempts_publicationTargetId_contentOperationPublicationTargets_id_fk",
+      "originalBytes": 95,
+      "corrected": "fk_managed_site_page_public_publication_target_92a78cd79f",
+      "correctedBytes": 57
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSitePagePublicationAttempts",
+      "column": "workId",
+      "targetTable": "managedSitePagePublicationWorks",
+      "targetColumn": "id",
+      "original": "managedSitePagePublicationAttempts_workId_managedSitePagePublicationWorks_id_fk",
+      "originalBytes": 79,
+      "corrected": "fk_managed_site_page_public_work_id_437b841d3d",
+      "correctedBytes": 46
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSitePagePublicationReceipts",
+      "column": "projectId",
+      "targetTable": "managedSiteProjects",
+      "targetColumn": "id",
+      "original": "managedSitePagePublicationReceipts_projectId_managedSiteProjects_id_fk",
+      "originalBytes": 70,
+      "corrected": "fk_managed_site_page_public_project_id_156a1483ee",
+      "correctedBytes": 49
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSitePagePublicationReceipts",
+      "column": "publicationTargetId",
+      "targetTable": "contentOperationPublicationTargets",
+      "targetColumn": "id",
+      "original": "managedSitePagePublicationReceipts_publicationTargetId_contentOperationPublicationTargets_id_fk",
+      "originalBytes": 95,
+      "corrected": "fk_managed_site_page_public_publication_target_23788a7bcd",
+      "correctedBytes": 57
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSitePagePublicationWorks",
+      "column": "clientId",
+      "targetTable": "contentOperationClients",
+      "targetColumn": "id",
+      "original": "managedSitePagePublicationWorks_clientId_contentOperationClients_id_fk",
+      "originalBytes": 70,
+      "corrected": "fk_managed_site_page_public_client_id_6311fc6c45",
+      "correctedBytes": 48
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSitePagePublicationWorks",
+      "column": "projectId",
+      "targetTable": "managedSiteProjects",
+      "targetColumn": "id",
+      "original": "managedSitePagePublicationWorks_projectId_managedSiteProjects_id_fk",
+      "originalBytes": 67,
+      "corrected": "fk_managed_site_page_public_project_id_12233959f0",
+      "correctedBytes": 49
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSitePagePublicationWorks",
+      "column": "publicationTargetId",
+      "targetTable": "contentOperationPublicationTargets",
+      "targetColumn": "id",
+      "original": "managedSitePagePublicationWorks_publicationTargetId_contentOperationPublicationTargets_id_fk",
+      "originalBytes": 92,
+      "corrected": "fk_managed_site_page_public_publication_target_8b10a9bd09",
+      "correctedBytes": 57
+    },
+    {
+      "migration": "0033_greedy_junta.sql",
+      "table": "managedSiteStorageConnections",
+      "column": "projectId",
+      "targetTable": "managedSiteProjects",
+      "targetColumn": "id",
+      "original": "managedSiteStorageConnections_projectId_managedSiteProjects_id_fk",
+      "originalBytes": 65,
+      "corrected": "fk_managed_site_storage_con_project_id_cfe6906220",
+      "correctedBytes": 49
     }
   ],
   "schemaPolicy": {
     "newForeignKeysRequireExplicitBoundedNames": true,
-    "legacyImplicitForeignKeyCount": 227,
-    "legacyImplicitForeignKeysSha256": "897e3e02f5ca41b36309e7493c0b2ce0af518c1551100905a8e28caacb7efd6c"
+    "legacyImplicitForeignKeyCount": 272,
+    "legacyImplicitForeignKeysSha256": "fe3bfb30cb58b716c687f6b0bd0002c76b904c9b6abf5ada2c23d43e2dea7d7d"
   }
 }

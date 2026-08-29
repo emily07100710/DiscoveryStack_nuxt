@@ -1725,6 +1725,275 @@ export const managedSiteSessions = mysqlTable('managedSiteSessions', {
   index('managed_site_sessions_owner_project_idx').on(table.ownerUserId, table.projectId, table.expiresAt),
 ])
 
+/** Server-owned storage configuration. Credentials remain deployment-only opaque references. */
+export const managedSiteStorageConnections = mysqlTable('managedSiteStorageConnections', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull(),
+  providerKey: mysqlEnum('providerKey', ['s3_compatible', 'local_dev', 'memory_test']).notNull(),
+  credentialReference: varchar('credentialReference', { length: 160 }),
+  configuration: json('configuration').notNull(),
+  configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['disabled', 'mock', 'configured', 'verified', 'blocked']).default('disabled').notNull(),
+  healthReceiptFingerprint: varchar('healthReceiptFingerprint', { length: 128 }),
+  scannerAuthorityFingerprint: varchar('scannerAuthorityFingerprint', { length: 128 }),
+  scannerHealthReceiptFingerprint: varchar('scannerHealthReceiptFingerprint', { length: 128 }),
+  scannerVerifiedAt: timestamp('scannerVerifiedAt'),
+  verifiedAt: timestamp('verifiedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_storage_con_project_id_cfe6906220', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+
+  uniqueIndex('managed_site_storage_project_unique').on(table.projectId),
+  uniqueIndex('managed_site_storage_owner_fingerprint_unique').on(table.ownerUserId, table.configurationFingerprint),
+])
+
+/** Canonical media identity; binary bytes never enter MySQL or Git. */
+export const managedSiteMediaAssets = mysqlTable('managedSiteMediaAssets', {
+  id: int('id').autoincrement().primaryKey(),
+  assetId: varchar('assetId', { length: 64 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  visibility: mysqlEnum('visibility', ['public', 'private', 'internal']).default('private').notNull(),
+  originalFilename: varchar('originalFilename', { length: 255 }).notNull(),
+  mediaType: mysqlEnum('mediaType', ['image']).notNull(),
+  status: mysqlEnum('status', ['pending_upload', 'uploaded', 'quarantined', 'processing', 'ready', 'trashed', 'deletion_pending', 'deleted', 'failed']).default('pending_upload').notNull(),
+  currentVersion: int('currentVersion').default(1).notNull(),
+  currentVersionId: int('currentVersionId'),
+  collectionId: int('collectionId'),
+  createdByUserId: int('createdByUserId').references(() => users.id),
+  createdByAuthority: varchar('createdByAuthority', { length: 160 }).notNull(),
+  rightsMetadata: json('rightsMetadata').notNull(),
+  trashedAt: timestamp('trashedAt'),
+  retentionUntil: timestamp('retentionUntil'),
+  deletedAt: timestamp('deletedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_media_asset_id_unique').on(table.assetId),
+  index('managed_site_media_owner_project_status_idx').on(table.ownerUserId, table.projectId, table.status),
+  index('managed_site_media_asset_tenant_page_idx').on(table.ownerUserId, table.projectId, table.deletedAt, table.createdAt, table.assetId),
+])
+
+/** Immutable original or replacement lineage for one media asset. */
+export const managedSiteMediaAssetVersions = mysqlTable('managedSiteMediaAssetVersions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull(),
+  assetId: varchar('assetId', { length: 64 }).notNull(),
+  version: int('version').notNull(),
+  declaredMime: varchar('declaredMime', { length: 160 }).notNull(),
+  sniffedMime: varchar('sniffedMime', { length: 160 }),
+  byteSize: int('byteSize').notNull(),
+  width: int('width'),
+  height: int('height'),
+  durationMs: int('durationMs'),
+  sha256: varchar('sha256', { length: 64 }),
+  processingFingerprint: varchar('processingFingerprint', { length: 128 }),
+  parentVersionId: int('parentVersionId'),
+  metadata: json('metadata').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_media_asset_project_id_c9d1d6836b', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+
+  uniqueIndex('managed_site_media_asset_version_unique').on(table.assetId, table.version),
+  index('managed_site_media_version_tenant_hash_idx').on(table.ownerUserId, table.projectId, table.sha256),
+])
+
+/** Opaque object authority for originals and generated variants. */
+export const managedSiteMediaObjects = mysqlTable('managedSiteMediaObjects', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  assetVersionId: int('assetVersionId').notNull(),
+  connectionId: int('connectionId').notNull(),
+  objectKey: varchar('objectKey', { length: 512 }).notNull(),
+  objectVersionReference: varchar('objectVersionReference', { length: 255 }),
+  objectKind: mysqlEnum('objectKind', ['original', 'variant']).notNull(),
+  byteSize: int('byteSize').notNull(),
+  sha256: varchar('sha256', { length: 64 }).notNull(),
+  deletionReceiptFingerprint: varchar('deletionReceiptFingerprint', { length: 128 }),
+  deletedAt: timestamp('deletedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_media_objec_asset_version_id_5949ee9b63', columns: [table.assetVersionId], foreignColumns: [managedSiteMediaAssetVersions.id] }),
+  foreignKey({ name: 'fk_managed_site_media_objec_connection_id_f71b3acea5', columns: [table.connectionId], foreignColumns: [managedSiteStorageConnections.id] }),
+
+  uniqueIndex('managed_site_media_object_version_key_unique').on(table.connectionId, table.assetVersionId, table.objectKey),
+  index('managed_site_media_object_tenant_version_idx').on(table.ownerUserId, table.projectId, table.assetVersionId),
+])
+
+/** Exact derived image bytes and immutable transformation lineage. */
+export const managedSiteMediaVariants = mysqlTable('managedSiteMediaVariants', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  assetVersionId: int('assetVersionId').notNull(),
+  mediaObjectId: int('mediaObjectId').notNull(),
+  variantKey: varchar('variantKey', { length: 96 }).notNull(),
+  format: mysqlEnum('format', ['jpeg', 'png', 'webp', 'avif']).notNull(),
+  width: int('width').notNull(),
+  height: int('height').notNull(),
+  byteSize: int('byteSize').notNull(),
+  sha256: varchar('sha256', { length: 64 }).notNull(),
+  transformation: json('transformation').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_media_varia_asset_version_id_e06841b368', columns: [table.assetVersionId], foreignColumns: [managedSiteMediaAssetVersions.id] }),
+  foreignKey({ name: 'fk_managed_site_media_varia_media_object_id_f5cdd7ea37', columns: [table.mediaObjectId], foreignColumns: [managedSiteMediaObjects.id] }),
+
+  uniqueIndex('managed_site_media_variant_identity_unique').on(table.assetVersionId, table.variantKey, table.format),
+])
+
+export const managedSiteMediaCollections = mysqlTable('managedSiteMediaCollections', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  parentId: int('parentId'), name: varchar('name', { length: 120 }).notNull(), canonicalKey: varchar('canonicalKey', { length: 160 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex('managed_site_media_collection_parent_key_unique').on(table.projectId, table.parentId, table.canonicalKey)])
+
+export const managedSiteMediaTags = mysqlTable('managedSiteMediaTags', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  name: varchar('name', { length: 80 }).notNull(), canonicalKey: varchar('canonicalKey', { length: 96 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('managed_site_media_tag_project_key_unique').on(table.projectId, table.canonicalKey)])
+
+export const managedSiteMediaTagLinks = mysqlTable('managedSiteMediaTagLinks', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  assetId: varchar('assetId', { length: 64 }).notNull(), tagId: int('tagId').notNull().references(() => managedSiteMediaTags.id), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('managed_site_media_tag_link_unique').on(table.assetId, table.tagId)])
+
+/** Exact page/block role bindings; replacements never silently mutate other usages. */
+export const managedSiteMediaUsageBindings = mysqlTable('managedSiteMediaUsageBindings', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull(),
+  assetId: varchar('assetId', { length: 64 }).notNull(), assetVersion: int('assetVersion').notNull(), assetSha256: varchar('assetSha256', { length: 64 }).notNull(),
+  pageId: varchar('pageId', { length: 64 }).notNull(), pageVersion: int('pageVersion').notNull(), blockId: varchar('blockId', { length: 64 }).notNull(), role: varchar('role', { length: 80 }).notNull(),
+  bindingFingerprint: varchar('bindingFingerprint', { length: 128 }).notNull(), releasedAt: timestamp('releasedAt'), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_media_usage_project_id_01b6041018', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+uniqueIndex('managed_site_media_usage_fingerprint_unique').on(table.bindingFingerprint), index('managed_site_media_usage_asset_idx').on(table.ownerUserId, table.projectId, table.assetId, table.releasedAt)])
+
+/** Short-lived bounded upload intent; caller filenames never define object keys. */
+export const managedSiteMediaUploadSessions = mysqlTable('managedSiteMediaUploadSessions', {
+  id: int('id').autoincrement().primaryKey(), uploadId: varchar('uploadId', { length: 64 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull(),
+  assetId: varchar('assetId', { length: 64 }).notNull(), connectionId: int('connectionId').notNull(), objectKey: varchar('objectKey', { length: 512 }).notNull(),
+  originalFilename: varchar('originalFilename', { length: 255 }).notNull(), visibility: mysqlEnum('visibility', ['public', 'private', 'internal']).default('private').notNull(), declaredMime: varchar('declaredMime', { length: 160 }).notNull(), declaredBytes: int('declaredBytes').notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['issued', 'uploading', 'uploaded', 'completing', 'completed', 'expired', 'cancelled', 'rejected']).default('issued').notNull(), completionFingerprint: varchar('completionFingerprint', { length: 128 }), quotaOriginalBytesCommitted: int('quotaOriginalBytesCommitted').default(0).notNull(), quotaAssetCountCommitted: int('quotaAssetCountCommitted').default(0).notNull(), expiresAt: timestamp('expiresAt').notNull(), leaseUntil: timestamp('leaseUntil'), completedAt: timestamp('completedAt'), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_media_uploa_project_id_53418513b0', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_media_uploa_connection_id_9efa170fb5', columns: [table.connectionId], foreignColumns: [managedSiteStorageConnections.id] }),
+uniqueIndex('managed_site_media_upload_id_unique').on(table.uploadId), uniqueIndex('managed_site_media_upload_idempotency_unique').on(table.ownerUserId, table.projectId, table.idempotencyKey), uniqueIndex('managed_site_media_upload_request_unique').on(table.ownerUserId, table.projectId, table.requestFingerprint), index('managed_site_media_upload_asset_status_idx').on(table.ownerUserId, table.projectId, table.assetId, table.status, table.createdAt)])
+
+export const managedSiteMediaProcessingRuns = mysqlTable('managedSiteMediaProcessingRuns', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull(), assetVersionId: int('assetVersionId').notNull(),
+  status: mysqlEnum('status', ['queued', 'processing', 'quarantined', 'retry_wait', 'failed', 'succeeded']).default('queued').notNull(), attemptCount: int('attemptCount').default(0).notNull(), scannerVerdict: mysqlEnum('scannerVerdict', ['not_configured', 'pending', 'passed', 'blocked', 'owner_review']).default('pending').notNull(),
+  processingFingerprint: varchar('processingFingerprint', { length: 128 }).notNull(), leaseUntil: timestamp('leaseUntil'), nextAttemptAt: timestamp('nextAttemptAt'), errorCode: varchar('errorCode', { length: 120 }), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_media_proce_project_id_81f7b4aea5', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_media_proce_asset_version_id_16e118f3bc', columns: [table.assetVersionId], foreignColumns: [managedSiteMediaAssetVersions.id] }),
+uniqueIndex('managed_site_media_processing_fingerprint_unique').on(table.processingFingerprint), index('managed_site_media_processing_status_idx').on(table.status, table.nextAttemptAt)])
+
+/** Append-only media security, lifecycle and deletion receipts. */
+export const managedSiteMediaEvents = mysqlTable('managedSiteMediaEvents', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), assetId: varchar('assetId', { length: 64 }), uploadId: varchar('uploadId', { length: 64 }),
+  eventType: varchar('eventType', { length: 96 }).notNull(), actorAuthority: varchar('actorAuthority', { length: 160 }).notNull(), beforeFingerprint: varchar('beforeFingerprint', { length: 128 }), afterFingerprint: varchar('afterFingerprint', { length: 128 }), metadata: json('metadata').notNull(), receiptFingerprint: varchar('receiptFingerprint', { length: 128 }).notNull(), occurredAt: timestamp('occurredAt').defaultNow().notNull(),
+}, table => [uniqueIndex('managed_site_media_event_receipt_unique').on(table.receiptFingerprint), index('managed_site_media_event_tenant_time_idx').on(table.ownerUserId, table.projectId, table.occurredAt), index('managed_site_media_event_asset_type_idx').on(table.ownerUserId, table.projectId, table.assetId, table.eventType)])
+
+export const managedSiteMediaQuotaProjections = mysqlTable('managedSiteMediaQuotaProjections', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull(), planKey: varchar('planKey', { length: 96 }).notNull(),
+  maxOriginalBytes: int('maxOriginalBytes').notNull(), maxAssetCount: int('maxAssetCount').notNull(), maxMonthlyUploadBytes: int('maxMonthlyUploadBytes').notNull(), maxMonthlyProcessingCount: int('maxMonthlyProcessingCount').notNull(),
+  originalBytesUsed: int('originalBytesUsed').default(0).notNull(), assetCountUsed: int('assetCountUsed').default(0).notNull(), monthlyUploadBytesUsed: int('monthlyUploadBytesUsed').default(0).notNull(), monthlyProcessingCountUsed: int('monthlyProcessingCountUsed').default(0).notNull(),
+  periodKey: varchar('periodKey', { length: 16 }).notNull(), projectionFingerprint: varchar('projectionFingerprint', { length: 128 }).notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_media_quota_project_id_07b5aa9438', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+uniqueIndex('managed_site_media_quota_project_period_unique').on(table.projectId, table.periodKey)])
+
+/** Idempotent quota reservations. Counters are changed only by conditional SQL updates in the same transaction. */
+export const managedSiteMediaQuotaClaims = mysqlTable('managedSiteMediaQuotaClaims', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), periodKey: varchar('periodKey', { length: 16 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  claimKind: mysqlEnum('claimKind', ['reservation', 'credit']).default('reservation').notNull(),
+  originalBytes: int('originalBytes').default(0).notNull(), assetCount: int('assetCount').default(0).notNull(), uploadBytes: int('uploadBytes').default(0).notNull(), processingCount: int('processingCount').default(0).notNull(),
+  status: mysqlEnum('status', ['reserved', 'committed', 'released']).default('reserved').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex('managed_site_media_quota_claim_idempotency_unique').on(table.ownerUserId, table.projectId, table.periodKey, table.idempotencyKey), index('managed_site_media_quota_claim_status_idx').on(table.ownerUserId, table.projectId, table.status)])
+
+/** Canonical page identity and its current draft/published projections. */
+export const managedSitePages = mysqlTable('managedSitePages', {
+  id: int('id').autoincrement().primaryKey(), pageId: varchar('pageId', { length: 64 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  locale: varchar('locale', { length: 20 }).notNull(), route: varchar('route', { length: 512 }).notNull(), contentType: varchar('contentType', { length: 80 }).notNull(), currentDraftVersion: int('currentDraftVersion').default(0).notNull(), publishedVersion: int('publishedVersion').default(0).notNull(), status: mysqlEnum('status', ['draft', 'preview', 'publishing', 'published', 'failed', 'archived']).default('draft').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex('managed_site_page_id_unique').on(table.pageId), uniqueIndex('managed_site_page_route_unique').on(table.projectId, table.locale, table.route), index('managed_site_page_tenant_route_idx').on(table.ownerUserId, table.projectId, table.route, table.pageId)])
+
+/** Append-only validated PageDocument snapshots. */
+export const managedSitePageVersions = mysqlTable('managedSitePageVersions', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), pageId: varchar('pageId', { length: 64 }).notNull(), version: int('version').notNull(), parentVersion: int('parentVersion'),
+  document: json('document').notNull(), documentFingerprint: varchar('documentFingerprint', { length: 128 }).notNull(), lifecycleStatus: mysqlEnum('lifecycleStatus', ['draft', 'preview', 'published', 'superseded', 'rolled_back', 'archived']).default('draft').notNull(), actorAuthority: varchar('actorAuthority', { length: 160 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('managed_site_page_version_unique').on(table.pageId, table.version), uniqueIndex('managed_site_page_fingerprint_unique').on(table.pageId, table.documentFingerprint)])
+
+export const managedSitePageOperations = mysqlTable('managedSitePageOperations', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), pageId: varchar('pageId', { length: 64 }).notNull(), fromVersion: int('fromVersion').notNull(), toVersion: int('toVersion').notNull(), commandType: varchar('commandType', { length: 80 }).notNull(), command: json('command').notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(), actorAuthority: varchar('actorAuthority', { length: 160 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('managed_site_page_operation_idempotency_unique').on(table.ownerUserId, table.projectId, table.idempotencyKey), uniqueIndex('managed_site_page_operation_request_unique').on(table.ownerUserId, table.projectId, table.requestFingerprint)])
+
+export const managedSitePagePublicationReceipts = mysqlTable('managedSitePagePublicationReceipts', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull(), pageId: varchar('pageId', { length: 64 }).notNull(), pageVersion: int('pageVersion').notNull(),
+  releaseId: int('releaseId'), publicationTargetId: int('publicationTargetId'), status: mysqlEnum('status', ['intent_created', 'publishing', 'succeeded', 'failed', 'rollback_pending', 'rolled_back']).default('intent_created').notNull(), artifactFingerprint: varchar('artifactFingerprint', { length: 128 }).notNull(), mediaSetFingerprint: varchar('mediaSetFingerprint', { length: 128 }).notNull(), receiptFingerprint: varchar('receiptFingerprint', { length: 128 }).notNull(), providerReceiptReference: varchar('providerReceiptReference', { length: 255 }), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_page_public_project_id_156a1483ee', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_page_public_publication_target_23788a7bcd', columns: [table.publicationTargetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+uniqueIndex('managed_site_page_publish_receipt_unique').on(table.receiptFingerprint), index('managed_site_page_publish_status_idx').on(table.ownerUserId, table.projectId, table.status)])
+
+/** Canonical page artifact delivery work. The worker must recompile and revalidate all authority before execution. */
+export const managedSitePagePublicationWorks = mysqlTable('managedSitePagePublicationWorks', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull(), clientId: int('clientId').notNull(),
+  pageId: varchar('pageId', { length: 64 }).notNull(), pageVersion: int('pageVersion').notNull(), releaseId: int('releaseId').notNull(), publicationTargetId: int('publicationTargetId').notNull(), operationKind: mysqlEnum('operationKind', ['publish', 'rollback']).default('publish').notNull(),
+  artifact: json('artifact').notNull(), artifactBytes: int('artifactBytes').notNull(), artifactFingerprint: varchar('artifactFingerprint', { length: 128 }).notNull(), mediaSetFingerprint: varchar('mediaSetFingerprint', { length: 128 }).notNull(), pageFingerprint: varchar('pageFingerprint', { length: 128 }).notNull(), contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(), status: mysqlEnum('status', ['queued', 'leased', 'retry_wait', 'succeeded', 'blocked']).default('queued').notNull(),
+  attemptCount: int('attemptCount').default(0).notNull(), maxAttempts: int('maxAttempts').default(5).notNull(), availableAt: timestamp('availableAt').defaultNow().notNull(), leaseOwner: varchar('leaseOwner', { length: 128 }), leaseUntil: timestamp('leaseUntil'), lastErrorCode: varchar('lastErrorCode', { length: 120 }), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_page_public_project_id_12233959f0', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_page_public_client_id_6311fc6c45', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_managed_site_page_public_publication_target_8b10a9bd09', columns: [table.publicationTargetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+uniqueIndex('managed_site_page_publish_work_idempotency_unique').on(table.ownerUserId, table.projectId, table.publicationTargetId, table.idempotencyKey), index('managed_site_page_publish_work_due_idx').on(table.status, table.availableAt, table.leaseUntil), index('managed_site_page_publish_work_tenant_idx').on(table.ownerUserId, table.projectId, table.status)])
+
+/** Append-only executor outcomes. A successful row is accepted only after exact receipt verification. */
+export const managedSitePagePublicationAttempts = mysqlTable('managedSitePagePublicationAttempts', {
+  id: int('id').autoincrement().primaryKey(), workId: int('workId').notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull(), publicationTargetId: int('publicationTargetId').notNull(),
+  attemptNumber: int('attemptNumber').notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(), status: mysqlEnum('status', ['delivered', 'retryable_failure', 'permanent_failure', 'blocked']).notNull(), receiptFingerprint: varchar('receiptFingerprint', { length: 128 }).notNull(), remoteRevision: varchar('remoteRevision', { length: 256 }), remoteState: varchar('remoteState', { length: 64 }), errorCode: varchar('errorCode', { length: 120 }), result: json('result').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_managed_site_page_public_project_id_1d80a8b0aa', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  foreignKey({ name: 'fk_managed_site_page_public_publication_target_92a78cd79f', columns: [table.publicationTargetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+  foreignKey({ name: 'fk_managed_site_page_public_work_id_437b841d3d', columns: [table.workId], foreignColumns: [managedSitePagePublicationWorks.id] }),
+uniqueIndex('managed_site_page_publish_attempt_number_unique').on(table.workId, table.attemptNumber), uniqueIndex('managed_site_page_publish_attempt_receipt_unique').on(table.receiptFingerprint)])
+
+/** Unified bounded scheduler queue for editor jobs, independent of transport/provider implementations. */
+export const managedSiteEditorJobs = mysqlTable('managedSiteEditorJobs', {
+  id: int('id').autoincrement().primaryKey(), jobId: varchar('jobId', { length: 96 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id),
+  kind: mysqlEnum('kind', ['media_processing', 'media_object_cleanup', 'scheduled_visibility', 'orphan_upload_expiry', 'trash_retention', 'publish_retry']).notNull(), sourceReference: varchar('sourceReference', { length: 160 }).notNull(), stateFingerprint: varchar('stateFingerprint', { length: 128 }).notNull(), payload: json('payload').notNull(),
+  status: mysqlEnum('status', ['queued', 'leased', 'retry_wait', 'succeeded', 'blocked']).default('queued').notNull(), attemptCount: int('attemptCount').default(0).notNull(), maxAttempts: int('maxAttempts').default(5).notNull(), availableAt: timestamp('availableAt').defaultNow().notNull(), leaseOwner: varchar('leaseOwner', { length: 128 }), leaseUntil: timestamp('leaseUntil'), lastErrorCode: varchar('lastErrorCode', { length: 120 }), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex('managed_site_editor_job_identity_unique').on(table.jobId), uniqueIndex('managed_site_editor_job_source_unique').on(table.kind, table.sourceReference, table.stateFingerprint), index('managed_site_editor_job_due_idx').on(table.status, table.availableAt, table.leaseUntil), index('managed_site_editor_job_tenant_idx').on(table.ownerUserId, table.projectId, table.status)])
+
+export const managedSiteEditorJobReceipts = mysqlTable('managedSiteEditorJobReceipts', {
+  id: int('id').autoincrement().primaryKey(), jobId: varchar('jobId', { length: 96 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), attemptNumber: int('attemptNumber').notNull(), status: mysqlEnum('status', ['succeeded', 'retry_wait', 'blocked']).notNull(), outcome: varchar('outcome', { length: 160 }).notNull(), reasonCode: varchar('reasonCode', { length: 120 }), receiptFingerprint: varchar('receiptFingerprint', { length: 128 }).notNull(), metadata: json('metadata').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('managed_site_editor_job_receipt_unique').on(table.receiptFingerprint), index('managed_site_editor_job_receipt_job_idx').on(table.jobId, table.attemptNumber)])
+
+/** AI can only persist bounded proposals and cost receipts; it never owns publication. */
+export const managedSiteAiEditProposals = mysqlTable('managedSiteAiEditProposals', {
+  id: int('id').autoincrement().primaryKey(), proposalId: varchar('proposalId', { length: 64 }).notNull(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), pageId: varchar('pageId', { length: 64 }).notNull(), expectedPageVersion: int('expectedPageVersion').notNull(),
+  intent: varchar('intent', { length: 80 }).notNull(), summary: text('summary').notNull(), operations: json('operations').notNull(), diff: json('diff'), warnings: json('warnings').notNull(), affectedBlockIds: json('affectedBlockIds').notNull(), visionMode: mysqlEnum('visionMode', ['metadata_only', 'injected_provider']).default('metadata_only').notNull(), proposalFingerprint: varchar('proposalFingerprint', { length: 128 }).notNull(), status: mysqlEnum('status', ['proposed', 'clarification_required', 'approved_to_draft', 'rejected', 'expired']).default('proposed').notNull(), expiresAt: timestamp('expiresAt').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('managed_site_ai_proposal_id_unique').on(table.proposalId), uniqueIndex('managed_site_ai_proposal_fingerprint_unique').on(table.ownerUserId, table.projectId, table.proposalFingerprint)])
+
+export const managedSiteAiCostLedger = mysqlTable('managedSiteAiCostLedger', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), proposalId: varchar('proposalId', { length: 64 }), providerKey: varchar('providerKey', { length: 96 }).notNull(), requestUnits: int('requestUnits').notNull(), inputTokens: int('inputTokens').notNull(), outputTokens: int('outputTokens').notNull(), costMicros: int('costMicros').notNull(), requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [uniqueIndex('managed_site_ai_cost_request_unique').on(table.ownerUserId, table.projectId, table.requestFingerprint), index('managed_site_ai_cost_tenant_time_idx').on(table.ownerUserId, table.projectId, table.createdAt)])
+
+/** Atomic daily AI budget bucket and its exact idempotent reservations. */
+export const managedSiteAiBudgetBuckets = mysqlTable('managedSiteAiBudgetBuckets', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), dayKey: varchar('dayKey', { length: 16 }).notNull(),
+  maxRequests: int('maxRequests').notNull(), maxInputTokens: int('maxInputTokens').notNull(), maxCostMicros: int('maxCostMicros').notNull(), requestsReserved: int('requestsReserved').default(0).notNull(), inputTokensReserved: int('inputTokensReserved').default(0).notNull(), costMicrosReserved: int('costMicrosReserved').default(0).notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex('managed_site_ai_budget_bucket_unique').on(table.ownerUserId, table.projectId, table.dayKey)])
+
+export const managedSiteAiBudgetClaims = mysqlTable('managedSiteAiBudgetClaims', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull().references(() => users.id), projectId: int('projectId').notNull().references(() => managedSiteProjects.id), dayKey: varchar('dayKey', { length: 16 }).notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(), requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  requests: int('requests').notNull(), inputTokens: int('inputTokens').notNull(), costMicros: int('costMicros').notNull(), status: mysqlEnum('status', ['reserved', 'committed', 'released']).default('reserved').notNull(), proposalId: varchar('proposalId', { length: 64 }), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex('managed_site_ai_budget_claim_unique').on(table.ownerUserId, table.projectId, table.dayKey, table.idempotencyKey), index('managed_site_ai_budget_claim_status_idx').on(table.ownerUserId, table.projectId, table.status)])
+
 export type ManagedSiteProject = typeof managedSiteProjects.$inferSelect
 export type ManagedSiteVersion = typeof managedSiteVersions.$inferSelect
 export type ManagedSiteAsset = typeof managedSiteAssets.$inferSelect
@@ -1733,6 +2002,14 @@ export type ManagedSiteInvitation = typeof managedSiteInvitations.$inferSelect
 export type ManagedSiteAuditEvent = typeof managedSiteAuditEvents.$inferSelect
 export type ManagedSiteSubscription = typeof managedSiteSubscriptions.$inferSelect
 export type ManagedSiteSession = typeof managedSiteSessions.$inferSelect
+export type ManagedSiteStorageConnection = typeof managedSiteStorageConnections.$inferSelect
+export type ManagedSiteMediaAsset = typeof managedSiteMediaAssets.$inferSelect
+export type ManagedSiteMediaAssetVersion = typeof managedSiteMediaAssetVersions.$inferSelect
+export type ManagedSiteMediaObject = typeof managedSiteMediaObjects.$inferSelect
+export type ManagedSiteMediaVariant = typeof managedSiteMediaVariants.$inferSelect
+export type ManagedSitePage = typeof managedSitePages.$inferSelect
+export type ManagedSitePageVersion = typeof managedSitePageVersions.$inferSelect
+export type ManagedSitePageOperation = typeof managedSitePageOperations.$inferSelect
 
 
 /** Anonymous or owner-associated preview draft. Only validated SiteSpec/style snapshots are persisted. */
