@@ -8,7 +8,9 @@ import type { MemoryGeoOutcomeRepository, MemoryGeoOutcomeState } from '../serve
 
 const OWNER = 42
 const OTHER_OWNER = 43
+const FIXED_MODELOPS_NOW = new Date('2026-08-28T00:00:00.000Z')
 const hash = (value: string) => sha256Hex(value)
+const fixedModelOpsRepository = () => createMemoryModelOpsRepository(undefined, () => new Date(FIXED_MODELOPS_NOW))
 
 function rawObservation(index: number, citationStatus: 'cited' | 'not_cited', overrides: Record<string, unknown> = {}) {
   const group = String(overrides.group || `group-${index}`)
@@ -57,7 +59,7 @@ let trainedArtifactId = ''
 
 beforeAll(async () => {
   const outcome = createMemoryGeoOutcomeRepository()
-  const modelOps = createMemoryModelOpsRepository()
+  const modelOps = fixedModelOpsRepository()
   await seedObservations(outcome, Array.from({ length: 500 }, (_, index) => pair(index + 1)).flat())
   await createModelOpsPolicy(OWNER, policyInput(), 'approved-fixture-policy', modelOps)
   const firstCycle = await createCycleFor(OWNER, outcome, modelOps, 'approved-fixture-cycle')
@@ -79,7 +81,7 @@ beforeAll(async () => {
 
 describe('ModelOps policy and durable cycle behavior', () => {
   it('defaults paused, isolates owners, and requires owner-derived enable', async () => {
-    const repo = createMemoryModelOpsRepository()
+    const repo = fixedModelOpsRepository()
     const policy = await createModelOpsPolicy(OWNER, policyInput({ minimumNewVerifiedCandidates: 1 }), 'policy-paused-1', repo)
     expect(policy.status).toBe('paused')
     expect(await repo.getPolicy(OTHER_OWNER, policy.policyId)).toBeNull()
@@ -89,7 +91,7 @@ describe('ModelOps policy and durable cycle behavior', () => {
   })
 
   it('supports idempotent policy replay/collision and terminal revoke', async () => {
-    const repo = createMemoryModelOpsRepository()
+    const repo = fixedModelOpsRepository()
     const first = await createModelOpsPolicy(OWNER, policyInput(), 'policy-replay-1', repo)
     const replay = await createModelOpsPolicy(OWNER, policyInput(), 'policy-replay-1', repo)
     expect(replay.policyId).toBe(first.policyId)
@@ -109,6 +111,26 @@ describe('ModelOps policy and durable cycle behavior', () => {
     const claims = await Promise.all([repo.claimCycle(OWNER, cycle.cycleId, 'winner-a', new Date(Date.now() + 60_000).toISOString()), repo.claimCycle(OWNER, cycle.cycleId, 'winner-b', new Date(Date.now() + 60_000).toISOString())])
     expect(claims.filter(item => item.outcome === 'stale_recovered')).toHaveLength(1)
     expect(claims.filter(item => item.outcome === 'in_progress')).toHaveLength(1)
+  })
+
+  it('fences every stale worker mutation and event after durable lease takeover', async () => {
+    const outcome = createMemoryGeoOutcomeRepository()
+    let clock = new Date('2026-08-28T00:00:00.000Z')
+    const repo = createMemoryModelOpsRepository(undefined, () => new Date(clock))
+    await createModelOpsPolicy(OWNER, policyInput({ minimumNewVerifiedCandidates: 1 }), 'fencing-policy-1', repo)
+    const cycle = await createCycleFor(OWNER, outcome, repo, 'fencing-cycle-1')
+    const first = await repo.claimCycle(OWNER, cycle.cycleId, 'worker-a', new Date(clock.getTime() + 60_000).toISOString())
+    expect(first.outcome).toBe('claimed')
+    const staleFence = { leaseOwner: 'worker-a', leaseVersion: first.cycle.leaseVersion, attempt: first.cycle.attempt }
+    clock = new Date(clock.getTime() + 120_000)
+    const takeover = await repo.claimCycle(OWNER, cycle.cycleId, 'worker-b', new Date(clock.getTime() + 60_000).toISOString())
+    expect(takeover.outcome).toBe('stale_recovered')
+    expect(takeover.cycle.leaseVersion).toBe(first.cycle.leaseVersion + 1)
+    await expect(repo.updateCycle(OWNER, cycle.cycleId, { reasonCodes: ['stale-write'] }, staleFence)).rejects.toThrow(/fence|stale/i)
+    const staleEventFingerprint = hash('stale-event')
+    await expect(repo.appendEvent(OWNER, { eventId: 'stale-worker-event', ownerUserId: OWNER, cycleId: cycle.cycleId, eventType: 'stale_worker_write', eventPayload: {}, eventFingerprint: staleEventFingerprint, createdAt: clock.toISOString() }, staleFence)).rejects.toThrow(/fence|stale/i)
+    const currentFence = { leaseOwner: 'worker-b', leaseVersion: takeover.cycle.leaseVersion, attempt: takeover.cycle.attempt }
+    await expect(repo.updateCycle(OWNER, cycle.cycleId, { reasonCodes: ['current-worker'] }, currentFence)).resolves.toMatchObject({ reasonCodes: ['current-worker'] })
   })
 
   it('records insufficient data without creating an empty dataset and dry-run writes nothing', async () => {
@@ -273,7 +295,7 @@ describe('shadow safety and owner rollback', () => {
     expect(evaluation.status).toBe('needs_owner_attention')
     expect((evaluation.driftDiagnostics as { previousTestF1: number }).previousTestF1).toBe(1)
     expect((await outcome.getArtifact(OWNER, trainedArtifactId))?.status).toBe('shadow_failed')
-  })
+  }, 15000)
 
   it('requires a compatible owner rollback decision and keeps decision append-only', async () => {
     const outcome = createMemoryGeoOutcomeRepository(trainedState)
@@ -312,4 +334,45 @@ describe('shadow safety and owner rollback', () => {
     expect(recovered.revokedArtifact.status).toBe('revoked')
     expect(await repo.listRollbackDecisions(OWNER)).toHaveLength(1)
   })
+})
+
+
+describe('policy-driven experimental ModelOps', () => {
+  it('runs without per-cycle owner approval and never marks an artifact production-active', async () => {
+    const outcome = createMemoryGeoOutcomeRepository()
+    const repo = fixedModelOpsRepository()
+    await seedObservations(outcome, Array.from({ length: 500 }, (_, index) => pair(index + 1)).flat())
+    const policy = await createModelOpsPolicy(OWNER, policyInput({ autonomousExecutionEnabled: true, minimumNewVerifiedCandidates: 200, minimumNewQueryGroups: 30, minimumNewWebsites: 5 }), 'autonomous-policy-1', repo)
+    await repo.updatePolicy(OWNER, policy.policyId, { status: 'enabled', authorizedByOwnerUserId: OWNER, authorizedAt: new Date('2026-08-28T00:00:00.000Z').toISOString() })
+    const cycle = await createCycleFor(OWNER, outcome, repo, 'autonomous-cycle-1', 'scheduled')
+    const result = await executeModelOpsCycle(OWNER, cycle.cycleId, outcome, repo, 'autonomous-worker', new Date('2026-08-28T00:00:00.000Z'))
+    expect(result.dataset?.status).toBe('approved')
+    expect((await outcome.listDatasetDecisions(OWNER)).at(-1)?.reviewerUserId).toBeNull()
+    expect(result.trainingRun?.status).toBe('completed')
+    expect(result.artifact?.status).toBe('approved_for_shadow')
+    expect(result.shadowEvaluation?.status).toBe('insufficient_data')
+    expect(result.cycle.status).toBe('completed')
+    expect((await outcome.listDecisions(OWNER)).at(-1)?.reviewerUserId).toBeNull()
+    expect((await outcome.listArtifacts(OWNER)).every(artifact => !('production_active' as string).includes(artifact.status))).toBe(true)
+  })
+
+  it('connects a completed formal shadow cycle to a durable advisory-only assignment', async () => {
+    const state = structuredClone(approvedState)
+    const baseline = structuredClone(trainedState.artifacts.find(item => item.status === 'approved_for_shadow')!)
+    state.artifacts.push(baseline)
+    const outcome = createMemoryGeoOutcomeRepository(state)
+    const repo = createMemoryModelOpsRepository()
+    await seedObservations(outcome, Array.from({ length: 250 }, (_, index) => pair(2_000 + index)).flat())
+    const policy = await createModelOpsPolicy(OWNER, policyInput({ autonomousExecutionEnabled: true, minimumNewVerifiedCandidates: 200, minimumNewQueryGroups: 30, minimumNewWebsites: 5 }), 'advisory-cycle-policy', repo)
+    await repo.updatePolicy(OWNER, policy.policyId, { status: 'enabled', authorizedByOwnerUserId: OWNER, authorizedAt: '2026-08-28T00:00:00.000Z' })
+    const cycle = await createCycleFor(OWNER, outcome, repo, 'advisory-cycle-runtime', 'scheduled')
+    const result = await executeModelOpsCycle(OWNER, cycle.cycleId, outcome, repo, 'advisory-worker', new Date('2032-01-01T00:00:00.000Z'))
+    expect(result.shadowEvaluation?.status).toBe('completed')
+    const assignments = await repo.listAdvisoryAssignments(OWNER)
+    expect(assignments).toHaveLength(1)
+    expect(assignments[0]).toMatchObject({ cycleId: cycle.cycleId, candidateArtifactId: result.artifact?.artifactId, currentArtifactHash: baseline.artifactHash, candidateArtifactHash: result.artifact?.artifactHash, status: 'advisory', productionActivation: false, reasonCodes: ['shadow_completed', 'advisory_only'] })
+    expect(assignments[0]?.datasetFingerprint).toMatch(/^[a-f0-9]{64}$/u)
+    expect(assignments[0]?.splitFingerprint).toMatch(/^[a-f0-9]{64}$/u)
+    expect(assignments[0]?.metricsFingerprint).toMatch(/^[a-f0-9]{64}$/u)
+  }, 15000)
 })

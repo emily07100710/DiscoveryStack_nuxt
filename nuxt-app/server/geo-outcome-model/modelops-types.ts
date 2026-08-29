@@ -17,6 +17,8 @@ export interface ModelOpsPolicyConfig {
   maximumTrainingRunsPerCycle: number
   cooldownHours: number
   shadowEvaluationEnabled: boolean
+  /** One-time owner policy may run dataset approval and shadow preparation; never activates production. */
+  autonomousExecutionEnabled: boolean
   expiresAt: string | null
 }
 
@@ -53,6 +55,8 @@ export interface ModelOpsCycle {
   startedAt: string | null
   completedAt: string | null
   attempt: number
+  /** Monotonic fencing token; every successful claim/takeover increments it. */
+  leaseVersion: number
   leaseOwner: string | null
   leaseExpiresAt: string | null
   idempotencyKey: string
@@ -107,9 +111,39 @@ export interface ModelOpsRollbackDecision {
   createdAt: string
 }
 
+export interface ModelOpsAdvisoryAssignment {
+  assignmentId: string
+  ownerUserId: number
+  policyId: string
+  policyFingerprint: string
+  currentArtifactHash: string
+  candidateArtifactHash: string
+  shadowEvaluationFingerprint: string
+  cycleId: string
+  candidateArtifactId: string
+  datasetFingerprint: string
+  splitFingerprint: string
+  metricsFingerprint: string
+  reasonCodes: string[]
+  productionActivation: false
+  status: 'advisory' | 'rolled_back'
+  activeScopeKey: string | null
+  version: number
+  rollbackFromAssignmentId: string | null
+  assignmentFingerprint: string
+  createdAt: string
+  rolledBackAt: string | null
+}
+
 export interface ModelOpsCycleClaimResult {
   outcome: 'claimed' | 'replay' | 'in_progress' | 'stale_recovered' | 'collision'
   cycle: ModelOpsCycle
+}
+
+export interface ModelOpsLeaseFence {
+  leaseOwner: string
+  leaseVersion: number
+  attempt: number
 }
 
 export interface ModelOpsWorkspace {
@@ -119,6 +153,7 @@ export interface ModelOpsWorkspace {
   events: ModelOpsEvent[]
   shadowEvaluations: ModelOpsShadowEvaluation[]
   rollbackDecisions: ModelOpsRollbackDecision[]
+  advisoryAssignments: ModelOpsAdvisoryAssignment[]
   outcome: {
     readiness: { development: DatasetManifest['readiness'], shadow: DatasetManifest['readiness'] }
     datasets: DatasetManifest[]
@@ -139,13 +174,17 @@ export interface ModelOpsRepositoryPort {
   getCycle(ownerUserId: number, cycleId: string): Promise<ModelOpsCycle | null>
   saveCycle(ownerUserId: number, cycle: ModelOpsCycle): Promise<ModelOpsCycle>
   claimCycle(ownerUserId: number, cycleId: string, leaseOwner: string, leaseExpiresAt: string): Promise<ModelOpsCycleClaimResult>
-  updateCycle(ownerUserId: number, cycleId: string, patch: Partial<ModelOpsCycle>): Promise<ModelOpsCycle>
-  appendEvent(ownerUserId: number, event: ModelOpsEvent): Promise<ModelOpsEvent>
+  assertCycleFence(ownerUserId: number, cycleId: string, fence: ModelOpsLeaseFence): Promise<ModelOpsCycle>
+  updateCycle(ownerUserId: number, cycleId: string, patch: Partial<ModelOpsCycle>, fence?: ModelOpsLeaseFence): Promise<ModelOpsCycle>
+  appendEvent(ownerUserId: number, event: ModelOpsEvent, fence?: ModelOpsLeaseFence): Promise<ModelOpsEvent>
   listEvents(ownerUserId: number, cycleId?: string): Promise<ModelOpsEvent[]>
   saveShadowEvaluation(ownerUserId: number, evaluation: ModelOpsShadowEvaluation): Promise<ModelOpsShadowEvaluation>
   listShadowEvaluations(ownerUserId: number, artifactId?: string): Promise<ModelOpsShadowEvaluation[]>
   appendRollbackDecision(ownerUserId: number, decision: ModelOpsRollbackDecision): Promise<ModelOpsRollbackDecision>
   listRollbackDecisions(ownerUserId: number): Promise<ModelOpsRollbackDecision[]>
+  listAdvisoryAssignments(ownerUserId: number): Promise<ModelOpsAdvisoryAssignment[]>
+  saveAdvisoryAssignment(ownerUserId: number, assignment: ModelOpsAdvisoryAssignment): Promise<ModelOpsAdvisoryAssignment>
+  compareAndSwapAdvisoryAssignment(ownerUserId: number, assignmentId: string, expectedVersion: number, patch: Partial<ModelOpsAdvisoryAssignment>): Promise<ModelOpsAdvisoryAssignment | null>
   transaction<T>(work: (repository: ModelOpsRepositoryPort) => Promise<T>): Promise<T>
 }
 
@@ -155,6 +194,7 @@ export interface MemoryModelOpsState {
   events: ModelOpsEvent[]
   shadowEvaluations: ModelOpsShadowEvaluation[]
   rollbackDecisions: ModelOpsRollbackDecision[]
+  advisoryAssignments?: ModelOpsAdvisoryAssignment[]
 }
 
 export interface ModelOpsDependencies {

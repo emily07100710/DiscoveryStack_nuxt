@@ -1189,11 +1189,154 @@
       "corrected": "fk_llm_visibility_observati_observation_id_16b5f0f3b7",
       "originalBytes": 77,
       "correctedBytes": 53
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationBudgetReservations",
+      "column": "entryId",
+      "targetTable": "contentOperationCalendarEntries",
+      "targetColumn": "id",
+      "original": "contentOperationBudgetReservations_entryId_contentOperationCalendarEntries_id_fk",
+      "originalBytes": 80,
+      "corrected": "fk_content_operation_budget_entry_id_f9984d8a11",
+      "correctedBytes": 47
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationBudgetReservations",
+      "column": "publicationTargetId",
+      "targetTable": "contentOperationPublicationTargets",
+      "targetColumn": "id",
+      "original": "contentOperationBudgetReservations_publicationTargetId_contentOperationPublicationTargets_id_fk",
+      "originalBytes": 95,
+      "corrected": "fk_content_operation_budget_publication_target_301e2f78f9",
+      "correctedBytes": 57
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationEntityStrategyProfiles",
+      "column": "clientId",
+      "targetTable": "contentOperationClients",
+      "targetColumn": "id",
+      "original": "contentOperationEntityStrategyProfiles_clientId_contentOperationClients_id_fk",
+      "originalBytes": 77,
+      "corrected": "fk_content_operation_entity_client_id_93fa2c6912",
+      "correctedBytes": 48
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationMachineAuthorizations",
+      "column": "clientId",
+      "targetTable": "contentOperationClients",
+      "targetColumn": "id",
+      "original": "contentOperationMachineAuthorizations_clientId_contentOperationClients_id_fk",
+      "originalBytes": 76,
+      "corrected": "fk_content_operation_machin_client_id_786cef497a",
+      "correctedBytes": 48
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationMachineAuthorizations",
+      "column": "draftId",
+      "targetTable": "seoGeoContentDrafts",
+      "targetColumn": "id",
+      "original": "contentOperationMachineAuthorizations_draftId_seoGeoContentDrafts_id_fk",
+      "originalBytes": 71,
+      "corrected": "fk_content_operation_machin_draft_id_8fb1f6c556",
+      "correctedBytes": 47
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationMachineAuthorizations",
+      "column": "entryId",
+      "targetTable": "contentOperationCalendarEntries",
+      "targetColumn": "id",
+      "original": "contentOperationMachineAuthorizations_entryId_contentOperationCalendarEntries_id_fk",
+      "originalBytes": 83,
+      "corrected": "fk_content_operation_machin_entry_id_07afe0cb6d",
+      "correctedBytes": 47
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationMachineAuthorizations",
+      "column": "jobId",
+      "targetTable": "seoGeoContentJobs",
+      "targetColumn": "id",
+      "original": "contentOperationMachineAuthorizations_jobId_seoGeoContentJobs_id_fk",
+      "originalBytes": 67,
+      "corrected": "fk_content_operation_machin_job_id_305a9e3c04",
+      "correctedBytes": 45
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationMachineAuthorizations",
+      "column": "publicationTargetId",
+      "targetTable": "contentOperationPublicationTargets",
+      "targetColumn": "id",
+      "original": "contentOperationMachineAuthorizations_publicationTargetId_contentOperationPublicationTargets_id_fk",
+      "originalBytes": 98,
+      "corrected": "fk_content_operation_machin_publication_target_7e7e3215e9",
+      "correctedBytes": 57
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationQueryOwnership",
+      "column": "clientId",
+      "targetTable": "contentOperationClients",
+      "targetColumn": "id",
+      "original": "contentOperationQueryOwnership_clientId_contentOperationClients_id_fk",
+      "originalBytes": 69,
+      "corrected": "fk_content_operation_query__client_id_ae8ba34aa7",
+      "correctedBytes": 48
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationRepairAttempts",
+      "column": "clientId",
+      "targetTable": "contentOperationClients",
+      "targetColumn": "id",
+      "original": "contentOperationRepairAttempts_clientId_contentOperationClients_id_fk",
+      "originalBytes": 69,
+      "corrected": "fk_content_operation_repair_client_id_c44092d2bd",
+      "correctedBytes": 48
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationRepairAttempts",
+      "column": "entryId",
+      "targetTable": "contentOperationCalendarEntries",
+      "targetColumn": "id",
+      "original": "contentOperationRepairAttempts_entryId_contentOperationCalendarEntries_id_fk",
+      "originalBytes": 76,
+      "corrected": "fk_content_operation_repair_entry_id_c4a371cc0a",
+      "correctedBytes": 47
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationTopicSubstitutions",
+      "column": "clientId",
+      "targetTable": "contentOperationClients",
+      "targetColumn": "id",
+      "original": "contentOperationTopicSubstitutions_clientId_contentOperationClients_id_fk",
+      "originalBytes": 73,
+      "corrected": "fk_content_operation_topic__client_id_a49c8626e8",
+      "correctedBytes": 48
+    },
+    {
+      "migration": "0032_youthful_famine.sql",
+      "table": "contentOperationTopicSubstitutions",
+      "column": "entryId",
+      "targetTable": "contentOperationCalendarEntries",
+      "targetColumn": "id",
+      "original": "contentOperationTopicSubstitutions_entryId_contentOperationCalendarEntries_id_fk",
+      "originalBytes": 80,
+      "corrected": "fk_content_operation_topic__entry_id_56892ad217",
+      "correctedBytes": 47
     }
   ],
   "schemaPolicy": {
     "newForeignKeysRequireExplicitBoundedNames": true,
-    "legacyImplicitForeignKeyCount": 221,
-    "legacyImplicitForeignKeysSha256": "75eb781f37b0bdabe9951cc1530e883cf886d532360a3a43d513d0f7ad72a071"
+    "legacyImplicitForeignKeyCount": 227,
+    "legacyImplicitForeignKeysSha256": "897e3e02f5ca41b36309e7493c0b2ce0af518c1551100905a8e28caacb7efd6c"
   }
 }

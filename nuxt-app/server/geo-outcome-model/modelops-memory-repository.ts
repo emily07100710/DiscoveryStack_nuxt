@@ -4,7 +4,9 @@ import type {
   ModelOpsCycle,
   ModelOpsCycleClaimResult,
   ModelOpsEvent,
+  ModelOpsLeaseFence,
   ModelOpsPolicy,
+  ModelOpsAdvisoryAssignment,
   ModelOpsRepositoryPort,
   ModelOpsRollbackDecision,
   ModelOpsShadowEvaluation,
@@ -15,11 +17,14 @@ const assertOwner = (expected: number, actual: number) => { if (expected !== act
 const now = () => Date.now()
 
 export class InMemoryModelOpsRepository implements ModelOpsRepositoryPort {
-  private state: MemoryModelOpsState
+  private state: MemoryModelOpsState & { advisoryAssignments: ModelOpsAdvisoryAssignment[] }
   private lock: Promise<void> = Promise.resolve()
+  private readonly clock: () => Date
 
-  constructor(initial?: MemoryModelOpsState) {
-    this.state = clone(initial || { policies: [], cycles: [], events: [], shadowEvaluations: [], rollbackDecisions: [] })
+  constructor(initial?: MemoryModelOpsState, clock: () => Date = () => new Date()) {
+    this.state = clone(initial || { policies: [], cycles: [], events: [], shadowEvaluations: [], rollbackDecisions: [], advisoryAssignments: [] }) as MemoryModelOpsState & { advisoryAssignments: ModelOpsAdvisoryAssignment[] }
+    this.state.advisoryAssignments ||= []
+    this.clock = clock
   }
 
   exportState(): MemoryModelOpsState { return clone(this.state) }
@@ -74,30 +79,51 @@ export class InMemoryModelOpsRepository implements ModelOpsRepositoryPort {
       if (index < 0) throw new Error('Cycle not found.')
       const current = this.state.cycles[index]!
       if (current.status === 'completed' || current.status === 'insufficient_data' || current.status === 'blocked') return { outcome: 'replay', cycle: clone(current) }
+      const observedAt = this.clock().getTime()
       const expires = current.leaseExpiresAt ? new Date(current.leaseExpiresAt).getTime() : 0
-      if (current.status === 'running' && expires > now()) return { outcome: 'in_progress', cycle: clone(current) }
+      if (current.status === 'running' && expires > observedAt) return { outcome: 'in_progress', cycle: clone(current) }
       if (current.status === 'failed') return { outcome: 'collision', cycle: clone(current) }
-      const stale = current.status === 'running' && expires <= now()
-      const updated: ModelOpsCycle = { ...current, status: 'running', startedAt: current.startedAt || new Date().toISOString(), leaseOwner, leaseExpiresAt, attempt: current.attempt + 1, updatedAt: new Date().toISOString() }
+      const stale = current.status === 'running' && expires <= observedAt
+      const updated: ModelOpsCycle = { ...current, status: 'running', startedAt: current.startedAt || this.clock().toISOString(), leaseOwner, leaseExpiresAt, attempt: current.attempt + 1, leaseVersion: current.leaseVersion + 1, updatedAt: this.clock().toISOString() }
       this.state.cycles.splice(index, 1, clone(updated))
       return { outcome: stale ? 'stale_recovered' : 'claimed', cycle: clone(updated) }
     })
   }
-  async updateCycle(ownerUserId: number, cycleId: string, patch: Partial<ModelOpsCycle>) {
+  async assertCycleFence(ownerUserId: number, cycleId: string, fence: ModelOpsLeaseFence) {
+    return this.withLock(async () => {
+      const current = this.state.cycles.find(item => item.ownerUserId === ownerUserId && item.cycleId === cycleId)
+      if (!current) throw new Error('Cycle not found.')
+      const leaseValid = current.leaseOwner === fence.leaseOwner && current.leaseVersion === fence.leaseVersion && current.attempt === fence.attempt && Boolean(current.leaseExpiresAt) && new Date(current.leaseExpiresAt!).getTime() > this.clock().getTime()
+      if (!leaseValid) throw new Error('ModelOps cycle lease fence is stale or expired.')
+      return clone(current)
+    })
+  }
+  async updateCycle(ownerUserId: number, cycleId: string, patch: Partial<ModelOpsCycle>, fence?: ModelOpsLeaseFence) {
     return this.withLock(async () => {
       const index = this.state.cycles.findIndex(item => item.ownerUserId === ownerUserId && item.cycleId === cycleId)
       if (index < 0) throw new Error('Cycle not found.')
       if (patch.ownerUserId !== undefined && patch.ownerUserId !== ownerUserId) throw new Error('Owner scope mismatch.')
       const current = this.state.cycles[index]!
-      const updated: ModelOpsCycle = { ...current, ...clone(patch), ownerUserId, updatedAt: new Date().toISOString() }
+      const leaseValid = fence && current.status === 'running' && current.leaseOwner === fence.leaseOwner && current.leaseVersion === fence.leaseVersion && current.attempt === fence.attempt && Boolean(current.leaseExpiresAt) && new Date(current.leaseExpiresAt!).getTime() > this.clock().getTime()
+      if (!leaseValid) throw new Error('ModelOps cycle lease fence is stale or expired.')
+      if (patch.attempt !== undefined || patch.leaseVersion !== undefined) throw new Error('ModelOps attempt and lease version are claim-owned fields.')
+      const safePatch = clone(patch)
+      delete safePatch.leaseOwner
+      delete safePatch.leaseExpiresAt
+      const updated: ModelOpsCycle = { ...current, ...safePatch, ownerUserId, updatedAt: this.clock().toISOString() }
       this.state.cycles.splice(index, 1, clone(updated))
       return clone(updated)
     })
   }
 
-  async appendEvent(ownerUserId: number, event: ModelOpsEvent) {
+  async appendEvent(ownerUserId: number, event: ModelOpsEvent, fence?: ModelOpsLeaseFence) {
     assertOwner(ownerUserId, event.ownerUserId)
     return this.withLock(async () => {
+      const cycle = this.state.cycles.find(item => item.ownerUserId === ownerUserId && item.cycleId === event.cycleId)
+      if (cycle) {
+        const leaseValid = fence && cycle.leaseOwner === fence.leaseOwner && cycle.leaseVersion === fence.leaseVersion && cycle.attempt === fence.attempt && Boolean(cycle.leaseExpiresAt) && new Date(cycle.leaseExpiresAt!).getTime() > this.clock().getTime()
+        if (!leaseValid) throw new Error('ModelOps cycle event lease fence is stale or expired.')
+      }
       const existing = this.state.events.find(item => item.ownerUserId === ownerUserId && item.eventId === event.eventId)
       if (existing) {
         if (existing.eventFingerprint !== event.eventFingerprint) throw new Error('Event collision.')
@@ -133,6 +159,30 @@ export class InMemoryModelOpsRepository implements ModelOpsRepositoryPort {
   }
   async listRollbackDecisions(ownerUserId: number) { return clone(this.state.rollbackDecisions.filter(item => item.ownerUserId === ownerUserId)) }
 
+  async listAdvisoryAssignments(ownerUserId: number) { return clone(this.state.advisoryAssignments.filter(item => item.ownerUserId === ownerUserId)) }
+  async saveAdvisoryAssignment(ownerUserId: number, assignment: ModelOpsAdvisoryAssignment) {
+    assertOwner(ownerUserId, assignment.ownerUserId)
+    return this.withLock(async () => {
+      const replay = this.state.advisoryAssignments.find(item => item.ownerUserId === ownerUserId && item.assignmentFingerprint === assignment.assignmentFingerprint)
+      if (replay) return clone(replay)
+      if (assignment.status !== 'advisory' || assignment.activeScopeKey === null) throw new Error('Only an active advisory assignment can be created.')
+      if (this.state.advisoryAssignments.some(item => item.ownerUserId === ownerUserId && item.activeScopeKey === assignment.activeScopeKey)) throw new Error('Active advisory assignment collision.')
+      this.state.advisoryAssignments.push(clone(assignment))
+      return clone(assignment)
+    })
+  }
+  async compareAndSwapAdvisoryAssignment(ownerUserId: number, assignmentId: string, expectedVersion: number, patch: Partial<ModelOpsAdvisoryAssignment>) {
+    return this.withLock(async () => {
+      const index = this.state.advisoryAssignments.findIndex(item => item.ownerUserId === ownerUserId && item.assignmentId === assignmentId && item.version === expectedVersion)
+      if (index < 0) return null
+      const current = this.state.advisoryAssignments[index]!
+      if (current.status !== 'advisory' || patch.status !== 'rolled_back' || patch.activeScopeKey !== null || patch.version !== expectedVersion + 1 || !patch.rollbackFromAssignmentId) throw new Error('Advisory assignment CAS transition is invalid.')
+      const updated = { ...current, ...clone(patch), ownerUserId } as ModelOpsAdvisoryAssignment
+      this.state.advisoryAssignments.splice(index, 1, updated)
+      return clone(updated)
+    })
+  }
+
   async transaction<T>(work: (repository: ModelOpsRepositoryPort) => Promise<T>): Promise<T> {
     const snapshot = clone(this.state)
     try { return await work(this) } catch (error) { this.state = snapshot; throw error }
@@ -147,5 +197,5 @@ export class InMemoryModelOpsRepository implements ModelOpsRepositoryPort {
   }
 }
 
-export function createMemoryModelOpsRepository(initial?: MemoryModelOpsState): InMemoryModelOpsRepository { return new InMemoryModelOpsRepository(initial) }
+export function createMemoryModelOpsRepository(initial?: MemoryModelOpsState, clock?: () => Date): InMemoryModelOpsRepository { return new InMemoryModelOpsRepository(initial, clock) }
 export function eventFingerprint(input: unknown): string { return fingerprint(input) }

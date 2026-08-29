@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { createServer } from 'node:http'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp, createError, createRouter, defineEventHandler, getHeader, send, setResponseStatus, toNodeListener } from 'h3'
 import { createMockManagedSiteCheckoutSessionAdapter } from '../server/managed-sites/live-connectors/checkout-session'
 import { setManagedSitePaymentWebhookDependenciesForTests, setManagedSitePublicOrderingRepositoryForTests, setManagedSiteRouteDependencyFactoryForTests } from '../server/managed-sites/live-connectors/http'
@@ -11,10 +11,10 @@ import { createMockManagedSiteDnsTlsAdapter, createMockManagedSiteDomainAdapter 
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
 import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
 import { createLiveConnectorMemoryRepository } from './fixtures/managed-site/live-connectors-repository'
-import { createAuthoritativeManagedSiteReleaseFixture } from './fixtures/managed-site/live-connectors-application'
+import { createAuthoritativeManagedSiteReleaseFixture, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
 
 beforeAll(() => { (globalThis as any).defineEventHandler = defineEventHandler; (globalThis as any).createError = createError })
-afterEach(() => { setManagedSiteRouteDependencyFactoryForTests(null); setManagedSitePaymentWebhookDependenciesForTests(null); setManagedSitePublicOrderingRepositoryForTests(null) })
+afterEach(() => { vi.useRealTimers(); setManagedSiteRouteDependencyFactoryForTests(null); setManagedSitePaymentWebhookDependenciesForTests(null); setManagedSitePublicOrderingRepositoryForTests(null) })
 
 async function serve(handler: any, path: string) {
   const app = createApp(); const router = createRouter(); router.post(path, handler); app.use(router)
@@ -182,6 +182,8 @@ describe('managed-site actual fixed H3 route acceptance', () => {
   })
 
   it('enforces owner session, exact path scope, strict fields, safe order, and redacted response at the checkout handler', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(managedSiteFixedNow)
     const line = await createAuthoritativeManagedSiteReleaseFixture({ createCheckout: false })
     setManagedSiteRouteDependencyFactoryForTests(event => {
       const session = getHeader(event, 'x-test-owner-session')

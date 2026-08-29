@@ -828,6 +828,9 @@ export const contentOperationAutopilotPolicies = mysqlTable('contentOperationAut
   publicationTargetId: int('publicationTargetId').notNull(),
   policyId: varchar('policyId', { length: 96 }).notNull(),
   policyVersion: varchar('policyVersion', { length: 96 }).notNull(),
+  /** V1 balanced/autonomous mode; legacy rows project to balanced. */
+  mode: mysqlEnum('mode', ['balanced', 'aggressive_growth', 'conservative_brand']).default('balanced').notNull(),
+  websiteId: varchar('websiteId', { length: 128 }).notNull().default('legacy-website'),
   authorizedByOwnerUserId: int('authorizedByOwnerUserId').notNull(),
   status: mysqlEnum('status', ['enabled', 'paused', 'revoked']).default('enabled').notNull(),
   authorizedAt: timestamp('authorizedAt').notNull(),
@@ -843,6 +846,19 @@ export const contentOperationAutopilotPolicies = mysqlTable('contentOperationAut
   requiredQualityGateVersion: varchar('requiredQualityGateVersion', { length: 96 }).default('content-risk-gate-v1').notNull(),
   allowedTargetIds: json('allowedTargetIds').notNull().default([]),
   allowedProviderModels: json('allowedProviderModels').notNull().default([]),
+  allowedDestinations: json('allowedDestinations').notNull().default([]),
+  allowedCadences: json('allowedCadences').notNull().default([]),
+  allowedRiskClasses: json('allowedRiskClasses').notNull().default([]),
+  riskSemanticsVersion: varchar('riskSemanticsVersion', { length: 96 }),
+  maximumRiskSeverity: varchar('maximumRiskSeverity', { length: 40 }),
+  allowedBusinessRiskClasses: json('allowedBusinessRiskClasses'),
+  entityStrategyProfileId: varchar('entityStrategyProfileId', { length: 160 }),
+  maximumRepairAttempts: int('maximumRepairAttempts').default(3).notNull(),
+  maximumTopicSubstitutions: int('maximumTopicSubstitutions').default(2).notNull(),
+  generationBudget: int('generationBudget').default(0).notNull(),
+  publicationBudget: int('publicationBudget').default(0).notNull(),
+  generationBudgetUsed: int('generationBudgetUsed').default(0).notNull(),
+  publicationBudgetUsed: int('publicationBudgetUsed').default(0).notNull(),
   activatedAt: timestamp('activatedAt').defaultNow().notNull(),
   configurationFingerprint: varchar('configurationFingerprint', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
@@ -855,6 +871,201 @@ export const contentOperationAutopilotPolicies = mysqlTable('contentOperationAut
   uniqueIndex('content_operation_autopilot_policy_id_unique').on(table.policyId),
   uniqueIndex('content_operation_autopilot_owner_target_unique').on(table.ownerUserId, table.publicationTargetId),
   index('content_operation_autopilot_owner_status_idx').on(table.ownerUserId, table.status, table.expiresAt),
+])
+
+/** Collision-safe atomic budget debits. A replay returns the same row and never consumes twice. */
+export const contentOperationBudgetReservations = mysqlTable('contentOperationBudgetReservations', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  policyId: varchar('policyId', { length: 160 }).notNull(),
+  publicationTargetId: int('publicationTargetId').notNull(),
+  entryId: int('entryId').notNull(),
+  kind: mysqlEnum('kind', ['generation', 'publication']).notNull(),
+  units: int('units').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 160 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_content_operation_budget_publication_target_301e2f78f9', columns: [table.publicationTargetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+  foreignKey({ name: 'fk_content_operation_budget_entry_id_f9984d8a11', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+
+  uniqueIndex('content_operation_budget_owner_key_unique').on(table.ownerUserId, table.policyId, table.kind, table.idempotencyKey),
+  index('content_operation_budget_owner_policy_idx').on(table.ownerUserId, table.policyId, table.kind),
+])
+
+/** Durable owner/client/website-scoped entity strategy; all facts are server-approved projections. */
+export const contentOperationEntityStrategyProfiles = mysqlTable('contentOperationEntityStrategyProfiles', {
+  id: int('id').autoincrement().primaryKey(),
+  profileId: varchar('profileId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull(),
+  websiteId: varchar('websiteId', { length: 128 }).notNull(),
+  canonicalBrandName: varchar('canonicalBrandName', { length: 160 }).notNull(),
+  brandAliases: json('brandAliases').notNull(),
+  canonicalWebsiteOrigin: varchar('canonicalWebsiteOrigin', { length: 2048 }).notNull(),
+  businessType: varchar('businessType', { length: 160 }).notNull(),
+  primaryLocale: varchar('primaryLocale', { length: 32 }).notNull(),
+  secondaryLocales: json('secondaryLocales').notNull(),
+  primaryLocations: json('primaryLocations').notNull(),
+  serviceAreas: json('serviceAreas').notNull(),
+  primaryServices: json('primaryServices').notNull(),
+  secondaryServices: json('secondaryServices').notNull(),
+  targetAudience: json('targetAudience').notNull(),
+  primaryQueryClusters: json('primaryQueryClusters').notNull(),
+  supportingQueryClusters: json('supportingQueryClusters').notNull(),
+  canonicalPillarPages: json('canonicalPillarPages').notNull(),
+  servicePageBindings: json('servicePageBindings').notNull(),
+  approvedBrandFacts: json('approvedBrandFacts').notNull(),
+  approvedDifferentiators: json('approvedDifferentiators').notNull(),
+  prohibitedClaims: json('prohibitedClaims').notNull(),
+  preferredTone: varchar('preferredTone', { length: 160 }).notNull(),
+  requiredDisclosures: json('requiredDisclosures').notNull(),
+  internalLinkPolicy: varchar('internalLinkPolicy', { length: 500 }).notNull(),
+  structuredDataIdentity: json('structuredDataIdentity').notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  profileFingerprint: varchar('profileFingerprint', { length: 128 }).notNull(),
+  version: int('version').notNull(),
+  status: mysqlEnum('status', ['active', 'revoked']).default('active').notNull(),
+  activeScopeKey: varchar('activeScopeKey', { length: 128 }),
+  effectiveAt: timestamp('effectiveAt').notNull(),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_content_operation_entity_client_id_93fa2c6912', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+
+  uniqueIndex('content_operation_entity_profile_owner_id_unique').on(table.ownerUserId, table.profileId),
+  uniqueIndex('content_operation_entity_profile_owner_fingerprint_unique').on(table.ownerUserId, table.profileFingerprint),
+  uniqueIndex('content_operation_entity_profile_active_scope_unique').on(table.ownerUserId, table.activeScopeKey),
+  index('content_operation_entity_profile_owner_scope_idx').on(table.ownerUserId, table.clientId, table.websiteId, table.status),
+])
+
+/** Durable canonical query ownership; one active owner page per owner/client/website/query is enforced by application gates. */
+export const contentOperationQueryOwnership = mysqlTable('contentOperationQueryOwnership', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull(),
+  websiteId: varchar('websiteId', { length: 128 }).notNull(),
+  ownerPageId: varchar('ownerPageId', { length: 256 }).notNull(),
+  normalizedQuery: varchar('normalizedQuery', { length: 500 }).notNull(),
+  queryCluster: varchar('queryCluster', { length: 256 }).notNull(),
+  supportingArticleIds: json('supportingArticleIds').notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  fingerprint: varchar('fingerprint', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['active', 'revoked']).default('active').notNull(),
+  activeScopeKey: varchar('activeScopeKey', { length: 128 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  revokedAt: timestamp('revokedAt'),
+}, table => [
+  foreignKey({ name: 'fk_content_operation_query__client_id_ae8ba34aa7', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+
+  uniqueIndex('content_operation_query_ownership_owner_fingerprint_unique').on(table.ownerUserId, table.fingerprint),
+  uniqueIndex('content_operation_query_ownership_active_scope_unique').on(table.ownerUserId, table.activeScopeKey),
+  index('content_operation_query_ownership_scope_query_idx').on(table.ownerUserId, table.clientId, table.websiteId, table.normalizedQuery, table.status),
+])
+
+/** Append-only repair lineage; exact original and repaired hashes are persisted by the server. */
+export const contentOperationRepairAttempts = mysqlTable('contentOperationRepairAttempts', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull(),
+  websiteId: varchar('websiteId', { length: 128 }).notNull(),
+  entryId: int('entryId').notNull(),
+  originalDraftId: varchar('originalDraftId', { length: 160 }).notNull(),
+  originalContentHash: varchar('originalContentHash', { length: 128 }).notNull(),
+  repairAttempt: int('repairAttempt').notNull(),
+  reasonCodes: json('reasonCodes').notNull(),
+  failingMetrics: json('failingMetrics').notNull(),
+  evidenceDeficiencies: json('evidenceDeficiencies').notNull(),
+  entityCoverageDeficiencies: json('entityCoverageDeficiencies').notNull(),
+  prohibitedClaimLocations: json('prohibitedClaimLocations').notNull(),
+  citationDeficiencies: json('citationDeficiencies').notNull(),
+  keywordStuffingLocations: json('keywordStuffingLocations').notNull(),
+  internalLinkDeficiencies: json('internalLinkDeficiencies').notNull(),
+  requestedRepairs: json('requestedRepairs').notNull(),
+  providerModel: varchar('providerModel', { length: 160 }),
+  repairedDraftId: varchar('repairedDraftId', { length: 160 }),
+  repairedContentHash: varchar('repairedContentHash', { length: 128 }),
+  parentLineage: json('parentLineage').notNull(),
+  repairFingerprint: varchar('repairFingerprint', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['planned', 'succeeded', 'failed', 'skipped']).default('planned').notNull(),
+  leaseOwner: varchar('leaseOwner', { length: 128 }),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_content_operation_repair_client_id_c44092d2bd', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_repair_entry_id_c4a371cc0a', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+
+  uniqueIndex('content_operation_repair_owner_fingerprint_unique').on(table.ownerUserId, table.repairFingerprint),
+  index('content_operation_repair_owner_entry_idx').on(table.ownerUserId, table.entryId, table.repairAttempt),
+])
+
+/** Append-only topic substitution lineage; a skipped entry never blocks the calendar. */
+export const contentOperationTopicSubstitutions = mysqlTable('contentOperationTopicSubstitutions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull(),
+  websiteId: varchar('websiteId', { length: 128 }).notNull(),
+  entryId: int('entryId').notNull(),
+  substitutionAttempt: int('substitutionAttempt').notNull(),
+  originalTopic: varchar('originalTopic', { length: 500 }).notNull(),
+  substitutedTopic: varchar('substitutedTopic', { length: 500 }).notNull(),
+  reasonCodes: json('reasonCodes').notNull(),
+  lineage: json('lineage').notNull(),
+  substitutionFingerprint: varchar('substitutionFingerprint', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['planned', 'applied', 'skipped']).default('planned').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_content_operation_topic__client_id_a49c8626e8', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_topic__entry_id_56892ad217', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+
+  uniqueIndex('content_operation_substitution_owner_fingerprint_unique').on(table.ownerUserId, table.substitutionFingerprint),
+  index('content_operation_substitution_owner_entry_idx').on(table.ownerUserId, table.entryId, table.substitutionAttempt),
+])
+
+/** Append-only machine publication authorization; no human review identity is fabricated. */
+export const contentOperationMachineAuthorizations = mysqlTable('contentOperationMachineAuthorizations', {
+  id: int('id').autoincrement().primaryKey(),
+  authorizationId: varchar('authorizationId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  clientId: int('clientId').notNull(),
+  websiteId: varchar('websiteId', { length: 128 }).notNull(),
+  entryId: int('entryId').notNull(),
+  jobId: int('jobId'),
+  draftId: int('draftId').notNull(),
+  publicationTargetId: int('publicationTargetId'),
+  policyId: varchar('policyId', { length: 160 }).notNull(),
+  policyVersion: varchar('policyVersion', { length: 128 }).notNull(),
+  candidateId: varchar('candidateId', { length: 160 }).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
+  policyFingerprint: varchar('policyFingerprint', { length: 128 }),
+  entityProfileFingerprint: varchar('entityProfileFingerprint', { length: 128 }),
+  queryOwnershipFingerprint: varchar('queryOwnershipFingerprint', { length: 128 }),
+  riskClass: varchar('riskClass', { length: 40 }).notNull(),
+  riskFingerprint: varchar('riskFingerprint', { length: 128 }),
+  qualityStatus: varchar('qualityStatus', { length: 40 }).notNull(),
+  qualityFingerprint: varchar('qualityFingerprint', { length: 128 }),
+  targetId: varchar('targetId', { length: 160 }).notNull(),
+  authorizationPayload: json('authorizationPayload').notNull(),
+  authorizationFingerprint: varchar('authorizationFingerprint', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['authorized', 'executing', 'published', 'revoked']).default('authorized').notNull(),
+  decidedAt: timestamp('decidedAt').notNull(),
+  authorizationExpiresAt: timestamp('authorizationExpiresAt'),
+  claimedAt: timestamp('claimedAt'),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_content_operation_machin_client_id_786cef497a', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'fk_content_operation_machin_entry_id_07afe0cb6d', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+  foreignKey({ name: 'fk_content_operation_machin_job_id_305a9e3c04', columns: [table.jobId], foreignColumns: [seoGeoContentJobs.id] }),
+  foreignKey({ name: 'fk_content_operation_machin_draft_id_8fb1f6c556', columns: [table.draftId], foreignColumns: [seoGeoContentDrafts.id] }),
+  foreignKey({ name: 'fk_content_operation_machin_publication_target_7e7e3215e9', columns: [table.publicationTargetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+
+  uniqueIndex('content_operation_machine_auth_owner_id_unique').on(table.ownerUserId, table.authorizationId),
+  uniqueIndex('content_operation_machine_auth_owner_fingerprint_unique').on(table.ownerUserId, table.authorizationFingerprint),
+  uniqueIndex('content_operation_machine_auth_owner_target_unique').on(table.ownerUserId, table.entryId, table.publicationTargetId, table.authorizationFingerprint),
+  index('content_operation_machine_auth_owner_entry_idx').on(table.ownerUserId, table.entryId, table.createdAt),
 ])
 
 /** Append-only first-party publication attempt ledger. Each retry is a new row. */
@@ -968,6 +1179,8 @@ export const contentOperationCalendarEntries = mysqlTable('contentOperationCalen
   publicationRoutingPlanId: varchar('publicationRoutingPlanId', { length: 128 }),
   publicationAuthorityReference: varchar('publicationAuthorityReference', { length: 160 }),
   publicationTargetCount: int('publicationTargetCount').default(0).notNull(),
+  replacementOfEntryId: int('replacementOfEntryId'),
+  replacementFingerprint: varchar('replacementFingerprint', { length: 128 }),
   status: mysqlEnum('status', ['planned', 'materialized', 'awaiting_generation', 'awaiting_review', 'ready_to_publish', 'publishing', 'delivered', 'completed', 'cancelled', 'skipped', 'blocked']).default('planned').notNull(),
   engineEntryId: varchar('engineEntryId', { length: 128 }).notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
@@ -983,6 +1196,7 @@ export const contentOperationCalendarEntries = mysqlTable('contentOperationCalen
 
   uniqueIndex('content_operation_entries_calendar_engine_unique').on(table.calendarId, table.engineEntryId),
   uniqueIndex('content_operation_entries_owner_idempotency_unique').on(table.ownerUserId, table.idempotencyKey),
+  uniqueIndex('content_operation_entries_owner_replacement_unique').on(table.ownerUserId, table.replacementFingerprint),
   index('content_operation_entries_owner_status_idx').on(table.ownerUserId, table.status, table.plannedLocalDate),
   index('content_operation_entries_calendar_status_idx').on(table.calendarId, table.status),
 ])
@@ -2275,7 +2489,8 @@ export const geoOutcomeDatasetDecisions = mysqlTable('geoOutcomeDatasetDecisions
   decisionId: varchar('decisionId', { length: 160 }).notNull().unique(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   datasetManifestId: int('datasetManifestId').notNull(),
-  reviewerUserId: int('reviewerUserId').notNull().references(() => users.id),
+  /** Null is a truthful machine-policy actor; owner review paths still persist the owner id. */
+  reviewerUserId: int('reviewerUserId'),
   previousStatus: varchar('previousStatus', { length: 96 }).notNull(),
   newStatus: varchar('newStatus', { length: 96 }).notNull(),
   reason: varchar('reason', { length: 500 }).notNull(),
@@ -2531,6 +2746,7 @@ export const geoOutcomeModelopsPolicies = mysqlTable('geoOutcomeModelopsPolicies
   maximumTrainingRunsPerCycle: int('maximumTrainingRunsPerCycle').notNull(),
   cooldownHours: int('cooldownHours').notNull(),
   shadowEvaluationEnabled: boolean('shadowEvaluationEnabled').default(true).notNull(),
+  autonomousExecutionEnabled: boolean('autonomousExecutionEnabled').default(false).notNull(),
   authorizedByOwnerUserId: int('authorizedByOwnerUserId').references(() => users.id),
   authorizedAt: timestamp('authorizedAt'),
   expiresAt: timestamp('expiresAt'),
@@ -2541,6 +2757,7 @@ export const geoOutcomeModelopsPolicies = mysqlTable('geoOutcomeModelopsPolicies
 }, table => [
   uniqueIndex('geo_outcome_modelops_policy_owner_id_unique').on(table.ownerUserId, table.policyId),
   index('geo_outcome_modelops_policy_owner_status_idx').on(table.ownerUserId, table.status, table.updatedAt),
+  index('geo_outcome_modelops_policy_scheduler_idx').on(table.status, table.expiresAt, table.ownerUserId, table.updatedAt),
 ])
 
 /** Durable cycle projection. All values are redacted fingerprints or bounded reason metadata. */
@@ -2566,6 +2783,7 @@ export const geoOutcomeModelopsCycles = mysqlTable('geoOutcomeModelopsCycles', {
   startedAt: timestamp('startedAt'),
   completedAt: timestamp('completedAt'),
   attempt: int('attempt').default(0).notNull(),
+  leaseVersion: int('leaseVersion').default(0).notNull(),
   leaseOwner: varchar('leaseOwner', { length: 128 }),
   leaseExpiresAt: timestamp('leaseExpiresAt'),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
@@ -2642,11 +2860,45 @@ export const geoOutcomeModelopsRollbackDecisions = mysqlTable('geoOutcomeModelop
   index('geo_outcome_modelops_rollback_owner_artifact_idx').on(table.ownerUserId, table.artifactId, table.createdAt),
 ])
 
+/** Advisory-only model assignment. This table intentionally has no production_active state. */
+export const geoOutcomeModelopsAdvisoryAssignments = mysqlTable('geoOutcomeModelopsAdvisoryAssignments', {
+  id: int('id').autoincrement().primaryKey(),
+  assignmentId: varchar('assignmentId', { length: 160 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull().references(() => users.id),
+  policyId: varchar('policyId', { length: 160 }).notNull(),
+  policyFingerprint: varchar('policyFingerprint', { length: 128 }).notNull(),
+  currentArtifactHash: varchar('currentArtifactHash', { length: 128 }).notNull(),
+  candidateArtifactHash: varchar('candidateArtifactHash', { length: 128 }).notNull(),
+  shadowEvaluationFingerprint: varchar('shadowEvaluationFingerprint', { length: 128 }).notNull(),
+  // Additive nullable columns let the generated DDL preserve pre-V4 rows. The
+  // repository rejects any such legacy row as incomplete instead of inventing
+  // advisory lineage during migration.
+  cycleId: varchar('cycleId', { length: 160 }),
+  candidateArtifactId: varchar('candidateArtifactId', { length: 160 }),
+  datasetFingerprint: varchar('datasetFingerprint', { length: 128 }),
+  splitFingerprint: varchar('splitFingerprint', { length: 128 }),
+  metricsFingerprint: varchar('metricsFingerprint', { length: 128 }),
+  reasonCodes: json('reasonCodes'),
+  productionActivation: boolean('productionActivation').default(false).notNull(),
+  status: mysqlEnum('status', ['advisory', 'rolled_back']).default('advisory').notNull(),
+  activeScopeKey: varchar('activeScopeKey', { length: 128 }),
+  version: int('version').default(1).notNull(),
+  rollbackFromAssignmentId: varchar('rollbackFromAssignmentId', { length: 160 }),
+  assignmentFingerprint: varchar('assignmentFingerprint', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  rolledBackAt: timestamp('rolledBackAt'),
+}, table => [
+  uniqueIndex('geo_outcome_modelops_advisory_assignment_unique').on(table.ownerUserId, table.assignmentId),
+  uniqueIndex('geo_outcome_modelops_advisory_fingerprint_unique').on(table.ownerUserId, table.assignmentFingerprint),
+  uniqueIndex('geo_outcome_modelops_advisory_active_unique').on(table.ownerUserId, table.activeScopeKey),
+])
+
 export type GeoOutcomeModelopsPolicy = typeof geoOutcomeModelopsPolicies.$inferSelect
 export type GeoOutcomeModelopsCycle = typeof geoOutcomeModelopsCycles.$inferSelect
 export type GeoOutcomeModelopsEvent = typeof geoOutcomeModelopsEvents.$inferSelect
 export type GeoOutcomeModelopsShadowEvaluation = typeof geoOutcomeModelopsShadowEvaluations.$inferSelect
 export type GeoOutcomeModelopsRollbackDecision = typeof geoOutcomeModelopsRollbackDecisions.$inferSelect
+export type GeoOutcomeModelopsAdvisoryAssignment = typeof geoOutcomeModelopsAdvisoryAssignments.$inferSelect
 
 /** Canonical owner/client/site identity for one governed system. Commerce authority stays in Managed Site tables. */
 export const systemSpecs = mysqlTable('systemSpecs', {
