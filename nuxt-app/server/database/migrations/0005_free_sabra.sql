@@ -32,6 +32,6 @@ ALTER TABLE `publicIntelligenceIngestionJobs` ADD `pagesCleaned` int DEFAULT 0 N
 ALTER TABLE `publicIntelligenceIngestionJobs` ADD `artifactsCreated` int DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE `publicIntelligenceIngestionJobs` ADD `crawlResults` json;--> statement-breakpoint
 ALTER TABLE `publicIntelligenceTrainingRuns` ADD CONSTRAINT `publicIntelligenceTrainingRuns_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE `publicIntelligenceTrainingRuns` ADD CONSTRAINT `publicIntelligenceTrainingRuns_datasetBuildId_publicIntelligenceDatasetBuilds_id_fk` FOREIGN KEY (`datasetBuildId`) REFERENCES `publicIntelligenceDatasetBuilds`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `publicIntelligenceTrainingRuns` ADD CONSTRAINT `fk_public_intelligence_trai_dataset_build_id_43cf8ee54e` FOREIGN KEY (`datasetBuildId`) REFERENCES `publicIntelligenceDatasetBuilds`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX `public_intelligence_training_owner_idx` ON `publicIntelligenceTrainingRuns` (`ownerUserId`,`createdAt`);--> statement-breakpoint
 CREATE INDEX `public_intelligence_training_status_idx` ON `publicIntelligenceTrainingRuns` (`status`,`mode`);

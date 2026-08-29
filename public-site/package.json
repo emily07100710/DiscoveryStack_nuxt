@@ -20,6 +20,7 @@
     "@astrojs/sitemap": "3.7.3",
     "@astrojs/vue": "7.0.2",
     "astro": "7.2.4",
+    "cookie": "2.0.1",
     "vue": "3.5.41"
   },
   "devDependencies": {

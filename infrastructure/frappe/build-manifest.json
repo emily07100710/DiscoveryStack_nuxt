@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "system-factory-image-build-manifest-v1",
+  "status": "local-image-authority-verified-production-unapproved",
+  "baseImage": "docker.io/frappe/erpnext:v16.33.0@sha256:493cecf82c92c828bf0d0c57df60694e07dc61671e374ac93a070d1cc86df1bd",
+  "frappeCommit": "5cba016e86b54b57f34a3864282b92300ef20fb0",
+  "erpnextCommit": "b24c9eba551905e256e336ff170a91a92d197a2f",
+  "customAppSha256": "4db2698b4c5730c5650d52daab66bfb8c31edd615280e7051295699688590ec3",
+  "buildRecipeFingerprint": "dabf5882d47dc5cc1fa7487aa753d589b223d225ec38a6d4434e78d5769c4257",
+  "builtImageReference": "discoverystack/frappe-system-factory:v1-local",
+  "imageManifestDigest": "sha256:537d0a332716541df27a96c906c8ff90ca69574b6b35bb64599926d6ff4ec6e2",
+  "imageConfigDigest": "sha256:7b8e808d7ba13fb97963cad4ca6e71f9c1ce129d27d220b309020a21373e899f",
+  "productionApproved": false
+}
