@@ -1,0 +1,47 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  nuxt-app:
+    name: nuxt-app (typecheck + build + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.24.0, package_json_file: nuxt-app/package.json }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.23.1, cache: pnpm, cache-dependency-path: nuxt-app/pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+        working-directory: nuxt-app
+      - run: pnpm typecheck
+        working-directory: nuxt-app
+      # build before test: vitest assumes .output was produced from this same source revision
+      - run: NODE_OPTIONS=--max-old-space-size=1536 NITRO_PRESET=node-server pnpm build
+        working-directory: nuxt-app
+      - run: NODE_OPTIONS=--max-old-space-size=1536 NITRO_PRESET=node-server pnpm vitest run
+        working-directory: nuxt-app
+  public-site:
+    name: public-site (astro check + build + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.24.0, package_json_file: public-site/package.json }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.23.1, cache: pnpm, cache-dependency-path: public-site/pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+        working-directory: public-site
+      - run: pnpm astro check
+        working-directory: public-site
+      # `test` is itself `astro build && vitest run`
+      - run: pnpm test
+        working-directory: public-site
