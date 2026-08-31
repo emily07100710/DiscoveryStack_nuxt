@@ -11,7 +11,7 @@
     "preview": "nuxt preview --host 0.0.0.0 --port 3000",
     "typecheck": "nuxt typecheck",
     "test": "vitest run",
-    "test:safe": "pnpm typecheck && NODE_OPTIONS=--max-old-space-size=1536 NITRO_PRESET=node-server pnpm build && NODE_OPTIONS=--max-old-space-size=1536 NITRO_PRESET=node-server vitest run",
+    "test:safe": "pnpm typecheck && NODE_OPTIONS=--max-old-space-size=4096 NITRO_PRESET=node-server pnpm build && NODE_OPTIONS=--max-old-space-size=4096 NITRO_PRESET=node-server vitest run",
     "test:external-credentials": "DS_RUN_EXTERNAL_CREDENTIAL_TESTS=1 vitest run tests/provider-secrets.integration.test.ts tests/huggingface.credentials.test.ts tests/huggingface-namespace-secret.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:check-identifiers": "node scripts/mysql-identifier-policy.mjs",

@@ -23,9 +23,9 @@ jobs:
       - run: pnpm typecheck
         working-directory: nuxt-app
       # build before test: vitest assumes .output was produced from this same source revision
-      - run: NODE_OPTIONS=--max-old-space-size=1536 NITRO_PRESET=node-server pnpm build
+      - run: NODE_OPTIONS=--max-old-space-size=4096 NITRO_PRESET=node-server pnpm build
         working-directory: nuxt-app
-      - run: NODE_OPTIONS=--max-old-space-size=1536 NITRO_PRESET=node-server pnpm vitest run
+      - run: NODE_OPTIONS=--max-old-space-size=4096 NITRO_PRESET=node-server pnpm vitest run
         working-directory: nuxt-app
   public-site:
     name: public-site (astro check + build + test)
