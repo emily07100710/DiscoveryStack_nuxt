@@ -7,7 +7,7 @@ import { OUTCOME_DATA_CONTRACT_VERSION } from '../outcome-learning'
 import { runOwnerProviderObservation } from '../llm-visibility/repository'
 import type { ProviderObservationRunInput } from '../llm-visibility/contracts'
 import { createMeasurementCollectionRepository } from './repository'
-import { resolveCredentialDependencies, type MeasurementCredentialDependencies } from './credentials'
+import { isGoogleServiceAccountConfigured, resolveCredentialDependencies, type MeasurementCredentialDependencies } from './credentials'
 import { ga4DataApiAdapter, googleSearchConsoleAdapter } from './adapters'
 import { buildMeasurementWindow, canonicalConnectionFingerprint, deidentifiedSubjectKey, isMeasurementCheckpoint, measurementIdempotencyKey, measurementInputFingerprint, measurementScopeFingerprint, normalizeCanonicalPage, normalizeCredentialReference, normalizeGa4PropertyId, normalizePageScope, normalizeSearchConsoleProperty, publicationLocalDate, sanitizeError } from './normalization'
 import { MEASUREMENT_CHECKPOINTS, MEASUREMENT_LEASE_MS, MEASUREMENT_MAX_RETRY_ATTEMPTS, MEASUREMENT_MAX_RUNS_PER_TICK, MEASUREMENT_RETRY_BASE_MS, MEASUREMENT_SOURCES, type AdapterSuccess, type MeasurementAdapterContext, type MeasurementAdapterResult, type MeasurementConnectionInput, type MeasurementConnectionRow, type MeasurementPhase, type MeasurementRepository, type MeasurementRunRow, type MeasurementSnapshotRow, type MeasurementSource, type MeasurementState, type MeasurementWorkspace, type MeasurementSourceSnapshot } from './types'
@@ -419,16 +419,18 @@ export async function dryRunMeasurementRun(ownerUserId: number, runId: number, d
   return { ...preview, planned: preview.planned.filter(item => item.targetId === run.targetId && item.connectionId === run.connectionId && item.checkpointDays === run.checkpointDays), runId }
 }
 
-function readiness(connection: MeasurementConnectionRow): 'ready' | 'not_ready' | 'paused' | 'revoked' | 'needs_reauthorization' {
+function readiness(connection: MeasurementConnectionRow, googleCredentialsAvailable: boolean): 'ready' | 'not_ready' | 'paused' | 'revoked' | 'needs_reauthorization' {
   if (connection.status === 'paused') return 'paused'
   if (connection.status === 'revoked') return 'revoked'
   if (connection.status === 'needs_reauthorization') return 'needs_reauthorization'
-  return connection.source === 'llm_visibility' ? 'ready' : 'not_ready'
+  if (connection.source === 'llm_visibility') return 'ready'
+  return !connection.credentialReference ? 'not_ready' : googleCredentialsAvailable ? 'ready' : 'not_ready'
 }
 
 export async function getMeasurementCollectionWorkspace(ownerUserId: number, dependencies?: ServiceDependencies): Promise<MeasurementWorkspace> {
   const repository = getMeasurementRepository(dependencies)
   const contentRepository = getContentRepository(dependencies)
+  const googleCredentialsAvailable = isGoogleServiceAccountConfigured()
   const [connections, runs, snapshots, outcomes, clients] = await Promise.all([repository.listConnections(ownerUserId), repository.listRuns(ownerUserId), repository.listSnapshots(ownerUserId), contentRepository.listOutcomes(ownerUserId), contentRepository.listClients(ownerUserId)])
   const checkpoints: MeasurementWorkspace['checkpoints'] = {}
   for (const run of runs) {
@@ -440,8 +442,8 @@ export async function getMeasurementCollectionWorkspace(ownerUserId: number, dep
     const status = outcome && typeof outcome.assessmentStatus === 'string' && ['ready', 'partial', 'insufficient_data', 'blocked'].includes(outcome.assessmentStatus) ? outcome.assessmentStatus as 'ready' | 'partial' | 'insufficient_data' | 'blocked' : 'not_ready'
     checkpoints[key] = { state: run.state, baselineReady, followUpReady, outcomeStatus: status, limitations: [...BASE_LIMITATIONS, ...runSnapshots.flatMap(snapshot => Array.isArray(snapshot.limitations) ? snapshot.limitations as string[] : [])].filter((value, index, array) => array.indexOf(value) === index).slice(0, 20) }
   }
-  const safeConnections = connections.map(connection => ({ ...connection, credentialReference: null, credentialConfigured: Boolean(connection.credentialReference), readiness: readiness(connection) })) as MeasurementWorkspace['connections']
-  return { clients: clients.map(client => ({ id: client.id, displayName: client.displayName, canonicalSiteOrigin: client.canonicalSiteOrigin, timeZone: client.timeZone })), connections: safeConnections, runs, snapshots, checkpoints, capabilities: { schedulerAvailable: true, realGoogleOAuth: false, realProviderCalls: false, outcomeCollectionConfigured: true }, limitations: [...BASE_LIMITATIONS, 'credential references are opaque and are never returned', 'provider API LLM observations remain secondary-only and are not primary learning labels', 'no production provider validation is performed by this V1'] }
+  const safeConnections = connections.map(connection => ({ ...connection, credentialReference: null, credentialConfigured: Boolean(connection.credentialReference), readiness: readiness(connection, googleCredentialsAvailable) })) as MeasurementWorkspace['connections']
+  return { clients: clients.map(client => ({ id: client.id, displayName: client.displayName, canonicalSiteOrigin: client.canonicalSiteOrigin, timeZone: client.timeZone })), connections: safeConnections, runs, snapshots, checkpoints, capabilities: { schedulerAvailable: true, realGoogleOAuth: googleCredentialsAvailable, realProviderCalls: false, outcomeCollectionConfigured: true }, limitations: [...BASE_LIMITATIONS, 'credential references are opaque and are never returned', 'provider API LLM observations remain secondary-only and are not primary learning labels', 'no production provider validation is performed by this V1'] }
 }
 
 export type { ServiceDependencies as MeasurementCollectionDependencies }

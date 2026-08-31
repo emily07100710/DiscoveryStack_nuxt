@@ -110,7 +110,7 @@ onMounted(loadWorkspace)
 
       <div class="capability-grid">
         <article class="capability-card"><span class="card-label">Scheduler</span><strong>{{ workspace.capabilities.schedulerAvailable ? '可執行' : '未配置' }}</strong><small>每次 tick 最多 50 runs，使用 durable claim/lease。</small></article>
-        <article class="capability-card"><span class="card-label">Google OAuth</span><strong>{{ workspace.capabilities.realGoogleOAuth ? '已執行' : 'NOT RUN' }}</strong><small>本 V1 不取得、不刷新、不驗證真實 Google credential。</small></article>
+        <article class="capability-card"><span class="card-label">Google OAuth</span><strong>{{ workspace.capabilities.realGoogleOAuth ? '已執行' : 'NOT RUN' }}</strong><small>顯示部署是否已設定 Google service account 唯讀憑證；不代表 Google 端已授予存取權。</small></article>
         <article class="capability-card"><span class="card-label">Provider calls</span><strong>{{ workspace.capabilities.realProviderCalls ? '已執行' : 'NONE' }}</strong><small>畫面資料不代表真實 GSC、GA4 或 LLM provider validation。</small></article>
         <article class="capability-card"><span class="card-label">Outcome</span><strong>{{ workspace.capabilities.outcomeCollectionConfigured ? '已接既有 service' : '未配置' }}</strong><small>Outcome 仍透過既有 recordOwnerOutcomeAssessment()。</small></article>
       </div>

@@ -1,5 +1,5 @@
-import { resolveControlledOwnerDatabaseUserId } from '../audit/repository'
-import { runMeasurementCollectionTick } from '../measurement-collection'
+import { resolveControlledOwnerDatabaseUserId } from '../../audit/repository'
+import { runMeasurementCollectionTick } from '../../measurement-collection'
 
 export default defineTask({
   meta: {

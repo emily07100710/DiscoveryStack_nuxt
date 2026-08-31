@@ -3,6 +3,7 @@ const modelImprovementCron = process.env.MODEL_IMPROVEMENT_CRON || '0 18 * * *'
 const geoModelOpsCron = process.env.GEO_MODELOPS_CRON || '*/15 * * * *'
 const managedSiteEditorCron = process.env.MANAGED_SITE_EDITOR_CRON || '*/5 * * * *'
 const systemFactoryCron = process.env.SYSTEM_FACTORY_CRON || '*/5 * * * *'
+const contentOperationsMeasurementCron = process.env.CONTENT_OPERATIONS_MEASUREMENT_CRON || '*/30 * * * *'
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-16',
@@ -28,7 +29,7 @@ export default defineNuxtConfig({
   },
   nitro: {
     experimental: { tasks: true },
-    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'], [geoModelOpsCron]: ['content-operations:geo-modelops-tick'], [managedSiteEditorCron]: ['managed-sites:editor-tick'], [systemFactoryCron]: ['system-factory:provisioning-tick'] },
+    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'], [geoModelOpsCron]: ['content-operations:geo-modelops-tick'], [managedSiteEditorCron]: ['managed-sites:editor-tick'], [systemFactoryCron]: ['system-factory:provisioning-tick'], [contentOperationsMeasurementCron]: ['content-operations:measurement-tick'] },
   },
   routeRules: {
     '/': { redirect: { to: '/audit-lab', statusCode: 302 } },
@@ -61,6 +62,7 @@ export default defineNuxtConfig({
     // exposed under `public`, and the adapter validates the endpoint before use.
     contentDraftProvider: process.env.NUXT_CONTENT_DRAFT_PROVIDER || '',
     autoGeoGeminiApiKey: process.env.NUXT_AUTOGEO_GEMINI_API_KEY || '',
+    googleServiceAccountJson: process.env.NUXT_GOOGLE_SERVICE_ACCOUNT_JSON || '',
     autoGeoBailianApiKey: process.env.NUXT_AUTOGEO_BAILIAN_API_KEY || '',
     autoGeoBailianEndpoint: process.env.NUXT_AUTOGEO_BAILIAN_ENDPOINT || '',
     autoGeoBailianModel: process.env.NUXT_AUTOGEO_BAILIAN_MODEL || 'qwen-plus',

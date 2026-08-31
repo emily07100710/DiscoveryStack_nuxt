@@ -165,6 +165,6 @@ export type MeasurementWorkspace = {
   runs: MeasurementRunRow[]
   snapshots: MeasurementSnapshotRow[]
   checkpoints: Record<string, { state: MeasurementState | 'not_scheduled'; baselineReady: boolean; followUpReady: boolean; outcomeStatus: 'not_ready' | 'ready' | 'partial' | 'insufficient_data' | 'blocked'; limitations: string[] }>
-  capabilities: { schedulerAvailable: true; realGoogleOAuth: false; realProviderCalls: false; outcomeCollectionConfigured: true }
+  capabilities: { schedulerAvailable: true; realGoogleOAuth: boolean; realProviderCalls: false; outcomeCollectionConfigured: true }
   limitations: string[]
 }
