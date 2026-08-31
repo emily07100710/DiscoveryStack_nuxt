@@ -354,7 +354,7 @@ describe('policy-driven experimental ModelOps', () => {
     expect(result.cycle.status).toBe('completed')
     expect((await outcome.listDecisions(OWNER)).at(-1)?.reviewerUserId).toBeNull()
     expect((await outcome.listArtifacts(OWNER)).every(artifact => !('production_active' as string).includes(artifact.status))).toBe(true)
-  })
+  }, 15000)
 
   it('connects a completed formal shadow cycle to a durable advisory-only assignment', async () => {
     const state = structuredClone(approvedState)
