@@ -1127,16 +1127,14 @@
           "type": "json",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
-          "default": "('[]')"
+          "autoincrement": false
         },
         "allowedProviderModels": {
           "name": "allowedProviderModels",
           "type": "json",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
-          "default": "('[]')"
+          "autoincrement": false
         },
         "activatedAt": {
           "name": "activatedAt",
@@ -2074,7 +2072,7 @@
         },
         "canonicalSiteOrigin": {
           "name": "canonicalSiteOrigin",
-          "type": "varchar(2048)",
+          "type": "varchar(512)",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -4121,8 +4119,7 @@
           "type": "json",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
-          "default": "('{}')"
+          "autoincrement": false
         },
         "idempotencyKey": {
           "name": "idempotencyKey",
@@ -8461,7 +8458,7 @@
         },
         "canonicalWebsiteIdentity": {
           "name": "canonicalWebsiteIdentity",
-          "type": "varchar(2048)",
+          "type": "varchar(512)",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -14292,7 +14289,7 @@
         },
         "targetOrigin": {
           "name": "targetOrigin",
-          "type": "varchar(2048)",
+          "type": "varchar(512)",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false

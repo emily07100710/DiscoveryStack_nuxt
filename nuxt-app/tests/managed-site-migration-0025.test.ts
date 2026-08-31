@@ -18,7 +18,7 @@ function sha256(path: URL): string {
 }
 
 const legacyMigrationHashes: Record<string, string> = {
-  '0021_omniscient_sebastian_shaw.sql': '0aaa6d9ad3dc4dca74b6a2770115d0fb682075419c80f79518cc7e9c42a6122d',
+  '0021_omniscient_sebastian_shaw.sql': '263ef27966f15c57e00c019f85c95466b50107dbc412f98426c2c7e2ea58c690',
   '0022_even_tiger_shark.sql': '76b4748b234f50c53a7a459011d9a1c2de243abfaf7ecc46edacc7c72d214c1d',
   '0023_smooth_spot.sql': 'a3f1661e5bf9440f7382171f24e486c195afe2d513a986584d7fd60d68aea28a',
   '0024_nice_obadiah_stane.sql': 'df7032887970a4f2aca67b3bb9ad79ef324a63f4e48dc5ad273c4555fb14a0e8',

@@ -60,7 +60,7 @@ CREATE TABLE `contentOperationClients` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`ownerUserId` int NOT NULL,
 	`displayName` varchar(160) NOT NULL,
-	`canonicalSiteOrigin` varchar(2048) NOT NULL,
+	`canonicalSiteOrigin` varchar(512) NOT NULL,
 	`framework` enum('astro','nuxt') NOT NULL,
 	`publicationTransport` enum('first_party_git','first_party_signed_api') NOT NULL,
 	`timeZone` varchar(80) NOT NULL,

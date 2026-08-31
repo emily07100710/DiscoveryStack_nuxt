@@ -13,8 +13,8 @@ function claim(ownerUserId: number, releaseId: number, canonicalDomain: string, 
 }
 
 describe('managed-site migration 0028 generated active-domain authority', () => {
-  it('uses a stored generated column before the unique index, without an application backfill or DML', () => {
-    const generated = 'ADD `activeCanonicalDomainKey` varchar(253) GENERATED ALWAYS AS (CASE WHEN `status` = \'released\' THEN NULL ELSE `canonicalDomain` END) STORED'
+  it('uses a virtual generated column before the unique index, without an application backfill or DML', () => {
+    const generated = 'ADD `activeCanonicalDomainKey` varchar(253) GENERATED ALWAYS AS (CASE WHEN `status` = \'released\' THEN NULL ELSE `canonicalDomain` END) VIRTUAL'
     expect(migration).toContain(generated)
     expect(migration.indexOf(generated)).toBeLessThan(migration.indexOf('managed_site_domain_claim_active_canonical_unique'))
     expect(migration).not.toMatch(/^\s*(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM|CREATE\s+TRIGGER|CREATE\s+PROCEDURE)\b/imu)

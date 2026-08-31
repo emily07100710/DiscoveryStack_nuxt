@@ -5,7 +5,7 @@ import { MANAGED_SITE_ROLES, MANAGED_SITE_TYPES, type ManagedSiteMemberInput, ty
 
 const idempotencyKey = z.string().trim().min(8).max(128)
 const email = z.string().trim().toLowerCase().email().max(320)
-const identity = z.string().trim().min(1).max(2048)
+const identity = z.string().trim().min(1).max(512)
 
 const projectSchema = z.object({
   canonicalClientIdentity: z.string().trim().min(1).max(160),

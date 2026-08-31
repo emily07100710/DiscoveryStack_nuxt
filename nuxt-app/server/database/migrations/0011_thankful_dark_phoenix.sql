@@ -101,7 +101,7 @@ CREATE TABLE `seoGeoDeliveryTargets` (
 	`ownerUserId` int NOT NULL,
 	`displayName` varchar(160) NOT NULL,
 	`adapter` enum('manual_export','wordpress_rest','generic_http') NOT NULL,
-	`targetOrigin` varchar(2048) NOT NULL,
+	`targetOrigin` varchar(512) NOT NULL,
 	`status` enum('disabled','review_required','enabled') NOT NULL DEFAULT 'disabled',
 	`allowPublish` boolean NOT NULL DEFAULT false,
 	`createdAt` timestamp NOT NULL DEFAULT (now()),

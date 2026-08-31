@@ -66,7 +66,7 @@ CREATE TABLE `managedSiteProjects` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`ownerUserId` int NOT NULL,
 	`canonicalClientIdentity` varchar(160) NOT NULL,
-	`canonicalWebsiteIdentity` varchar(2048) NOT NULL,
+	`canonicalWebsiteIdentity` varchar(512) NOT NULL,
 	`contentOperationClientId` int,
 	`status` enum('draft','quoted','awaiting_customer_authorization','payment_pending','payment_verified','domain_intent_created','domain_purchase_pending','domain_registered','dns_pending','dns_verified','build_pending','building','deployment_failed','deployed','tls_pending','active','retry_wait','blocked','suspended') NOT NULL DEFAULT 'draft',
 	`siteType` enum('one_page','brand_blog','simple_commerce') NOT NULL,

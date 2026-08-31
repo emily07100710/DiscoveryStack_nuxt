@@ -196,9 +196,9 @@ ALTER TABLE `geoOutcomeDatasetDecisions` DROP FOREIGN KEY `geoOutcomeDatasetDeci
 ALTER TABLE `geoOutcomeDatasetDecisions` MODIFY COLUMN `reviewerUserId` int;--> statement-breakpoint
 ALTER TABLE `contentOperationAutopilotPolicies` ADD `mode` enum('balanced','aggressive_growth','conservative_brand') DEFAULT 'balanced' NOT NULL;--> statement-breakpoint
 ALTER TABLE `contentOperationAutopilotPolicies` ADD `websiteId` varchar(128) DEFAULT 'legacy-website' NOT NULL;--> statement-breakpoint
-ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedDestinations` json DEFAULT ('[]') NOT NULL;--> statement-breakpoint
-ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedCadences` json DEFAULT ('[]') NOT NULL;--> statement-breakpoint
-ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedRiskClasses` json DEFAULT ('[]') NOT NULL;--> statement-breakpoint
+ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedDestinations` json NOT NULL;--> statement-breakpoint
+ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedCadences` json NOT NULL;--> statement-breakpoint
+ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedRiskClasses` json NOT NULL;--> statement-breakpoint
 ALTER TABLE `contentOperationAutopilotPolicies` ADD `riskSemanticsVersion` varchar(96);--> statement-breakpoint
 ALTER TABLE `contentOperationAutopilotPolicies` ADD `maximumRiskSeverity` varchar(40);--> statement-breakpoint
 ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedBusinessRiskClasses` json;--> statement-breakpoint

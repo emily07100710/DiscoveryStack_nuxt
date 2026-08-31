@@ -20,7 +20,7 @@ CREATE TABLE `managedSitePaymentWebhookInbox` (
 );
 --> statement-breakpoint
 ALTER TABLE `managedSiteDomainClaims` DROP INDEX `managed_site_domain_claim_canonical_unique`;--> statement-breakpoint
-ALTER TABLE `managedSiteDomainClaims` ADD `activeCanonicalDomainKey` varchar(253) GENERATED ALWAYS AS (CASE WHEN `status` = 'released' THEN NULL ELSE `canonicalDomain` END) STORED;--> statement-breakpoint
+ALTER TABLE `managedSiteDomainClaims` ADD `activeCanonicalDomainKey` varchar(253) GENERATED ALWAYS AS (CASE WHEN `status` = 'released' THEN NULL ELSE `canonicalDomain` END) VIRTUAL;--> statement-breakpoint
 ALTER TABLE `managedSiteProviderConfigurations` ADD `capabilityIdentity` varchar(160);--> statement-breakpoint
 ALTER TABLE `managedSiteDomainClaims` ADD CONSTRAINT `managed_site_domain_claim_active_canonical_unique` UNIQUE(`activeCanonicalDomainKey`);--> statement-breakpoint
 ALTER TABLE `managedSitePaymentWebhookInbox` ADD CONSTRAINT `managedSitePaymentWebhookInbox_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint

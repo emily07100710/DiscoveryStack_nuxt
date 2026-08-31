@@ -18,8 +18,8 @@ ALTER TABLE `contentOperationAutopilotPolicies` ADD `cadenceDays` int DEFAULT 3 
 ALTER TABLE `contentOperationAutopilotPolicies` ADD `evidenceFreshnessHours` int DEFAULT 720 NOT NULL;--> statement-breakpoint
 ALTER TABLE `contentOperationAutopilotPolicies` ADD `maximumRiskLevel` varchar(40) DEFAULT 'general' NOT NULL;--> statement-breakpoint
 ALTER TABLE `contentOperationAutopilotPolicies` ADD `requiredQualityGateVersion` varchar(96) DEFAULT 'geo-content-quality-v1' NOT NULL;--> statement-breakpoint
-ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedTargetIds` json DEFAULT ('[]') NOT NULL;--> statement-breakpoint
-ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedProviderModels` json DEFAULT ('[]') NOT NULL;--> statement-breakpoint
+ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedTargetIds` json NOT NULL;--> statement-breakpoint
+ALTER TABLE `contentOperationAutopilotPolicies` ADD `allowedProviderModels` json NOT NULL;--> statement-breakpoint
 ALTER TABLE `contentOperationAutopilotPolicies` ADD `activatedAt` timestamp DEFAULT (now()) NOT NULL;--> statement-breakpoint
 ALTER TABLE `contentOperationCalendarEntries` ADD `publicationContentHash` varchar(128);--> statement-breakpoint
 ALTER TABLE `contentOperationCalendarEntries` ADD `publicationRoutingPlanId` varchar(128);--> statement-breakpoint
@@ -52,7 +52,7 @@ ALTER TABLE `contentOperationPublicationAttempts` ADD `publicationContentHash` v
 ALTER TABLE `contentOperationPublicationTargets` ADD `websiteId` varchar(128) DEFAULT 'legacy-website' NOT NULL;--> statement-breakpoint
 ALTER TABLE `contentOperationPublicationTargets` ADD `destinationPublicationIdentity` varchar(256) DEFAULT 'legacy-destination' NOT NULL;--> statement-breakpoint
 ALTER TABLE `contentOperationPublicationTargets` ADD `serviceReference` varchar(128);--> statement-breakpoint
-ALTER TABLE `contentOperationPublicationTargets` ADD `provenance` json DEFAULT ('{}') NOT NULL;--> statement-breakpoint
+ALTER TABLE `contentOperationPublicationTargets` ADD `provenance` json NOT NULL;--> statement-breakpoint
 ALTER TABLE `contentOperationCalendarEntryTargets` ADD CONSTRAINT `contentOperationCalendarEntryTargets_ownerUserId_users_id_fk` FOREIGN KEY (`ownerUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `contentOperationCalendarEntryTargets` ADD CONSTRAINT `fk_content_operation_calend_client_id_03ac90030a` FOREIGN KEY (`clientId`) REFERENCES `contentOperationClients`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `contentOperationCalendarEntryTargets` ADD CONSTRAINT `fk_content_operation_calend_entry_id_82d007b891` FOREIGN KEY (`entryId`) REFERENCES `contentOperationCalendarEntries`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint

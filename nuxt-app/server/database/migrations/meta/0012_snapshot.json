@@ -4487,7 +4487,7 @@
         },
         "targetOrigin": {
           "name": "targetOrigin",
-          "type": "varchar(2048)",
+          "type": "varchar(512)",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
