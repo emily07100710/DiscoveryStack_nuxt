@@ -3369,3 +3369,131 @@ export type SystemProvisioningRunRecord = typeof systemProvisioningRuns.$inferSe
 export type SystemReceiptRecord = typeof systemReceipts.$inferSelect
 export type SystemAdminInvitationRecord = typeof systemAdminInvitations.$inferSelect
 export type SystemConnectionRefRecord = typeof systemConnectionRefs.$inferSelect
+
+import { mediumtext } from 'drizzle-orm/mysql-core'
+
+/** Owner-scoped ledger for one bounded, asynchronous site-evidence scan. */
+export const siteEvidenceScans = mysqlTable('siteEvidenceScans', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  targetOrigin: varchar('targetOrigin', { length: 2048 }).notNull(),
+  targetHost: varchar('targetHost', { length: 255 }).notNull(),
+  status: mysqlEnum('status', ['pending', 'running', 'completed', 'completed_partial', 'failed']).default('pending').notNull(),
+  maxPages: int('maxPages').notNull(),
+  pagesDiscovered: int('pagesDiscovered').default(0).notNull(),
+  pagesFetched: int('pagesFetched').default(0).notNull(),
+  renderedCaptured: int('renderedCaptured').default(0).notNull(),
+  errorCode: varchar('errorCode', { length: 80 }),
+  limitations: json('limitations'),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  heartbeatAt: timestamp('heartbeatAt'),
+  startedAt: timestamp('startedAt'),
+  finishedAt: timestamp('finishedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('site_evidence_scans_owner_key_unique').on(table.ownerUserId, table.idempotencyKey),
+  index('site_evidence_scans_owner_created_idx').on(table.ownerUserId, table.createdAt),
+  foreignKey({ name: 'sev_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+])
+
+/** Persistent owner URL inventory, merged across scans by a normalized URL hash. */
+export const siteEvidenceUrls = mysqlTable('siteEvidenceUrls', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  siteHost: varchar('siteHost', { length: 255 }).notNull(),
+  url: varchar('url', { length: 2048 }).notNull(),
+  normalizedUrl: varchar('normalizedUrl', { length: 2048 }).notNull(),
+  urlHash: varchar('urlHash', { length: 128 }).notNull(),
+  lastScanId: int('lastScanId').notNull(),
+  discoverySources: json('discoverySources').notNull(),
+  canonicalUrl: varchar('canonicalUrl', { length: 2048 }),
+  robotsVerdict: mysqlEnum('robotsVerdict', ['allowed', 'disallowed', 'unavailable', 'unknown']).default('unknown').notNull(),
+  robotsMatchedRule: varchar('robotsMatchedRule', { length: 512 }),
+  metaRobots: varchar('metaRobots', { length: 255 }),
+  xRobotsTag: varchar('xRobotsTag', { length: 255 }),
+  httpStatus: int('httpStatus'),
+  redirectChain: json('redirectChain'),
+  finalUrl: varchar('finalUrl', { length: 2048 }),
+  contentHash: varchar('contentHash', { length: 128 }),
+  contentType: varchar('contentType', { length: 128 }),
+  bytesFetched: int('bytesFetched'),
+  errorCode: varchar('errorCode', { length: 80 }),
+  firstSeenAt: timestamp('firstSeenAt').notNull(),
+  lastFetchedAt: timestamp('lastFetchedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('site_evidence_urls_owner_hash_unique').on(table.ownerUserId, table.urlHash),
+  index('site_evidence_urls_owner_host_idx').on(table.ownerUserId, table.siteHost),
+  index('site_evidence_urls_scan_idx').on(table.lastScanId),
+  foreignKey({ name: 'seu_last_scan_fk', columns: [table.lastScanId], foreignColumns: [siteEvidenceScans.id] }),
+  foreignKey({ name: 'seu_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+])
+
+/** Capped raw or provider-rendered HTML evidence captured during one scan. */
+export const siteEvidenceSnapshots = mysqlTable('siteEvidenceSnapshots', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  scanId: int('scanId').notNull(),
+  urlId: int('urlId').notNull(),
+  kind: mysqlEnum('kind', ['raw', 'rendered']).notNull(),
+  status: mysqlEnum('status', ['captured', 'unavailable', 'failed']).notNull(),
+  reasonCode: varchar('reasonCode', { length: 80 }),
+  provider: varchar('provider', { length: 80 }),
+  httpStatus: int('httpStatus'),
+  contentHash: varchar('contentHash', { length: 128 }),
+  body: mediumtext('body'),
+  bodyTruncated: boolean('bodyTruncated').default(false).notNull(),
+  bytesFetched: int('bytesFetched'),
+  signals: json('signals'),
+  fetchDurationMs: int('fetchDurationMs'),
+  fetchedAt: timestamp('fetchedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  index('site_evidence_snapshots_scan_idx').on(table.scanId),
+  index('site_evidence_snapshots_url_kind_idx').on(table.urlId, table.kind),
+  foreignKey({ name: 'ses_scan_fk', columns: [table.scanId], foreignColumns: [siteEvidenceScans.id] }),
+  foreignKey({ name: 'ses_url_fk', columns: [table.urlId], foreignColumns: [siteEvidenceUrls.id] }),
+  foreignKey({ name: 'ses_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+])
+
+/** Sitemap documents observed during a bounded site-evidence scan. */
+export const siteEvidenceSitemaps = mysqlTable('siteEvidenceSitemaps', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  scanId: int('scanId').notNull(),
+  url: varchar('url', { length: 2048 }).notNull(),
+  urlHash: varchar('urlHash', { length: 128 }).notNull(),
+  kind: mysqlEnum('kind', ['urlset', 'sitemapindex', 'unknown']).default('unknown').notNull(),
+  status: mysqlEnum('status', ['fetched', 'failed']).notNull(),
+  httpStatus: int('httpStatus'),
+  urlCount: int('urlCount').default(0).notNull(),
+  contentHash: varchar('contentHash', { length: 128 }),
+  errorCode: varchar('errorCode', { length: 80 }),
+  discoveredFrom: mysqlEnum('discoveredFrom', ['robots', 'wellknown', 'index']).notNull(),
+  fetchedAt: timestamp('fetchedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  index('site_evidence_sitemaps_scan_idx').on(table.scanId),
+  foreignKey({ name: 'sem_scan_fk', columns: [table.scanId], foreignColumns: [siteEvidenceScans.id] }),
+  foreignKey({ name: 'sem_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+])
+
+/** Deterministic reconciliation and raw-versus-rendered findings for a scan. */
+export const siteEvidenceFindings = mysqlTable('siteEvidenceFindings', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  scanId: int('scanId').notNull(),
+  urlId: int('urlId'),
+  category: varchar('category', { length: 80 }).notNull(),
+  severity: mysqlEnum('severity', ['info', 'warning', 'critical']).notNull(),
+  status: mysqlEnum('status', ['detected', 'unknown']).notNull(),
+  evidence: json('evidence').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  index('site_evidence_findings_scan_category_idx').on(table.scanId, table.category),
+  foreignKey({ name: 'sef_scan_fk', columns: [table.scanId], foreignColumns: [siteEvidenceScans.id] }),
+  foreignKey({ name: 'sef_url_fk', columns: [table.urlId], foreignColumns: [siteEvidenceUrls.id] }),
+  foreignKey({ name: 'sef_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+])
