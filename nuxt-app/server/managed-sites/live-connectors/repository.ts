@@ -266,6 +266,10 @@ export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSi
     async listAttempts(ownerUserId, projectId) {
       return database.select().from(managedSiteConnectorAttempts).where(and(eq(managedSiteConnectorAttempts.ownerUserId, ownerUserId), eq(managedSiteConnectorAttempts.projectId, projectId))).orderBy(desc(managedSiteConnectorAttempts.createdAt)).limit(200)
     },
+    async listEligibleRetryAttempts(now, limit, ownerUserId) {
+      const eligible = and(eq(managedSiteConnectorAttempts.status, 'retry_wait'), lte(managedSiteConnectorAttempts.retryEligibleAt, now), ...(ownerUserId ? [eq(managedSiteConnectorAttempts.ownerUserId, ownerUserId)] : []))
+      return database.select().from(managedSiteConnectorAttempts).where(eligible).orderBy(asc(managedSiteConnectorAttempts.retryEligibleAt), asc(managedSiteConnectorAttempts.id)).limit(Math.min(Math.max(limit, 1), 50))
+    },
     async findReceiptByProviderEvent(providerKey, providerEventId) {
       const [row] = await database.select().from(managedSiteConnectorReceipts).where(and(eq(managedSiteConnectorReceipts.providerKey, providerKey), eq(managedSiteConnectorReceipts.providerEventId, providerEventId))).limit(1)
       return row || null
@@ -276,6 +280,10 @@ export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSi
     },
     async findReceiptByFingerprint(ownerUserId, receiptFingerprint) {
       const [row] = await database.select().from(managedSiteConnectorReceipts).where(and(eq(managedSiteConnectorReceipts.ownerUserId, ownerUserId), eq(managedSiteConnectorReceipts.receiptFingerprint, receiptFingerprint))).limit(1)
+      return row || null
+    },
+    async findOwnershipChallengeByReference(projectId, canonicalDomain, challengeReference) {
+      const [row] = await database.select().from(managedSiteConnectorReceipts).where(and(eq(managedSiteConnectorReceipts.projectId, projectId), eq(managedSiteConnectorReceipts.canonicalDomain, canonicalDomain), eq(managedSiteConnectorReceipts.externalReference, challengeReference), eq(managedSiteConnectorReceipts.receiptType, 'existing_site_challenge_created'), eq(managedSiteConnectorReceipts.receiptStatus, 'verified'))).limit(1)
       return row || null
     },
     async insertReceipt(input) {
