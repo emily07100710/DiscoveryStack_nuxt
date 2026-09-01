@@ -325,9 +325,11 @@ export type ManagedSiteLiveConnectorRepository = {
   acquireAttemptLease(ownerUserId: number, attemptId: number, leaseOwner: string, now: Date, leaseMs: number): Promise<ManagedSiteConnectorAttempt | null>
   releaseAttemptLease(ownerUserId: number, attemptId: number, leaseOwner: string, patch: Partial<Omit<ManagedSiteConnectorAttempt, 'id' | 'ownerUserId' | 'projectId' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteConnectorAttempt | null>
   listAttempts(ownerUserId: number, projectId: number): Promise<ManagedSiteConnectorAttempt[]>
+  listEligibleRetryAttempts(now: Date, limit: number, ownerUserId?: number): Promise<ManagedSiteConnectorAttempt[]>
   findReceiptByProviderEvent(providerKey: string, providerEventId: string): Promise<ManagedSiteConnectorReceipt | null>
   findVerifiedDomainReceipt(canonicalDomain: string): Promise<ManagedSiteConnectorReceipt | null>
   findReceiptByFingerprint(ownerUserId: number, receiptFingerprint: string): Promise<ManagedSiteConnectorReceipt | null>
+  findOwnershipChallengeByReference(projectId: number, canonicalDomain: string, challengeReference: string): Promise<ManagedSiteConnectorReceipt | null>
   insertReceipt(input: Omit<ManagedSiteConnectorReceipt, 'id'>): Promise<ManagedSiteConnectorReceipt>
   listReceipts(ownerUserId: number, projectId: number): Promise<ManagedSiteConnectorReceipt[]>
   listReceiptsByDraftOrder(ownerUserId: number, draftOrderId: number): Promise<ManagedSiteConnectorReceipt[]>

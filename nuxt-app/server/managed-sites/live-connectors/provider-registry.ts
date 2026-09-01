@@ -149,21 +149,28 @@ export async function verifyManagedSiteProviderConfiguration(
 ) {
   const configuration = await repository.findProviderConfiguration(ownerUserId, capability)
   if (!configuration || configuration.readinessStatus !== 'configured' || !configuration.credentialReference) conflict('Provider must be configured before server verification.')
-  const credential = await credentialResolver(configuration.credentialReference)
+  const providerKey = configuration.providerKey; const credentialReference = configuration.credentialReference; const configurationFingerprint = configuration.configurationFingerprint
+  const transportConfiguration = configuration.transportConfiguration && typeof configuration.transportConfiguration === 'object' && !Array.isArray(configuration.transportConfiguration) ? { ...configuration.transportConfiguration as Record<string, unknown> } : {}
+  const credential = await credentialResolver(credentialReference)
   if (!credential.ok) conflict('Provider credential reference could not be resolved; configuration remains configured.')
-  const verifier = resolveManagedSiteProviderVerifier(configuration.providerKey, capability, verifierRegistry)
+  const verifier = resolveManagedSiteProviderVerifier(providerKey, capability, verifierRegistry)
+  let resolvedFetchImpl = fetchImpl
+  if (!resolvedFetchImpl) {
+    const endpointOrigin = typeof transportConfiguration.endpointOrigin === 'string' ? transportConfiguration.endpointOrigin : ''
+    if (endpointOrigin) resolvedFetchImpl = (await import('./internal-broker/broker-fetch')).resolveManagedSiteBrokerFetchImpl(endpointOrigin)
+  }
   let receipt: ManagedSiteProviderVerificationReceipt
   try {
-    receipt = await verifier({ capability, providerKey: configuration.providerKey, configurationFingerprint: configuration.configurationFingerprint, transportConfiguration: configuration.transportConfiguration as Record<string, unknown>, credentialReference: configuration.credentialReference, resolveCredential: credentialResolver, fetchImpl, clock })
+    receipt = await verifier({ capability, providerKey, configurationFingerprint, transportConfiguration, credentialReference, resolveCredential: credentialResolver, fetchImpl: resolvedFetchImpl, clock })
   } catch (error) {
     if (error && typeof error === 'object' && 'statusCode' in error) throw error
     conflict('Provider verification failed without changing provider readiness.')
   }
   const observedAt = new Date(receipt.observedAt)
   const verifiedAt = clock()
-  if (receipt.capability !== capability || receipt.providerKey !== configuration.providerKey || receipt.configurationFingerprint !== configuration.configurationFingerprint || !isOpaqueReference(receipt.capabilityIdentity, 160) || !isOpaqueReference(receipt.providerEventId, 160) || !/^[a-f0-9]{64}$/u.test(receipt.payloadHash) || !isOpaqueReference(receipt.exactResponseIdentity, 256) || !Number.isFinite(observedAt.getTime()) || Math.abs(verifiedAt.getTime() - observedAt.getTime()) > 10 * 60_000) conflict('Provider verification receipt identity or timestamp is incomplete or mismatched.')
+  if (receipt.capability !== capability || receipt.providerKey !== providerKey || receipt.configurationFingerprint !== configurationFingerprint || !isOpaqueReference(receipt.capabilityIdentity, 160) || !isOpaqueReference(receipt.providerEventId, 160) || !/^[a-f0-9]{64}$/u.test(receipt.payloadHash) || !isOpaqueReference(receipt.exactResponseIdentity, 256) || !Number.isFinite(observedAt.getTime()) || Math.abs(verifiedAt.getTime() - observedAt.getTime()) > 10 * 60_000) conflict('Provider verification receipt identity or timestamp is incomplete or mismatched.')
   const receiptFingerprint = stableFingerprint(receipt)
-  const verified = await repository.verifyProviderConfigurationCas(ownerUserId, configuration.id, configuration.configurationFingerprint, { readinessStatus: 'verified', blockedReasonCode: null, verificationReceiptFingerprint: receiptFingerprint, capabilityIdentity: receipt.capabilityIdentity, verifiedAt })
+  const verified = await repository.verifyProviderConfigurationCas(ownerUserId, configuration.id, configurationFingerprint, { readinessStatus: 'verified', blockedReasonCode: null, verificationReceiptFingerprint: receiptFingerprint, capabilityIdentity: receipt.capabilityIdentity, verifiedAt })
   if (!verified) conflict('Provider configuration changed before verification completed.')
   return { configuration: verified, receiptFingerprint }
 }

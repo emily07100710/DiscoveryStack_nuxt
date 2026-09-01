@@ -147,7 +147,7 @@ function parseIpv4(hostname: string): number[] | null {
   return octets.every(octet => octet >= 0 && octet <= 255) ? octets : null
 }
 
-function isSpecialUseIpv4(hostname: string): boolean {
+export function isSpecialUseIpv4(hostname: string): boolean {
   const octets = parseIpv4(hostname)
   if (!octets) return true
   const [first, second, third] = octets as [number, number, number, number]
@@ -186,7 +186,7 @@ function ipv6Words(hostname: string): number[] | null {
   return [...leftWords, ...Array.from({ length: zeroes }, () => 0), ...rightWords]
 }
 
-function isSpecialUseIpv6(hostname: string): boolean {
+export function isSpecialUseIpv6(hostname: string): boolean {
   const words = ipv6Words(hostname)
   if (!words || words.length !== 8) return true
   const first = words[0]!

@@ -89,7 +89,7 @@ export async function createExistingSiteRelease(ownerUserId: number, input: { pr
   return { release, replayed: false }
 }
 
-function validateDeploymentReceipt(receipt: ManagedSiteDeploymentReceipt, expected: { providerKey: string; providerAuthorityFingerprint: string; projectId: number; versionId: number; contentHash: string; canonicalDomain: string; status: ManagedSiteDeploymentReceipt['status'] }): void {
+export function validateDeploymentReceipt(receipt: ManagedSiteDeploymentReceipt, expected: { providerKey: string; providerAuthorityFingerprint: string; projectId: number; versionId: number; contentHash: string; canonicalDomain: string; status: ManagedSiteDeploymentReceipt['status'] }): void {
   if (receipt.providerKey !== expected.providerKey || receipt.projectId !== expected.projectId || receipt.versionId !== expected.versionId || receipt.contentHash !== expected.contentHash || receipt.canonicalDomain !== expected.canonicalDomain || receipt.status !== expected.status) conflict('Deployment receipt does not match the exact project, version, content hash, domain, provider, and requested state.')
   if (receipt.providerAuthorityFingerprint !== expected.providerAuthorityFingerprint) conflict('Deployment receipt provider configuration authority is mismatched.')
   if (!isOpaqueReference(receipt.providerEventId, 160) || !isOpaqueReference(receipt.providerDeploymentId, 160) || !isOpaqueReference(receipt.exactResponseIdentity, 256)) conflict('Deployment receipt external identity is incomplete.')

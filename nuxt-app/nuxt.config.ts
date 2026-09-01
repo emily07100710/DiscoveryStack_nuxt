@@ -2,6 +2,7 @@ const faviconLink = [{ rel: 'icon' as const, type: 'image/svg+xml', href: 'data:
 const modelImprovementCron = process.env.MODEL_IMPROVEMENT_CRON || '0 18 * * *'
 const geoModelOpsCron = process.env.GEO_MODELOPS_CRON || '*/15 * * * *'
 const managedSiteEditorCron = process.env.MANAGED_SITE_EDITOR_CRON || '*/5 * * * *'
+const managedSiteProvisioningCron = process.env.MANAGED_SITE_PROVISIONING_CRON || '*/5 * * * *'
 const systemFactoryCron = process.env.SYSTEM_FACTORY_CRON || '*/5 * * * *'
 const contentOperationsMeasurementCron = process.env.CONTENT_OPERATIONS_MEASUREMENT_CRON || '*/30 * * * *'
 
@@ -29,7 +30,7 @@ export default defineNuxtConfig({
   },
   nitro: {
     experimental: { tasks: true },
-    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'], [geoModelOpsCron]: ['content-operations:geo-modelops-tick'], [managedSiteEditorCron]: ['managed-sites:editor-tick'], [systemFactoryCron]: ['system-factory:provisioning-tick'], [contentOperationsMeasurementCron]: ['content-operations:measurement-tick'] },
+    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'], [geoModelOpsCron]: ['content-operations:geo-modelops-tick'], [managedSiteEditorCron]: ['managed-sites:editor-tick'], [managedSiteProvisioningCron]: ['managed-sites:provisioning-tick'], [systemFactoryCron]: ['system-factory:provisioning-tick'], [contentOperationsMeasurementCron]: ['content-operations:measurement-tick'] },
   },
   routeRules: {
     '/': { redirect: { to: '/audit-lab', statusCode: 302 } },
