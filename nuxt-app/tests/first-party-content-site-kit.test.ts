@@ -4,7 +4,9 @@ import {
   buildAstroContentProjection,
   buildFirstPartyContentManifest,
   buildFirstPartySeoProjection,
+  buildKnowledgeArticleJsonLd,
   buildNuxtContentProjection,
+  knowledgeEntityJsonLdId,
   parseFirstPartyContentDocument,
 } from '../server/first-party-content-site-kit'
 import { buildFirstPartyMarkdownArtifact } from '../server/first-party-publishing/artifact'
@@ -413,6 +415,47 @@ describe('SEO and metadata projection', () => {
     }
   })
 
+  it('keeps the complete legacy Article JSON-LD node deep-equal when entity inputs are absent', () => {
+    const document = makeDocument()
+    const result = buildFirstPartySeoProjection(documentInput(document))
+    expect(result.status).toBe('verified')
+    if (result.status !== 'verified') return
+    const canonicalUrl = 'https://client.example.com/en/articles/verified-first-party-article'
+    expect(result.jsonLd[0]).toEqual({
+      '@context': 'https://schema.org',
+      '@id': `${canonicalUrl}#article`,
+      url: canonicalUrl,
+      name: document.title,
+      inLanguage: document.language,
+      isPartOf: { '@type': 'WebSite', name: 'Client Example', url: 'https://client.example.com/' },
+      publisher: { '@type': 'Organization', name: 'Client Example' },
+      '@type': 'Article',
+      headline: document.title,
+      datePublished: document.publishedAt,
+      mainEntityOfPage: { '@type': 'WebPage', '@id': canonicalUrl },
+    })
+  })
+
+  it('blocks invalid entity references with ENTITY_INPUT_INVALID', () => {
+    expect(buildFirstPartySeoProjection(documentInput(makeDocument(), {
+      publisherEntity: { entityUid: 'org-1', name: '', kind: 'organization', secret: 'unknown' },
+    }))).toMatchObject({ status: 'blocked', code: 'ENTITY_INPUT_INVALID' })
+    expect(buildFirstPartySeoProjection(documentInput(makeDocument(), {
+      authorEntities: [{ entityUid: 'person-1', name: 'Author', kind: 'person', url: 'http://example.com/author' }],
+    }))).toMatchObject({ status: 'blocked', code: 'ENTITY_INPUT_INVALID' })
+  })
+
+  it('emits stable enriched publisher and author nodes', () => {
+    const publisherEntity = { entityUid: 'ORG01', name: 'Real Publisher', kind: 'organization' as const, url: 'https://publisher.example.com/' }
+    const authorEntities = [{ entityUid: 'PERSON01', name: 'Real Author', kind: 'person' as const, sameAs: ['https://profiles.example.com/author'] }]
+    const result = buildFirstPartySeoProjection(documentInput(makeDocument(), { publisherEntity, authorEntities }))
+    expect(result.status).toBe('verified')
+    if (result.status !== 'verified') return
+    expect(result.jsonLd[0]?.publisher).toEqual({ '@type': 'Organization', '@id': knowledgeEntityJsonLdId('https://client.example.com', 'ORG01'), name: 'Real Publisher', url: 'https://publisher.example.com/' })
+    expect(result.jsonLd[0]?.author).toEqual([{ '@type': 'Person', '@id': knowledgeEntityJsonLdId('https://client.example.com', 'PERSON01'), name: 'Real Author', sameAs: ['https://profiles.example.com/author'] }])
+    expect(buildKnowledgeArticleJsonLd({ siteOrigin: 'https://client.example.com', article: { headline: 'Knowledge article', articleId: 'https://client.example.com/article#article' }, publisherEntity, authorEntities })).toMatchObject({ status: 'verified', jsonLd: { '@type': 'Article', publisher: { '@id': knowledgeEntityJsonLdId('https://client.example.com', 'ORG01') }, author: [{ '@id': knowledgeEntityJsonLdId('https://client.example.com', 'PERSON01') }] } })
+  })
+
   it('builds FAQPage only when verified FAQ pairs are present', () => {
     const document = makeFaqDocument()
     const withoutPairs = buildFirstPartySeoProjection(documentInput(document))
@@ -764,12 +807,14 @@ describe('first-party content site kit repair contracts', () => {
     }
   })
 
-  it('exposes exactly the five runtime public APIs', () => {
+  it('exposes the legacy and entity-aware runtime public APIs', () => {
     expect(Object.keys(contentSiteKitApi).sort()).toEqual([
       'buildAstroContentProjection',
       'buildFirstPartyContentManifest',
       'buildFirstPartySeoProjection',
+      'buildKnowledgeArticleJsonLd',
       'buildNuxtContentProjection',
+      'knowledgeEntityJsonLdId',
       'parseFirstPartyContentDocument',
     ])
     expect('computeSeoProjectionFingerprint' in contentSiteKitApi).toBe(false)

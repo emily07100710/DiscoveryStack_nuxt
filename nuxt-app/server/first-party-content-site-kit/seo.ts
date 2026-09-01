@@ -15,10 +15,14 @@ import type {
   FirstPartySeoMeta,
   FirstPartySeoProjection,
   FirstPartySeoResult,
+  KnowledgeArticleJsonLdInput,
+  KnowledgeArticleJsonLdResult,
+  KnowledgeEntityRef,
 } from './types'
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
-const INPUT_KEYS = new Set(['document', 'siteOrigin', 'siteName', 'organizationLogoUrl', 'alternateDocuments', 'fallbackDocument', 'xDefaultDocument', 'faqPairs'])
+const INPUT_KEYS = new Set(['document', 'siteOrigin', 'siteName', 'organizationLogoUrl', 'alternateDocuments', 'fallbackDocument', 'xDefaultDocument', 'faqPairs', 'publisherEntity', 'authorEntities'])
+const ENTITY_KEYS = new Set(['entityUid', 'name', 'kind', 'url', 'sameAs'])
 const LANGUAGE_ORDER: readonly FirstPartyContentLanguage[] = ['en', 'zh-hant']
 
 function blocked(code: FirstPartyContentBlockedResult['code'], ...reasons: string[]): FirstPartySeoResult {
@@ -63,6 +67,59 @@ function publicAbsoluteUrl(value: unknown): string | undefined {
   }
   if (!isPublicHttpsOrigin(parsed.origin) || parsed.username || parsed.password || parsed.search || parsed.hash || (parsed.port && parsed.port !== '443')) return undefined
   return parsed.href
+}
+
+function knowledgeEntityRef(value: unknown, requiredKind?: KnowledgeEntityRef['kind']): { ok: true; value: KnowledgeEntityRef } | { ok: false; reason: string } {
+  if (!isRecord(value) || Object.keys(value).some(key => !ENTITY_KEYS.has(key))) return { ok: false, reason: 'Knowledge entity reference contains an unknown key or is not an object' }
+  const entityUid = read(value, 'entityUid')
+  const name = read(value, 'name')
+  const kind = read(value, 'kind')
+  if (!safeString(entityUid, 32) || entityUid.trim() !== entityUid || !safeString(name, 255) || name.trim() !== name || !name.trim()) return { ok: false, reason: 'Knowledge entity identity and name must be bounded non-empty strings' }
+  if (kind !== 'organization' && kind !== 'person') return { ok: false, reason: 'Knowledge entity kind must be organization or person' }
+  if (requiredKind !== undefined && kind !== requiredKind) return { ok: false, reason: `Knowledge entity kind must be ${requiredKind}` }
+  const rawUrl = read(value, 'url')
+  const url = rawUrl === undefined ? undefined : publicAbsoluteUrl(rawUrl)
+  if (rawUrl !== undefined && url === undefined) return { ok: false, reason: 'Knowledge entity url must be a public HTTPS URL' }
+  const rawSameAs = read(value, 'sameAs')
+  let sameAs: string[] | undefined
+  if (rawSameAs !== undefined) {
+    if (!Array.isArray(rawSameAs) || rawSameAs.length < 1 || rawSameAs.length > 32) return { ok: false, reason: 'Knowledge entity sameAs must contain 1-32 public HTTPS URLs' }
+    sameAs = []
+    for (const item of rawSameAs) {
+      const normalized = publicAbsoluteUrl(item)
+      if (normalized === undefined || sameAs.includes(normalized)) return { ok: false, reason: 'Knowledge entity sameAs values must be unique public HTTPS URLs' }
+      sameAs.push(normalized)
+    }
+  }
+  return { ok: true, value: { entityUid, name, kind, ...(url === undefined ? {} : { url }), ...(sameAs === undefined ? {} : { sameAs }) } }
+}
+
+function knowledgeEntityRefs(value: unknown): { ok: true; value: KnowledgeEntityRef[] } | { ok: false; reason: string } {
+  if (!Array.isArray(value) || value.length > 32) return { ok: false, reason: 'authorEntities must be an array containing at most 32 knowledge entity references' }
+  const result: KnowledgeEntityRef[] = []
+  const identifiers = new Set<string>()
+  for (const item of value) {
+    const parsed = knowledgeEntityRef(item)
+    if (!parsed.ok) return parsed
+    if (identifiers.has(parsed.value.entityUid)) return { ok: false, reason: 'authorEntities must not contain duplicate entityUid values' }
+    identifiers.add(parsed.value.entityUid)
+    result.push(parsed.value)
+  }
+  return { ok: true, value: result }
+}
+
+export function knowledgeEntityJsonLdId(siteOrigin: string, entityUid: string): string {
+  return `${siteOrigin}/#/knowledge/${entityUid}`
+}
+
+function knowledgeEntityNode(origin: string, entity: KnowledgeEntityRef, forcedType?: 'Organization' | 'Person'): Record<string, unknown> {
+  return {
+    '@type': forcedType ?? (entity.kind === 'person' ? 'Person' : 'Organization'),
+    '@id': knowledgeEntityJsonLdId(origin, entity.entityUid),
+    name: entity.name,
+    ...(entity.url === undefined ? {} : { url: entity.url }),
+    ...(entity.sameAs === undefined ? {} : { sameAs: entity.sameAs }),
+  }
 }
 
 function routeSegment(contentType: FirstPartyContentType): 'articles' | 'faq' | 'services' {
@@ -157,9 +214,9 @@ function verifiedFaqPairs(raw: unknown, document: FirstPartyContentDocument): { 
   return { ok: true, pairs }
 }
 
-function baseJsonLd(origin: string, document: FirstPartyContentDocument, siteName: string, logoUrl: string | undefined): Record<string, unknown> {
+function baseJsonLd(origin: string, document: FirstPartyContentDocument, siteName: string, logoUrl: string | undefined, publisherEntity: KnowledgeEntityRef | undefined): Record<string, unknown> {
   const url = canonicalUrl(origin, document)
-  const publisher: Record<string, unknown> = { '@type': 'Organization', name: siteName }
+  const publisher: Record<string, unknown> = publisherEntity === undefined ? { '@type': 'Organization', name: siteName } : knowledgeEntityNode(origin, publisherEntity, 'Organization')
   if (logoUrl !== undefined) publisher.logo = { '@type': 'ImageObject', url: logoUrl }
   return {
     '@context': 'https://schema.org',
@@ -172,9 +229,9 @@ function baseJsonLd(origin: string, document: FirstPartyContentDocument, siteNam
   }
 }
 
-function jsonLdFor(origin: string, document: FirstPartyContentDocument, siteName: string, logoUrl: string | undefined, faqPairs: readonly FirstPartyFaqPair[] | undefined): readonly Record<string, unknown>[] {
+function jsonLdFor(origin: string, document: FirstPartyContentDocument, siteName: string, logoUrl: string | undefined, faqPairs: readonly FirstPartyFaqPair[] | undefined, publisherEntity: KnowledgeEntityRef | undefined, authorEntities: readonly KnowledgeEntityRef[] | undefined): readonly Record<string, unknown>[] {
   const url = canonicalUrl(origin, document)
-  const base = baseJsonLd(origin, document, siteName, logoUrl)
+  const base = baseJsonLd(origin, document, siteName, logoUrl, publisherEntity)
   if (document.contentType === 'article') {
     return [{
       ...base,
@@ -183,6 +240,7 @@ function jsonLdFor(origin: string, document: FirstPartyContentDocument, siteName
       headline: document.title,
       datePublished: document.publishedAt,
       mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+      ...(authorEntities === undefined || authorEntities.length === 0 ? {} : { author: authorEntities.map(entity => knowledgeEntityNode(origin, entity)) }),
     }]
   }
   if (document.contentType === 'faq' && faqPairs !== undefined) {
@@ -241,6 +299,20 @@ export function buildFirstPartySeoProjection(input: unknown): FirstPartySeoResul
       if (!faqResult.ok) return blocked('FAQ_PAIRS_INVALID', faqResult.reason)
       faqPairs = faqResult.pairs
     }
+    const publisherRaw = read(input, 'publisherEntity')
+    let publisherEntity: KnowledgeEntityRef | undefined
+    if (publisherRaw !== undefined) {
+      const parsed = knowledgeEntityRef(publisherRaw, 'organization')
+      if (!parsed.ok) return blocked('ENTITY_INPUT_INVALID', parsed.reason)
+      publisherEntity = parsed.value
+    }
+    const authorsRaw = read(input, 'authorEntities')
+    let authorEntities: KnowledgeEntityRef[] | undefined
+    if (authorsRaw !== undefined) {
+      const parsed = knowledgeEntityRefs(authorsRaw)
+      if (!parsed.ok) return blocked('ENTITY_INPUT_INVALID', parsed.reason)
+      authorEntities = parsed.value
+    }
     const canonical = canonicalUrl(origin, documentValue)
     const hreflang = buildHreflang(origin, alternates.documents)
     const description = plainExcerpt(documentValue)
@@ -269,13 +341,64 @@ export function buildFirstPartySeoProjection(input: unknown): FirstPartySeoResul
       description,
       canonicalUrl: canonical,
       meta,
-      jsonLd: jsonLdFor(origin, documentValue, siteName, logoUrl, faqPairs),
+      jsonLd: jsonLdFor(origin, documentValue, siteName, logoUrl, faqPairs, publisherEntity, authorEntities),
       sitemap: { loc: canonical, lastmod: documentValue.publishedAt, alternates: hreflang },
     }
     if (safeJsonStringify(projection) === undefined) return blocked('SEO_INPUT_INVALID', 'SEO projection is not JSON-safe')
     return projection
   } catch {
     return blocked('SEO_INPUT_INVALID', 'SEO input could not be safely read')
+  }
+}
+
+export function buildKnowledgeArticleJsonLd(input: KnowledgeArticleJsonLdInput): KnowledgeArticleJsonLdResult {
+  try {
+    if (!isRecord(input) || Object.keys(input).some(key => !['siteOrigin', 'siteName', 'article', 'publisherEntity', 'authorEntities'].includes(key))) return { status: 'blocked', code: 'SEO_INPUT_INVALID', reasons: ['Knowledge Article input contains an unknown key'] }
+    const origin = publicOrigin(read(input, 'siteOrigin'))
+    if (origin === undefined) return { status: 'blocked', code: 'ORIGIN_INVALID', reasons: ['siteOrigin must be a public HTTPS origin without path, query, or fragment'] }
+    const siteNameRaw = read(input, 'siteName')
+    if (siteNameRaw !== undefined && !safeString(siteNameRaw, 256)) return { status: 'blocked', code: 'SEO_INPUT_INVALID', reasons: ['siteName must be a bounded safe string when present'] }
+    const article = read(input, 'article')
+    if (!isRecord(article) || Object.keys(article).some(key => !['headline', 'articleId', 'datePublished', 'inLanguage', 'canonicalUrl'].includes(key))) return { status: 'blocked', code: 'SEO_INPUT_INVALID', reasons: ['article contains an unknown key or is not an object'] }
+    const headline = read(article, 'headline')
+    const articleId = read(article, 'articleId')
+    if (!safeString(headline, 500) || !safeString(articleId, 1024) || !articleId.startsWith('https://')) return { status: 'blocked', code: 'SEO_INPUT_INVALID', reasons: ['article headline and HTTPS articleId are required'] }
+    const datePublished = read(article, 'datePublished')
+    if (datePublished !== undefined && !strictTimestamp(datePublished).ok) return { status: 'blocked', code: 'SEO_INPUT_INVALID', reasons: ['datePublished must be a strict timestamp'] }
+    const inLanguage = read(article, 'inLanguage')
+    if (inLanguage !== undefined && !safeString(inLanguage, 16)) return { status: 'blocked', code: 'SEO_INPUT_INVALID', reasons: ['inLanguage must be a bounded safe string'] }
+    const canonicalRaw = read(article, 'canonicalUrl')
+    const canonicalUrlValue = canonicalRaw === undefined ? undefined : publicAbsoluteUrl(canonicalRaw)
+    if (canonicalRaw !== undefined && canonicalUrlValue === undefined) return { status: 'blocked', code: 'ORIGIN_INVALID', reasons: ['canonicalUrl must be a public HTTPS URL'] }
+    const publisherRaw = read(input, 'publisherEntity')
+    let publisherEntity: KnowledgeEntityRef | undefined
+    if (publisherRaw !== undefined) {
+      const parsed = knowledgeEntityRef(publisherRaw, 'organization')
+      if (!parsed.ok) return { status: 'blocked', code: 'ENTITY_INPUT_INVALID', reasons: [parsed.reason] }
+      publisherEntity = parsed.value
+    }
+    const authorsRaw = read(input, 'authorEntities')
+    let authorEntities: KnowledgeEntityRef[] | undefined
+    if (authorsRaw !== undefined) {
+      const parsed = knowledgeEntityRefs(authorsRaw)
+      if (!parsed.ok) return { status: 'blocked', code: 'ENTITY_INPUT_INVALID', reasons: [parsed.reason] }
+      authorEntities = parsed.value
+    }
+    const jsonLd: Record<string, unknown> = {
+      '@context': 'https://schema.org',
+      '@type': 'Article',
+      '@id': articleId,
+      headline,
+      ...(canonicalUrlValue === undefined ? {} : { url: canonicalUrlValue, mainEntityOfPage: { '@type': 'WebPage', '@id': canonicalUrlValue } }),
+      ...(datePublished === undefined ? {} : { datePublished }),
+      ...(inLanguage === undefined ? {} : { inLanguage }),
+      ...(publisherEntity !== undefined ? { publisher: knowledgeEntityNode(origin, publisherEntity, 'Organization') } : siteNameRaw === undefined ? {} : { publisher: { '@type': 'Organization', name: siteNameRaw } }),
+      ...(authorEntities === undefined || authorEntities.length === 0 ? {} : { author: authorEntities.map(entity => knowledgeEntityNode(origin, entity)) }),
+    }
+    if (safeJsonStringify(jsonLd) === undefined) return { status: 'blocked', code: 'SEO_INPUT_INVALID', reasons: ['Knowledge Article JSON-LD is not JSON-safe'] }
+    return { status: 'verified', jsonLd }
+  } catch {
+    return { status: 'blocked', code: 'SEO_INPUT_INVALID', reasons: ['Knowledge Article input could not be safely read'] }
   }
 }
 

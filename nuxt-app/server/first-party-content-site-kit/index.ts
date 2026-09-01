@@ -1,6 +1,6 @@
 export { parseFirstPartyContentDocument } from './parser'
 export { buildFirstPartyContentManifest } from './manifest'
-export { buildFirstPartySeoProjection } from './seo'
+export { buildFirstPartySeoProjection, buildKnowledgeArticleJsonLd, knowledgeEntityJsonLdId } from './seo'
 export { buildAstroContentProjection } from './astro'
 export { buildNuxtContentProjection } from './nuxt'
 export type {
@@ -31,4 +31,7 @@ export type {
   FirstPartySeoMeta,
   FirstPartySeoProjection,
   FirstPartySeoResult,
+  KnowledgeArticleJsonLdInput,
+  KnowledgeArticleJsonLdResult,
+  KnowledgeEntityRef,
 } from './types'

@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { boolean, decimal, foreignKey, index, int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/mysql-core'
+import { boolean, datetime, decimal, foreignKey, index, int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/mysql-core'
 
 /** OAuth identities are private and are used only for owner-gated administration. */
 export const users = mysqlTable('users', {
@@ -3497,3 +3497,291 @@ export const siteEvidenceFindings = mysqlTable('siteEvidenceFindings', {
   foreignKey({ name: 'sef_url_fk', columns: [table.urlId], foreignColumns: [siteEvidenceUrls.id] }),
   foreignKey({ name: 'sef_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
 ])
+
+// Knowledge foundation: owner-scoped Entity Graph, Claim Ledger, Source Graph, and content bindings.
+
+/** Durable entity identity. Merged and retired rows remain as tombstones, and entityUid is never reused. */
+export const knowledgeEntities = mysqlTable('knowledgeEntities', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  entityUid: varchar('entityUid', { length: 32 }).notNull(),
+  entityType: mysqlEnum('entityType', ['Person', 'Organization', 'Brand', 'Product', 'Service', 'Concept', 'Topic', 'Location', 'Author', 'Research', 'Dataset', 'Claim', 'Source', 'Article', 'Question', 'Event', 'Statistic']).notNull(),
+  canonicalName: varchar('canonicalName', { length: 255 }).notNull(),
+  slug: varchar('slug', { length: 160 }),
+  canonicalUri: varchar('canonicalUri', { length: 500 }),
+  canonicalUriHash: varchar('canonicalUriHash', { length: 64 }),
+  locale: varchar('locale', { length: 16 }),
+  summary: text('summary'),
+  status: mysqlEnum('status', ['active', 'merged', 'retired']).default('active').notNull(),
+  publicVisibility: mysqlEnum('publicVisibility', ['private', 'public_candidate']).default('private').notNull(),
+  mergedIntoEntityId: int('mergedIntoEntityId'),
+  provenance: json('provenance'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_entities_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_entities_merged_into', columns: [table.mergedIntoEntityId], foreignColumns: [table.id] }),
+  uniqueIndex('knowledge_entities_uid_unique').on(table.entityUid),
+  uniqueIndex('knowledge_entities_owner_uri_hash_unique').on(table.ownerUserId, table.canonicalUriHash),
+  index('knowledge_entities_owner_type_idx').on(table.ownerUserId, table.entityType),
+  index('knowledge_entities_owner_name_idx').on(table.ownerUserId, table.canonicalName),
+])
+
+/** Folded alternate names used for deterministic entity lookup without forcing same-name merges. */
+export const knowledgeEntityAliases = mysqlTable('knowledgeEntityAliases', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  entityId: int('entityId').notNull(),
+  alias: varchar('alias', { length: 255 }).notNull(),
+  aliasNormalized: varchar('aliasNormalized', { length: 255 }).notNull(),
+  locale: varchar('locale', { length: 16 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_entity_aliases_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_entity_alias_entity', columns: [table.entityId], foreignColumns: [knowledgeEntities.id] }),
+  uniqueIndex('knowledge_entity_alias_normalized_unique').on(table.entityId, table.aliasNormalized),
+])
+
+/** Exact external identifiers are the deterministic, owner-scoped entity deduplication backbone. */
+export const knowledgeEntityExternalIds = mysqlTable('knowledgeEntityExternalIds', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  entityId: int('entityId').notNull(),
+  idType: varchar('idType', { length: 64 }).notNull(),
+  idValue: varchar('idValue', { length: 255 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_entity_external_ids_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_external_id_entity', columns: [table.entityId], foreignColumns: [knowledgeEntities.id] }),
+  uniqueIndex('knowledge_external_id_owner_value_unique').on(table.ownerUserId, table.idType, table.idValue),
+])
+
+/** Manually registered source metadata; source contents are not fetched or copied automatically. */
+export const knowledgeSources = mysqlTable('knowledgeSources', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  canonicalUrl: varchar('canonicalUrl', { length: 500 }).notNull(),
+  urlHash: varchar('urlHash', { length: 64 }).notNull(),
+  title: varchar('title', { length: 255 }),
+  sourceClass: mysqlEnum('sourceClass', ['official documentation', 'government', 'academic / peer-reviewed', 'primary research', 'first-party company data', 'major publication', 'secondary media', 'expert publication', 'blog', 'forum', 'social', 'unknown']).notNull(),
+  status: mysqlEnum('status', ['active', 'archived']).default('active').notNull(),
+  notes: text('notes'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [foreignKey({ name: 'fk_knowledge_sources_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }), uniqueIndex('knowledge_sources_owner_url_hash_unique').on(table.ownerUserId, table.urlHash)])
+
+/** Versioned, hash-addressed source observations with bounded excerpts and retrieval metadata. */
+export const knowledgeSourceVersions = mysqlTable('knowledgeSourceVersions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  sourceId: int('sourceId').notNull(),
+  versionNumber: int('versionNumber').notNull(),
+  contentHash: varchar('contentHash', { length: 64 }).notNull(),
+  retrievedAt: datetime('retrievedAt').notNull(),
+  excerpt: text('excerpt'),
+  metadata: json('metadata'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_source_versions_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_source_version_source', columns: [table.sourceId], foreignColumns: [knowledgeSources.id] }),
+  uniqueIndex('knowledge_source_version_number_unique').on(table.sourceId, table.versionNumber),
+  index('knowledge_source_version_hash_idx').on(table.sourceId, table.contentHash),
+])
+
+/** Directed, source-aware entity relationship with explicit validity and verification state. */
+export const knowledgeEntityEdges = mysqlTable('knowledgeEntityEdges', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  subjectEntityId: int('subjectEntityId').notNull(),
+  predicate: mysqlEnum('predicate', ['worksFor', 'about', 'authoredBy', 'supportedBy', 'offeredBy', 'supports', 'answeredBy', 'mentions', 'producedBy']).notNull(),
+  objectEntityId: int('objectEntityId').notNull(),
+  validFrom: datetime('validFrom'),
+  validTo: datetime('validTo'),
+  sourceId: int('sourceId'),
+  verificationStatus: mysqlEnum('verificationStatus', ['unverified', 'verified', 'disputed']).default('unverified').notNull(),
+  note: text('note'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_entity_edges_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_edge_subject_entity', columns: [table.subjectEntityId], foreignColumns: [knowledgeEntities.id] }),
+  foreignKey({ name: 'fk_knowledge_edge_object_entity', columns: [table.objectEntityId], foreignColumns: [knowledgeEntities.id] }),
+  foreignKey({ name: 'fk_knowledge_edge_source', columns: [table.sourceId], foreignColumns: [knowledgeSources.id] }),
+  index('knowledge_entity_edges_subject_idx').on(table.subjectEntityId),
+  index('knowledge_entity_edges_object_idx').on(table.objectEntityId),
+])
+
+/** Material factual statement whose explainable status is projected from evidence and owner decisions. */
+export const knowledgeClaims = mysqlTable('knowledgeClaims', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  statement: text('statement').notNull(),
+  claimType: mysqlEnum('claimType', ['statistics', 'pricing', 'laws and regulations', 'medical / financial / legal claims', 'product capabilities', 'research findings', 'competitive comparisons', 'first-party measurements', 'time-sensitive facts']).notNull(),
+  status: mysqlEnum('status', ['unverified', 'source_backed', 'independently_confirmed', 'first_party_measured', 'disputed', 'expired', 'retracted']).default('unverified').notNull(),
+  validFrom: datetime('validFrom'),
+  validTo: datetime('validTo'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [foreignKey({ name: 'fk_knowledge_claims_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }), index('knowledge_claims_owner_status_idx').on(table.ownerUserId, table.status)])
+
+/** Owner-scoped many-to-many binding from a claim to every entity it concerns. */
+export const knowledgeClaimEntityLinks = mysqlTable('knowledgeClaimEntityLinks', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  claimId: int('claimId').notNull(),
+  entityId: int('entityId').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_claim_entity_links_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_claim_entity_link_claim', columns: [table.claimId], foreignColumns: [knowledgeClaims.id] }),
+  foreignKey({ name: 'fk_knowledge_claim_entity_link_entity', columns: [table.entityId], foreignColumns: [knowledgeEntities.id] }),
+  uniqueIndex('knowledge_claim_entity_link_unique').on(table.claimId, table.entityId),
+])
+
+/** Precise, version-bound evidence relationship; no unbounded source body is persisted here. */
+export const knowledgeClaimEvidence = mysqlTable('knowledgeClaimEvidence', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  claimId: int('claimId').notNull(),
+  sourceVersionId: int('sourceVersionId').notNull(),
+  relation: mysqlEnum('relation', ['supports', 'contradicts', 'contextualizes', 'supersedes']).notNull(),
+  locator: varchar('locator', { length: 500 }).notNull(),
+  locatorHash: varchar('locatorHash', { length: 64 }).notNull(),
+  contentHash: varchar('contentHash', { length: 64 }).notNull(),
+  reviewNotes: text('reviewNotes'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_claim_evidence_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_claim_evidence_claim', columns: [table.claimId], foreignColumns: [knowledgeClaims.id] }),
+  foreignKey({ name: 'fk_knowledge_claim_evidence_version', columns: [table.sourceVersionId], foreignColumns: [knowledgeSourceVersions.id] }),
+  uniqueIndex('knowledge_claim_evidence_locator_unique').on(table.claimId, table.sourceVersionId, table.relation, table.locatorHash),
+])
+
+/** Append-only ledger of every automatic and owner-triggered claim status transition. */
+export const knowledgeClaimStatusEvents = mysqlTable('knowledgeClaimStatusEvents', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  claimId: int('claimId').notNull(),
+  fromStatus: mysqlEnum('fromStatus', ['unverified', 'source_backed', 'independently_confirmed', 'first_party_measured', 'disputed', 'expired', 'retracted']).notNull(),
+  toStatus: mysqlEnum('toStatus', ['unverified', 'source_backed', 'independently_confirmed', 'first_party_measured', 'disputed', 'expired', 'retracted']).notNull(),
+  reason: varchar('reason', { length: 500 }).notNull(),
+  triggeredBy: mysqlEnum('triggeredBy', ['system', 'owner']).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_claim_status_events_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_claim_status_event_claim', columns: [table.claimId], foreignColumns: [knowledgeClaims.id] }),
+  index('knowledge_claim_status_events_claim_idx').on(table.claimId),
+])
+
+/** Reviewable contradiction pair; resolved pairs are retained and the same claims may be disputed again later. */
+export const knowledgeClaimDisputes = mysqlTable('knowledgeClaimDisputes', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  claimAId: int('claimAId').notNull(),
+  claimBId: int('claimBId').notNull(),
+  detectionMethod: mysqlEnum('detectionMethod', ['shared_source_conflict', 'manual']).notNull(),
+  detectionReason: varchar('detectionReason', { length: 500 }).notNull(),
+  status: mysqlEnum('status', ['open', 'resolved']).default('open').notNull(),
+  resolution: mysqlEnum('resolution', ['kept_a', 'kept_b', 'both_stand', 'other']),
+  resolutionNote: text('resolutionNote'),
+  resolvedAt: datetime('resolvedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_claim_disputes_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_dispute_claim_a', columns: [table.claimAId], foreignColumns: [knowledgeClaims.id] }),
+  foreignKey({ name: 'fk_knowledge_dispute_claim_b', columns: [table.claimBId], foreignColumns: [knowledgeClaims.id] }),
+  index('knowledge_disputes_owner_status_idx').on(table.ownerUserId, table.status),
+  index('knowledge_disputes_claim_pair_idx').on(table.claimAId, table.claimBId),
+])
+
+/** Human review queue for deterministic exact matches and non-authoritative normalized-name matches. */
+export const knowledgeEntityMergeCandidates = mysqlTable('knowledgeEntityMergeCandidates', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  sourceEntityId: int('sourceEntityId').notNull(),
+  targetEntityId: int('targetEntityId').notNull(),
+  matchMethod: mysqlEnum('matchMethod', ['exact_external_id', 'exact_canonical_uri', 'normalized_name']).notNull(),
+  matchDetail: json('matchDetail').notNull(),
+  status: mysqlEnum('status', ['pending', 'approved', 'rejected']).default('pending').notNull(),
+  decisionNote: varchar('decisionNote', { length: 500 }),
+  decidedAt: datetime('decidedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_merge_candidates_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_merge_candidate_source', columns: [table.sourceEntityId], foreignColumns: [knowledgeEntities.id] }),
+  foreignKey({ name: 'fk_knowledge_merge_candidate_target', columns: [table.targetEntityId], foreignColumns: [knowledgeEntities.id] }),
+  index('knowledge_merge_candidates_owner_status_idx').on(table.ownerUserId, table.status),
+])
+
+/** Append-only entity merge ledger with an in-row undo marker for reversible tombstone redirects. */
+export const knowledgeEntityMergeEvents = mysqlTable('knowledgeEntityMergeEvents', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  sourceEntityId: int('sourceEntityId').notNull(),
+  targetEntityId: int('targetEntityId').notNull(),
+  candidateId: int('candidateId'),
+  reason: varchar('reason', { length: 500 }).notNull(),
+  undoneAt: datetime('undoneAt'),
+  undoReason: varchar('undoReason', { length: 500 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_merge_events_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_merge_event_source', columns: [table.sourceEntityId], foreignColumns: [knowledgeEntities.id] }),
+  foreignKey({ name: 'fk_knowledge_merge_event_target', columns: [table.targetEntityId], foreignColumns: [knowledgeEntities.id] }),
+  foreignKey({ name: 'fk_knowledge_merge_event_candidate', columns: [table.candidateId], foreignColumns: [knowledgeEntityMergeCandidates.id] }),
+  index('knowledge_merge_events_source_idx').on(table.sourceEntityId),
+])
+
+/** Owner-scoped semantic role linking a generated content brief to a canonical knowledge entity. */
+export const knowledgeContentEntityLinks = mysqlTable('knowledgeContentEntityLinks', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  briefId: int('briefId').notNull(),
+  entityId: int('entityId').notNull(),
+  role: mysqlEnum('role', ['author', 'about', 'mentions']).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_content_entity_links_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_content_link_brief', columns: [table.briefId], foreignColumns: [seoGeoContentBriefs.id] }),
+  foreignKey({ name: 'fk_knowledge_content_link_entity', columns: [table.entityId], foreignColumns: [knowledgeEntities.id] }),
+  uniqueIndex('knowledge_content_entity_role_unique').on(table.briefId, table.entityId, table.role),
+])
+
+/** Singleton owner preference designating the real Organization entity used for structured-data publishing. */
+export const knowledgePublisherSettings = mysqlTable('knowledgePublisherSettings', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  organizationEntityId: int('organizationEntityId').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_knowledge_publisher_settings_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_knowledge_publisher_organization', columns: [table.organizationEntityId], foreignColumns: [knowledgeEntities.id] }),
+  uniqueIndex('knowledge_publisher_settings_owner_unique').on(table.ownerUserId),
+])
+
+export type KnowledgeEntityRecord = typeof knowledgeEntities.$inferSelect
+export type KnowledgeEntityAliasRecord = typeof knowledgeEntityAliases.$inferSelect
+export type KnowledgeEntityExternalIdRecord = typeof knowledgeEntityExternalIds.$inferSelect
+export type KnowledgeEntityEdgeRecord = typeof knowledgeEntityEdges.$inferSelect
+export type KnowledgeSourceRecord = typeof knowledgeSources.$inferSelect
+export type KnowledgeSourceVersionRecord = typeof knowledgeSourceVersions.$inferSelect
+export type KnowledgeClaimRecord = typeof knowledgeClaims.$inferSelect
+export type KnowledgeClaimEntityLinkRecord = typeof knowledgeClaimEntityLinks.$inferSelect
+export type KnowledgeClaimEvidenceRecord = typeof knowledgeClaimEvidence.$inferSelect
+export type KnowledgeClaimStatusEventRecord = typeof knowledgeClaimStatusEvents.$inferSelect
+export type KnowledgeClaimDisputeRecord = typeof knowledgeClaimDisputes.$inferSelect
+export type KnowledgeEntityMergeCandidateRecord = typeof knowledgeEntityMergeCandidates.$inferSelect
+export type KnowledgeEntityMergeEventRecord = typeof knowledgeEntityMergeEvents.$inferSelect
+export type KnowledgeContentEntityLinkRecord = typeof knowledgeContentEntityLinks.$inferSelect
+export type KnowledgePublisherSettingRecord = typeof knowledgePublisherSettings.$inferSelect

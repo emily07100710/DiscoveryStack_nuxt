@@ -21,6 +21,7 @@ export type ContentSiteKitDecisionCode =
   | 'MANIFEST_COLLISION'
   | 'ORIGIN_INVALID'
   | 'SEO_INPUT_INVALID'
+  | 'ENTITY_INPUT_INVALID'
   | 'FAQ_PAIRS_INVALID'
   | 'PROJECTION_INVALID'
 
@@ -122,6 +123,26 @@ export interface FirstPartySeoProjection {
 
 export type FirstPartySeoResult = FirstPartySeoProjection | FirstPartyContentBlockedResult
 
+export interface KnowledgeEntityRef {
+  readonly entityUid: string
+  readonly name: string
+  readonly kind: 'organization' | 'person'
+  readonly url?: string
+  readonly sameAs?: readonly string[]
+}
+
+export interface KnowledgeArticleJsonLdInput {
+  readonly siteOrigin: unknown
+  readonly siteName?: unknown
+  readonly article: unknown
+  readonly publisherEntity?: unknown
+  readonly authorEntities?: unknown
+}
+
+export type KnowledgeArticleJsonLdResult =
+  | { readonly status: 'verified'; readonly jsonLd: Readonly<Record<string, unknown>> }
+  | FirstPartyContentBlockedResult
+
 export interface FirstPartyAstroContentProjection {
   readonly status: 'verified'
   readonly framework: 'astro'
@@ -195,6 +216,8 @@ export interface FirstPartySeoInput {
   readonly fallbackDocument?: unknown
   readonly xDefaultDocument?: unknown
   readonly faqPairs?: unknown
+  readonly publisherEntity?: unknown
+  readonly authorEntities?: unknown
 }
 
 export interface FirstPartyProjectionInput extends FirstPartySeoInput {}
