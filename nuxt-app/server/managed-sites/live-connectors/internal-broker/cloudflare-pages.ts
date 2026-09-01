@@ -88,20 +88,20 @@ export async function deployCloudflarePagesPreview(input: { ownerUserId: number;
   const projectName = managedSitePagesProjectName(options.projectPrefix, input.ownerUserId, input.projectId)
   await ensureProject(options, projectName)
   const accountProject = `${API_ORIGIN}/client/v4/accounts/${options.accountId}/pages/projects/${projectName}`
-  const tokenResponse = await request(options.fetchImpl, `${accountProject}/upload-token`, { method: 'POST', headers: bearer(options.apiToken), body: '{}' })
+  const tokenResponse = await request(options.fetchImpl, `${accountProject}/upload-token`, { method: 'GET', headers: bearer(options.apiToken) })
   if (!tokenResponse.response.ok) throw cloudflareError(tokenResponse.response.status, 'Cloudflare Pages upload token request failed.')
   const tokenResult = resultObject(tokenResponse.envelope)
   const uploadToken = typeof tokenResult.jwt === 'string' ? tokenResult.jwt : typeof tokenResult.token === 'string' ? tokenResult.token : ''
   if (uploadToken.length < 16) throw cloudflareError(502, 'Cloudflare Pages upload token was incomplete.')
   const hashed = input.assets.map(asset => ({ asset, hash: cloudflarePagesAssetHash(asset), base64: Buffer.from(asset.content, 'utf8').toString('base64') }))
-  const check = await request(options.fetchImpl, `${API_ORIGIN}/pages/assets/check-missing`, { method: 'POST', headers: bearer(uploadToken), body: JSON.stringify({ hashes: hashed.map(item => item.hash) }) })
+  const check = await request(options.fetchImpl, `${API_ORIGIN}/client/v4/pages/assets/check-missing`, { method: 'POST', headers: bearer(uploadToken), body: JSON.stringify({ hashes: hashed.map(item => item.hash) }) })
   if (!check.response.ok) throw cloudflareError(check.response.status, 'Cloudflare Pages missing-assets check failed.')
   const missingResult = check.envelope.result
   const missing = new Set(Array.isArray(missingResult) ? missingResult.filter(item => typeof item === 'string') : typeof missingResult === 'object' && missingResult && Array.isArray((missingResult as any).missing) ? (missingResult as any).missing.filter((item: unknown) => typeof item === 'string') : [])
   const uploads = hashed.filter(item => missing.has(item.hash))
   for (let index = 0; index < uploads.length; index += 50) {
     const batch = uploads.slice(index, index + 50).map(item => ({ key: item.hash, value: item.base64, metadata: { contentType: item.asset.contentType }, base64: true }))
-    const uploaded = await request(options.fetchImpl, `${API_ORIGIN}/pages/assets/upload`, { method: 'POST', headers: bearer(uploadToken), body: JSON.stringify(batch) })
+    const uploaded = await request(options.fetchImpl, `${API_ORIGIN}/client/v4/pages/assets/upload`, { method: 'POST', headers: bearer(uploadToken), body: JSON.stringify(batch) })
     if (!uploaded.response.ok || uploaded.envelope.success === false) throw cloudflareError(uploaded.response.status, 'Cloudflare Pages asset upload failed.')
   }
   const form = new FormData()
