@@ -253,7 +253,7 @@ export async function runSiteEvidenceScan(scanId: number, inputDependencies: Sit
       }
     }
 
-    const findings = buildSiteEvidenceFindings({ inventory, sitemaps: sitemap.documents }).map(item => ({ ...item, ownerUserId: scan.ownerUserId, scanId: scan.id }))
+    const findings = buildSiteEvidenceFindings({ inventory, sitemaps: sitemap.documents, targetOrigin: scan.targetOrigin, limitations }).map(item => ({ ...item, ownerUserId: scan.ownerUserId, scanId: scan.id }))
     await deps.repository.insertFindings(findings)
     const finalLimitations = unique(limitations)
     const partial = finalLimitations.some(value => ['page_cap_reached', 'scan_deadline_reached', 'sitemap_url_consideration_cap_reached', 'rendered_snapshots_unavailable'].includes(value))

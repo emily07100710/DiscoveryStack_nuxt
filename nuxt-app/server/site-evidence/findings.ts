@@ -3,7 +3,7 @@ import { compareRawRendered } from './html'
 import type { HtmlSignals, SiteEvidenceFinding, SiteEvidenceSitemap, SiteEvidenceUrl } from './types'
 
 export type FindingInventoryItem = SiteEvidenceUrl & { rawSignals?: HtmlSignals | null, renderedSignals?: HtmlSignals | null, renderedUnavailableReason?: string | null }
-export type ReconciliationInput = { inventory: FindingInventoryItem[], sitemaps: SiteEvidenceSitemap[] }
+export type ReconciliationInput = { inventory: FindingInventoryItem[], sitemaps: SiteEvidenceSitemap[], targetOrigin?: string, limitations?: string[] }
 
 const duplicateCategory = {
   scheme_variant: 'http_https_duplicate',
@@ -25,16 +25,29 @@ export function buildSiteEvidenceFindings(input: ReconciliationInput): SiteEvide
     }
   }
   const byNormalized = new Map(input.inventory.map(item => [item.normalizedUrl, item]))
+  const scanLimits = [...new Set((input.limitations || []).filter(item => item === 'page_cap_reached' || item === 'scan_deadline_reached'))]
+  const sitemapBaseTruncated = (input.limitations || []).some(item => item === 'sitemap_entries_truncated' || item === 'sitemap_url_consideration_cap_reached')
   for (const [normalized, original] of sitemapUrls) {
     const page = byNormalized.get(normalized)
-    const offSite = Boolean(page?.finalUrl && !isSameSite(page.url, page.finalUrl))
-    if (!page || page.errorCode || (page.httpStatus !== null && page.httpStatus >= 400) || offSite) {
-      output.push(finding('in_sitemap_not_crawlable', 'warning', { url: original, urlHash: urlHash(original), reason: !page ? 'not_fetched' : offSite ? 'redirected_off_site' : page.errorCode || `http_${page.httpStatus}` }, page?.id || null))
+    if (!page) {
+      // Failed fetch attempts always produce an inventory row, so a missing row means the
+      // scanner never tried this URL (its own page cap, deadline, or site-scope rule) —
+      // an honest unknown, never a detected customer-site defect.
+      const outOfScope = Boolean(input.targetOrigin && !isSameSite(input.targetOrigin, original))
+      const evidence: Record<string, unknown> = { url: original, urlHash: urlHash(original), reason: outOfScope ? 'out_of_site_scope' : 'not_attempted' }
+      if (!outOfScope && scanLimits.length) evidence.scanLimits = scanLimits
+      output.push(finding('in_sitemap_not_crawlable', 'info', evidence, null, 'unknown'))
+      continue
+    }
+    const offSite = Boolean(page.finalUrl && !isSameSite(page.url, page.finalUrl))
+    if (page.errorCode || (page.httpStatus !== null && page.httpStatus >= 400) || offSite) {
+      output.push(finding('in_sitemap_not_crawlable', 'warning', { url: original, urlHash: urlHash(original), reason: offSite ? 'redirected_off_site' : page.errorCode || `http_${page.httpStatus}` }, page.id))
     }
   }
   for (const page of input.inventory) {
     if (page.httpStatus === 200 && page.contentType && /^(?:text\/html|application\/xhtml\+xml)$/u.test(page.contentType) && !sitemapUrls.has(page.normalizedUrl)) {
-      output.push(finding('crawled_not_in_sitemap', 'info', { url: page.url, urlHash: page.urlHash }, page.id))
+      if (sitemapBaseTruncated) output.push(finding('crawled_not_in_sitemap', 'info', { url: page.url, urlHash: page.urlHash, reason: 'sitemap_base_truncated' }, page.id, 'unknown'))
+      else output.push(finding('crawled_not_in_sitemap', 'info', { url: page.url, urlHash: page.urlHash }, page.id))
     }
     if (page.canonicalUrl) {
       const relation = classifyUrlVariant(page.url, page.canonicalUrl)

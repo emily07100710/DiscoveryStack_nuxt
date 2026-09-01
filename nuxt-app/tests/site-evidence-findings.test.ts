@@ -32,13 +32,36 @@ describe('site evidence reconciliation findings', () => {
     ]
     const findings = buildSiteEvidenceFindings({
       inventory,
-      sitemaps: [{ ownerUserId: 1, scanId: 7, url: 'https://example.com/sitemap.xml', urlHash: urlHash('https://example.com/sitemap.xml'), kind: 'urlset', status: 'fetched', httpStatus: 200, urlCount: 2, contentHash: 'b'.repeat(64), errorCode: null, discoveredFrom: 'wellknown', fetchedAt: new Date('2026-01-01T00:00:00Z'), entries: [{ url: 'https://example.com/in-sitemap', lastmod: null }, { url: 'https://example.com/missing-entirely', lastmod: null }] }],
+      targetOrigin: 'https://example.com/',
+      sitemaps: [{ ownerUserId: 1, scanId: 7, url: 'https://example.com/sitemap.xml', urlHash: urlHash('https://example.com/sitemap.xml'), kind: 'urlset', status: 'fetched', httpStatus: 200, urlCount: 3, contentHash: 'b'.repeat(64), errorCode: null, discoveredFrom: 'wellknown', fetchedAt: new Date('2026-01-01T00:00:00Z'), entries: [{ url: 'https://example.com/in-sitemap', lastmod: null }, { url: 'https://example.com/missing-entirely', lastmod: null }, { url: 'https://sub.example.com/off-scope', lastmod: null }] }],
     })
     const categories = new Set(findings.map(item => item.category))
     expect(categories).toEqual(expect.objectContaining(new Set([
       'in_sitemap_not_crawlable', 'crawled_not_in_sitemap', 'canonical_mismatch', 'canonical_points_to_variant', 'redirect_chain', 'soft_404_suspect', 'http_https_duplicate', 'www_duplicate', 'trailing_slash_duplicate', 'query_param_duplicate', 'raw_missing_main_content', 'js_only_links', 'raw_rendered_mismatch', 'rendered_unknown',
     ])))
     expect(findings.filter(item => item.urlId === inventory[7]!.id && ['raw_missing_main_content', 'js_only_links', 'raw_rendered_mismatch', 'rendered_unknown'].includes(item.category)).every(item => item.status === 'unknown')).toBe(true)
-    expect(findings.find(item => item.category === 'in_sitemap_not_crawlable' && item.evidence.url === 'https://example.com/missing-entirely')).toBeTruthy()
+    const attemptedAndFailed = findings.find(item => item.category === 'in_sitemap_not_crawlable' && item.evidence.url === 'https://example.com/in-sitemap')
+    expect(attemptedAndFailed).toMatchObject({ status: 'detected', severity: 'warning', evidence: { reason: 'http_500' } })
+    const neverAttempted = findings.find(item => item.category === 'in_sitemap_not_crawlable' && item.evidence.url === 'https://example.com/missing-entirely')
+    expect(neverAttempted).toMatchObject({ status: 'unknown', severity: 'info', urlId: null, evidence: { reason: 'not_attempted' } })
+    const outOfScope = findings.find(item => item.category === 'in_sitemap_not_crawlable' && item.evidence.url === 'https://sub.example.com/off-scope')
+    expect(outOfScope).toMatchObject({ status: 'unknown', severity: 'info', evidence: { reason: 'out_of_site_scope' } })
+    expect(findings.find(item => item.category === 'crawled_not_in_sitemap')?.status).toBe('detected')
+  })
+
+  it('never reports scanner-side limits as detected defects', () => {
+    nextId = 1
+    const sitemaps = [{ ownerUserId: 1, scanId: 7, url: 'https://example.com/sitemap.xml', urlHash: urlHash('https://example.com/sitemap.xml'), kind: 'urlset' as const, status: 'fetched' as const, httpStatus: 200, urlCount: 2, contentHash: 'b'.repeat(64), errorCode: null, discoveredFrom: 'wellknown' as const, fetchedAt: new Date('2026-01-01T00:00:00Z'), entries: [{ url: 'https://example.com/fetched', lastmod: null }, { url: 'https://example.com/never-reached', lastmod: null }] }]
+    const findings = buildSiteEvidenceFindings({
+      inventory: [page('https://example.com/fetched'), page('https://example.com/extra')],
+      targetOrigin: 'https://example.com/',
+      limitations: ['page_cap_reached', 'sitemap_url_consideration_cap_reached'],
+      sitemaps,
+    })
+    const capped = findings.find(item => item.category === 'in_sitemap_not_crawlable' && item.evidence.url === 'https://example.com/never-reached')
+    expect(capped).toMatchObject({ status: 'unknown', severity: 'info', evidence: { reason: 'not_attempted', scanLimits: ['page_cap_reached'] } })
+    const truncatedBase = findings.find(item => item.category === 'crawled_not_in_sitemap' && item.evidence.url === 'https://example.com/extra')
+    expect(truncatedBase).toMatchObject({ status: 'unknown', severity: 'info', evidence: { reason: 'sitemap_base_truncated' } })
+    expect(findings.filter(item => item.status === 'detected')).toHaveLength(0)
   })
 })
