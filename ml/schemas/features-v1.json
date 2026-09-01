@@ -1,0 +1,32 @@
+{
+  "version": "features-v1",
+  "description": "Inference-reconstructible, non-label-leaking features for the journeyStage branch",
+  "normalization": "fit_on_train_only_then_freeze",
+  "features": [
+    {"name": "problem_statement_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "question_heading_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "definition_cue_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "how_it_works_cue_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "comparison_cue_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "requirements_cue_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "troubleshooting_cue_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "error_debug_cue_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "remediation_cue_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "cta_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "contact_purchase_cue_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "price_shipping_returns_cue_count", "dtype": "float32", "source": "trainingText", "range": [0, null]},
+    {"name": "form_presence", "dtype": "float32", "source": "trainingText", "range": [0, 1]},
+    {"name": "next_step_link_count", "dtype": "float32", "source": "approved_structured_extract", "range": [0, null]},
+    {"name": "page_type_one_hot", "dtype": "float32[]", "source": "approved_structured_extract", "vocabulary": ["home", "service", "solution", "product", "pricing", "faq", "guide", "case_study", "contact", "booking", "comparison", "location", "other", "unknown"]},
+    {"name": "schema_type_one_hot", "dtype": "float32[]", "source": "approved_structured_extract", "vocabulary": ["Article", "FAQPage", "HowTo", "Product", "LocalBusiness", "Organization", "Service", "WebPage", "unknown"]},
+    {"name": "evidence_quality_vector", "dtype": "float32[]", "source": "approved_structured_extract", "range": [0, 4]}
+  ],
+  "forbidden_inputs": [
+    "journeyStage",
+    "secondaryStages",
+    "stageCueTypes",
+    "post_outcome_behavior",
+    "test_metrics",
+    "source_split_after_assignment"
+  ]
+}

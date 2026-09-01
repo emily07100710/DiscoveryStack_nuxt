@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://discoverystack.local/schema/dataset-v5-1087.schema.json",
+  "title": "DiscoveryStack journey-v5-1087 development training row",
+  "$comment": "Development-only v5 contract. New rows remain rights-review-pending and require human stageEvidence adjudication before production. This is intentionally versioned separately from dataset-v4-500.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "manifestHash",
+    "split",
+    "trainingText",
+    "targets",
+    "stageEvidence",
+    "labelConfidence",
+    "labelMethod",
+    "reviewState",
+    "taxonomyVersion",
+    "featureContractVersion",
+    "sourceFamily",
+    "canonicalDomainHash",
+    "nearDuplicateCluster",
+    "contentType",
+    "language",
+    "governance"
+  ],
+  "properties": {
+    "id": {"type": "integer", "minimum": 1},
+    "manifestHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "split": {"enum": ["train", "validation", "test_legacy_v1", "test_v2"]},
+    "trainingText": {"type": "string", "minLength": 1},
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "journeyStage",
+        "secondaryStages",
+        "stageCueTypes",
+        "searchIntents",
+        "contentTypes",
+        "audienceRoles",
+        "geoSignals",
+        "citationReadiness",
+        "technicalSeoSignals",
+        "frictionSignals",
+        "actionPriority"
+      ],
+      "properties": {
+        "journeyStage": {"enum": ["discovery", "understanding", "response", "progression", "conversion"]},
+        "secondaryStages": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["discovery", "understanding", "response", "progression", "conversion"]}
+        },
+        "stageCueTypes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "searchIntents": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["commercial", "informational", "navigational", "transactional"]}
+        },
+        "contentTypes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["comparison", "editorial", "faq", "home", "other", "pricing", "product", "service", "tool"]}
+        },
+        "audienceRoles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["buyer", "decision_maker", "existing_customer", "local_visitor", "media_or_partner", "practitioner", "researcher", "technical_evaluator"]}
+        },
+        "geoSignals": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["city_or_local", "country", "global", "multilingual", "not_applicable", "region"]}
+        },
+        "citationReadiness": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["contact_or_location", "dated_or_current", "first_party_expertise", "insufficient_evidence", "named_author_or_owner", "source_links", "structured_data"]}
+        },
+        "technicalSeoSignals": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["canonical_present", "h1_present", "indexable", "internal_routing", "language_signal", "performance_not_observed", "structured_data", "title_present"]}
+        },
+        "frictionSignals": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["information_overload", "missing_contact_route", "missing_next_step", "missing_trust_signal", "no_material_friction_observed", "unclear_value", "weak_cta"]}
+        },
+        "actionPriority": {"enum": ["critical", "high", "medium", "monitor"]}
+      }
+    },
+    "stageEvidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidenceArtifactId", "evidenceLocator", "evidenceHash"],
+        "properties": {
+          "evidenceArtifactId": {"type": "integer", "minimum": 1},
+          "evidenceLocator": {"type": "string", "minLength": 1},
+          "evidenceHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    },
+    "stageCueVector": {
+      "type": "object",
+      "additionalProperties": {"type": "number"}
+    },
+    "labelConfidence": {"type": "integer", "minimum": 1, "maximum": 5},
+    "labelMethod": {"enum": ["human", "human_amended", "assistant_rule_candidate", "owner_approved_legacy"]},
+    "reviewState": {"enum": ["reviewed", "needs_adjudication", "blocked"]},
+    "taxonomyVersion": {"type": "string", "pattern": "^journey-v[0-9]+$"},
+    "featureContractVersion": {"type": "string", "pattern": "^features-v[0-9]+$"},
+    "sourceFamily": {"type": "string", "enum": ["google_search_central", "web_dev", "google_developers", "mdn"]},
+    "canonicalDomainHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "nearDuplicateCluster": {"type": "string", "minLength": 1},
+    "contentType": {"type": "string", "minLength": 1},
+    "language": {"type": "string", "minLength": 2},
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceCardId", "rightsStatus", "robotsChecked", "piiStatus", "dedupeStatus"],
+      "properties": {
+        "sourceCardId": {"type": "string", "minLength": 1},
+        "rightsStatus": {"enum": ["approved", "public_access_only_pending_human_review", "needs_policy_review", "blocked"]},
+        "licensePolicy": {"type": "string", "minLength": 1},
+        "robotsChecked": {"type": "boolean"},
+        "piiStatus": {"enum": ["none_detected", "masked", "blocked"]},
+        "dedupeStatus": {"enum": ["unique", "cluster_reviewed", "blocked"]}
+      }
+    }
+  }
+}

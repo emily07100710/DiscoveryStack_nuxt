@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://discoverystack.local/schema/dataset-v4-500.schema.json",
+  "title": "DiscoveryStack journey-v4-500 training row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "manifestHash",
+    "split",
+    "trainingText",
+    "targets",
+    "stageEvidence",
+    "labelConfidence",
+    "labelMethod",
+    "reviewState",
+    "taxonomyVersion",
+    "featureContractVersion"
+  ],
+  "properties": {
+    "id": {"type": "integer", "minimum": 1},
+    "manifestHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "split": {"enum": ["train", "validation", "test_legacy_v1", "test_v2"]},
+    "trainingText": {"type": "string", "minLength": 1},
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["journeyStage", "secondaryStages", "stageCueTypes"],
+      "properties": {
+        "journeyStage": {"enum": ["discovery", "understanding", "response", "progression", "conversion"]},
+        "secondaryStages": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["discovery", "understanding", "response", "progression", "conversion"]}
+        },
+        "stageCueTypes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "stageEvidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidenceArtifactId", "evidenceLocator", "evidenceHash"],
+        "properties": {
+          "evidenceArtifactId": {"type": "integer", "minimum": 1},
+          "evidenceLocator": {"type": "string", "minLength": 1},
+          "evidenceHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    },
+    "stageCueVector": {
+      "type": "object",
+      "additionalProperties": {"type": "number"}
+    },
+    "labelConfidence": {"type": "integer", "minimum": 1, "maximum": 5},
+    "labelMethod": {"enum": ["human", "human_amended", "assistant_rule_candidate", "owner_approved_legacy"]},
+    "reviewState": {"enum": ["reviewed", "needs_adjudication", "blocked"]},
+    "taxonomyVersion": {"type": "string", "pattern": "^journey-v[0-9]+$"},
+    "featureContractVersion": {"type": "string", "pattern": "^features-v[0-9]+$"},
+    "sourceFamily": {"type": "string", "minLength": 1},
+    "canonicalDomainHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "nearDuplicateCluster": {"type": "string", "minLength": 1},
+    "contentType": {"type": "string", "minLength": 1},
+    "language": {"type": "string", "minLength": 2},
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceCardId", "rightsStatus", "robotsChecked", "piiStatus", "dedupeStatus"],
+      "properties": {
+        "sourceCardId": {"type": "string", "minLength": 1},
+        "rightsStatus": {"enum": ["approved", "needs_policy_review", "blocked"]},
+        "robotsChecked": {"type": "boolean"},
+        "piiStatus": {"enum": ["none_detected", "masked", "blocked"]},
+        "dedupeStatus": {"enum": ["unique", "cluster_reviewed", "blocked"]}
+      }
+    }
+  }
+}
