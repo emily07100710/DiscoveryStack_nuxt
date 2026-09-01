@@ -1,0 +1,2 @@
+import { getKnowledgeService, knowledgeValue, readKnowledgeBody, requireKnowledgeOwner, routeError, setKnowledgePrivateApiHeaders, strictKeys } from './_helpers'
+export default defineEventHandler(async event => { setKnowledgePrivateApiHeaders(event); try { const { ownerUserId } = await requireKnowledgeOwner(event); const body = await readKnowledgeBody(event); strictKeys(body, ['briefId', 'entityId', 'role']); knowledgeValue(await getKnowledgeService(ownerUserId).unlinkContentEntity(body as never)); return { status: 'success' } } catch (error) { return routeError(error) } })

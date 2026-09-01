@@ -1,0 +1,3 @@
+import { getQuery } from 'h3'
+import { getKnowledgeService, requireKnowledgeOwner, routeError, setKnowledgePrivateApiHeaders } from './_helpers'
+export default defineEventHandler(async event => { setKnowledgePrivateApiHeaders(event); try { const { ownerUserId } = await requireKnowledgeOwner(event); const value = getQuery(event).sourceEntityId; const sourceEntityId = typeof value === 'string' && /^\d+$/u.test(value) ? Number(value) : undefined; return { status: 'success', mergeEvents: await getKnowledgeService(ownerUserId).listMergeEvents(sourceEntityId === undefined ? {} : { sourceEntityId }) } } catch (error) { return routeError(error) } })

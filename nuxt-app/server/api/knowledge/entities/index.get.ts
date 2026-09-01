@@ -1,0 +1,2 @@
+import { getKnowledgeService, requireKnowledgeOwner, routeError, setKnowledgePrivateApiHeaders } from '../_helpers'
+export default defineEventHandler(async event => { setKnowledgePrivateApiHeaders(event); try { const { ownerUserId } = await requireKnowledgeOwner(event); return { status: 'success', entities: await getKnowledgeService(ownerUserId).listEntities() } } catch (error) { return routeError(error) } })

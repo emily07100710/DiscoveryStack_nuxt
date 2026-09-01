@@ -1,0 +1,3 @@
+import { getRouterParam } from 'h3'
+import { getKnowledgeService, knowledgeValue, positiveId, readKnowledgeBody, requireKnowledgeOwner, routeError, setKnowledgePrivateApiHeaders, strictKeys } from '../../_helpers'
+export default defineEventHandler(async event => { setKnowledgePrivateApiHeaders(event); try { const { ownerUserId } = await requireKnowledgeOwner(event); const body = await readKnowledgeBody(event); strictKeys(body, ['reason']); const mergeEvent = knowledgeValue(await getKnowledgeService(ownerUserId).undoMerge({ mergeEventId: positiveId(getRouterParam(event, 'id'), 'merge event id'), reason: body.reason as string })); return { status: 'success', mergeEvent } } catch (error) { return routeError(error) } })

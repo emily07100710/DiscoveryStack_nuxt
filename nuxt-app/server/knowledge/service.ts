@@ -494,6 +494,17 @@ export class KnowledgeService {
     return gaps
   }
 
+  // Read projections deliberately stay thin: the repository remains the storage port.
+  async listEntities() { return this.repository.listEntities(this.ownerUserId) }
+  async getEntity(entityId: number) { return this.repository.getEntity(this.ownerUserId, entityId) }
+  async listEntityAliases(input: { entityId?: number } = {}) { return this.repository.listEntityAliases(this.ownerUserId, input.entityId) }
+  async listEntityExternalIds(input: { entityId?: number } = {}) { return this.repository.listEntityExternalIds(this.ownerUserId, input.entityId) }
+  async listSources() { return this.repository.listSources(this.ownerUserId) }
+  async getSource(sourceId: number) { return this.repository.getSource(this.ownerUserId, sourceId) }
+  async listSourceVersions(input: { sourceId?: number } = {}) { return this.repository.listSourceVersions(this.ownerUserId, input.sourceId) }
+  async getClaim(claimId: number) { return this.repository.getClaim(this.ownerUserId, claimId) }
+  async listClaimEntityLinks(input: { claimId?: number } = {}) { return this.repository.listClaimEntityLinks(this.ownerUserId, input.claimId) }
+  async listClaimEvidence(input: { claimId?: number } = {}) { return this.repository.listClaimEvidence(this.ownerUserId, input.claimId) }
   async listClaims(input: { status?: KnowledgeClaimStatus } = {}) { return this.repository.listClaims(this.ownerUserId, input.status) }
   async listDisputes(input: { status?: KnowledgeClaimDispute['status'] } = {}) { return this.repository.listDisputes(this.ownerUserId, input.status) }
   async listClaimStatusEvents(input: { claimId?: number } = {}) { return this.repository.listClaimStatusEvents(this.ownerUserId, input.claimId) }

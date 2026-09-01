@@ -1,0 +1,3 @@
+import { getRouterParam } from 'h3'
+import { getKnowledgeService, positiveId, requireKnowledgeOwner, routeError, setKnowledgePrivateApiHeaders } from '../_helpers'
+export default defineEventHandler(async event => { setKnowledgePrivateApiHeaders(event); try { const { ownerUserId } = await requireKnowledgeOwner(event); const claimId = positiveId(getRouterParam(event, 'id'), 'claim id'); const service = getKnowledgeService(ownerUserId); return { status: 'success', claim: await service.getClaim(claimId), entityLinks: await service.listClaimEntityLinks({ claimId }), statusEvents: await service.listClaimStatusEvents({ claimId }), evidence: await service.listClaimEvidence({ claimId }) } } catch (error) { return routeError(error) } })

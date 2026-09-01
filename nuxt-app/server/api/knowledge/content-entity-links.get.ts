@@ -1,0 +1,3 @@
+import { getQuery } from 'h3'
+import { getKnowledgeService, positiveId, requireKnowledgeOwner, routeError, setKnowledgePrivateApiHeaders } from './_helpers'
+export default defineEventHandler(async event => { setKnowledgePrivateApiHeaders(event); try { const { ownerUserId } = await requireKnowledgeOwner(event); const value = getQuery(event).briefId; const briefId = positiveId(typeof value === 'string' ? value : undefined, 'brief id'); return { status: 'success', contentEntityLinks: await getKnowledgeService(ownerUserId).listContentEntityLinks({ briefId }) } } catch (error) { return routeError(error) } })
