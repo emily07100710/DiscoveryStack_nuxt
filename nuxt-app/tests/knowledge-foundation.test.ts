@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createInMemoryKnowledgeRepository, createKnowledgeService } from '../server/knowledge'
 import { DrizzleKnowledgeRepository, type KnowledgeDrizzleDatabase } from '../server/knowledge/repository-drizzle'
 
@@ -109,6 +109,62 @@ describe('knowledge foundation service', () => {
     const redisputed = await service.createManualDispute({ claimAId: supported.value.id, claimBId: contradicted.value.id, reason: 'Owner requests a second review after new context.' })
     expect(redisputed).toMatchObject({ status: 'ok', value: { detectionMethod: 'manual', status: 'open' } })
     expect(await service.listDisputes()).toHaveLength(2)
+  })
+
+  it('records contradicting evidence without a partner claim as discoverable data, never a dead-end disputed status', async () => {
+    const { service } = fixture()
+    const subject = await entity(service, 'Lone Contradiction Subject')
+    const { version } = await sourceVersion(service)
+    const created = await service.createClaim({ statement: 'The reported adoption rate is 12%.', claimType: 'statistics', entityIds: [subject.id] })
+    expect(created.status).toBe('ok')
+    if (created.status !== 'ok') return
+    const result = await service.addEvidence({ claimId: created.value.id, sourceVersionId: version.id, relation: 'contradicts', locator: 'footnote-3', contentHash: HASH_B })
+    expect(result).toMatchObject({ status: 'ok', value: { disputes: [] } })
+    expect(await service.getClaim(created.value.id)).toMatchObject({ status: 'unverified' })
+    expect(await service.listDisputes()).toHaveLength(0)
+    expect(await service.listClaimStatusEvents({ claimId: created.value.id })).toHaveLength(0)
+    expect(await service.listClaimEvidence({ claimId: created.value.id })).toEqual([expect.objectContaining({ relation: 'contradicts', sourceVersionId: version.id })])
+    expect(await service.transitionClaim({ claimId: created.value.id, toStatus: 'first_party_measured', reason: 'Owner measured the rate directly.' })).toMatchObject({ status: 'ok', value: { status: 'first_party_measured' } })
+  })
+
+  it('keeps contradicting evidence atomic and pairs nothing when the only shared-source claim is expired', async () => {
+    const { service } = fixture()
+    const subject = await entity(service, 'Expired Opponent Subject')
+    const { version } = await sourceVersion(service)
+    const supported = await service.createClaim({ statement: 'The 2025 figure was 10%.', claimType: 'statistics', entityIds: [subject.id] })
+    const contradicted = await service.createClaim({ statement: 'The 2026 figure is 15%.', claimType: 'statistics', entityIds: [subject.id] })
+    expect(supported.status).toBe('ok')
+    expect(contradicted.status).toBe('ok')
+    if (supported.status !== 'ok' || contradicted.status !== 'ok') return
+    await service.addEvidence({ claimId: supported.value.id, sourceVersionId: version.id, relation: 'supports', locator: 'table-1', contentHash: HASH_A })
+    expect(await service.transitionClaim({ claimId: supported.value.id, toStatus: 'expired', reason: 'Superseded by the 2026 report.' })).toMatchObject({ status: 'ok', value: { status: 'expired' } })
+
+    const result = await service.addEvidence({ claimId: contradicted.value.id, sourceVersionId: version.id, relation: 'contradicts', locator: 'table-2', contentHash: HASH_B })
+    expect(result).toMatchObject({ status: 'ok', value: { disputes: [] } })
+    expect(await service.getClaim(contradicted.value.id)).toMatchObject({ status: 'unverified' })
+    expect(await service.getClaim(supported.value.id)).toMatchObject({ status: 'expired' })
+    expect(await service.listDisputes()).toHaveLength(0)
+
+    const retry = await service.addEvidence({ claimId: contradicted.value.id, sourceVersionId: version.id, relation: 'contradicts', locator: 'table-2', contentHash: HASH_B })
+    expect(retry).toMatchObject({ status: 'rejected', code: 'DUPLICATE_EVIDENCE' })
+    expect(await service.listClaimEvidence({ claimId: contradicted.value.id })).toHaveLength(1)
+  })
+
+  it('rolls back all writes when a rejection is raised inside an atomic knowledge transaction', async () => {
+    const { repository, service } = fixture()
+    const source = await entity(service, 'Rollback Source Organization')
+    const target = await entity(service, 'Rollback Target Organization')
+    const merged = await service.mergeEntities({ sourceEntityId: source.id, targetEntityId: target.id, reason: 'Owner approved the merge.' })
+    expect(merged.status).toBe('ok')
+    if (merged.status !== 'ok') return
+    vi.spyOn(repository, 'updateMergeEvent').mockResolvedValueOnce(null)
+    const failed = await service.undoMerge({ mergeEventId: merged.value.id, reason: 'First undo attempt hits a storage fault.' })
+    expect(failed).toMatchObject({ status: 'rejected', code: 'UNDO_NOT_LATEST' })
+    expect(await service.resolveEntity(source.id)).toMatchObject({ status: 'ok', value: { id: target.id } })
+    expect(await service.listMergeEvents({ sourceEntityId: source.id })).toEqual([expect.objectContaining({ id: merged.value.id, undoneAt: null })])
+    const undone = await service.undoMerge({ mergeEventId: merged.value.id, reason: 'Owner separates the organizations.' })
+    expect(undone).toMatchObject({ status: 'ok', value: { undoneAt: expect.any(Date) } })
+    expect(await service.resolveEntity(source.id)).toMatchObject({ status: 'ok', value: { id: source.id, status: 'active', mergedIntoEntityId: null } })
   })
 
   it('creates manual disputes, preserves terminal retractions, and auto-numbers source versions', async () => {

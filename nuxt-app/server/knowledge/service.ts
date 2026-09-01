@@ -61,7 +61,12 @@ function normalizeCanonicalUri(value: string): string | null {
 }
 
 const DISPUTABLE_STATUSES: readonly KnowledgeClaimStatus[] = ['unverified', 'source_backed', 'independently_confirmed', 'first_party_measured']
+const DISPUTE_ELIGIBLE_STATUSES: readonly KnowledgeClaimStatus[] = [...DISPUTABLE_STATUSES, 'disputed']
 const ORGANIZATION_ENTITY_TYPES = new Set<KnowledgeEntity['entityType']>(['Organization', 'Brand'])
+
+class KnowledgeRejection extends Error {
+  constructor(readonly result: import('./types').KnowledgeRejectedResult) { super(result.reason) }
+}
 
 export interface KnowledgeServiceOptions {
   readonly ownerUserId: number
@@ -85,6 +90,20 @@ export class KnowledgeService {
   }
 
   private timestamp(): Date { return new Date(this.clock()) }
+
+  /** Rejected results thrown out of this wrapper roll the transaction back before being returned; the plain repository.transaction commits on a rejected return, which addExternalId relies on to persist its review-queue candidate. */
+  private async atomicTransaction<T>(work: (repository: KnowledgeRepository) => Promise<KnowledgeResult<T>>): Promise<KnowledgeResult<T>> {
+    try {
+      return await this.repository.transaction(async repository => {
+        const result = await work(repository)
+        if (result.status === 'rejected') throw new KnowledgeRejection(result)
+        return result
+      })
+    } catch (error) {
+      if (error instanceof KnowledgeRejection) return error.result
+      throw error
+    }
+  }
 
   private async resolveWith(repository: KnowledgeRepository, entityId: number): Promise<KnowledgeResult<KnowledgeEntity>> {
     const visited = new Set<number>()
@@ -261,7 +280,7 @@ export class KnowledgeService {
   async undoMerge(input: { mergeEventId: number; reason: string }): Promise<KnowledgeResult<KnowledgeEntityMergeEvent>> {
     const reason = input.reason.trim()
     if (!bounded(reason, 500)) return rejected('INVALID_INPUT', 'Undo reason is required and bounded.')
-    return this.repository.transaction(async repository => {
+    return this.atomicTransaction(async repository => {
       const event = await repository.getMergeEvent(this.ownerUserId, input.mergeEventId)
       if (!event) return rejected('UNDO_NOT_LATEST', 'Merge event does not exist for this owner.')
       const activeEvents = (await repository.listMergeEvents(this.ownerUserId, event.sourceEntityId)).filter(item => item.undoneAt === null).sort((left, right) => right.id - left.id)
@@ -329,7 +348,7 @@ export class KnowledgeService {
     if (claimAId === claimBId) return rejected('INVALID_INPUT', 'A claim cannot dispute itself.')
     const existing = (await repository.listDisputes(this.ownerUserId, 'open')).find(item => item.claimAId === claimAId && item.claimBId === claimBId)
     if (existing) return rejected('DISPUTE_ALREADY_OPEN', 'This normalized claim pair already has an open dispute.')
-    if (![...DISPUTABLE_STATUSES, 'disputed'].includes(claimA.status) || ![...DISPUTABLE_STATUSES, 'disputed'].includes(claimB.status)) return rejected('INVALID_TRANSITION', 'Only active, non-expired, non-retracted claims can enter a dispute.')
+    if (!DISPUTE_ELIGIBLE_STATUSES.includes(claimA.status) || !DISPUTE_ELIGIBLE_STATUSES.includes(claimB.status)) return rejected('INVALID_TRANSITION', 'Only active, non-expired, non-retracted claims can enter a dispute.')
     const now = this.timestamp()
     const dispute = await repository.insertDispute({ ownerUserId: this.ownerUserId, claimAId, claimBId, detectionMethod: method, detectionReason: reason, status: 'open', resolution: null, resolutionNote: null, resolvedAt: null, createdAt: now, updatedAt: now })
     await this.ensureDisputed(repository, claimA, reason)
@@ -340,7 +359,7 @@ export class KnowledgeService {
   async addEvidence(input: { claimId: number; sourceVersionId: number; relation: KnowledgeEvidenceRelation; locator: string; contentHash: string; reviewNotes?: string }): Promise<KnowledgeResult<{ evidence: import('./types').KnowledgeClaimEvidence; disputes: KnowledgeClaimDispute[] }>> {
     const locator = input.locator.trim()
     if (!bounded(locator, 500) || !validHash(input.contentHash)) return rejected('INVALID_INPUT', 'Evidence locator and lowercase SHA-256 content hash are required.')
-    return this.repository.transaction(async repository => {
+    return this.atomicTransaction(async repository => {
       let claim = await repository.getClaim(this.ownerUserId, input.claimId)
       if (!claim) return rejected('CLAIM_NOT_FOUND', 'Claim does not exist for this owner.')
       if (!await repository.getSourceVersion(this.ownerUserId, input.sourceVersionId)) return rejected('SOURCE_VERSION_NOT_FOUND', 'Source version does not exist for this owner.')
@@ -350,21 +369,26 @@ export class KnowledgeService {
       const now = this.timestamp()
       const evidence = await repository.insertClaimEvidence({ ownerUserId: this.ownerUserId, claimId: claim.id, sourceVersionId: input.sourceVersionId, relation: input.relation, locator, locatorHash, contentHash: input.contentHash, reviewNotes: input.reviewNotes?.trim() || null, createdAt: now, updatedAt: now })
       if (input.relation === 'supports' && claim.status === 'unverified') claim = await this.transitionWith(repository, claim, 'source_backed', `Supporting evidence ${evidence.id} was added.`, 'system')
-      if (input.relation === 'contradicts' && DISPUTABLE_STATUSES.includes(claim.status)) claim = await this.transitionWith(repository, claim, 'disputed', `Contradicting evidence ${evidence.id} was added.`, 'system')
 
       const opened: KnowledgeClaimDispute[] = []
-      if (input.relation === 'contradicts' && claim.status === 'disputed') {
+      if (input.relation === 'contradicts' && DISPUTE_ELIGIBLE_STATUSES.includes(claim.status)) {
+        const claimId = claim.id
         const links = await repository.listClaimEntityLinks(this.ownerUserId)
-        const entityIds = new Set(links.filter(item => item.claimId === claim.id).map(item => item.entityId))
-        const otherIds = new Set(links.filter(item => item.claimId !== claim.id && entityIds.has(item.entityId)).map(item => item.claimId))
+        const entityIds = new Set(links.filter(item => item.claimId === claimId).map(item => item.entityId))
+        const otherIds = new Set(links.filter(item => item.claimId !== claimId && entityIds.has(item.entityId)).map(item => item.claimId))
         const allEvidence = await repository.listClaimEvidence(this.ownerUserId)
         for (const otherId of otherIds) {
           if (!allEvidence.some(item => item.claimId === otherId && item.sourceVersionId === input.sourceVersionId && item.relation === 'supports')) continue
           const other = await repository.getClaim(this.ownerUserId, otherId)
-          if (!other || other.status === 'retracted') continue
+          if (!other || !DISPUTE_ELIGIBLE_STATUSES.includes(other.status)) continue
           const result = await this.openDispute(repository, claim, other, 'shared_source_conflict', `Source version ${input.sourceVersionId} contradicts claim ${claim.id} while supporting claim ${other.id}.`)
-          if (result.status === 'ok') opened.push(result.value)
-          else if (result.code !== 'DISPUTE_ALREADY_OPEN') return result
+          if (result.status !== 'ok') {
+            if (result.code === 'DISPUTE_ALREADY_OPEN') continue
+            return result
+          }
+          opened.push(result.value)
+          const refreshed = await repository.getClaim(this.ownerUserId, claim.id)
+          if (refreshed) claim = refreshed
         }
       }
       return ok({ evidence, disputes: opened })
