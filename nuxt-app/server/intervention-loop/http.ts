@@ -1,0 +1,12 @@
+import { createError, getRequestHeader, getRequestURL, readBody, setHeader, type H3Event } from 'h3'
+import { getOwnerDatabaseUserId } from '../audit/repository'
+import { toPublicInterventionLoopError } from './normalization'
+import { requireOwner } from '../utils/auth'
+
+export const MAX_REQUEST_BYTES = 64 * 1024
+export function setInterventionPrivateApiHeaders(event: H3Event) { setHeader(event, 'Cache-Control', 'no-store'); setHeader(event, 'X-Robots-Tag', 'noindex, nofollow, noarchive') }
+export async function requireInterventionOwner(event: H3Event) { const owner = await requireOwner(event); return { ownerUserId: await getOwnerDatabaseUserId(owner.openId), openId: owner.openId } }
+export async function readInterventionBody(event: H3Event): Promise<Record<string, unknown>> { const length = Number(getRequestHeader(event, 'content-length') || 0); if (Number.isFinite(length) && length > MAX_REQUEST_BYTES) throw createError({ statusCode: 413, statusMessage: 'Request body exceeds the 64 KB intervention limit.' }); const body = await readBody<unknown>(event); if (body === undefined || body === null || body === '') return {}; if (typeof body !== 'object' || Array.isArray(body)) throw createError({ statusCode: 400, statusMessage: 'Request body must be a plain object.' }); return body as Record<string, unknown> }
+export function positiveId(value: string | undefined, label = 'id') { const id = Number(value); if (!Number.isSafeInteger(id) || id <= 0) throw createError({ statusCode: 422, statusMessage: `${label} must be a positive integer.` }); return id }
+export function assertSameOriginMutation(event: H3Event) { const origin = getRequestHeader(event, 'origin') || ''; const configured = process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN || ''; const expected = configured ? (() => { try { return new URL(configured).origin } catch { throw createError({ statusCode: 503, statusMessage: 'Private intervention origin is not configured correctly.' }) } })() : getRequestURL(event).origin; if (!origin || (() => { try { return new URL(origin).origin } catch { return '' } })() !== expected) throw createError({ statusCode: 403, statusMessage: 'Intervention mutation requires an exact same-origin request.' }); const site = getRequestHeader(event, 'sec-fetch-site'); if (site && site !== 'same-origin') throw createError({ statusCode: 403, statusMessage: 'Cross-site intervention mutation is not allowed.' }) }
+export function routeError(error: unknown): never { throw toPublicInterventionLoopError(error) }

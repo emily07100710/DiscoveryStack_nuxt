@@ -260,6 +260,13 @@
       "when": 1788319611257,
       "tag": "0036_silent_stranger",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "5",
+      "when": 1788344815481,
+      "tag": "0037_legal_pete_wisdom",
+      "breakpoints": true
     }
   ]
 }
