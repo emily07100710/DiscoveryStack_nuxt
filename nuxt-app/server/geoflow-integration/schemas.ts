@@ -230,7 +230,7 @@ export function validateGeoFlowResponse(input: unknown, requestInput: unknown): 
   }
   const provider = response.providerProvenance
   if (request.value.requestedCapabilities.includes('qwen_generation')) {
-    if (provider.mode !== 'provider' || !/^(?:qwen|bailian|dashscope|model-studio)(?:[-_.][A-Za-z0-9._:-]+)*$/iu.test(provider.provider)) return failure('PROVIDER_PROVENANCE_MISSING', '$.providerProvenance')
+    if (provider.mode !== 'provider' || !/^(?:qwen|bailian|dashscope|model-studio|openai)(?:[-_.][A-Za-z0-9._:-]+)*$/iu.test(provider.provider)) return failure('PROVIDER_PROVENANCE_MISSING', '$.providerProvenance')
   }
   if (provider.mode === 'deterministic_scaffold') {
     if (provider.provider !== 'deterministic_scaffold' || provider.model !== 'none' || !response.limitations.includes(DETERMINISTIC_SCAFFOLD_LIMITATION)) return failure('PROVIDER_PROVENANCE_MISSING', '$.providerProvenance')

@@ -2,9 +2,9 @@ export const GEO_WORKBENCH_VERSION = 'geo-workbench-v1'
 
 export type GeoLanguage = 'en' | 'zh-hant'
 export type GeoRuleCategory = 'answerability' | 'structure' | 'context' | 'evidence' | 'utility' | 'planning'
-export type GeoProviderId = 'reference-rules-v1' | 'autogeo-api' | 'autogeo-bailian-qwen' | 'custom'
-export type GeoRequestedProvider = 'autogeo-api' | 'autogeo-bailian-qwen'
-export type GeoProviderExecution = 'official-autogeo-api' | 'autogeo-framework-bailian-qwen' | 'reference-fallback'
+export type GeoProviderId = 'reference-rules-v1' | 'autogeo-api' | 'autogeo-bailian-qwen' | 'autogeo-openai-compatible' | 'custom'
+export type GeoRequestedProvider = 'autogeo-api' | 'autogeo-bailian-qwen' | 'autogeo-openai-compatible'
+export type GeoProviderExecution = 'official-autogeo-api' | 'autogeo-framework-bailian-qwen' | 'autogeo-framework-openai-compatible' | 'reference-fallback'
 export type GeoFallbackReason =
   | 'bailian-not-configured'
   | 'bailian-invalid-configuration'
@@ -45,6 +45,7 @@ export type GeoRewriteProvenance = {
   rewriteMethod: 'autogeo_api'
   ruleset: 'Researchy-GEO / Gemini default rules'
   model: 'gemini-2.5-pro' | 'qwen-plus' | (string & {})
+  providerLabel?: 'bailian' | 'openai'
   providerRequestId?: string
   usage?: { inputTokens?: number, outputTokens?: number, totalTokens?: number }
   fallbackReason?: GeoFallbackReason

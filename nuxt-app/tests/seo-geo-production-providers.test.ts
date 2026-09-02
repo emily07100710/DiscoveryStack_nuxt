@@ -29,4 +29,39 @@ describe('Production runtime provider resolver', () => {
     expect(runtime.baseDraftGenerator.id).toBe('discoverystack-deterministic-scaffold')
     expect(runtime.optimizationAdapter.id).toBe('reference-rules-v1')
   })
+
+  it.each([
+    ['https://ws-abc123.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1', 'qwen-plus', 'bailian'],
+    ['https://api.openai.com/v1', 'gpt-test', 'openai'],
+  ])('configures the generic mode for %s', (endpoint, model, providerLabel) => {
+    vi.stubEnv('NUXT_CONTENT_DRAFT_PROVIDER', 'openai_compatible')
+    vi.stubEnv('NUXT_LLM_ENDPOINT', endpoint)
+    vi.stubEnv('NUXT_LLM_API_KEY', 'placeholder-secret')
+    vi.stubEnv('NUXT_LLM_MODEL', model)
+    const runtime = resolveProductionRuntimeProviders()
+    expect(runtime).toMatchObject({ mode: 'openai_compatible', configured: true, provenance: { providerLabel, provider: 'autogeo-openai-compatible' } })
+    expect(runtime.optimizationAdapter.id).toBe('autogeo-openai-compatible')
+  })
+
+  it('keeps autogeo_bailian_qwen as an alias backed by legacy configuration', () => {
+    vi.stubEnv('NUXT_CONTENT_DRAFT_PROVIDER', 'autogeo_bailian_qwen')
+    vi.stubEnv('NUXT_GEOFLOW_QWEN_ENDPOINT', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1')
+    vi.stubEnv('NUXT_GEOFLOW_QWEN_API_KEY', 'placeholder-secret')
+    vi.stubEnv('NUXT_GEOFLOW_QWEN_MODEL', 'qwen-plus')
+    const runtime = resolveProductionRuntimeProviders()
+    expect(runtime).toMatchObject({ mode: 'autogeo_bailian_qwen', configured: true, provenance: { providerLabel: 'bailian' } })
+    expect(runtime.optimizationAdapter.id).toBe('autogeo-openai-compatible')
+  })
+
+  it.each([
+    ['OpenAI without an explicit model', 'https://api.openai.com/v1', ''],
+    ['a disallowed endpoint', 'https://api.openai.com.evil.test/v1', 'gpt-test'],
+  ])('falls back for %s', (_label, endpoint, model) => {
+    vi.stubEnv('NUXT_CONTENT_DRAFT_PROVIDER', 'openai_compatible')
+    vi.stubEnv('NUXT_LLM_ENDPOINT', endpoint)
+    vi.stubEnv('NUXT_LLM_API_KEY', 'placeholder-secret')
+    vi.stubEnv('NUXT_LLM_MODEL', model)
+    const runtime = resolveProductionRuntimeProviders()
+    expect(runtime).toMatchObject({ mode: 'reference_rules', configured: false, fallbackReason: 'provider-credentials-endpoint-or-optimizer-not-configured' })
+  })
 })

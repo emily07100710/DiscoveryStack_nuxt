@@ -1,4 +1,5 @@
-import { aiEditRequestFingerprint, proposeAiWebsiteEdit } from '../../../../managed-sites/page-editor/ai'
+import { aiEditRequestFingerprint, isAiPlannerUnavailableProposal, proposeAiWebsiteEdit } from '../../../../managed-sites/page-editor/ai'
+import { resolveConfiguredAiPlanner } from '../../../../managed-sites/page-editor/ai-planner-openai-compatible'
 import { assertEditorSameOrigin, readBoundedEditorBody, requireEditorActor } from '../../../../managed-sites/page-editor/http'
 import { getDrizzleMediaVaultRepository } from '../../../../managed-sites/media-vault/repository-drizzle'
 import { getDrizzlePageEditorRepository } from '../../../../managed-sites/page-editor/repository-drizzle'
@@ -19,9 +20,14 @@ export default defineEventHandler(async event => {
   const selectedMediaAssetIds = Array.isArray(body.selectedMediaAssetIds) ? body.selectedMediaAssetIds : []
   const now = new Date()
   const budget = createDrizzleAiBudgetPort()
+  const planner = resolveConfiguredAiPlanner()
   const requestFingerprint = aiEditRequestFingerprint({ actor: pageActor, page, request: body.request, selectedMediaAssetIds })
   try {
-    const proposal = await proposeAiWebsiteEdit({ actor: pageActor, page, request: body.request, approvedMedia: assets, resolveMedia: (_actor, binding) => media.findAsset(pageActor, binding.assetId), budget, selectedMediaAssetIds, idempotencyKey: body.idempotencyKey, deferBudgetCommit: true, now })
+    const proposal = await proposeAiWebsiteEdit({ actor: pageActor, page, request: body.request, approvedMedia: assets, resolveMedia: (_actor, binding) => media.findAsset(pageActor, binding.assetId), budget, planner, selectedMediaAssetIds, idempotencyKey: body.idempotencyKey, deferBudgetCommit: true, now })
+    if (isAiPlannerUnavailableProposal(proposal)) {
+      await budget.release?.(pageActor, { idempotencyKey: body.idempotencyKey, requestFingerprint, now }).catch(() => undefined)
+      return proposal
+    }
     return await saveAiProposalAndCommitBudget(pageActor, proposal, { idempotencyKey: body.idempotencyKey, requestFingerprint, now })
   } catch (error) {
     await budget.release?.(pageActor, { idempotencyKey: body.idempotencyKey, requestFingerprint, now }).catch(() => undefined)
