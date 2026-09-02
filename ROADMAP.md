@@ -9,6 +9,7 @@
 | 服務 | 供應商 | 使用帳號 | 實例/專案名 | 後台連結 |
 |---|---|---|---|---|
 | 主機 | Render(免費方案) | tendertech2018 | discoverystack-web + discoverystack-api | dashboard.render.com |
+| 建站主機(客戶站) | Cloudflare Pages + R2(倉庫) | 待補:問老闆是哪個 Cloudflare 帳號 | 專案前綴 ds;09-02 測試專案 ds-o1-p1(可刪) | dash.cloudflare.com |
 | 程式碼 | GitHub ×2 | emily07100710(主開發)/ tendertech2018(部署來源) | DiscoveryStack_nuxt | github.com |
 | 資料庫 | TiDB Cloud(MySQL 相容) | tendertech2018@gmail.com | discoverystack-production(AWS 東京 · Starter · v8.5.3) | tidbcloud.com |
 | 量測 GA4 | Google Analytics | DoAlignment 帳號 406473099 | property 552043438 · 追蹤碼 G-1Y0HJGHKGS | analytics.google.com |
@@ -22,15 +23,21 @@
 - 驗收基準:GEO_ENGINEERING_SPEC_v2.0,標準是「完整商業產品,不是 MVP」;完成度細節看 PROJECT_MAP.md §8
 
 ## 進度
-- 目標:等 broker(對話 1)交件驗收;三線並行已落地兩線(爬蟲證據、知識底座)
-- 🔵 進行中(對話 1):一鍵建站「真的開出一站」— broker 仲介服務第一段;做完貼完成報告回來驗收
+- 目標:broker 09-02 落地(第一次真開出一站);觀測站統計(對話 4)與介入閉環(對話 5)在跑;接著開 Stripe 收款(對話 6)
+- 🔵 進行中(對話 6):Stripe 真收款接上訂購鏈 — 客戶付錢 → 確認收到 → 觸發開站;09-02 發包
+- 🔵 進行中(對話 4):觀測站可重複 benchmark — 同一問題重複跑 N 次、樣本數+信賴區間、prompt 版本化、對手名冊、引用新鮮度;Phase 3 出口;09-01 發包
+- 🔵 進行中(對話 5):介入與實驗閉環 — 改動登記簿、部署/重抓確認、實驗結果、refresh 佇列,綁到既有 baseline 前後量測;Phase 4 出口;09-01 發包
 - 🟡 待驗收:GA4 收數 — 09-01 PM 真瀏覽器實測追蹤碼會發送(程式載入+page_view 送出;先前抓原始碼的檢法不適用動態載入);等老闆開 GA4 即時報表看到數字回報,就點亮
-- ⚪ 排隊 1:Stripe 真收款接上訂購鏈 — 刻意不跟 broker 同時做(改同一批訂購鏈檔案),broker 落地就開
-- ⚪ 排隊 2:整合期 — AI 編輯接真 LLM;約 60 條沒前端的 API 挑關鍵的補畫面
-- ⚪ 排隊 3:觀測站可重複 benchmark、介入/實驗閉環;自有模型訓練照交接規則排最後
+- ⚪ 排隊 1:整合期 — AI 編輯接真 LLM(broker 落地了、檔案跟 Stripe 不同,可以另開);約 60 條沒前端的 API 挑關鍵的補畫面;觀測站 benchmark 續跑掛上排程(對話 4 交件後)
+- ⚪ 排隊 2:煙測 — 拿 doalignment.com 真資料跑一次爬蟲證據+知識底座(要先批准套用 0034/0035);正式環境開真開站要先設 broker 環境變數(照 nuxt-app/MANAGED_SITE_INTERNAL_BROKER_SETUP_V1.md)並跑一次 DNS TXT 所有權驗證(目前 NOT RUN);自有模型訓練照交接規則排最後
+- 🔴 老闆要做(安全):Backblaze 刪掉 Application Key「discoverystack-vault」並重產 Master Key(B2 已棄用);Cloudflare 的 R2 鑰匙與 Pages token 出現過在對話 1 聊天裡,重產後貼給對話 1 更新 .env;Cloudflare 測試痕跡可刪(Pages 專案 ds-o1-p1 + 一個 preview 部署、R2/B2 桶裡的測試小檔)
 - 另外掛著:site-evidence(migration 0034)與知識底座 15 張表(0035)都還沒套用到正式資料庫,線上要用前先批准套用;換掉臨時登入密碼(正式前,直接在 Render 改環境變數);Render 免費方案會睡 → 排程睡著時不會跑;正式網域還沒買;5 個孤兒引擎逐一給歸屬;root db:push 死 script;CI 的 NUXT_BUILD_TYPECHECK=false
 
 ## 已拍板
+- 2026-09-02 建站倉庫改用 Cloudflare R2(Backblaze B2 不接受程式送的防覆蓋標頭、回 501,放棄);客戶站部署用 Cloudflare Pages 直接上傳;仲介服務做在程式裡(in-process),不另開一台服務
+- 2026-09-02 介入閉環設計拍板(對話 5 討論關卡,走商業版):前後成績除了排程文章自動拿,手改頁面也按網址向 GSC 自動拉(每筆每天最多一次,憑證沒設就 unknown),手動貼數字只當備援並標明來源;上線確認=整站掃描指紋比對+單頁「現在就檢查」(找到預期文字=強證據、只有指紋變=弱證據);Google 重抓確認=老闆按檢查+排程自動問(每筆每天一次、最多 30 天);回頭處理清單用全域可調門檻(掉 20%/至少 30 筆/90 天)且每項寫原因;自動收成績接上自動掛結果,排程發布文章自動登記改動(只准掛在 content-operations/service.ts 或 publication-routing,被擋就先做手動、留 broker 落地後補)
+- 2026-09-02 觀測站 benchmark 設計拍板(對話 4 討論關卡,走商業版):樣本逐筆存+母表存聚合快照(快照要能從樣本重算);改非同步、可從斷點續跑(主機會睡)、不用 Nitro 排程以免撞 broker 的 nuxt.config.ts、單次上限 250 probes 可用環境變數調;部分失敗照成功數算 n、只准手動補跑;舊 prompt/對手首次使用自動補建版本與名冊,另給一支冪等 sync API;引用日期優先序 provider 日期 > URL 日期 > Last-Modified,HEAD 抓取 opt-in 預設關、擋內網、疑似假日期存 unknown
+- 2026-09-01 第二波並行:排隊 2(AI 編輯、補畫面)大多在 managed-sites 引擎內、跟 broker 撞檔,先跳過;改開觀測站統計(對話 4)與介入閉環(對話 5),檔案跟 broker 與彼此互不相撞;兩邊都會加表,後落地者照撞號規則 rebase 重產生
 - 2026-09-01 平行分支 migration 撞號一律「rebase 到 main 後用 pnpm db:generate 重新產生」,不手改 SQL/snapshot/journal(知識底座 0034→0035 第一次照做)
 - 2026-09-01 三線並行開工:broker(對話 1)+ 爬蟲證據(對話 2)+ 知識底座(對話 3),檔案互不相撞;Stripe 與 broker 撞檔,排 broker 之後
 - 2026-09-01 優先序改判:「一鍵生成真網站」提到最前面;GEO 六步路線內容不變、整體往後挪
@@ -46,6 +53,7 @@
 - (日期不詳)不從零訓練通用大語言模型;自有模型只學「哪裡有問題、先改什麼、什麼有效」
 
 ## 已完成
+- 2026-09-02 一鍵建站第一次真的開出一站(broker 併入 main:程式內建仲介服務接 Cloudflare Pages + R2,真部署測試通過、公網讀回頁面;根因是打 Cloudflare 的三個呼叫跟真 API 不合,mock 測試看不出來;PM 驗收:範圍乾淨、合併後型別檢查 0 錯、正式 build 成功、159 測試檔全綠;DNS TXT 所有權驗證 NOT RUN;正式環境未設環境變數,開站功能線上未啟用)
 - 2026-09-01 Entity + Claim + Source 知識底座併入 main(三線並行第二個交件:15 張知識表 + 28 條 owner API + 後台頁,孤兒 JSON-LD 引擎接上、交付預覽會附 JSON-LD;PM 驗收:範圍乾淨、142 測試綠、型別檢查過、0035 只建知識表;對真資料實跑仍未做)
 - 2026-09-01 整站爬蟲/頁面證據 slice 併入 main(三線並行第一個交件:URL 清單+原始碼 vs 實際畫面比對+canonical/sitemap 稽核+最小結果頁;PM 驗收:範圍乾淨、21 測試綠、型別檢查過;對真站實跑仍是 opt-in 未跑)
 - 2026-09-01 整套系統上線 Render + 密碼登入修好(老闆親測登入成功;PM 實開兩網址驗過;部署細節記入檔案卡)
