@@ -1,6 +1,7 @@
 import { executeVisibilityProbeBatch } from './runner'
 import type { ObservationCandidate, ProbeBatchBlockedResult, ProbeBatchResult, VisibilityProbeAdapter, VisibilityProbeIdempotencyRegistry, VisibilityProbePlan } from './types'
 import { persistProviderObservationCandidate, type VisibilityWorkflowRepository } from '../llm-visibility/service'
+import { createDefaultCitationHeadFetch, type CitationHeadFetchOptions } from '../llm-visibility/citation-freshness'
 
 export type PersistedProviderObservation = { probeId: string, requestFingerprint: string, runId: number, observationId: number }
 
@@ -57,12 +58,14 @@ export async function executeAndPersistProviderObservations(input: {
   concurrency?: number
   abortSignal?: AbortSignal
   now?: Date
+  headFetch?: CitationHeadFetchOptions
 }): Promise<ProviderObservationRuntimeResult> {
   if (!Number.isSafeInteger(input.ownerUserId) || input.ownerUserId < 1 || !expectedScopeMatches(input.plan, input.ownerScopeKey)) {
     return { batch: { status: 'blocked', reasonCodes: ['OWNER_SCOPE_MISMATCH'], results: [], counts: { completed: 0, blocked: 0, failed: 0, retryable: 0 } }, persisted: [], persistenceFailures: [] }
   }
   const batch = await executeVisibilityProbeBatch({ plan: input.plan, adapters: input.adapters, idempotencyRegistry: input.idempotencyRegistry, ...(input.concurrency === undefined ? {} : { concurrency: input.concurrency }), ...(input.abortSignal === undefined ? {} : { abortSignal: input.abortSignal }) })
   if (batch.status === 'blocked') return { batch, persisted: [], persistenceFailures: [] }
+  const headFetch = input.headFetch ?? createDefaultCitationHeadFetch()
   const persisted: PersistedProviderObservation[] = []
   const persistenceFailures: Array<{ probeId: string, requestFingerprint: string, code: 'PERSISTENCE_FAILED' }> = []
   for (const result of batch.results) {
@@ -72,7 +75,7 @@ export async function executeAndPersistProviderObservations(input: {
       const projectId = numericIdentity(candidate.projectId)
       const queryId = numericIdentity(candidate.queryId)
       if (projectId === null || queryId === null) throw new Error('PERSISTENCE_IDENTITY_MAPPING_FAILED')
-      const committed = await persistProviderObservationCandidate(input.repository, input.ownerUserId, { ...candidate, projectId, queryId }, input.now || new Date())
+      const committed = await persistProviderObservationCandidate(input.repository, input.ownerUserId, { ...candidate, projectId, queryId }, input.now || new Date(), { headFetch })
       persisted.push({ probeId: candidate.probeId, requestFingerprint: candidate.requestFingerprint, runId: committed.runId, observationId: committed.observationId })
     } catch {
       persistenceFailures.push({ probeId: candidate.probeId, requestFingerprint: candidate.requestFingerprint, code: 'PERSISTENCE_FAILED' })

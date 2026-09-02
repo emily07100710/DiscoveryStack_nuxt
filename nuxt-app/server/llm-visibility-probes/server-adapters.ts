@@ -1,4 +1,6 @@
 import type { AdapterResult, ProbeProvider, VisibilityProbeAdapter } from './types'
+import { normalizeCitationSourceDate } from '../llm-visibility/citation-freshness'
+import { canonicalizePublicHttps } from '../llm-visibility/guards'
 
 const OFFICIAL_ENDPOINTS: Record<ProbeProvider, string> = {
   chatgpt: 'https://api.openai.com/v1/responses',
@@ -37,6 +39,30 @@ function readCitationUrls(payload: unknown): string[] {
     return typeof uri === 'string' ? [uri] : []
   })
   return [...new Set([...direct, ...grounded])].slice(0, 50)
+}
+
+function readCitationDates(provider: ProbeProvider, payload: unknown, citationUrls: string[]): Record<string, string> | undefined {
+  if (provider !== 'perplexity' || !payload || typeof payload !== 'object') return undefined
+  const allowed = new Set<string>()
+  for (const citationUrl of citationUrls) {
+    try { allowed.add(canonicalizePublicHttps(citationUrl).url) } catch { /* Strict response normalization will reject the invalid citation itself. */ }
+  }
+  const searchResults = Array.isArray((payload as Record<string, unknown>).search_results) ? (payload as Record<string, unknown>).search_results as unknown[] : []
+  const dates: Record<string, string> = {}
+  for (const result of searchResults) {
+    if (Object.keys(dates).length >= 50) break
+    if (!result || typeof result !== 'object') continue
+    const rawUrl = (result as Record<string, unknown>).url
+    const rawDate = (result as Record<string, unknown>).date
+    if (typeof rawUrl !== 'string' || typeof rawDate !== 'string') continue
+    let canonicalUrl: string
+    try { canonicalUrl = canonicalizePublicHttps(rawUrl).url } catch { continue }
+    if (!allowed.has(canonicalUrl) || dates[canonicalUrl] !== undefined) continue
+    const sourceDate = normalizeCitationSourceDate(rawDate)
+    if (sourceDate === null) continue
+    dates[canonicalUrl] = sourceDate
+  }
+  return Object.keys(dates).length ? dates : undefined
 }
 
 function readResponseText(provider: ProbeProvider, payload: unknown): string | null {
@@ -113,7 +139,9 @@ export function createVisibilityProviderAdapter(config: VisibilityServerAdapterC
         const responseText = readResponseText(config.provider, payload)
         if (!responseText) return { ok: false, failureKind: 'malformed_response', retryable: false, code: 'RESPONSE_TEXT_MISSING' }
         const providerRequestId = response.headers.get('x-request-id') || (payload && typeof payload === 'object' && typeof (payload as Record<string, unknown>).id === 'string' ? (payload as Record<string, unknown>).id as string : undefined)
-        return { ok: true, provider: config.provider, modelLabel: config.modelLabel, responseText, citationUrls: readCitationUrls(payload), observedAt: new Date().toISOString(), ...(providerRequestId ? { providerRequestId: providerRequestId.slice(0, 256) } : {}) }
+        const citationUrls = readCitationUrls(payload)
+        const citationDates = readCitationDates(config.provider, payload, citationUrls)
+        return { ok: true, provider: config.provider, modelLabel: config.modelLabel, responseText, citationUrls, observedAt: new Date().toISOString(), ...(providerRequestId ? { providerRequestId: providerRequestId.slice(0, 256) } : {}), ...(citationDates ? { citationDates } : {}) }
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') return { ok: false, failureKind: 'timeout', retryable: true, code: 'PROVIDER_TIMEOUT' }
         return { ok: false, failureKind: 'network_unavailable', retryable: true, code: 'PROVIDER_NETWORK_UNAVAILABLE' }

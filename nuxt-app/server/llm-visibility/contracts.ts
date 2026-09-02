@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { VISIBILITY_SAMPLE_LIMITATION_CODES } from './statistics'
 
 export const visibilityProviders = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'manual_other'] as const
 export const visibilityModes = ['manual_verified', 'provider_api_observation'] as const
@@ -25,6 +26,25 @@ export const queryInputSchema = z.object({
   locale: z.enum(visibilityLocales),
   active: z.boolean().default(true),
 }).strict()
+
+export const visibilityQueryUpdateSchema = z.object({
+  promptText: boundedLabel(2000).optional(),
+  active: z.boolean().optional(),
+}).strict().refine(value => value.promptText !== undefined || value.active !== undefined, '至少需要一個可更新欄位。')
+
+const competitorShape = {
+  name: boundedLabel(160),
+  aliases: z.array(boundedLabel(160)).max(20).default([]),
+  domain: z.string().trim().min(1).max(253).nullable().default(null),
+} as const
+
+export const visibilityCompetitorCreateSchema = z.object(competitorShape).strict()
+export const visibilityCompetitorUpdateSchema = z.object({
+  name: competitorShape.name.optional(),
+  aliases: z.array(boundedLabel(160)).max(20).optional(),
+  domain: z.string().trim().min(1).max(253).nullable().optional(),
+  active: z.boolean().optional(),
+}).strict().refine(value => Object.values(value).some(item => item !== undefined), '至少需要一個可更新欄位。')
 
 const observationInputShape = {
   projectId: z.number().int().positive(),
@@ -72,19 +92,21 @@ export const ownerManualObservationReviewSchema = z.object({
 }).strict()
 
 /** Provider API observations are bounded secondary evidence and never owner-verified consumer-surface truth. */
+export const visibilityProviderTargetSchema = z.object({
+  provider: z.enum(['chatgpt', 'gemini', 'perplexity']),
+  modelLabel: boundedLabel(160),
+  adapterKey: boundedLabel(120),
+  allowedLocales: z.array(z.enum(visibilityLocales)).min(1).max(2),
+  maximumResponseBytes: z.number().int().min(1).max(2_000_000).default(120_000),
+  timeoutMs: z.number().int().min(1_000).max(120_000).default(30_000),
+}).strict()
+
 export const providerObservationRunInputSchema = z.object({
   projectId: z.number().int().positive(),
   queryIds: z.array(z.number().int().positive()).min(1).max(100),
   observationWindowKey: boundedLabel(160),
   maximumProbes: z.number().int().min(1).max(50).default(50),
-  providerTargets: z.array(z.object({
-    provider: z.enum(['chatgpt', 'gemini', 'perplexity']),
-    modelLabel: boundedLabel(160),
-    adapterKey: boundedLabel(160),
-    allowedLocales: z.array(z.enum(visibilityLocales)).min(1).max(2),
-    maximumResponseBytes: z.number().int().min(1).max(2_000_000).default(120_000),
-    timeoutMs: z.number().int().min(1_000).max(120_000).default(30_000),
-  }).strict()).min(1).max(12),
+  providerTargets: z.array(visibilityProviderTargetSchema).min(1).max(12),
 }).strict()
 
 export const providerObservationCandidateSchema = z.object({
@@ -102,6 +124,7 @@ export const providerObservationCandidateSchema = z.object({
   ownerScopeKey: boundedLabel(256),
   observationWindowKey: boundedLabel(160),
   providerRequestId: boundedLabel(256).optional(),
+  citationDates: z.record(boundedLabel(2048), z.string().regex(/^\d{4}-\d{2}-\d{2}$/u)).refine(value => Object.keys(value).length <= 50, 'citationDates 最多 50 筆。').optional(),
   provenance: z.object({
     adapterKey: boundedLabel(160),
     engineVersion: boundedLabel(120),
@@ -116,6 +139,9 @@ export const providerObservationCandidateSchema = z.object({
 
 export type ProjectInput = z.infer<typeof projectInputSchema>
 export type QueryInput = z.infer<typeof queryInputSchema>
+export type VisibilityQueryUpdate = z.infer<typeof visibilityQueryUpdateSchema>
+export type VisibilityCompetitorCreate = z.infer<typeof visibilityCompetitorCreateSchema>
+export type VisibilityCompetitorUpdate = z.infer<typeof visibilityCompetitorUpdateSchema>
 export type ObservationInput = z.infer<typeof observationInputSchema>
 export type OwnerManualObservationImport = z.infer<typeof ownerManualObservationImportSchema>
 export type OwnerManualObservationReview = z.infer<typeof ownerManualObservationReviewSchema>
@@ -138,4 +164,10 @@ export const VISIBILITY_LIMITATIONS = [
   'provider_api_observation 可保存為明確標記的 secondary-only observation，但永遠不是 owner-verified evidence、consumer UI truth 或 primary manual_verified 指標。',
   '主要指標只使用符合期間且 review ledger 為 approved 的 manual observation rows；observedQueries 是其中不重複的 active query 數，比例則以 observation rows 為分母。',
   'V1 沒有 consumer UI scraping、自動登入或隱藏 bypass；provider observation runtime 只透過明確注入的 provider adapter 執行，沒有 adapter／credential 時 fail-closed。',
+] as const
+
+export const VISIBILITY_LIMITATION_CODES = [
+  ...VISIBILITY_SAMPLE_LIMITATION_CODES,
+  'provider_api_not_consumer_surface',
+  'prompt_version_mismatch',
 ] as const

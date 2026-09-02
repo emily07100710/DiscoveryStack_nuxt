@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -24,6 +24,53 @@ describe('LLM visibility schema/migration alignment', () => {
   it('does not include any raw provider response column', () => {
     expect(schema).not.toMatch(/rawProviderResponse|fullProviderResponse|rawResponse/)
     expect(migration).not.toMatch(/rawProviderResponse|fullProviderResponse|rawResponse/)
+    expect(schema).toContain("boundedExcerpt: text('boundedExcerpt')")
+    expect(schema).toContain("responseHash: varchar('responseHash'")
+  })
+})
+
+const journal = JSON.parse(readFileSync(join(root, 'server/database/migrations/meta/_journal.json'), 'utf8')) as { entries: Array<{ tag: string }> }
+const benchmarkMigrationFiles = readdirSync(join(root, 'server/database/migrations')).filter(file => /^0036_.+\.sql$/u.test(file))
+const benchmarkMigrationTag = benchmarkMigrationFiles.length === 1 ? benchmarkMigrationFiles[0]!.replace(/\.sql$/u, '') : null
+const benchmarkMigration = benchmarkMigrationTag ? readFileSync(join(root, `server/database/migrations/${benchmarkMigrationTag}.sql`), 'utf8') : ''
+
+describe('LLM visibility benchmark schema/migration alignment', () => {
+  const newTables = ['llmVisibilityPromptVersions', 'llmVisibilityCompetitors', 'llmVisibilityBenchmarkRuns', 'llmVisibilityBenchmarkSamples']
+
+  it('locates exactly one generated 0036 migration recorded anywhere in the journal', () => {
+    expect(benchmarkMigrationFiles).toHaveLength(1)
+    expect(benchmarkMigrationTag).toMatch(/^0036_/u)
+    expect(journal.entries.some(entry => entry.tag === benchmarkMigrationTag)).toBe(true)
+    for (const table of newTables) {
+      expect(schema).toContain(`mysqlTable('${table}'`)
+      expect(benchmarkMigration).toContain(`CREATE TABLE \`${table}\``)
+    }
+  })
+
+  it('includes prompt/competitor and benchmark sample uniqueness plus nullable additive columns', () => {
+    for (const identifier of ['llm_vis_prompt_versions_query_version_unique', 'llm_vis_competitors_project_key_unique', 'llm_vis_bench_samples_identity_unique', 'llm_vis_bench_samples_fingerprint_unique']) expect(benchmarkMigration).toContain(identifier)
+    expect(benchmarkMigration).toContain('ADD `promptVersionId` int')
+    expect(benchmarkMigration).toContain('ADD `citationFreshness` json')
+    expect(benchmarkMigration).toContain('fk_llm_vis_observations_prompt_version')
+    expect(schema).toContain("benchmarkRunId: int('benchmarkRunId')")
+    expect(schema).toContain("sampleIndex: int('sampleIndex')")
+  })
+
+  it('freezes brand name, aliases, and measured domain in the benchmark CREATE TABLE', () => {
+    const benchmarkTableDdl = benchmarkMigration.match(/CREATE TABLE `llmVisibilityBenchmarkRuns` \([\s\S]*?\n\);/u)?.[0] || ''
+    expect(benchmarkTableDdl).toContain('`brandName` varchar(160) NOT NULL')
+    expect(benchmarkTableDdl).toContain('`brandAliases` json NOT NULL')
+    expect(benchmarkTableDdl).toContain('`measuredDomain` varchar(253) NOT NULL')
+  })
+
+  it('is DDL-only and contains no provider call, seed, DML, trigger or procedure', () => {
+    expect(benchmarkMigration).not.toMatch(/^\s*(INSERT|UPDATE|DELETE|REPLACE|CALL|CREATE\s+TRIGGER|CREATE\s+PROCEDURE)\b/im)
+    expect(benchmarkMigration).not.toMatch(/https?:\/\//i)
+  })
+
+  it('does not include any raw provider response column', () => {
+    expect(schema).not.toMatch(/rawProviderResponse|fullProviderResponse|rawResponse/)
+    expect(benchmarkMigration).not.toMatch(/rawProviderResponse|fullProviderResponse|rawResponse/)
     expect(schema).toContain("boundedExcerpt: text('boundedExcerpt')")
     expect(schema).toContain("responseHash: varchar('responseHash'")
   })

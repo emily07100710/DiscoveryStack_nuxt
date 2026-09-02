@@ -259,6 +259,13 @@ describe('LLM Visibility Probe Engine V1 analyzer', () => {
     expect(analyzeProviderObservation(responseInput({}, syntheticSuccess({ citationUrls: ['https://example.com/guide#section'] })))).toMatchObject({ status: 'blocked', reasonCodes: ['CITATION_VALIDATION_FAILURE'] })
   })
 
+  it('carries bounded provider citationDates while preserving exact-key rejection', () => {
+    const url = 'https://example.com/guide'
+    const candidate = completedCandidate(responseInput({}, syntheticSuccess({ citationUrls: [url], citationDates: { [url]: '2025-04-03' } })))
+    expect(candidate.citationDates).toEqual({ [url]: '2025-04-03' })
+    expect(analyzeProviderObservation(responseInput({}, { ...syntheticSuccess(), unexpectedDateField: '2025-04-03' }))).toMatchObject({ status: 'blocked', reasonCodes: ['MALFORMED_RESPONSE'] })
+  })
+
   it('sets citedDomain only for exact canonical hostname', () => {
     const exact = completedCandidate(responseInput({}, syntheticSuccess({ citationUrls: ['https://example.com/guide'] })))
     const subdomain = completedCandidate(responseInput({}, syntheticSuccess({ citationUrls: ['https://www.example.com/guide'] })))

@@ -119,6 +119,7 @@ export type AdapterSuccess = {
   modelLabel: string
   responseText: string
   citationUrls: string[]
+  citationDates?: Record<string, string>
   observedAt: string
   providerRequestId?: string
   responseMetadata?: AdapterResponseMetadata
@@ -180,6 +181,7 @@ export type ObservationCandidate = {
   firstMentionPosition: number | null
   competitorMentions: Record<string, number>
   citationUrls: string[]
+  citationDates?: Record<string, string>
   citedDomain: string | null
   providerRequestId?: string
   evidenceLocator: string

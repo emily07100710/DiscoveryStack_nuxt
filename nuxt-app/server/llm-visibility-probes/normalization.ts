@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { canonicalBrandKey } from '../llm-visibility/service'
 import { canonicalizePublicHttps, canonicalHostname, normalizedPromptHash } from '../llm-visibility/guards'
+import { normalizeCitationSourceDate } from '../llm-visibility/citation-freshness'
 import {
   PROBE_ENGINE_VERSION,
   PROBE_LIMITATION_CODE,
@@ -25,6 +26,7 @@ import {
 export const MAX_PROBES = 50
 export const MAX_PROVIDER_TARGETS = 12
 export const MAX_QUERY_SNAPSHOTS = 100
+export const MAX_PROJECT_COMPETITOR_TERMS = 30
 export const MAX_RESPONSE_METADATA_KEYS = 4
 export const MAX_EXCERPT_CHARS = 1000
 export const MAX_EXCERPT_BYTES = 16_000
@@ -47,7 +49,7 @@ const TARGET_KEYS = ['provider', 'modelLabel', 'adapterKey', 'status', 'allowedL
 const PROBE_KEYS = ['probeId', 'requestFingerprint', 'identityKey', 'ownerScopeKey', 'projectId', 'queryId', 'provider', 'modelLabel', 'adapterKey', 'locale', 'normalizedPrompt', 'observationWindowKey', 'limitationCode', 'provenance', 'status'] as const
 const PROBE_PROVENANCE_KEYS = ['engineVersion', 'observationMode', 'consumerSurfaceEquivalent'] as const
 const RESPONSE_REQUIRED_KEYS = ['ok', 'provider', 'modelLabel', 'responseText', 'citationUrls', 'observedAt'] as const
-const RESPONSE_OPTIONAL_KEYS = ['providerRequestId', 'responseMetadata'] as const
+const RESPONSE_OPTIONAL_KEYS = ['providerRequestId', 'responseMetadata', 'citationDates'] as const
 const FAILURE_REQUIRED_KEYS = ['ok', 'failureKind', 'retryable', 'code'] as const
 const FAILURE_OPTIONAL_KEYS = ['httpStatus'] as const
 const CANDIDATE_REQUIRED_KEYS = [
@@ -56,7 +58,7 @@ const CANDIDATE_REQUIRED_KEYS = [
   'limitationCode', 'persistenceStatus', 'responseHash', 'boundedExcerpt', 'brandMentioned', 'exactMentionCount',
   'firstMentionPosition', 'competitorMentions', 'citationUrls', 'citedDomain', 'evidenceLocator', 'observedAt', 'provenance',
 ] as const
-const CANDIDATE_OPTIONAL_KEYS = ['providerRequestId'] as const
+const CANDIDATE_OPTIONAL_KEYS = ['providerRequestId', 'citationDates'] as const
 const CANDIDATE_PROVENANCE_REQUIRED_KEYS = ['adapterKey', 'engineVersion'] as const
 const CANDIDATE_PROVENANCE_OPTIONAL_KEYS = ['responseMetadata'] as const
 const RESPONSE_METADATA_KEYS = ['finishReason', 'inputTokens', 'outputTokens', 'totalTokens'] as const
@@ -175,7 +177,7 @@ function normalizeProject(value: unknown): ProjectIdentity {
   const brandName = normalizeText(read(value, 'brandName'), 160, 'MALFORMED_PROJECT')
   const brandKey = canonicalBrandKey(brandName)
   const brandAliases = normalizeStringList(read(value, 'brandAliases'), 30, 160, 'MALFORMED_PROJECT').filter(alias => canonicalBrandKey(alias) !== brandKey)
-  const competitorBrands = normalizeStringList(read(value, 'competitorBrands'), 30, 160, 'MALFORMED_PROJECT')
+  const competitorBrands = normalizeStringList(read(value, 'competitorBrands'), MAX_PROJECT_COMPETITOR_TERMS, 160, 'MALFORMED_PROJECT')
   const brandKeys = new Set([brandKey, ...brandAliases.map(canonicalBrandKey)])
   if (competitorBrands.some(competitor => brandKeys.has(canonicalBrandKey(competitor)))) throw new Error('BRAND_COMPETITOR_COLLISION')
   return { projectId, canonicalWebsiteDomain, brandName, brandAliases, competitorBrands, locale: normalizeLocale(read(value, 'locale'), 'MALFORMED_PROJECT') }
@@ -467,6 +469,24 @@ export function normalizeCitationUrls(value: unknown): string[] {
   return [...new Set(canonical)].sort(compareCanonicalStrings)
 }
 
+export function normalizeCitationDates(value: unknown, citationUrls: string[]): Record<string, string> | undefined {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) throw new Error('CITATION_VALIDATION_FAILURE')
+  const keys = ownKeys(value)
+  if (keys.some(key => typeof key !== 'string') || keys.length > 50) throw new Error('CITATION_VALIDATION_FAILURE')
+  const allowed = new Set(citationUrls)
+  const normalized: Record<string, string> = {}
+  for (const rawKey of keys as string[]) {
+    let key: string
+    try { key = canonicalizePublicHttps(rawKey).url } catch { throw new Error('CITATION_VALIDATION_FAILURE') }
+    if (!allowed.has(key) || normalized[key] !== undefined) throw new Error('CITATION_VALIDATION_FAILURE')
+    const date = normalizeCitationSourceDate(read(value, rawKey))
+    if (!date) throw new Error('CITATION_VALIDATION_FAILURE')
+    normalized[key] = date
+  }
+  return Object.fromEntries(Object.entries(normalized).sort(([left], [right]) => compareCanonicalStrings(left, right)))
+}
+
 export function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength
 }
@@ -604,6 +624,7 @@ export function normalizeObservationCandidate(value: unknown, context: Candidate
   const evidenceLocator = read(value, 'evidenceLocator')
   if (evidenceLocator !== buildEvidenceLocator(probe, responseHash)) throw new Error('MALFORMED_CANDIDATE')
   const providerRequestId = normalizeProviderRequestId(read(value, 'providerRequestId'))
+  const citationDates = normalizeCitationDates(read(value, 'citationDates'), citationUrls)
   const provenance = normalizeCandidateProvenance(read(value, 'provenance'), target)
   return {
     probeId,
@@ -629,6 +650,7 @@ export function normalizeObservationCandidate(value: unknown, context: Candidate
     firstMentionPosition: brandMentioned ? firstMentionPosition as number : null,
     competitorMentions,
     citationUrls,
+    ...(citationDates === undefined ? {} : { citationDates }),
     citedDomain: expectedCitedDomain,
     ...(providerRequestId === undefined ? {} : { providerRequestId }),
     evidenceLocator: buildEvidenceLocator(probe, responseHash),
@@ -644,6 +666,7 @@ export function normalizeAdapterSuccessResponse(value: unknown): AdapterSuccess 
   const responseText = read(value, 'responseText')
   if (typeof responseText !== 'string' || !responseText || responseText !== responseText.normalize('NFKC') || DISALLOWED_RESPONSE_CONTROLS.test(responseText)) throw new Error('MALFORMED_RESPONSE')
   const citationUrls = normalizeCitationUrls(read(value, 'citationUrls'))
+  const citationDates = normalizeCitationDates(read(value, 'citationDates'), citationUrls)
   const observedAt = normalizeObservedAt(read(value, 'observedAt'))
   const providerRequestId = normalizeProviderRequestId(read(value, 'providerRequestId'))
   const responseMetadata = normalizeResponseMetadata(read(value, 'responseMetadata'))
@@ -653,6 +676,7 @@ export function normalizeAdapterSuccessResponse(value: unknown): AdapterSuccess 
     modelLabel,
     responseText,
     citationUrls,
+    ...(citationDates === undefined ? {} : { citationDates }),
     observedAt,
     ...(providerRequestId === undefined ? {} : { providerRequestId }),
     ...(responseMetadata === undefined ? {} : { responseMetadata }),

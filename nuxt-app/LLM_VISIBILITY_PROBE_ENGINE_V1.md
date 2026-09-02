@@ -1,12 +1,10 @@
 # LLM Visibility Probe Planning & Provider Observation Engine V1
 
-## 定位與安全邊界
+## 定位與治理
 
-本 package 是未來自動監測的 **純 server-side、offline、deterministic、fail-closed safety core**，不是 consumer ChatGPT、Gemini 或 Perplexity UI scraper，也不是既有 LLM Visibility Monitor V1 的 dashboard 替代品。它提供 governed probe planning、注入式 provider adapter contract、response evidence normalization、品牌／競品提及分析、citation URL analysis、secondary-only provider observation candidate、bounded retry classification 與 atomic idempotency contract。
+Probe engine 是 server-side、deterministic、fail-closed 的 provider observation 核心，不是 consumer UI scraper。正式 runtime 已有 owner-only provider route、persistence 與 resumable benchmark orchestration；但所有 provider evidence 仍固定為 `provider_api_observation`、`verifiedByOwner=false`、`secondary_only`、`consumerSurfaceEquivalent=false`、`provider_api_not_consumer_surface`。它不代表搜尋排名、consumer UI 曝光、流量、轉換、營收或 ROI。
 
-V1 不呼叫真實 OpenAI、Gemini、Perplexity 或其他付費 provider API，不登入 consumer account，不 scraping consumer UI，不繞過 provider 限制，不新增 API route、scheduler task、database schema、migration、persistence 或 deployment。所有 provider execution tests 都使用 injected synthetic mock adapter；response text 只在 analyzer function memory 中處理。
-
-`server/llm-visibility-probes/index.ts` 是唯一 public barrel。所有 public entrypoint 以 `unknown` 為輸入，對 null、array、extra key、enumerable symbol、throwing getter、錯誤型別與 malformed lineage fail closed。新模組沒有 network client、environment credential、browser automation、scraper、crawler、database write 或檔案 write。
+`server/llm-visibility-probes/index.ts` 是唯一 public barrel。所有 public entrypoint 以 `unknown` 為輸入，對 null、array、extra key、enumerable symbol、throwing getter、錯誤型別與 malformed lineage fail closed。Planner、plan validator、runner、adapter response 與 candidate 都維持 strict exact-key/lineage validation。Scope、target、prompt、window、metadata、citation 或 governance field tamper 會在 persistence 前 fail closed。
 
 ## Deterministic plan contract
 
@@ -24,6 +22,22 @@ expectedPlanFingerprint = canonicalFingerprint(canonicalPlanBody)
 
 每個 probe 的 request fingerprint 由固定 identity、normalized prompt hash、engine version 計算，probe ID 由 `identityKey + requestFingerprint` 計算。Validator 重新計算並精確比對 `requestFingerprint`、`identityKey`、`probeId`、owner/project/query/locale/window、target identity、provenance 與治理欄位；任何 prompt、project、target、scope 或 lineage tamper 都在 adapter 呼叫前 blocked。它同時拒絕重複 request fingerprint、probe ID 與 identity key，以及空 probes plan。
 
+## Identity and benchmark sampling
+
+Engine identity is unchanged:
+
+```text
+provider | model | query | locale
+```
+
+`canonicalProbeIdentity` additionally fingerprints normalized prompt hash, engine version, owner/project scope, and `observationWindowKey`. A benchmark deliberately builds one one-probe plan for each query/target/repetition and assigns:
+
+```text
+benchmark:<benchmarkId>:sample:<k>
+```
+
+The same query/provider/model/locale therefore remains the same engine identity while each repetition receives a deterministic, mutually distinct request fingerprint. `PROBE_KEYS`, duplicate-combination rules, and the planner algorithm are not changed. The benchmark mother row is inserted first inside a transaction so its ID can be used while inserting every pending sample in that same transaction.
+
 ## Validated-plan analyzer
 
 `analyzeProviderObservation(input: unknown)` 的正式輸入只有：
@@ -38,11 +52,11 @@ expectedPlanFingerprint = canonicalFingerprint(canonicalPlanBody)
 
 Analyzer 先完整呼叫 `normalizeVisibilityProbePlan()`，再要求 probe ID 是 canonical lowercase SHA-256，從 validated plan 找到唯一 probe 與 active locale-eligible target。Project、provider target、plan fingerprint、owner scope 與 observation window 全部只能來自 validated plan/probe；caller 不可另外注入 project 或 target。
 
-Response 也採 exact-key contract。Success response 只允許 `ok`、`provider`、`modelLabel`、`responseText`、`citationUrls`、`observedAt` 以及 bounded optional request ID/metadata。Provider/model 必須與 validated target 精確一致；response text 受 UTF-8 byte ceiling；citation 只接受 canonical public HTTPS URL，去除 duplicate，拒絕 credentials、localhost、private/reserved IP 與 fragment；metadata 的 unknown keys、symbol、getter exception 與不一致 token totals 都 blocked。
+Response 也採 exact-key contract。Success response 只允許 `ok`、`provider`、`modelLabel`、`responseText`、`citationUrls`、`observedAt` 以及 bounded optional `providerRequestId`、`responseMetadata`、`citationDates`。Provider/model 必須與 validated target 精確一致；response text 受 UTF-8 byte ceiling；citation 只接受 canonical public HTTPS URL，去除 duplicate，拒絕 credentials、localhost、private/reserved IP 與 fragment；`citationDates` 最多 50 筆、必須能正規化為日期且只能引用 canonical citation list；metadata 的 unknown keys、symbol、getter exception 與不一致 token totals 都 blocked。
 
 Candidate 的 lineage 必須保存 `planFingerprint`、`ownerScopeKey`、`projectId`、`queryId`、`provider`、`modelLabel`、`observationWindowKey` 與 `provenance.adapterKey/engineVersion`。`normalizeObservationCandidate()` 是 internal full validator，不在 public barrel 暴露，且不再 spread 未驗證 caller fields。Replay 與 completed result 都必須使用同一個完整 candidate validator。
 
-所有成功 candidate 固定為：
+所有 analyzer 成功 candidate 固定為：
 
 ```text
 observationMode = provider_api_observation
@@ -54,7 +68,7 @@ limitationCode = provider_api_not_consumer_surface
 persistenceStatus = not_persisted_v1
 ```
 
-Candidate 不能通過既有 `ownerManualObservationImportSchema`；runner 不呼叫 `importObservationSnapshot()`，也不會寫入既有 manual dashboard。既有 primary metrics 仍維持 `metricBasis = manual_verified_v1`。
+Runtime persistence 會再次以 strict schema 驗證 candidate，並只把 persistence copy 標記為 `persisted_secondary_only`；它不會把 evidence 升級成 owner-verified 或 primary evidence。Candidate 不能通過既有 `ownerManualObservationImportSchema`；既有 primary metrics 仍維持 `metricBasis = manual_verified_v1`。
 
 ## Timestamp、Unicode 與 evidence contract
 
@@ -69,6 +83,12 @@ Evidence locator 使用完整 response hash，而非前 16 字元：
 ```
 
 因此 response hash 只有 suffix 不同時，locator 仍一定不同。Candidate 只保留 exact hash、bounded excerpt、derived mentions、canonical citations、bounded provider request reference、evidence locator、timestamp 與 safe metadata，不保存 raw response。
+
+## Adapter success and citation dates
+
+The success response required keys remain `ok`, provider/model, bounded response text, canonical citation URLs, and timezone-bearing `observedAt`. Optional exact keys are request ID, safe response metadata, and `citationDates: Record<url, ISO date>` bounded to 50 entries. `citationDates` is normalized and must reference returned citations. Analyzer carries it to the strictly validated observation candidate.
+
+Perplexity maps documented `search_results[].{url,date}` only when the canonical URL is already present in the response citation list; invalid, duplicate, unlisted, or unparseable entries are omitted. Plain `citations` have no date. OpenAI and Gemini omit dates unless an actual dated provider field exists. A missing date is never invented.
 
 ## Atomic idempotency 與 bounded runner
 
@@ -100,24 +120,39 @@ Runner 自己以 target `timeoutMs` 建立 bounded deadline，不只依賴 adapt
 
 固定不可重試類別包含 invalid input、owner/project/query mismatch、unsupported locale、adapter mismatch、response too large、malformed response、citation validation、identity collision、redirect，以及 HTTP 400／401／403／404／409／422。可重試類別包含 timeout、network unavailable、HTTP 429 與 HTTP 500–599。輸出只有 boolean、bounded delay category（none／short／medium／long）與 reason code，不提供 duration、不 sleep、不回傳原始錯誤。
 
+## Execution, retry, reconciliation, and persistence
+
+The existing runner retains concurrency range 1–5, target deadline up to 120 seconds, atomic injected idempotency registry, stable results, and failure classification. It does not sleep internally. Benchmark orchestration invokes it on one-probe plans with a single in-memory idempotency registry per execution, a worker pool of five, short injected delays, and at most three attempts for a retryable sample in one execution.
+
+Before every call, durable owner/fingerprint state is reconciled. If a run plus observation already exists, the sample links to them and becomes succeeded without calling the adapter. A unique-fingerprint 409 during persistence repeats this reconciliation instead of becoming a false failure. Each persisted run receives prompt version, benchmark ID, and sample index; each observation receives its own prompt version and citation freshness. Every row result updates counters and `lastProgressAt` immediately.
+
+Resume never executes succeeded samples. Pending, failed, and interrupted stale-running rows are eligible. Fresh `running` rows cannot be claimed by another executor. No Nitro scheduler or automatic retry loop exists.
+
+## Citation HEAD safety
+
+Provider/URL dates are pure. Optional HTTP `HEAD` is enabled only by `LLM_VISIBILITY_CITATION_HEAD_FETCH=true`; default/off produces `unknown` without network. Fetch and DNS are injectable. Benchmark execution and each synchronous provider batch share one cache and 100-request budget within their execution, use a five-second AbortController timeout, and follow at most three redirects manually.
+
+Before the first request and after every redirect, only credential-free HTTP/HTTPS URLs are allowed; the hostname is resolved and every returned address must be public. Localhost, private/loopback/link-local/carrier-grade/zero-network IPv4, IPv6 loopback/unique-local/link-local, and mapped forms are blocked. Fake or unreliable Last-Modified values remain unknown.
+
 ## Existing V1 non-regression boundary
 
-新 package 可以 import existing pure helpers/types，但不修改：
+The engine is now called by `server/llm-visibility/repository.ts`, `server/llm-visibility/benchmark-runtime.ts`, and the owner routes. This current integration adds provider persistence and benchmark orchestration while leaving these contracts untouched:
 
-- `server/llm-visibility/**`
-- `server/api/llm-visibility/**`
-- `pages/audit-lab/llm-visibility.vue`
 - manual observation import contract
 - `manual_verified_v1` primary metrics denominator
 - owner verification semantics
 
-Provider mock candidate 永遠是 `verifiedByOwner=false`、`secondary_only`、`not_persisted_v1`，不會被轉換為 manual verified snapshot。
+Provider candidates remain `verifiedByOwner=false` and `secondary_only`; runtime persistence marks them `persisted_secondary_only` and never converts them to a manual verified snapshot.
+
+## Mocked-by-default operation
+
+Provider adapters use official fixed endpoints and opaque env credentials only through the existing opt-in mechanism. Missing credentials fail closed. Unit and contract tests inject adapters, clocks, delays, fetch, and DNS; they make no real provider request or citation HEAD request. Operational reports must state `real provider calls NOT RUN` and `HEAD real fetch NOT RUN` unless separately and explicitly exercised.
 
 ## Testing and limitations
 
-`tests/llm-visibility-probe-engine.test.ts` 保留原有 targeted safety coverage，並新增 adversarial tests，現有 targeted suite 共 **191 direct tests**。覆蓋 planner deterministic ordering、strict exact-key/symbol/getter validation、全部 probe lineage tamper、plan fingerprint recomputation、paused/locale-ineligible target、validated-plan analyzer、candidate governance/replay lineage、atomic concurrent duplicate、collision/in-progress/release exceptions、runner-owned timeout、strict timezone offset、multiline response、canonical mention/excerpt coordinate、metadata totals、400 emoji code-point position、full-hash evidence locator、canonical array reorder、response/runner extra keys，以及 existing manual import fail-closed regression。
+`tests/llm-visibility-probe-engine.test.ts` 保留原有 targeted safety coverage，並新增 adversarial tests，現有 targeted suite 共 **192 direct tests**。覆蓋 planner deterministic ordering、strict exact-key/symbol/getter validation、全部 probe lineage tamper、plan fingerprint recomputation、paused/locale-ineligible target、validated-plan analyzer、candidate governance/replay lineage、atomic concurrent duplicate、collision/in-progress/release exceptions、runner-owned timeout、strict timezone offset、multiline response、canonical mention/excerpt coordinate、metadata totals、400 emoji code-point position、full-hash evidence locator、canonical array reorder、response/runner extra keys，以及 existing manual import fail-closed regression。
 
-V1 是 mocked adapter safety core，尚未接 live provider，也不代表 consumer UI 曝光。Provider API response 不等於 consumer UI visibility；candidate 不代表搜尋排名、流量、轉換、營收、ROI 或因果成效。V1 沒有 scheduler、durable idempotency persistence、API route、database persistence、dashboard wiring 或 deployment；response text 也不宣稱已完成完整語意匿名化，production admission 仍需可信的上游 data governance。
+V1 仍不是 consumer UI 曝光證據。Provider API response 不等於 consumer UI visibility；candidate 不代表搜尋排名、流量、轉換、營收、ROI 或因果成效。Runtime 現已具 owner route、database persistence、durable fingerprint reconciliation 與 dashboard/benchmark wiring，但沒有 Nitro scheduler、automatic retry loop、consumer UI scraper 或 deployment proof；response text 也不宣稱已完成完整語意匿名化，production admission 仍需可信的上游 data governance。
 
 ## References
 

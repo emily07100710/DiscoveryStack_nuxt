@@ -1,8 +1,8 @@
-import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNull, lt } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDatabase } from '../database'
-import { llmVisibilityObservationReviews, llmVisibilityObservations, llmVisibilityProjects, llmVisibilityQueries, llmVisibilityRuns } from '../database/schema'
-import type { ObservationInput, ProjectInput, QueryInput } from './contracts'
+import { llmVisibilityCompetitors, llmVisibilityObservationReviews, llmVisibilityObservations, llmVisibilityProjects, llmVisibilityPromptVersions, llmVisibilityQueries, llmVisibilityRuns } from '../database/schema'
+import type { ObservationInput, ProjectInput, QueryInput, VisibilityCompetitorCreate, VisibilityCompetitorUpdate, VisibilityQueryUpdate } from './contracts'
 import { VisibilityContractError, VISIBILITY_LIMITATIONS } from './contracts'
 import { prepareProject, createTrackingQuery, buildSummaryProjection, type QueryWorkflowRepository, type VisibilityWorkflowRepository } from './service'
 import type { ProviderObservationRunInput } from './contracts'
@@ -10,11 +10,116 @@ import type { OwnerManualObservationReview } from './contracts'
 import { fingerprint } from '../geo-outcome-model/canonical'
 import type { GeoOutcomeDrizzleDatabase } from '../geo-outcome-model/repository-drizzle'
 import { buildVisibilityProbePlan, createConfiguredVisibilityProviderAdapters, createEphemeralVisibilityProbeIdempotencyRegistry, executeAndPersistProviderObservations } from '../llm-visibility-probes'
+import {
+  createCompetitor as createRegistryCompetitor,
+  assertActiveCompetitorTermLimit,
+  deactivateCompetitor as deactivateRegistryCompetitor,
+  ensureCompetitorRegistry,
+  ensurePromptVersion,
+  listCompetitors as listRegistryCompetitors,
+  syncProjectRegistry,
+  updateCompetitor as updateRegistryCompetitor,
+  updateVisibilityQuery as updateRegistryQuery,
+  type CompetitorRecord,
+  type VisibilityRegistryRepository,
+} from './registry'
 
 function requireVisibilityDatabase() {
   const database = getDatabase()
   if (!database) throw createError({ statusCode: 503, statusMessage: 'LLM Visibility Monitor 暫時無法連線。' })
   return database
+}
+
+function competitorProjection(row: typeof llmVisibilityCompetitors.$inferSelect): CompetitorRecord {
+  return { ...row, aliases: Array.isArray(row.aliases) ? row.aliases as string[] : [] }
+}
+
+export function createDrizzleVisibilityRegistryRepository(database: any = requireVisibilityDatabase(), transactional = false): VisibilityRegistryRepository {
+  let repository: VisibilityRegistryRepository
+  repository = {
+    async transaction(work) {
+      if (transactional) return work(repository)
+      return database.transaction((transaction: any) => work(createDrizzleVisibilityRegistryRepository(transaction, true)))
+    },
+    async getProject(ownerUserId, projectId) {
+      const [row] = await database.select().from(llmVisibilityProjects).where(and(eq(llmVisibilityProjects.id, projectId), eq(llmVisibilityProjects.ownerUserId, ownerUserId))).limit(1)
+      return row ? { ...row, brandAliases: Array.isArray(row.brandAliases) ? row.brandAliases as string[] : [], competitorBrands: Array.isArray(row.competitorBrands) ? row.competitorBrands as string[] : [] } : null
+    },
+    async listProjectQueries(ownerUserId, projectId) {
+      return database.select().from(llmVisibilityQueries).where(and(eq(llmVisibilityQueries.ownerUserId, ownerUserId), eq(llmVisibilityQueries.projectId, projectId))).orderBy(llmVisibilityQueries.id)
+    },
+    async getQuery(ownerUserId, queryId) {
+      const [row] = await database.select().from(llmVisibilityQueries).where(and(eq(llmVisibilityQueries.id, queryId), eq(llmVisibilityQueries.ownerUserId, ownerUserId))).limit(1)
+      return row || null
+    },
+    async findQueryByHash(ownerUserId, projectId, promptHash) {
+      const [row] = await database.select().from(llmVisibilityQueries).where(and(eq(llmVisibilityQueries.ownerUserId, ownerUserId), eq(llmVisibilityQueries.projectId, projectId), eq(llmVisibilityQueries.promptHash, promptHash))).limit(1)
+      return row || null
+    },
+    async updateQuery(ownerUserId, queryId, values) {
+      await database.update(llmVisibilityQueries).set(values).where(and(eq(llmVisibilityQueries.id, queryId), eq(llmVisibilityQueries.ownerUserId, ownerUserId)))
+      const [row] = await database.select().from(llmVisibilityQueries).where(and(eq(llmVisibilityQueries.id, queryId), eq(llmVisibilityQueries.ownerUserId, ownerUserId))).limit(1)
+      if (!row) throw new VisibilityContractError(404, '找不到此 owner 的 tracking query。')
+      return row
+    },
+    async getLatestPromptVersion(ownerUserId, queryId) {
+      const [row] = await database.select().from(llmVisibilityPromptVersions).where(and(eq(llmVisibilityPromptVersions.ownerUserId, ownerUserId), eq(llmVisibilityPromptVersions.queryId, queryId))).orderBy(desc(llmVisibilityPromptVersions.versionNumber)).limit(1)
+      return row || null
+    },
+    async insertPromptVersion(values) {
+      const result = await database.insert(llmVisibilityPromptVersions).values(values)
+      return { id: Number(result[0].insertId), ...values, createdAt: new Date() }
+    },
+    async listCompetitors(ownerUserId, projectId, options = {}) {
+      const predicates = [eq(llmVisibilityCompetitors.ownerUserId, ownerUserId), eq(llmVisibilityCompetitors.projectId, projectId)]
+      if (options.activeOnly) predicates.push(eq(llmVisibilityCompetitors.active, true))
+      const rows = await database.select().from(llmVisibilityCompetitors).where(and(...predicates)).orderBy(llmVisibilityCompetitors.id).limit(options.limit || 500)
+      return rows.map(competitorProjection)
+    },
+    async getCompetitor(ownerUserId, competitorId) {
+      const [row] = await database.select().from(llmVisibilityCompetitors).where(and(eq(llmVisibilityCompetitors.id, competitorId), eq(llmVisibilityCompetitors.ownerUserId, ownerUserId))).limit(1)
+      return row ? competitorProjection(row) : null
+    },
+    async findCompetitorByKey(ownerUserId, projectId, canonicalKey) {
+      const [row] = await database.select().from(llmVisibilityCompetitors).where(and(eq(llmVisibilityCompetitors.ownerUserId, ownerUserId), eq(llmVisibilityCompetitors.projectId, projectId), eq(llmVisibilityCompetitors.canonicalKey, canonicalKey))).limit(1)
+      return row ? competitorProjection(row) : null
+    },
+    async insertCompetitor(values) {
+      const result = await database.insert(llmVisibilityCompetitors).values(values)
+      return { id: Number(result[0].insertId), ...values, createdAt: new Date(), updatedAt: new Date() }
+    },
+    async updateCompetitor(ownerUserId, competitorId, values) {
+      await database.update(llmVisibilityCompetitors).set(values).where(and(eq(llmVisibilityCompetitors.id, competitorId), eq(llmVisibilityCompetitors.ownerUserId, ownerUserId)))
+      const [row] = await database.select().from(llmVisibilityCompetitors).where(and(eq(llmVisibilityCompetitors.id, competitorId), eq(llmVisibilityCompetitors.ownerUserId, ownerUserId))).limit(1)
+      if (!row) throw new VisibilityContractError(404, '找不到此 owner 的 competitor。')
+      return competitorProjection(row)
+    },
+  }
+  return repository
+}
+
+export function updateVisibilityQuery(ownerUserId: number, queryId: number, input: VisibilityQueryUpdate) {
+  return updateRegistryQuery(createDrizzleVisibilityRegistryRepository(), ownerUserId, queryId, input)
+}
+
+export function syncVisibilityProjectRegistry(ownerUserId: number, projectId: number) {
+  return syncProjectRegistry(createDrizzleVisibilityRegistryRepository(), ownerUserId, projectId)
+}
+
+export function listVisibilityCompetitors(ownerUserId: number, projectId: number, activeOnly = false) {
+  return listRegistryCompetitors(createDrizzleVisibilityRegistryRepository(), ownerUserId, projectId, activeOnly)
+}
+
+export function createVisibilityCompetitor(ownerUserId: number, projectId: number, input: VisibilityCompetitorCreate) {
+  return createRegistryCompetitor(createDrizzleVisibilityRegistryRepository(), ownerUserId, projectId, input)
+}
+
+export function updateVisibilityCompetitor(ownerUserId: number, competitorId: number, input: VisibilityCompetitorUpdate) {
+  return updateRegistryCompetitor(createDrizzleVisibilityRegistryRepository(), ownerUserId, competitorId, input)
+}
+
+export function deactivateVisibilityCompetitor(ownerUserId: number, competitorId: number) {
+  return deactivateRegistryCompetitor(createDrizzleVisibilityRegistryRepository(), ownerUserId, competitorId)
 }
 
 export async function createVisibilityProject(ownerUserId: number, input: ProjectInput) {
@@ -53,12 +158,16 @@ export async function runOwnerProviderObservation(ownerUserId: number, input: Pr
   const project = projectRow[0]
   if (!project || project.status !== 'active') throw new VisibilityContractError(404, '找不到此 owner 的 active LLM visibility project。')
   if (queryRows.length !== new Set(input.queryIds).size || queryRows.some(query => !query.active || query.projectId !== project.id)) throw new VisibilityContractError(422, 'provider observation query scope 必須全部屬於此 active project。')
+  const registryRepository = createDrizzleVisibilityRegistryRepository(database)
+  const normalizedProject = { ...project, brandAliases: Array.isArray(project.brandAliases) ? project.brandAliases as string[] : [], competitorBrands: Array.isArray(project.competitorBrands) ? project.competitorBrands as string[] : [] }
+  const registry = await registryRepository.transaction(transaction => ensureCompetitorRegistry(transaction, normalizedProject))
+  const competitorBrands = assertActiveCompetitorTermLimit(registry.competitors)
   const ownerScopeKey = `visibility-owner:${ownerUserId}`
   const planResult = buildVisibilityProbePlan({
     ownerScopeKey,
-    project: { projectId: String(project.id), canonicalWebsiteDomain: project.canonicalDomain, brandName: project.brandName, brandAliases: Array.isArray(project.brandAliases) ? project.brandAliases as string[] : [], competitorBrands: Array.isArray(project.competitorBrands) ? project.competitorBrands as string[] : [], locale: project.locale },
+    project: { projectId: String(project.id), canonicalWebsiteDomain: project.canonicalDomain, brandName: project.brandName, brandAliases: normalizedProject.brandAliases, competitorBrands, locale: project.locale },
     activeQuerySnapshots: queryRows.map(query => ({ queryId: String(query.id), projectId: String(query.projectId), promptText: query.promptText, promptHash: query.promptHash, intent: query.intent, locale: query.locale, active: query.active })),
-    providerTargets: input.providerTargets,
+    providerTargets: input.providerTargets.map(target => ({ ...target, status: 'active' as const })),
     observationWindowKey: input.observationWindowKey,
     maximumProbes: input.maximumProbes,
     engineVersion: 'llm_visibility_probe_engine_v1',
@@ -69,8 +178,8 @@ export async function runOwnerProviderObservation(ownerUserId: number, input: Pr
   return { ownerScopeKey, plan: planResult.plan, runtime }
 }
 
-export function createDrizzleVisibilityWorkflowRepository(): VisibilityWorkflowRepository {
-  const database = requireVisibilityDatabase()
+export function createDrizzleVisibilityWorkflowRepository(database: any = requireVisibilityDatabase()): VisibilityWorkflowRepository {
+  const registryRepository = createDrizzleVisibilityRegistryRepository(database)
   return {
     async getProject(ownerUserId, projectId) {
       const [row] = await database.select().from(llmVisibilityProjects).where(and(eq(llmVisibilityProjects.id, projectId), eq(llmVisibilityProjects.ownerUserId, ownerUserId))).limit(1)
@@ -92,15 +201,20 @@ export function createDrizzleVisibilityWorkflowRepository(): VisibilityWorkflowR
       const [row] = await database.select({ id: llmVisibilityObservations.id }).from(llmVisibilityObservations).where(and(eq(llmVisibilityObservations.runId, runId), eq(llmVisibilityObservations.queryId, queryId))).limit(1)
       return Boolean(row)
     },
+    async ensurePromptVersion(query) {
+      return (await registryRepository.transaction(transaction => ensurePromptVersion(transaction, query))).version
+    },
     async commitObservation(input) {
       try {
-        return await database.transaction(async transaction => {
+        return await database.transaction(async (transaction: any) => {
           let runId = input.runId
           if (!runId) {
-            const runResult = await transaction.insert(llmVisibilityRuns).values({ ownerUserId: input.ownerUserId, projectId: input.projectId, provider: input.provider, modelLabel: input.modelLabel, observationMode: input.observationMode, status: input.status, observedAt: input.observedAtDate, requestFingerprint: input.requestFingerprint, limitationCode: input.limitationCode })
+            const runResult = await transaction.insert(llmVisibilityRuns).values({ ownerUserId: input.ownerUserId, projectId: input.projectId, provider: input.provider, modelLabel: input.modelLabel, observationMode: input.observationMode, status: input.status, observedAt: input.observedAtDate, requestFingerprint: input.requestFingerprint, limitationCode: input.limitationCode, promptVersionId: input.promptVersionId, benchmarkRunId: input.benchmarkRunId, sampleIndex: input.sampleIndex })
             runId = Number(runResult[0].insertId)
+          } else if (input.promptVersionId) {
+            await transaction.update(llmVisibilityRuns).set({ promptVersionId: input.promptVersionId }).where(and(eq(llmVisibilityRuns.id, runId), eq(llmVisibilityRuns.ownerUserId, input.ownerUserId), isNull(llmVisibilityRuns.promptVersionId)))
           }
-          const observationResult = await transaction.insert(llmVisibilityObservations).values({ ownerUserId: input.ownerUserId, projectId: input.projectId, runId, queryId: input.queryId, brandMentioned: input.brandMentioned, exactMentionCount: input.exactMentionCount, firstMentionPosition: input.firstMentionPosition, citedDomain: input.citedDomain, citationUrls: input.citationUrls, competitorMentions: input.competitorMentions, boundedExcerpt: input.boundedExcerpt, responseHash: input.responseHash, evidenceLocator: input.evidenceLocator, reviewerNote: input.reviewerNote, verifiedByOwner: input.verifiedByOwner })
+          const observationResult = await transaction.insert(llmVisibilityObservations).values({ ownerUserId: input.ownerUserId, projectId: input.projectId, runId, queryId: input.queryId, promptVersionId: input.promptVersionId, brandMentioned: input.brandMentioned, exactMentionCount: input.exactMentionCount, firstMentionPosition: input.firstMentionPosition, citedDomain: input.citedDomain, citationUrls: input.citationUrls, competitorMentions: input.competitorMentions, boundedExcerpt: input.boundedExcerpt, responseHash: input.responseHash, evidenceLocator: input.evidenceLocator, reviewerNote: input.reviewerNote, verifiedByOwner: input.verifiedByOwner, citationFreshness: input.citationFreshness })
           return { runId, observationId: Number(observationResult[0].insertId) }
         })
       } catch (error: any) {
@@ -165,14 +279,18 @@ export async function reviewVisibilityObservation(ownerUserId: number, reviewerU
 
 export async function listVisibilityWorkspace(ownerUserId: number) {
   const database = requireVisibilityDatabase()
-  const [projects, queries, recent, reviews] = await Promise.all([
+  const [projects, queries, promptVersionRows, competitors, recent, reviews] = await Promise.all([
     database.select().from(llmVisibilityProjects).where(eq(llmVisibilityProjects.ownerUserId, ownerUserId)).orderBy(desc(llmVisibilityProjects.updatedAt)),
     database.select().from(llmVisibilityQueries).where(eq(llmVisibilityQueries.ownerUserId, ownerUserId)).orderBy(desc(llmVisibilityQueries.updatedAt)),
-    database.select({ id: llmVisibilityObservations.id, projectId: llmVisibilityObservations.projectId, queryId: llmVisibilityObservations.queryId, runId: llmVisibilityObservations.runId, brandMentioned: llmVisibilityObservations.brandMentioned, exactMentionCount: llmVisibilityObservations.exactMentionCount, firstMentionPosition: llmVisibilityObservations.firstMentionPosition, citedDomain: llmVisibilityObservations.citedDomain, citationUrls: llmVisibilityObservations.citationUrls, competitorMentions: llmVisibilityObservations.competitorMentions, boundedExcerpt: llmVisibilityObservations.boundedExcerpt, evidenceLocator: llmVisibilityObservations.evidenceLocator, reviewerNote: llmVisibilityObservations.reviewerNote, verifiedByOwner: llmVisibilityObservations.verifiedByOwner, createdAt: llmVisibilityObservations.createdAt, provider: llmVisibilityRuns.provider, modelLabel: llmVisibilityRuns.modelLabel, observationMode: llmVisibilityRuns.observationMode, observedAt: llmVisibilityRuns.observedAt, limitationCode: llmVisibilityRuns.limitationCode }).from(llmVisibilityObservations).innerJoin(llmVisibilityRuns, and(eq(llmVisibilityObservations.runId, llmVisibilityRuns.id), eq(llmVisibilityRuns.ownerUserId, ownerUserId))).where(eq(llmVisibilityObservations.ownerUserId, ownerUserId)).orderBy(desc(llmVisibilityRuns.observedAt)).limit(50),
+    database.select({ id: llmVisibilityPromptVersions.id, queryId: llmVisibilityPromptVersions.queryId, versionNumber: llmVisibilityPromptVersions.versionNumber }).from(llmVisibilityPromptVersions).where(eq(llmVisibilityPromptVersions.ownerUserId, ownerUserId)).orderBy(desc(llmVisibilityPromptVersions.versionNumber)).limit(1000),
+    database.select().from(llmVisibilityCompetitors).where(and(eq(llmVisibilityCompetitors.ownerUserId, ownerUserId), eq(llmVisibilityCompetitors.active, true))).orderBy(desc(llmVisibilityCompetitors.updatedAt)).limit(500),
+    database.select({ id: llmVisibilityObservations.id, projectId: llmVisibilityObservations.projectId, queryId: llmVisibilityObservations.queryId, promptVersionId: llmVisibilityObservations.promptVersionId, runId: llmVisibilityObservations.runId, brandMentioned: llmVisibilityObservations.brandMentioned, exactMentionCount: llmVisibilityObservations.exactMentionCount, firstMentionPosition: llmVisibilityObservations.firstMentionPosition, citedDomain: llmVisibilityObservations.citedDomain, citationUrls: llmVisibilityObservations.citationUrls, competitorMentions: llmVisibilityObservations.competitorMentions, boundedExcerpt: llmVisibilityObservations.boundedExcerpt, evidenceLocator: llmVisibilityObservations.evidenceLocator, reviewerNote: llmVisibilityObservations.reviewerNote, verifiedByOwner: llmVisibilityObservations.verifiedByOwner, createdAt: llmVisibilityObservations.createdAt, provider: llmVisibilityRuns.provider, modelLabel: llmVisibilityRuns.modelLabel, observationMode: llmVisibilityRuns.observationMode, observedAt: llmVisibilityRuns.observedAt, limitationCode: llmVisibilityRuns.limitationCode }).from(llmVisibilityObservations).innerJoin(llmVisibilityRuns, and(eq(llmVisibilityObservations.runId, llmVisibilityRuns.id), eq(llmVisibilityRuns.ownerUserId, ownerUserId))).where(eq(llmVisibilityObservations.ownerUserId, ownerUserId)).orderBy(desc(llmVisibilityRuns.observedAt)).limit(50),
     database.select().from(llmVisibilityObservationReviews).where(eq(llmVisibilityObservationReviews.ownerUserId, ownerUserId)),
   ])
   const approved = new Set(reviews.filter(row => row.newStatus === 'approved').map(row => row.observationId)); const revoked = new Set(reviews.filter(row => row.newStatus === 'revoked').map(row => row.observationId))
-  return { projects, queries, recentObservations: recent.map(row => ({ ...row, verifiedByOwner: approved.has(row.id) && !revoked.has(row.id), reviewStatus: revoked.has(row.id) ? 'revoked' : approved.has(row.id) ? 'approved' : 'pending' })), limitations: VISIBILITY_LIMITATIONS, projection: 'traceable_model_observations_v1' }
+  const currentVersionByQuery = new Map<number, { id: number, versionNumber: number }>()
+  for (const row of promptVersionRows) if (!currentVersionByQuery.has(row.queryId)) currentVersionByQuery.set(row.queryId, { id: row.id, versionNumber: row.versionNumber })
+  return { projects, queries: queries.map(query => ({ ...query, promptVersion: currentVersionByQuery.get(query.id) || null })), competitors: competitors.map(competitorProjection), recentObservations: recent.map(row => ({ ...row, verifiedByOwner: approved.has(row.id) && !revoked.has(row.id), reviewStatus: revoked.has(row.id) ? 'revoked' : approved.has(row.id) ? 'approved' : 'pending' })), limitations: VISIBILITY_LIMITATIONS, projection: 'traceable_model_observations_v1' }
 }
 
 export async function getVisibilityProjectSummary(ownerUserId: number, projectId: number, now = new Date()) {
@@ -180,14 +298,23 @@ export async function getVisibilityProjectSummary(ownerUserId: number, projectId
   const [project] = await database.select().from(llmVisibilityProjects).where(and(eq(llmVisibilityProjects.id, projectId), eq(llmVisibilityProjects.ownerUserId, ownerUserId))).limit(1)
   if (!project) throw new VisibilityContractError(404, '找不到此 owner 的 LLM visibility project。')
   const from = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000)
-  const [queries, rows, reviews] = await Promise.all([
+  const [queries, rows, reviews, competitors, promptVersionRows] = await Promise.all([
     database.select().from(llmVisibilityQueries).where(and(eq(llmVisibilityQueries.ownerUserId, ownerUserId), eq(llmVisibilityQueries.projectId, project.id))).orderBy(desc(llmVisibilityQueries.createdAt)),
-    database.select({ id: llmVisibilityObservations.id, queryId: llmVisibilityObservations.queryId, provider: llmVisibilityRuns.provider, modelLabel: llmVisibilityRuns.modelLabel, observationMode: llmVisibilityRuns.observationMode, observedAt: llmVisibilityRuns.observedAt, brandMentioned: llmVisibilityObservations.brandMentioned, exactMentionCount: llmVisibilityObservations.exactMentionCount, firstMentionPosition: llmVisibilityObservations.firstMentionPosition, citedDomain: llmVisibilityObservations.citedDomain, citationUrls: llmVisibilityObservations.citationUrls, competitorMentions: llmVisibilityObservations.competitorMentions, boundedExcerpt: llmVisibilityObservations.boundedExcerpt, evidenceLocator: llmVisibilityObservations.evidenceLocator, reviewerNote: llmVisibilityObservations.reviewerNote, limitationCode: llmVisibilityRuns.limitationCode }).from(llmVisibilityObservations).innerJoin(llmVisibilityRuns, and(eq(llmVisibilityObservations.runId, llmVisibilityRuns.id), eq(llmVisibilityRuns.ownerUserId, ownerUserId), eq(llmVisibilityRuns.projectId, project.id))).where(and(eq(llmVisibilityObservations.ownerUserId, ownerUserId), eq(llmVisibilityObservations.projectId, project.id), gte(llmVisibilityRuns.observedAt, from), lt(llmVisibilityRuns.observedAt, now))).orderBy(desc(llmVisibilityRuns.observedAt)),
+    database.select({ id: llmVisibilityObservations.id, queryId: llmVisibilityObservations.queryId, promptVersionId: llmVisibilityObservations.promptVersionId, provider: llmVisibilityRuns.provider, modelLabel: llmVisibilityRuns.modelLabel, observationMode: llmVisibilityRuns.observationMode, observedAt: llmVisibilityRuns.observedAt, brandMentioned: llmVisibilityObservations.brandMentioned, exactMentionCount: llmVisibilityObservations.exactMentionCount, firstMentionPosition: llmVisibilityObservations.firstMentionPosition, citedDomain: llmVisibilityObservations.citedDomain, citationUrls: llmVisibilityObservations.citationUrls, competitorMentions: llmVisibilityObservations.competitorMentions, boundedExcerpt: llmVisibilityObservations.boundedExcerpt, evidenceLocator: llmVisibilityObservations.evidenceLocator, reviewerNote: llmVisibilityObservations.reviewerNote, limitationCode: llmVisibilityRuns.limitationCode }).from(llmVisibilityObservations).innerJoin(llmVisibilityRuns, and(eq(llmVisibilityObservations.runId, llmVisibilityRuns.id), eq(llmVisibilityRuns.ownerUserId, ownerUserId), eq(llmVisibilityRuns.projectId, project.id))).where(and(eq(llmVisibilityObservations.ownerUserId, ownerUserId), eq(llmVisibilityObservations.projectId, project.id), gte(llmVisibilityRuns.observedAt, from), lt(llmVisibilityRuns.observedAt, now))).orderBy(desc(llmVisibilityRuns.observedAt)),
     database.select().from(llmVisibilityObservationReviews).where(eq(llmVisibilityObservationReviews.ownerUserId, ownerUserId)),
+    database.select().from(llmVisibilityCompetitors).where(and(eq(llmVisibilityCompetitors.ownerUserId, ownerUserId), eq(llmVisibilityCompetitors.projectId, project.id))).orderBy(llmVisibilityCompetitors.id).limit(500),
+    database.select({ id: llmVisibilityPromptVersions.id, queryId: llmVisibilityPromptVersions.queryId, versionNumber: llmVisibilityPromptVersions.versionNumber }).from(llmVisibilityPromptVersions).where(and(eq(llmVisibilityPromptVersions.ownerUserId, ownerUserId), eq(llmVisibilityPromptVersions.projectId, project.id))).orderBy(desc(llmVisibilityPromptVersions.versionNumber)).limit(1000),
   ])
   const normalizedProject = { ...project, brandAliases: Array.isArray(project.brandAliases) ? project.brandAliases as string[] : [], competitorBrands: Array.isArray(project.competitorBrands) ? project.competitorBrands as string[] : [] }
   const metricQueries = queries.map(query => ({ id: query.id, locale: query.locale, active: query.active }))
   const approved = new Set(reviews.filter(row => row.newStatus === 'approved').map(row => row.observationId)); const revoked = new Set(reviews.filter(row => row.newStatus === 'revoked').map(row => row.observationId))
   const metricRows = rows.filter(row => approved.has(row.id) && !revoked.has(row.id)).map(row => ({ ...row, citationUrls: Array.isArray(row.citationUrls) ? row.citationUrls as string[] : [], competitorMentions: row.competitorMentions && typeof row.competitorMentions === 'object' && !Array.isArray(row.competitorMentions) ? row.competitorMentions as Record<string, number> : {} }))
-  return { ...buildSummaryProjection({ project: normalizedProject, queries: metricQueries, observations: metricRows, recentObservations: metricRows.slice(0, 20), now }), queries }
+  const competitorRegistry = competitors.map(competitorProjection)
+  const currentVersionByQuery = new Map<number, { id: number, versionNumber: number }>()
+  for (const row of promptVersionRows) if (!currentVersionByQuery.has(row.queryId)) currentVersionByQuery.set(row.queryId, { id: row.id, versionNumber: row.versionNumber })
+  const promptVersions = queries.map(query => {
+    const version = currentVersionByQuery.get(query.id)
+    return version ? { queryId: query.id, promptVersionId: version.id, versionNumber: version.versionNumber } : { queryId: query.id, promptVersionId: null, versionNumber: null }
+  })
+  return { ...buildSummaryProjection({ project: normalizedProject, queries: metricQueries, observations: metricRows, recentObservations: metricRows.slice(0, 20), competitorRegistry, now }), queries, competitors: competitorRegistry, promptVersions }
 }

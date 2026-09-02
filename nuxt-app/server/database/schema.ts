@@ -1350,6 +1350,43 @@ export const llmVisibilityQueries = mysqlTable('llmVisibilityQueries', {
   index('llm_visibility_queries_project_idx').on(table.projectId, table.active),
 ])
 
+/** Immutable prompt history used to attribute every benchmark sample to exact query text. */
+export const llmVisibilityPromptVersions = mysqlTable('llmVisibilityPromptVersions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  projectId: int('projectId').notNull(),
+  queryId: int('queryId').notNull(),
+  versionNumber: int('versionNumber').notNull(),
+  promptText: text('promptText').notNull(),
+  promptHash: varchar('promptHash', { length: 64 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_llm_vis_prompt_versions_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_llm_vis_prompt_versions_project', columns: [table.projectId], foreignColumns: [llmVisibilityProjects.id] }),
+  foreignKey({ name: 'fk_llm_vis_prompt_versions_query', columns: [table.queryId], foreignColumns: [llmVisibilityQueries.id] }),
+  uniqueIndex('llm_vis_prompt_versions_query_version_unique').on(table.queryId, table.versionNumber),
+  index('llm_vis_prompt_versions_owner_project_idx').on(table.ownerUserId, table.projectId),
+])
+
+/** Owner-maintained competitor registry; rows are deactivated rather than deleted. */
+export const llmVisibilityCompetitors = mysqlTable('llmVisibilityCompetitors', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  projectId: int('projectId').notNull(),
+  name: varchar('name', { length: 160 }).notNull(),
+  canonicalKey: varchar('canonicalKey', { length: 160 }).notNull(),
+  aliases: json('aliases').notNull().default([]),
+  domain: varchar('domain', { length: 253 }),
+  active: boolean('active').default(true).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_llm_vis_competitors_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_llm_vis_competitors_project', columns: [table.projectId], foreignColumns: [llmVisibilityProjects.id] }),
+  uniqueIndex('llm_vis_competitors_project_key_unique').on(table.projectId, table.canonicalKey),
+  index('llm_vis_competitors_owner_project_active_idx').on(table.ownerUserId, table.projectId, table.active),
+])
+
 /** One provider-labelled observation run; no provider executor or raw response is persisted. */
 export const llmVisibilityRuns = mysqlTable('llmVisibilityRuns', {
   id: int('id').autoincrement().primaryKey(),
@@ -1362,11 +1399,16 @@ export const llmVisibilityRuns = mysqlTable('llmVisibilityRuns', {
   observedAt: timestamp('observedAt').notNull(),
   requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(),
   limitationCode: varchar('limitationCode', { length: 120 }).notNull(),
+  promptVersionId: int('promptVersionId'),
+  benchmarkRunId: int('benchmarkRunId'),
+  sampleIndex: int('sampleIndex'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_llm_vis_runs_prompt_version', columns: [table.promptVersionId], foreignColumns: [llmVisibilityPromptVersions.id] }),
   uniqueIndex('llm_visibility_runs_owner_fingerprint_unique').on(table.ownerUserId, table.requestFingerprint),
   index('llm_visibility_runs_owner_idx').on(table.ownerUserId, table.observedAt),
   index('llm_visibility_runs_project_idx').on(table.projectId, table.observedAt),
+  index('llm_vis_runs_benchmark_idx').on(table.benchmarkRunId),
 ])
 
 /** Bounded, structured evidence only. Full provider responses are intentionally excluded from this schema. */
@@ -1376,6 +1418,7 @@ export const llmVisibilityObservations = mysqlTable('llmVisibilityObservations',
   projectId: int('projectId').notNull().references(() => llmVisibilityProjects.id),
   runId: int('runId').notNull().references(() => llmVisibilityRuns.id),
   queryId: int('queryId').notNull().references(() => llmVisibilityQueries.id),
+  promptVersionId: int('promptVersionId'),
   brandMentioned: boolean('brandMentioned').notNull(),
   exactMentionCount: int('exactMentionCount').notNull(),
   firstMentionPosition: int('firstMentionPosition'),
@@ -1387,13 +1430,89 @@ export const llmVisibilityObservations = mysqlTable('llmVisibilityObservations',
   evidenceLocator: varchar('evidenceLocator', { length: 1000 }).notNull(),
   reviewerNote: text('reviewerNote').notNull(),
   verifiedByOwner: boolean('verifiedByOwner').notNull(),
+  citationFreshness: json('citationFreshness'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
+  foreignKey({ name: 'fk_llm_vis_observations_prompt_version', columns: [table.promptVersionId], foreignColumns: [llmVisibilityPromptVersions.id] }),
   uniqueIndex('llm_visibility_observations_run_query_unique').on(table.runId, table.queryId),
   index('llm_visibility_observations_owner_idx').on(table.ownerUserId, table.createdAt),
   index('llm_visibility_observations_project_idx').on(table.projectId, table.createdAt),
   index('llm_visibility_observations_run_idx').on(table.runId),
   index('llm_visibility_observations_query_idx').on(table.queryId),
+])
+
+/** Durable benchmark mother row. TASK 2 owns execution and aggregate population. */
+export const llmVisibilityBenchmarkRuns = mysqlTable('llmVisibilityBenchmarkRuns', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  projectId: int('projectId').notNull(),
+  label: varchar('label', { length: 160 }),
+  brandName: varchar('brandName', { length: 160 }).notNull(),
+  brandAliases: json('brandAliases').notNull(),
+  measuredDomain: varchar('measuredDomain', { length: 253 }).notNull(),
+  status: mysqlEnum('status', ['queued', 'running', 'completed', 'partial', 'failed']).default('queued').notNull(),
+  sampleSize: int('sampleSize').notNull(),
+  requestedSamples: int('requestedSamples').notNull(),
+  succeededSamples: int('succeededSamples').default(0).notNull(),
+  failedSamples: int('failedSamples').default(0).notNull(),
+  queryIds: json('queryIds').notNull(),
+  providerTargets: json('providerTargets').notNull(),
+  promptVersionIds: json('promptVersionIds').notNull(),
+  competitorSnapshot: json('competitorSnapshot').notNull(),
+  engineVersion: varchar('engineVersion', { length: 80 }).notNull(),
+  maximumProbes: int('maximumProbes').notNull(),
+  concurrency: int('concurrency').notNull(),
+  limitationCodes: json('limitationCodes').notNull().default([]),
+  aggregateSnapshot: json('aggregateSnapshot'),
+  aggregateComputedAt: datetime('aggregateComputedAt'),
+  startedAt: datetime('startedAt'),
+  lastProgressAt: datetime('lastProgressAt'),
+  completedAt: datetime('completedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_llm_vis_benchmark_runs_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_llm_vis_benchmark_runs_project', columns: [table.projectId], foreignColumns: [llmVisibilityProjects.id] }),
+  index('llm_vis_benchmark_runs_owner_project_created_idx').on(table.ownerUserId, table.projectId, table.createdAt),
+  index('llm_vis_benchmark_runs_owner_status_idx').on(table.ownerUserId, table.status),
+])
+
+/** One deterministic provider/model/query repetition belonging to a benchmark run. */
+export const llmVisibilityBenchmarkSamples = mysqlTable('llmVisibilityBenchmarkSamples', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  benchmarkRunId: int('benchmarkRunId').notNull(),
+  projectId: int('projectId').notNull(),
+  queryId: int('queryId').notNull(),
+  promptVersionId: int('promptVersionId').notNull(),
+  sampleIndex: int('sampleIndex').notNull(),
+  provider: mysqlEnum('provider', ['chatgpt', 'gemini', 'perplexity']).notNull(),
+  modelLabel: varchar('modelLabel', { length: 160 }).notNull(),
+  adapterKey: varchar('adapterKey', { length: 120 }).notNull(),
+  locale: mysqlEnum('locale', ['en', 'zh-hant']).notNull(),
+  observationWindowKey: varchar('observationWindowKey', { length: 160 }).notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(),
+  status: mysqlEnum('status', ['pending', 'running', 'succeeded', 'failed']).default('pending').notNull(),
+  attempts: int('attempts').default(0).notNull(),
+  failureKind: varchar('failureKind', { length: 60 }),
+  failureCode: varchar('failureCode', { length: 120 }),
+  runId: int('runId'),
+  observationId: int('observationId'),
+  startedAt: datetime('startedAt'),
+  completedAt: datetime('completedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_llm_vis_bench_samples_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_llm_vis_bench_samples_benchmark', columns: [table.benchmarkRunId], foreignColumns: [llmVisibilityBenchmarkRuns.id] }),
+  foreignKey({ name: 'fk_llm_vis_bench_samples_project', columns: [table.projectId], foreignColumns: [llmVisibilityProjects.id] }),
+  foreignKey({ name: 'fk_llm_vis_bench_samples_query', columns: [table.queryId], foreignColumns: [llmVisibilityQueries.id] }),
+  foreignKey({ name: 'fk_llm_vis_bench_samples_prompt_version', columns: [table.promptVersionId], foreignColumns: [llmVisibilityPromptVersions.id] }),
+  foreignKey({ name: 'fk_llm_vis_bench_samples_run', columns: [table.runId], foreignColumns: [llmVisibilityRuns.id] }),
+  foreignKey({ name: 'fk_llm_vis_bench_samples_observation', columns: [table.observationId], foreignColumns: [llmVisibilityObservations.id] }),
+  uniqueIndex('llm_vis_bench_samples_identity_unique').on(table.benchmarkRunId, table.queryId, table.provider, table.modelLabel, table.sampleIndex),
+  uniqueIndex('llm_vis_bench_samples_fingerprint_unique').on(table.ownerUserId, table.requestFingerprint),
+  index('llm_vis_bench_samples_run_status_idx').on(table.benchmarkRunId, table.status),
 ])
 
 /** Append-only owner decisions for imported manual snapshots. Legacy booleans are never authority. */
