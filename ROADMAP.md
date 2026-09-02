@@ -19,20 +19,25 @@
 | 金流(國際) | Stripe | 已有帳號(細節待補) | — | dashboard.stripe.com |
 | 金流(台灣) | 綠界或藍新(未定,屆時由 PM 評選) | 未申請 | — | — |
 
-- 慣例:main 單線開發;conventional commits(feat/fix/docs/test);測試全 mock 不打真服務;migration 只產生、套用要另外批准;外部服務一律自己打 API(fetch 可注入假的),不裝供應商 SDK(Cloudflare、Google、Stripe 都照做)
+- 慣例:main 單線開發;conventional commits(feat/fix/docs/test);測試全 mock 不打真服務;migration 只產生、套用要另外批准;外部服務一律自己打 API(fetch 可注入假的),不裝供應商 SDK(Cloudflare、Google、Stripe 都照做);資料表與欄位名一律駝峰(跟既有 173 張表一致);路由型別表已滿,每個新引擎只准 1 個路由檔(萬用路由自己分派),多一個 typecheck 就爆
 - 驗收基準:GEO_ENGINEERING_SPEC_v2.0,標準是「完整商業產品,不是 MVP」;完成度細節看 PROJECT_MAP.md §8
 
 ## 進度
-- 目標:觀測站統計與 0036 修正 09-02 併入 main,正式資料庫套到 37 支、線上觀測站頁面應該恢復(沒開頁驗);介入閉環(對話 5)與 Stripe 收款(對話 6)在跑;下一個開整合期(benchmark 續跑掛排程)
-- 🔵 進行中(對話 6):Stripe 真收款接上訂購鏈 — 客戶付錢 → 確認收到 → 觸發開站;09-02 發包,不裝套件自己打 API
-- 🔵 進行中(對話 5):介入與實驗閉環 — 改動登記簿、部署/重抓確認、實驗結果、refresh 佇列,綁到既有 baseline 前後量測;Phase 4 出口;09-01 發包
+- 目標:讓老闆以付費客戶身分把一鍵建站完整走一遍(付款 → 開站 → 用一句話改網站);對話 5、6、7 併進 main + Render 設好環境變數就能試;現在開出來的是 *.pages.dev 網址,自動買網域還沒做
+- 🔵 進行中(對話 6):Stripe 真收款接上訂購鏈 — 客戶付錢 → 確認收到 → 觸發開站 → 退款/爭議停站 → 對帳;09-02 發包,不裝套件自己打 API;09-02 交件 9e97647 + 8cf5aea(單一路由檔、webhook 內容上限 1MB、手冊補 Origin;PM 試併 main 型別 0 錯、8 測試檔綠、37 檔全在 nuxt-app);跟對話 5 撞號 0037 → 退回:rebase 到新 main 重產 0038 + 補 Fresh Review 再交;真 Stripe 測試模式 NOT RUN
+- 🔵 進行中(對話 7):真實 AI 接百煉(Qwen)— GEO 內容生成真的用 Qwen 產草稿 + 建站後台「用一句話改網站」真的由 Qwen 規劃(現在是寫死規則假裝的);key 只放 .env 與 Render,不進對話;09-02 發包
 - 🟡 待驗收:GA4 收數 — 09-01 PM 真瀏覽器實測追蹤碼會發送(程式載入+page_view 送出;先前抓原始碼的檢法不適用動態載入);等老闆開 GA4 即時報表看到數字回報,就點亮
-- ⚪ 排隊 1:整合期 — 觀測站 benchmark 續跑掛上排程(對話 4 已交件,可開:nuxt.config.ts 加一行排程 + 一支 task);AI 編輯接真 LLM(broker 落地了、檔案跟 Stripe 不同,可以另開);約 60 條沒前端的 API 挑關鍵的補畫面
-- ⚪ 排隊 2:煙測 — 拿 doalignment.com 真資料跑一次爬蟲證據+知識底座+觀測站 benchmark(0034–0036 都套好了,可以開);正式環境開真開站要先設 broker 環境變數(照 nuxt-app/MANAGED_SITE_INTERNAL_BROKER_SETUP_V1.md)並跑一次 DNS TXT 所有權驗證(目前 NOT RUN);自有模型訓練照交接規則排最後
+- 🟡 待老闆按一下:0037_legal_pete_wisdom 套到正式資料庫 — 介入閉環程式已在 main 推上線,7 張新表還沒開;PM 的自動套用被安全閘擋住,指令已給老闆按 Run;套完回報 PM 核對(預期 38 支、181 張表)
+- ⚪ 排隊 1:客戶完整走一遍 — 5、6、7 併進 main 後,老闆在 Render 設環境變數(換新的 Cloudflare 金鑰、百煉 key、Stripe 測試金鑰,照 nuxt-app/MANAGED_SITE_INTERNAL_BROKER_SETUP_V1.md 與各交件說明)、跑一次 DNS TXT 所有權驗證(目前 NOT RUN),PM 給逐步試跑清單;走完再決定要不要做自動買網域
+- ⚪ 排隊 2:整合期 — 觀測站 benchmark 續跑掛上排程(nuxt.config.ts 加一行 + 一支 task);拿 doalignment.com 真資料實跑爬蟲證據+知識底座+觀測站 benchmark(0034–0036 都套好了);約 60 條沒前端的 API 挑關鍵的補畫面;自有模型訓練照交接規則排最後
 - 🔴 老闆要做(安全):Backblaze 刪掉 Application Key「discoverystack-vault」並重產 Master Key(B2 已棄用);Cloudflare 的 R2 鑰匙與 Pages token 出現過在對話 1 聊天裡,重產後貼給對話 1 更新 .env;Cloudflare 測試痕跡可刪(Pages 專案 ds-o1-p1 + 一個 preview 部署、R2/B2 桶裡的測試小檔)
-- 另外掛著:換掉臨時登入密碼(正式前,直接在 Render 改環境變數);Render 免費方案會睡 → 排程睡著時不會跑;正式網域還沒買;5 個孤兒引擎逐一給歸屬;root db:push 死 script;CI 的 NUXT_BUILD_TYPECHECK=false
+- 另外掛著:換掉臨時登入密碼(正式前,直接在 Render 改環境變數);Render 免費方案會睡 → 排程睡著時不會跑;正式網域還沒買;5 個孤兒引擎逐一給歸屬;root db:push 死 script;CI 的 NUXT_BUILD_TYPECHECK=false;POST 請求大小只靠 Content-Length 標頭擋(沒標頭的分段傳輸擋不到,建站編輯器與介入引擎都一樣,全專案統一處理);路由額度只剩約 1 個引擎的份(PM 實測:對話 5、6 都併後再加 1 個萬用路由還過,對話 7 之後就滿;升級 Nuxt/Nitro 或改設定要老闆拍板)
 
 ## 已拍板
+- 2026-09-02 撞號 0037 先後:先併對話 5(Fresh Review 已過、改了四輪不再拖),Stripe rebase 到新 main 重產 0038 並補 Fresh Review 後再併;路由額度 PM 實測:兩邊都併後再加 1 個萬用路由還過,對話 7 之後就滿
+- 2026-09-02 AI 供應商做成可換:程式只認「OpenAI 相容端點」,端點、key、模型名全用環境變數;白名單先放百煉(國際版、中國版)+ api.openai.com;之後換 OpenAI 或別家只改環境變數,不改程式(對話 7 補充要求)
+- 2026-09-02 下一階段目標改成「老闆以付費客戶身分完整走一遍一鍵建站」;真實 AI 用百煉(Qwen)接,提前另開對話 7 跟 5、6 並行(檔案不撞);API key 只放本機 .env 和 Render 環境變數,絕不貼進任何對話
+- 2026-09-02 Google 重抓確認的查詢額度只算「真的問到 Google 並拿到答案」的次數;失敗不算額度,但同一頁同一天失敗 3 次就停到隔天並記原因,避免無限重試(對話 5 交件小缺口,PM 拍板一起修、不另開單)
 - 2026-09-02 benchmark 建立當下把品牌名、別名、網域跟對手名冊一起凍進快照,之後續跑、重算、比較一律用凍結值;改專案網域只影響新建的 benchmark(對話 4 Fresh Review 第三條,PM 拍板一起修、不另開單)
 - 2026-09-02 Stripe 不裝官方套件、自己打它的 API(跟全案其他外部服務一致,測試好換假的);條件:webhook 簽章自己驗(拿原始內容算 HMAC、時間差 5 分鐘內、比對用等時法)、每次呼叫固定 Stripe-Version、建付款頁帶 Idempotency-Key
 - 2026-09-02 建站倉庫改用 Cloudflare R2(Backblaze B2 不接受程式送的防覆蓋標頭、回 501,放棄);客戶站部署用 Cloudflare Pages 直接上傳;仲介服務做在程式裡(in-process),不另開一台服務
@@ -54,6 +59,7 @@
 - (日期不詳)不從零訓練通用大語言模型;自有模型只學「哪裡有問題、先改什麼、什麼有效」
 
 ## 已完成
+- 2026-09-02 介入與實驗閉環併入 main(對話 5 交件 3b7d298:改動登記簿+事件流水、部署/重抓確認(沒問到 Google 前不給結論、回 409)、實驗結果一定附樣本數與因果免責、refresh 佇列可調門檻、已取消的不進佇列、超過 200 筆分頁走完;改四輪後 Fresh Review 過;PM 驗收:43 檔全在 nuxt-app、合併後型別 0 錯、17 測試檔綠、識別字政策通過;合併 commit eb97bc2 推兩邊;0037_legal_pete_wisdom(7 張表)待老闆套;真 Google 呼叫 NOT RUN)
 - 2026-09-02 0036 修好併入 main、正式資料庫套到 37 支(對話 4 修:兩個 json 欄位改 $defaultFn、還原到 0035 重產 0036_silent_stranger、加一條「migration 裡 json 欄位不准字面預設值」的測試;PM 驗收:6 個檔案全在觀測站地盤、migration 與 benchmark 測試綠、識別字政策通過;PM 用 drizzle-kit 重套,36→37 支、170→174 張表,4 張 benchmark 表與 5 個新欄位都在;線上觀測站頁面應該恢復,沒開頁驗)
 - 2026-09-02 正式資料庫套用 0034(爬蟲證據)與 0035(知識底座):老闆批准、PM 用 drizzle-kit 依序套,34→36 支、150→170 張表,套前套後都查過;0036 第一版被 TiDB 擋下,修好後另行套上(見上一行)
 - 2026-09-02 觀測站可重複 benchmark 併入 main(對話 4 交件:同一問題重複跑 N 次、樣本數+信賴區間、prompt 版本化、對手名冊、引用新鮮度、品牌名+網域凍進快照;Fresh Review B 三條備註修畢;PM 驗收:範圍乾淨(45 檔全在觀測站地盤)、合併後型別檢查 0 錯、正式 build 成功、163 測試檔全綠;main 由對話 4 快轉到合併 commit 2188dd5 並推兩邊,PM 核實本機與兩個 GitHub 一致;真 AI 平台呼叫、引用網址真抓取 NOT RUN;0036 修好後套上)
