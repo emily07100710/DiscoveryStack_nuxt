@@ -23,13 +23,12 @@
 - 驗收基準:GEO_ENGINEERING_SPEC_v2.0,標準是「完整商業產品,不是 MVP」;完成度細節看 PROJECT_MAP.md §8
 
 ## 進度
-- 目標:觀測站統計 09-02 併入 main;介入閉環(對話 5)與 Stripe 收款(對話 6)在跑;0036 修好重套,讓線上觀測站頁面恢復
+- 目標:觀測站統計與 0036 修正 09-02 併入 main,正式資料庫套到 37 支、線上觀測站頁面應該恢復(沒開頁驗);介入閉環(對話 5)與 Stripe 收款(對話 6)在跑;下一個開整合期(benchmark 續跑掛排程)
 - 🔵 進行中(對話 6):Stripe 真收款接上訂購鏈 — 客戶付錢 → 確認收到 → 觸發開站;09-02 發包,不裝套件自己打 API
 - 🔵 進行中(對話 5):介入與實驗閉環 — 改動登記簿、部署/重抓確認、實驗結果、refresh 佇列,綁到既有 baseline 前後量測;Phase 4 出口;09-01 發包
 - 🟡 待驗收:GA4 收數 — 09-01 PM 真瀏覽器實測追蹤碼會發送(程式載入+page_view 送出;先前抓原始碼的檢法不適用動態載入);等老闆開 GA4 即時報表看到數字回報,就點亮
 - ⚪ 排隊 1:整合期 — 觀測站 benchmark 續跑掛上排程(對話 4 已交件,可開:nuxt.config.ts 加一行排程 + 一支 task);AI 編輯接真 LLM(broker 落地了、檔案跟 Stripe 不同,可以另開);約 60 條沒前端的 API 挑關鍵的補畫面
-- ⚪ 排隊 2:煙測 — 拿 doalignment.com 真資料跑一次爬蟲證據+知識底座+觀測站 benchmark(要先套 0034–0036,見 🔴);正式環境開真開站要先設 broker 環境變數(照 nuxt-app/MANAGED_SITE_INTERNAL_BROKER_SETUP_V1.md)並跑一次 DNS TXT 所有權驗證(目前 NOT RUN);自有模型訓練照交接規則排最後
-- 🔴 卡住(對話 4 修):0036 套不進正式資料庫 — 09-02 老闆批准後 PM 依序套,0034/0035 成功(36 支、170 張表),0036 第一句建表就被 TiDB 擋下(兩個 json 欄位 limitationCodes、aliases 寫了字面預設值 DEFAULT ('[]'),TiDB 不吃,跟 09-01 修過的老問題一樣),資料庫沒留下半套痕跡;修法:schema 改用 $defaultFn、還原成 0035 再重產 0036、加一條「migration 裡 json 欄位不准字面預設值」的測試;修好併進 main 後 PM 再套一次;套完前線上觀測站頁面仍會壞
+- ⚪ 排隊 2:煙測 — 拿 doalignment.com 真資料跑一次爬蟲證據+知識底座+觀測站 benchmark(0034–0036 都套好了,可以開);正式環境開真開站要先設 broker 環境變數(照 nuxt-app/MANAGED_SITE_INTERNAL_BROKER_SETUP_V1.md)並跑一次 DNS TXT 所有權驗證(目前 NOT RUN);自有模型訓練照交接規則排最後
 - 🔴 老闆要做(安全):Backblaze 刪掉 Application Key「discoverystack-vault」並重產 Master Key(B2 已棄用);Cloudflare 的 R2 鑰匙與 Pages token 出現過在對話 1 聊天裡,重產後貼給對話 1 更新 .env;Cloudflare 測試痕跡可刪(Pages 專案 ds-o1-p1 + 一個 preview 部署、R2/B2 桶裡的測試小檔)
 - 另外掛著:換掉臨時登入密碼(正式前,直接在 Render 改環境變數);Render 免費方案會睡 → 排程睡著時不會跑;正式網域還沒買;5 個孤兒引擎逐一給歸屬;root db:push 死 script;CI 的 NUXT_BUILD_TYPECHECK=false
 
@@ -55,8 +54,9 @@
 - (日期不詳)不從零訓練通用大語言模型;自有模型只學「哪裡有問題、先改什麼、什麼有效」
 
 ## 已完成
-- 2026-09-02 正式資料庫套用 0034(爬蟲證據)與 0035(知識底座):老闆批准、PM 用 drizzle-kit 依序套,34→36 支、150→170 張表,套前套後都查過;0036 失敗見 🔴
-- 2026-09-02 觀測站可重複 benchmark 併入 main(對話 4 交件:同一問題重複跑 N 次、樣本數+信賴區間、prompt 版本化、對手名冊、引用新鮮度、品牌名+網域凍進快照;Fresh Review B 三條備註修畢;PM 驗收:範圍乾淨(45 檔全在觀測站地盤)、合併後型別檢查 0 錯、正式 build 成功、163 測試檔全綠;main 由對話 4 快轉到合併 commit 2188dd5 並推兩邊,PM 核實本機與兩個 GitHub 一致;真 AI 平台呼叫、引用網址真抓取 NOT RUN;migration 0036 未套用)
+- 2026-09-02 0036 修好併入 main、正式資料庫套到 37 支(對話 4 修:兩個 json 欄位改 $defaultFn、還原到 0035 重產 0036_silent_stranger、加一條「migration 裡 json 欄位不准字面預設值」的測試;PM 驗收:6 個檔案全在觀測站地盤、migration 與 benchmark 測試綠、識別字政策通過;PM 用 drizzle-kit 重套,36→37 支、170→174 張表,4 張 benchmark 表與 5 個新欄位都在;線上觀測站頁面應該恢復,沒開頁驗)
+- 2026-09-02 正式資料庫套用 0034(爬蟲證據)與 0035(知識底座):老闆批准、PM 用 drizzle-kit 依序套,34→36 支、150→170 張表,套前套後都查過;0036 第一版被 TiDB 擋下,修好後另行套上(見上一行)
+- 2026-09-02 觀測站可重複 benchmark 併入 main(對話 4 交件:同一問題重複跑 N 次、樣本數+信賴區間、prompt 版本化、對手名冊、引用新鮮度、品牌名+網域凍進快照;Fresh Review B 三條備註修畢;PM 驗收:範圍乾淨(45 檔全在觀測站地盤)、合併後型別檢查 0 錯、正式 build 成功、163 測試檔全綠;main 由對話 4 快轉到合併 commit 2188dd5 並推兩邊,PM 核實本機與兩個 GitHub 一致;真 AI 平台呼叫、引用網址真抓取 NOT RUN;0036 修好後套上)
 - 2026-09-02 一鍵建站第一次真的開出一站(broker 併入 main:程式內建仲介服務接 Cloudflare Pages + R2,真部署測試通過、公網讀回頁面;根因是打 Cloudflare 的三個呼叫跟真 API 不合,mock 測試看不出來;PM 驗收:範圍乾淨、合併後型別檢查 0 錯、正式 build 成功、159 測試檔全綠;DNS TXT 所有權驗證 NOT RUN;正式環境未設環境變數,開站功能線上未啟用)
 - 2026-09-01 Entity + Claim + Source 知識底座併入 main(三線並行第二個交件:15 張知識表 + 28 條 owner API + 後台頁,孤兒 JSON-LD 引擎接上、交付預覽會附 JSON-LD;PM 驗收:範圍乾淨、142 測試綠、型別檢查過、0035 只建知識表;對真資料實跑仍未做)
 - 2026-09-01 整站爬蟲/頁面證據 slice 併入 main(三線並行第一個交件:URL 清單+原始碼 vs 實際畫面比對+canonical/sitemap 稽核+最小結果頁;PM 驗收:範圍乾淨、21 測試綠、型別檢查過;對真站實跑仍是 opt-in 未跑)
