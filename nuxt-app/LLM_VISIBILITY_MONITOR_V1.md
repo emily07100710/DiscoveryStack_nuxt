@@ -8,7 +8,7 @@ Full provider responses are never persisted. Stored evidence is limited to hashe
 
 ## Durable entities
 
-The original project, query, run, observation, and review tables are extended by migration `0036_early_chimera.sql` with:
+The original project, query, run, observation, and review tables are extended by migration `0036_silent_stranger.sql` with:
 
 - `llmVisibilityPromptVersions`: immutable, one-based versions of normalized query text and hash. A query lazily receives v1 on first sync/use; normalized text changes append a version.
 - `llmVisibilityCompetitors`: owner/project-scoped display name, canonical key, aliases, optional canonical hostname, and active state. Deactivation never deletes history.

@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "4b763fbe-477f-4f08-846d-4ab533f55b18",
+  "id": "7758346d-001d-441f-b91f-da03238bc076",
   "prevId": "ae9afe06-6c23-44cf-a857-15cbe4835639",
   "tables": {
     "auditEvidenceLedger": {
@@ -12257,8 +12257,7 @@
           "type": "json",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
-          "default": "('[]')"
+          "autoincrement": false
         },
         "aggregateSnapshot": {
           "name": "aggregateSnapshot",
@@ -12717,8 +12716,7 @@
           "type": "json",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
-          "default": "('[]')"
+          "autoincrement": false
         },
         "domain": {
           "name": "domain",

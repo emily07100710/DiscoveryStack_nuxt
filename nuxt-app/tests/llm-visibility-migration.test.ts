@@ -75,3 +75,25 @@ describe('LLM visibility benchmark schema/migration alignment', () => {
     expect(schema).toContain("responseHash: varchar('responseHash'")
   })
 })
+
+describe('TiDB compatibility of generated migrations', () => {
+  const migrationsDir = join(root, 'server/database/migrations')
+  const sqlFiles = readdirSync(migrationsDir).filter(file => file.endsWith('.sql')).sort()
+
+  it('never gives a json column a literal DEFAULT in any migration SQL', () => {
+    expect(sqlFiles.length).toBeGreaterThan(0)
+    const offenders: string[] = []
+    for (const file of sqlFiles) {
+      for (const line of readFileSync(join(migrationsDir, file), 'utf8').split('\n')) {
+        if (/`[^`]+`\s+json\b[^;]*\bDEFAULT\b/iu.test(line)) offenders.push(`${file}: ${line.trim()}`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('declares json defaults in the Drizzle schema with $defaultFn instead of a literal default', () => {
+    expect(schema).toContain("limitationCodes: json('limitationCodes').notNull().$defaultFn(() => [])")
+    expect(schema).toContain("aliases: json('aliases').notNull().$defaultFn(() => [])")
+    expect(schema).not.toMatch(/json\('[^']+'\)(\.notNull\(\))?\.default\(/u)
+  })
+})
