@@ -9,14 +9,19 @@ type Workspace = {
   authority: Record<string, boolean>
   limitations: string[]
 }
+type ManagedSiteOrder = { id: number; status: string; createdAt: string; updatedAt: string; quote: { plan: string; currency: string; totalMinor: number; cadence: number } | null; release: { id: number; status: string } | null; payments: Array<{ receiptType: string; receiptStatus: string; externalReference: string | null; verifiedAt: string; checkoutUrl?: string }> }
+type OrdersResponse = { orders: ManagedSiteOrder[] }
 
 definePageMeta({ i18n: false, layout: 'owner' })
 useHead({ title: 'Managed Sites · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 
 const emptyWorkspace = (): Workspace => ({ readiness: { capabilities: [], liveReady: false, dryRunAllowed: true, mockedAllowed: false, truthfulBoundary: [] }, projects: [], nextSafeActions: [], executionModes: { dryRun: true, mocked: false, live: false }, authority: {}, limitations: [] })
 const workspaceEndpoint: string = '/api/managed-sites/live-connectors/workspace'
-const { data, pending, error, refresh } = await useAsyncData<Workspace>('managed-site-live-connectors', () => $fetch<Workspace>(workspaceEndpoint), { server: false, default: emptyWorkspace })
+const ordersEndpoint: string = '/api/managed-sites/payments/orders'
+const { data, pending, error, refresh: refreshWorkspace } = await useAsyncData<Workspace>('managed-site-live-connectors', () => $fetch<Workspace>(workspaceEndpoint), { server: false, default: emptyWorkspace })
+const { data: ordersData, pending: ordersPending, error: ordersError, refresh: refreshOrders } = await useAsyncData<OrdersResponse>('managed-site-orders', () => $fetch<OrdersResponse>(ordersEndpoint), { server: false, default: () => ({ orders: [] }) })
 const workspace = computed(() => data.value || emptyWorkspace())
+const orders = computed(() => ordersData.value?.orders || [])
 const saving = ref(false)
 const notice = ref('')
 const failure = ref('')
@@ -25,8 +30,13 @@ const form = reactive<{ capability: Capability; providerKey: string; readinessSt
 const conversion = reactive({ previewId: '', quoteId: '', leadIntentId: '', draftOrderId: '' })
 const domains = reactive<Record<number, string>>({})
 const rollbacks = reactive<Record<number, { fromReleaseId: string; toReleaseId: string }>>({})
+const checkoutUrls = reactive<Record<number, string>>({})
+const reconciliationReports = reactive<Record<number, string>>({})
 watchEffect(() => { for (const row of workspace.value.projects) rollbacks[row.project.id] ||= { fromReleaseId: '', toReleaseId: '' } })
 const capabilityLabels: Record<Capability, string> = { website_generator: 'AI 網站生成', payment: '付款', domain_registration: '網域註冊', dns_tls: 'DNS / TLS', deployment: '部署' }
+const paymentStatusLabels: Record<string, string> = { draft: '草稿', payment_pending: '等待付款', payment_verified: '付款已驗證', refunded: '已退款', disputed: '付款爭議中', cancelled: '已取消', expired: '已過期' }
+async function refresh() { await Promise.all([refreshWorkspace(), refreshOrders()]) }
+function checkoutUrlFor(order: ManagedSiteOrder): string { return checkoutUrls[order.id] || order.payments.find(payment => payment.receiptType === 'checkout_session_created')?.checkoutUrl || '' }
 
 async function configureProvider() {
   saving.value = true; notice.value = ''; failure.value = ''
@@ -99,7 +109,7 @@ async function performReleaseAction(row: any, release: any) {
   try {
     if (action === 'inspect_preview_gates') await $fetch(`${base}/gates`)
     else if (action === 'approve_preview') await $fetch(`${base}/approve`, { method: 'POST', body: { idempotencyKey: crypto.randomUUID() } })
-    else if (action === 'create_checkout_session') await $fetch(`${base}/checkout`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
+    else if (action === 'create_checkout_session') { const result: any = await $fetch(`${base}/checkout`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } }); if (release.draftOrderId && result.checkout?.url) checkoutUrls[release.draftOrderId] = result.checkout.url }
     else if (action === 'bind_verified_payment') await $fetch(`${base}/payment-bind`, { method: 'POST', body: { idempotencyKey: crypto.randomUUID() } })
     else if (action === 'quote_domain') await $fetch(`${base}/domain-quote`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
     else if (action === 'confirm_domain_purchase') await $fetch(`${base}/domain-purchase`, { method: 'POST', body: { explicitConfirmation: true, executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
@@ -114,6 +124,32 @@ async function performReleaseAction(row: any, release: any) {
   } catch (caught: any) { operationStates[key] = release.status === 'retry_wait' ? 'retry_wait' : 'blocked'; failure.value = caught?.data?.message || caught?.message || 'Operation fail closed；沒有成功 authority 被保存。'; await refresh() }
 }
 
+async function createOrderCheckout(order: ManagedSiteOrder) {
+  if (!order.release) return
+  const project = workspace.value.projects.find(row => row.releases.some((release: any) => release.id === order.release!.id))
+  if (!project) return
+  const key = `order-checkout-${order.id}`; operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
+  try {
+    const result: any = await $fetch(`/api/managed-sites/projects/${project.project.id}/releases/${order.release.id}/checkout`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
+    checkoutUrls[order.id] = String(result.checkout?.url || '')
+    operationStates[key] = 'success'; notice.value = checkoutUrls[order.id] ? '付款連結已產生，可複製後傳給客戶。' : '付款連結 receipt 已更新。'
+    await refresh()
+  } catch (caught: any) { operationStates[key] = 'blocked'; failure.value = caught?.data?.message || '付款連結未產生；沒有付款狀態被變更。'; await refresh() }
+}
+
+async function reconcileOrder(order: ManagedSiteOrder) {
+  if (!order.release) return
+  const project = workspace.value.projects.find(row => row.releases.some((release: any) => release.id === order.release!.id))
+  if (!project) return
+  const key = `order-reconcile-${order.id}`; operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
+  try {
+    const result: any = await $fetch(`/api/managed-sites/payments/projects/${project.project.id}/releases/${order.release.id}/reconcile`, { method: 'POST', body: { idempotencyKey: crypto.randomUUID() } })
+    reconciliationReports[order.id] = `Stripe：${result.reported?.lifecycle || 'unknown'} · session ${result.reported?.checkoutStatus || 'unknown'} · payment ${result.reported?.paymentStatus || 'unknown'}${result.reported?.paymentIntentStatus ? ` · intent ${result.reported.paymentIntentStatus}` : ''}`
+    operationStates[key] = 'success'; notice.value = 'Stripe 核對證據已保存；只有 provider read 與既有狀態不一致時才交由唯一 webhook transition 處理。'
+    await refresh()
+  } catch (caught: any) { operationStates[key] = 'blocked'; failure.value = caught?.data?.message || 'Stripe 核對失敗；本地付款狀態未改變。'; await refresh() }
+}
+
 const statusClass = (status: string) => status === 'verified' || status === 'live_verified' || status === 'geo_active' ? 'status status--ready' : status === 'blocked' || status === 'failed' || status === 'retry_wait' ? 'status status--blocked' : 'status'
 </script>
 
@@ -121,10 +157,11 @@ const statusClass = (status: string) => status === 'verified' || status === 'liv
   <main class="workbench">
     <header class="hero">
       <div><p class="eyebrow">OWNER ONLY / LIVE CONNECTORS V1</p><h1>Managed AI Website + GEO</h1><p>這裡顯示 provider、生成候選、付款、網域、DNS/TLS、部署與 GEO 啟用的真實 receipt 狀態。意圖、configured 或瀏覽器回傳都不算成功。</p></div>
-      <button type="button" :disabled="pending || saving" @click="refresh">重新整理</button>
+      <button type="button" :disabled="pending || ordersPending || saving" @click="refresh">重新整理</button>
     </header>
 
     <p v-if="error" class="alert alert--error">Owner workspace 無法載入；沒有任何外部操作被執行。</p>
+    <p v-if="ordersError" class="alert alert--error">訂單清單無法載入；沒有任何付款狀態被推定。</p>
     <p v-if="notice" class="alert" role="status">{{ notice }}</p>
     <p v-if="failure" class="alert alert--error" role="alert">{{ failure }}</p>
 
@@ -141,6 +178,14 @@ const statusClass = (status: string) => status === 'verified' || status === 'liv
           <p v-if="operationStates[`verify-${item.capability}`]" class="muted">operation: {{ operationStates[`verify-${item.capability}`] }}</p>
         </article>
       </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title"><div><p class="eyebrow">ORDERS</p><h2>Owner-scoped 付款訂單</h2><p class="muted">只顯示 server quote、release 與 reduced Stripe evidence；不顯示 credential 或任意 receipt metadata。</p></div><span class="status">{{ orders.length }} 筆</span></div>
+      <div v-if="orders.length" class="table-wrap"><table><thead><tr><th>Order</th><th>付款狀態</th><th>方案 / 金額</th><th>Release</th><th>Stripe evidence</th><th>Owner action</th></tr></thead><tbody>
+        <tr v-for="order in orders" :key="order.id"><td>#{{ order.id }}<br><span class="muted">{{ order.createdAt }}</span></td><td><span :class="statusClass(order.status)">{{ paymentStatusLabels[order.status] || order.status }}</span></td><td>{{ order.quote ? `${order.quote.plan} · ${order.quote.totalMinor} ${order.quote.currency} · ${order.quote.cadence} 天` : 'quote unavailable' }}</td><td>{{ order.release ? `#${order.release.id} · ${order.release.status}` : '尚未連結' }}</td><td><p v-for="payment in order.payments" :key="`${payment.receiptType}-${payment.externalReference}-${payment.verifiedAt}`" class="evidence-line">{{ payment.receiptType }} · {{ payment.receiptStatus }}<br><span class="selectable">{{ payment.externalReference || '無 object id' }}</span> · {{ payment.verifiedAt }}</p><p v-if="reconciliationReports[order.id]" class="muted">{{ reconciliationReports[order.id] }}</p></td><td><button type="button" :disabled="!order.release || operationStates[`order-checkout-${order.id}`] === 'loading'" @click="createOrderCheckout(order)">{{ operationStates[`order-checkout-${order.id}`] === 'loading' ? '產生中…' : '產生付款連結' }}</button> <button type="button" :disabled="!order.release || !order.payments.some(payment => payment.receiptType === 'checkout_session_created') || operationStates[`order-reconcile-${order.id}`] === 'loading'" @click="reconcileOrder(order)">{{ operationStates[`order-reconcile-${order.id}`] === 'loading' ? '核對中…' : '向 Stripe 核對' }}</button><p v-if="checkoutUrlFor(order)" class="selectable checkout-url">{{ checkoutUrlFor(order) }}</p></td></tr>
+      </tbody></table></div>
+      <p v-else class="muted">目前沒有 owner-scoped draft order。</p>
     </section>
 
     <section class="panel">
@@ -184,5 +229,5 @@ const statusClass = (status: string) => status === 'verified' || status === 'liv
 </template>
 
 <style scoped>
-.workbench{padding:3rem clamp(1rem,4vw,4rem);display:grid;gap:1.2rem}.hero,.section-title{display:flex;justify-content:space-between;align-items:flex-end;gap:1rem}.hero{padding:2rem;border-radius:1rem;background:#121b2a;color:#fff}.hero p{max-width:55rem;color:#bdc8d7;line-height:1.65}.eyebrow{margin:0 0 .45rem;color:#5572a8;font:800 .68rem/1.2 ui-monospace,monospace;letter-spacing:.12em}.hero .eyebrow{color:#8eb7ec}h1{margin:0;font-size:clamp(2rem,5vw,4rem)}h2,h3{margin:.2rem 0}.panel{padding:1.4rem;border:1px solid #d9e0e8;border-radius:.9rem;background:#fff}.capability-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.75rem;margin-top:1rem}.card{padding:1rem;border:1px solid #e1e6ec;border-radius:.7rem}.status{display:inline-flex;padding:.25rem .5rem;border-radius:999px;background:#edf1f5;color:#46566e;font:800 .65rem/1.2 ui-monospace,monospace}.status--ready{background:#e3f4e9;color:#1f6a3b}.status--blocked{background:#fff0e6;color:#9a4e19}.muted{color:#6e7b8d}.config-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.8rem;margin-top:1rem}.config-form label{display:grid;gap:.35rem;color:#4a586b;font-size:.78rem}.config-form input,.config-form select{width:100%;padding:.7rem;border:1px solid #ccd5df;border-radius:.5rem;background:#fff}.config-form button,.hero button,.section-title button{align-self:end;border:0;border-radius:.55rem;padding:.75rem 1rem;background:#315bd6;color:#fff;font-weight:800}.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem;margin-top:1rem}.summary-grid div{display:grid;padding:.8rem;border-radius:.6rem;background:#f2f5f8}.summary-grid strong{font-size:1.5rem}.summary-grid span{color:#6e7b8d;font-size:.72rem}.table-wrap{overflow:auto;margin-top:1rem}table{width:100%;border-collapse:collapse;font-size:.76rem}th,td{padding:.65rem;text-align:left;border-bottom:1px solid #e4e8ed;white-space:nowrap}.attempts{margin-top:1rem;padding:1rem;border-radius:.6rem;background:#fff5ec;color:#704421}.alert{padding:.8rem 1rem;border-radius:.6rem;background:#e5f1ff}.alert--error{background:#ffebe8;color:#8d3027}.boundary{color:#5d6878;font-size:.78rem;line-height:1.6}@media(max-width:1100px){.capability-grid{grid-template-columns:repeat(2,1fr)}.config-form{grid-template-columns:1fr 1fr}}@media(max-width:700px){.hero,.section-title{display:block}.capability-grid,.config-form,.summary-grid{grid-template-columns:1fr}.hero button,.section-title button{margin-top:1rem}}
+.workbench{padding:3rem clamp(1rem,4vw,4rem);display:grid;gap:1.2rem}.hero,.section-title{display:flex;justify-content:space-between;align-items:flex-end;gap:1rem}.hero{padding:2rem;border-radius:1rem;background:#121b2a;color:#fff}.hero p{max-width:55rem;color:#bdc8d7;line-height:1.65}.eyebrow{margin:0 0 .45rem;color:#5572a8;font:800 .68rem/1.2 ui-monospace,monospace;letter-spacing:.12em}.hero .eyebrow{color:#8eb7ec}h1{margin:0;font-size:clamp(2rem,5vw,4rem)}h2,h3{margin:.2rem 0}.panel{padding:1.4rem;border:1px solid #d9e0e8;border-radius:.9rem;background:#fff}.capability-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.75rem;margin-top:1rem}.card{padding:1rem;border:1px solid #e1e6ec;border-radius:.7rem}.status{display:inline-flex;padding:.25rem .5rem;border-radius:999px;background:#edf1f5;color:#46566e;font:800 .65rem/1.2 ui-monospace,monospace}.status--ready{background:#e3f4e9;color:#1f6a3b}.status--blocked{background:#fff0e6;color:#9a4e19}.muted{color:#6e7b8d}.config-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.8rem;margin-top:1rem}.config-form label{display:grid;gap:.35rem;color:#4a586b;font-size:.78rem}.config-form input,.config-form select{width:100%;padding:.7rem;border:1px solid #ccd5df;border-radius:.5rem;background:#fff}.config-form button,.hero button,.section-title button{align-self:end;border:0;border-radius:.55rem;padding:.75rem 1rem;background:#315bd6;color:#fff;font-weight:800}.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem;margin-top:1rem}.summary-grid div{display:grid;padding:.8rem;border-radius:.6rem;background:#f2f5f8}.summary-grid strong{font-size:1.5rem}.summary-grid span{color:#6e7b8d;font-size:.72rem}.table-wrap{overflow:auto;margin-top:1rem}table{width:100%;border-collapse:collapse;font-size:.76rem}th,td{padding:.65rem;text-align:left;border-bottom:1px solid #e4e8ed;white-space:nowrap}.evidence-line{margin:.2rem 0}.selectable{user-select:text;font-family:ui-monospace,monospace}.checkout-url{max-width:28rem;white-space:normal;overflow-wrap:anywhere}.attempts{margin-top:1rem;padding:1rem;border-radius:.6rem;background:#fff5ec;color:#704421}.alert{padding:.8rem 1rem;border-radius:.6rem;background:#e5f1ff}.alert--error{background:#ffebe8;color:#8d3027}.boundary{color:#5d6878;font-size:.78rem;line-height:1.6}@media(max-width:1100px){.capability-grid{grid-template-columns:repeat(2,1fr)}.config-form{grid-template-columns:1fr 1fr}}@media(max-width:700px){.hero,.section-title{display:block}.capability-grid,.config-form,.summary-grid{grid-template-columns:1fr}.hero button,.section-title button{margin-top:1rem}}
 </style>

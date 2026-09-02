@@ -1,5 +1,5 @@
 import { createError } from 'h3'
-import { and, asc, desc, eq, isNull, lt, lte, or } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm'
 import { getDatabase } from '../../database'
 import {
   managedSiteConnectorAttempts,
@@ -273,6 +273,24 @@ export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSi
     async findReceiptByProviderEvent(providerKey, providerEventId) {
       const [row] = await database.select().from(managedSiteConnectorReceipts).where(and(eq(managedSiteConnectorReceipts.providerKey, providerKey), eq(managedSiteConnectorReceipts.providerEventId, providerEventId))).limit(1)
       return row || null
+    },
+    async findPaymentReceiptsByProviderObjectIds(providerKey, providerObjectIds) {
+      const ids = [...new Set(providerObjectIds)].slice(0, 20)
+      if (!ids.length) return []
+      const metadataId = (key: string) => sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${managedSiteConnectorReceipts.metadata}, ${`$.${key}`}))`
+      return database.select().from(managedSiteConnectorReceipts).where(and(
+        eq(managedSiteConnectorReceipts.capability, 'payment'),
+        eq(managedSiteConnectorReceipts.providerKey, providerKey),
+        inArray(managedSiteConnectorReceipts.receiptStatus, ['verified', 'ignored_out_of_order']),
+        or(
+          inArray(managedSiteConnectorReceipts.externalReference, ids),
+          inArray(metadataId('stripeCheckoutSessionId'), ids),
+          inArray(metadataId('stripePaymentIntentId'), ids),
+          inArray(metadataId('stripeChargeId'), ids),
+          inArray(metadataId('stripeInvoiceId'), ids),
+          inArray(metadataId('stripeSubscriptionId'), ids),
+        ),
+      )).orderBy(desc(managedSiteConnectorReceipts.verifiedAt), desc(managedSiteConnectorReceipts.id)).limit(20)
     },
     async findVerifiedDomainReceipt(canonicalDomain) {
       const [row] = await database.select().from(managedSiteConnectorReceipts).where(and(eq(managedSiteConnectorReceipts.canonicalDomain, canonicalDomain), eq(managedSiteConnectorReceipts.receiptStatus, 'verified'), or(eq(managedSiteConnectorReceipts.receiptType, 'domain_registered'), eq(managedSiteConnectorReceipts.receiptType, 'existing_site_ownership_verified')))).limit(1)

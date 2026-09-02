@@ -52,7 +52,8 @@ describe('managed-site connector CAS, provider race, and atomic domain claim bou
   })
 
   it('fails closed for unsupported verifier and non-server-allowlisted endpoint origins', () => {
-    expect(() => resolveManagedSiteProviderVerifier('stripe', 'payment')).toThrow()
+    expect(resolveManagedSiteProviderVerifier('stripe', 'payment')).toBeTypeOf('function')
+    expect(() => resolveManagedSiteProviderVerifier('unregistered-payment-provider', 'payment')).toThrow()
     expect(() => assertAllowedManagedSiteProviderOrigin('https://owner-supplied.com/v1', 'https://approved.com')).toThrow()
     expect(assertAllowedManagedSiteProviderOrigin('https://approved.com/v1', 'https://approved.com')).toBe('https://approved.com')
   })

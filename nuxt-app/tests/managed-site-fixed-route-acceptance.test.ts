@@ -13,8 +13,9 @@ import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering
 import { createLiveConnectorMemoryRepository } from './fixtures/managed-site/live-connectors-repository'
 import { createAuthoritativeManagedSiteReleaseFixture, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
 
+const savedPrivateOrigin = process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN
 beforeAll(() => { (globalThis as any).defineEventHandler = defineEventHandler; (globalThis as any).createError = createError })
-afterEach(() => { vi.useRealTimers(); setManagedSiteRouteDependencyFactoryForTests(null); setManagedSitePaymentWebhookDependenciesForTests(null); setManagedSitePublicOrderingRepositoryForTests(null) })
+afterEach(() => { vi.useRealTimers(); setManagedSiteRouteDependencyFactoryForTests(null); setManagedSitePaymentWebhookDependenciesForTests(null); setManagedSitePublicOrderingRepositoryForTests(null); if (savedPrivateOrigin === undefined) delete process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN; else process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN = savedPrivateOrigin })
 
 async function serve(handler: any, path: string) {
   const app = createApp(); const router = createRouter(); router.post(path, handler); app.use(router)
@@ -23,9 +24,12 @@ async function serve(handler: any, path: string) {
   return { origin, close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
 }
 
-async function serveRoutes(routes: { method: 'get' | 'post'; path: string; handler: any }[]) {
+async function serveRoutes(routes: { method: 'get' | 'post' | 'use'; path: string; handler: any }[]) {
   const app = createApp({ debug: false, onError: async (error, event) => { setResponseStatus(event, error.statusCode || 500, error.statusMessage); await send(event, JSON.stringify({ statusCode: error.statusCode || 500, statusMessage: error.statusMessage || 'Request failed.' }), 'application/json') } }); const router = createRouter()
-  for (const route of routes) router[route.method](route.path, route.handler)
+  for (const route of routes) {
+    if (route.method === 'use') router.use(route.path, route.handler)
+    else router[route.method](route.path, route.handler)
+  }
   app.use(router); const server = createServer(toNodeListener(app)); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const address = server.address(); return { origin: `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`, close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
 }
@@ -43,6 +47,7 @@ async function createRouteState() {
 
 describe('managed-site actual fixed H3 route acceptance', () => {
   it('executes the complete generated-site and existing-site journeys through fixed H3 handlers only', async () => {
+    delete process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN
     const line = await createRouteState(); const vault = createMemoryManagedSiteArtifactVault(); const paymentCredential = 'runtime-only-route-payment-key'; let qwenBlueprint: any = null; let probeCalls = 0; let generationCalls = 0
     const qwenFetch = (async (_url: string, init: RequestInit) => {
       const request = JSON.parse(String(init.body)); expect(init.redirect).toBe('error')
@@ -89,10 +94,11 @@ describe('managed-site actual fixed H3 route acceptance', () => {
       ['post', '/api/managed-sites/projects/:id/releases/:releaseId/ownership-verify', '../server/api/managed-sites/projects/[id]/releases/[releaseId]/ownership-verify.post'],
       ['post', '/api/managed-sites/projects/:id/releases/:releaseId/geo-activate', '../server/api/managed-sites/projects/[id]/releases/[releaseId]/geo-activate.post'],
     ] as const
-    const routes = await Promise.all(routeSpecs.map(async ([method, path, module]) => ({ method, path, handler: (await import(module)).default })))
+    const routes: { method: 'get' | 'post' | 'use'; path: string; handler: any }[] = await Promise.all(routeSpecs.map(async ([method, path, module]) => ({ method, path, handler: (await import(module)).default })))
+    routes.push({ method: 'use', path: '/api/managed-sites/payments/**', handler: (await import('../server/api/managed-sites/payments/[...path]')).default })
     const server = await serveRoutes(routes as any); const ownerHeaders = { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1' }
     const request = async (path: string, body: unknown, headers: Record<string, string> = ownerHeaders) => {
-      const response = await fetch(`${server.origin}${path}`, { method: 'POST', headers, body: JSON.stringify(body) }); const text = await response.text()
+      const response = await fetch(`${server.origin}${path}`, { method: 'POST', headers: { origin: server.origin, ...headers }, body: JSON.stringify(body) }); const text = await response.text()
       expect(response.headers.get('cache-control')).toContain('no-store'); expect(response.headers.get('x-robots-tag')).toContain('noindex'); expect(text).not.toContain('runtime-only-'); expect(text).not.toMatch(/x-discoverystack-provider-signature|authorization|rawBody|"stack"/iu)
       return { response, body: text ? JSON.parse(text) : null, text }
     }
@@ -121,6 +127,15 @@ describe('managed-site actual fixed H3 route acceptance', () => {
       return { previewId, previewAccessToken, quoteId, leadIntentId, draftOrderId, quote: quote.body.quote }
     }
     try {
+      const csrfRejectionHeaders: Record<string, string>[] = [
+        { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1' },
+        { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1', origin: 'https://foreign.example.invalid' },
+        { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1', origin: server.origin, 'sec-fetch-site': 'cross-site' },
+      ]
+      for (const headers of csrfRejectionHeaders) {
+        const rejected = await fetch(`${server.origin}/api/managed-sites/live-connectors/provider-configurations`, { method: 'POST', headers, body: '{}' })
+        expect(rejected.status).toBe(403)
+      }
       const catalog = await getRequest('/api/managed-sites/price-catalog'); expect(catalog.response.status).toBe(200); expect(catalog.body.version).toBe('managed-site-pricing-v1')
       const orderingLine = await createOrderingJourney('route-generated.acme.taipei', 'route-full')
       const prepurchaseBody = { previewId: orderingLine.previewId, quoteId: orderingLine.quoteId, leadIntentId: orderingLine.leadIntentId, draftOrderId: orderingLine.draftOrderId, idempotencyKey: 'route-full-prepurchase' }
@@ -141,10 +156,11 @@ describe('managed-site actual fixed H3 route acceptance', () => {
       const generated = await request(`/api/managed-sites/projects/${projectId}/releases/generated`, { generationCandidateId: generation.body.candidate.id, canonicalDomain: 'route-generated.acme.taipei', targetKey: 'production-primary', idempotencyKey: 'route-full-release' }); expect(generated.response.status).toBe(200); const releaseId = Number(generated.body.release.id)
       expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/checkout`, { executionMode: 'mocked', idempotencyKey: 'route-too-early-checkout' })).response.status).toBe(409)
       expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/preview-build`, { executionMode: 'mocked', idempotencyKey: 'route-full-preview' })).response.status).toBe(200)
-      const gatesResponse = await fetch(`${server.origin}/api/managed-sites/projects/${projectId}/releases/${releaseId}/gates`, { headers: { 'x-test-owner-session': 'owner-1' } }); expect(gatesResponse.status).toBe(200); expect(gatesResponse.headers.get('cache-control')).toContain('no-store'); const gates = await gatesResponse.json() as any; expect(gates.allAutomatedRequiredPassed).toBe(true); expect(gates.required).toHaveLength(5); expect(gates.humanReview).toMatchObject({ result: 'required', contentHashMatches: true })
+      const gatesResponse = await fetch(`${server.origin}/api/managed-sites/projects/${projectId}/releases/${releaseId}/gates`, { headers: { 'x-test-owner-session': 'owner-1', 'sec-fetch-site': 'same-origin' } }); expect(gatesResponse.status).toBe(200); expect(gatesResponse.headers.get('cache-control')).toContain('no-store'); const gates = await gatesResponse.json() as any; expect(gates.allAutomatedRequiredPassed).toBe(true); expect(gates.required).toHaveLength(5); expect(gates.humanReview).toMatchObject({ result: 'required', contentHashMatches: true })
       expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/approve`, { idempotencyKey: 'route-full-approve' })).response.status).toBe(200)
       expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/checkout`, { executionMode: 'mocked', idempotencyKey: 'route-full-checkout' }, { 'content-type': 'application/json', 'x-test-owner-session': 'owner-2' })).response.status).toBe(404)
       const checkout = await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/checkout`, { executionMode: 'mocked', idempotencyKey: 'route-full-checkout' }); expect(checkout.response.status).toBe(200)
+      expect((await request(`/api/managed-sites/payments/projects/${projectId}/releases/${releaseId}/reconcile`, { idempotencyKey: 'route-full-reconcile' })).response.status).toBe(503)
       expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/domain-quote`, { requestedDomain: 'route-generated.acme.taipei', executionMode: 'mocked', idempotencyKey: 'route-domain-before-payment' })).response.status).toBe(404)
       expect((await request(`/api/managed-sites/projects/${projectId}/releases/${releaseId}/deploy`, { executionMode: 'mocked', idempotencyKey: 'route-wrong-content', contentHash: 'f'.repeat(64) })).response.status).toBe(422)
       const paymentConfiguration = await line.live.repository.findProviderConfiguration(1, 'payment'); const checkoutReceipt = line.live.state.receipts.find(row => row.receiptType === 'checkout_session_created' && row.releaseId === releaseId)!
@@ -182,6 +198,7 @@ describe('managed-site actual fixed H3 route acceptance', () => {
   })
 
   it('enforces owner session, exact path scope, strict fields, safe order, and redacted response at the checkout handler', async () => {
+    delete process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(managedSiteFixedNow)
     const line = await createAuthoritativeManagedSiteReleaseFixture({ createCheckout: false })
@@ -194,13 +211,13 @@ describe('managed-site actual fixed H3 route acceptance', () => {
     const route = await serve(handler, '/api/managed-sites/projects/:id/releases/:releaseId/checkout')
     try {
       const url = `${route.origin}/api/managed-sites/projects/${line.prePurchase.project.id}/releases/${line.release.release.id}/checkout`
-      const unauthorized = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ executionMode: 'mocked', idempotencyKey: 'route-checkout-unauthorized' }) }); expect(unauthorized.status).toBe(401)
-      const unknown = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1' }, body: JSON.stringify({ executionMode: 'mocked', idempotencyKey: 'route-checkout-unknown', apiKey: 'forbidden-browser-value' }) }); expect(unknown.status).toBe(422)
-      const wrongScope = await fetch(`${route.origin}/api/managed-sites/projects/999/releases/${line.release.release.id}/checkout`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1' }, body: JSON.stringify({ executionMode: 'mocked', idempotencyKey: 'route-checkout-wrong-project' }) }); expect(wrongScope.status).toBe(404)
+      const unauthorized = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', origin: route.origin }, body: JSON.stringify({ executionMode: 'mocked', idempotencyKey: 'route-checkout-unauthorized' }) }); expect(unauthorized.status).toBe(401)
+      const unknown = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1', origin: route.origin }, body: JSON.stringify({ executionMode: 'mocked', idempotencyKey: 'route-checkout-unknown', apiKey: 'forbidden-browser-value' }) }); expect(unknown.status).toBe(422)
+      const wrongScope = await fetch(`${route.origin}/api/managed-sites/projects/999/releases/${line.release.release.id}/checkout`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1', origin: route.origin }, body: JSON.stringify({ executionMode: 'mocked', idempotencyKey: 'route-checkout-wrong-project' }) }); expect(wrongScope.status).toBe(404)
       expect(line.live.state.receipts.some(row => row.receiptType === 'generation_candidate_admitted')).toBe(true)
       expect(line.live.state.receipts.some(row => row.receiptType === 'preview_build_verified')).toBe(true)
       expect(line.live.state.receipts.some(row => row.receiptType === 'owner_preview_approved')).toBe(true)
-      const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1' }, body: JSON.stringify({ executionMode: 'mocked', idempotencyKey: 'route-checkout-success-001' }) }); expect(response.status).toBe(200)
+      const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1', origin: route.origin }, body: JSON.stringify({ executionMode: 'mocked', idempotencyKey: 'route-checkout-success-001' }) }); expect(response.status).toBe(200)
       expect(response.headers.get('cache-control')).toContain('no-store'); expect(response.headers.get('x-robots-tag')).toContain('noindex')
       const body = await response.text(); expect(body).toContain('checkout'); expect(body).not.toMatch(/credential|signature|secret|stack/iu)
       const ordered = line.live.state.receipts.map(row => row.receiptType); expect(ordered.indexOf('generation_candidate_admitted')).toBeLessThan(ordered.indexOf('preview_build_verified')); expect(ordered.indexOf('preview_build_verified')).toBeLessThan(ordered.indexOf('owner_preview_approved')); expect(ordered.indexOf('owner_preview_approved')).toBeLessThan(ordered.indexOf('checkout_session_created'))
@@ -208,6 +225,7 @@ describe('managed-site actual fixed H3 route acceptance', () => {
   })
 
   it('reaches the actual fixed provider configuration and owner-triggered Qwen verification handlers with mocked fetch', async () => {
+    delete process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN
     const line = await createAuthoritativeManagedSiteReleaseFixture(); let probeCalls = 0
     setManagedSiteRouteDependencyFactoryForTests(event => {
       if (getHeader(event, 'x-test-owner-session') !== 'owner-1') throw createError({ statusCode: 401, statusMessage: 'Owner session is required.' })
@@ -218,7 +236,7 @@ describe('managed-site actual fixed H3 route acceptance', () => {
     const app = createApp(); const router = createRouter(); router.post('/api/managed-sites/live-connectors/provider-configurations', configure); router.post('/api/managed-sites/live-connectors/providers/:capability/verify', verify); app.use(router)
     const server = createServer(toNodeListener(app)); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
     try {
-      const headers = { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1' }
+      const headers = { 'content-type': 'application/json', 'x-test-owner-session': 'owner-1', origin }
       const configured = await fetch(`${origin}/api/managed-sites/live-connectors/provider-configurations`, { method: 'POST', headers, body: JSON.stringify({ capability: 'website_generator', providerKey: 'bailian-qwen', readinessStatus: 'configured', credentialReference: 'vault:qwen-route-probe', transportConfiguration: { endpointOrigin: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus' }, idempotencyKey: 'route-qwen-configuration-001' }) }); expect(configured.status).toBe(200)
       const verified = await fetch(`${origin}/api/managed-sites/live-connectors/providers/website_generator/verify`, { method: 'POST', headers, body: '{}' }); expect(verified.status).toBe(200); expect(probeCalls).toBe(1)
       const response = await verified.text(); expect(response).not.toContain('runtime-only-route-qwen-key'); expect(response).not.toContain('OK'); expect((await line.live.repository.findProviderConfiguration(1, 'website_generator'))?.readinessStatus).toBe('verified')

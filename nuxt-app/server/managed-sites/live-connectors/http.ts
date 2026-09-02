@@ -1,4 +1,4 @@
-import { createError, getRouterParam, readBody, setResponseHeaders, type H3Event } from 'h3'
+import { createError, getRequestHeader, getRequestURL, getRouterParam, readBody, readRawBody, setResponseHeaders, type H3Event } from 'h3'
 import { getOwnerDatabaseUserId } from '../../audit/repository'
 import { parsePathId } from '../normalization'
 import { requireOwner } from '../../utils/auth'
@@ -31,6 +31,7 @@ export type ManagedSiteRouteDependencies = {
   paymentWebhookCredentialReference?: string
   paymentWebhookExecutionMode?: 'mocked' | 'live'
   paymentWebhookJointTransaction?: ManagedSiteJointTransaction
+  paymentWebhookClock?: () => Date
   geoActivator?: (...args: any[]) => Promise<any>
 }
 
@@ -63,16 +64,87 @@ export function privateManagedSiteHeaders(event: H3Event): void {
   setResponseHeaders(event, { 'cache-control': 'private, no-store, max-age=0', 'x-robots-tag': 'noindex, nofollow, noarchive', 'referrer-policy': 'no-referrer' })
 }
 
-export async function managedSiteOwnerContext(event: H3Event) {
+export async function managedSiteOwnerContext(event: H3Event, mutation = true) {
   privateManagedSiteHeaders(event)
+  if (mutation) assertSameOriginManagedSiteMutation(event)
   if (testDependencyFactory) return testDependencyFactory(event)
   const owner = await requireOwner(event)
   return { ownerUserId: await getOwnerDatabaseUserId(owner.openId), repository: getManagedSiteLiveConnectorRepository() }
 }
 
+/** Browsers omit Origin on same-origin GET, so only mutations may demand it. Mirrors server/system-factory/http.ts. */
+export function assertSameOriginManagedSiteMutation(event: H3Event): void {
+  const origin = getRequestHeader(event, 'origin') || ''
+  const configured = process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN || ''
+  const expected = configured ? (() => { try { return new URL(configured).origin } catch { throw createError({ statusCode: 503, statusMessage: 'Private managed-site origin is not configured correctly.' }) } })() : getRequestURL(event).origin
+  if (!origin || (() => { try { return new URL(origin).origin } catch { return '' } })() !== expected) throw createError({ statusCode: 403, statusMessage: 'Managed-site mutation requires an exact same-origin request.' })
+  const fetchSite = getRequestHeader(event, 'sec-fetch-site')
+  if (fetchSite && fetchSite !== 'same-origin') throw createError({ statusCode: 403, statusMessage: 'Cross-site managed-site mutation is not allowed.' })
+}
+
 /** Webhooks have no owner session. This seam exists only in NODE_ENV=test; production always resolves its server authority below the route. */
 export function managedSitePaymentWebhookContextForTests(): ManagedSiteRouteDependencies | null {
   return process.env.NODE_ENV === 'test' ? testPaymentWebhookDependencies : null
+}
+
+export const MANAGED_SITE_PAYMENT_WEBHOOK_MAX_BYTES = 1_000_000
+const H3_RAW_BODY = Symbol.for('h3RawBody')
+
+function oversizedManagedSitePaymentWebhook(): never {
+  throw createError({ statusCode: 413, statusMessage: 'Stripe webhook request body is too large.' })
+}
+
+export async function readBoundedManagedSitePaymentWebhookBody(event: H3Event, maxBytes = MANAGED_SITE_PAYMENT_WEBHOOK_MAX_BYTES): Promise<Buffer | undefined> {
+  const lengthHeader = getRequestHeader(event, 'content-length')
+  const normalizedLength = lengthHeader?.trim() || ''
+  if (/^\d+$/u.test(normalizedLength)) {
+    const declaredLength = Number(normalizedLength)
+    if (!Number.isSafeInteger(declaredLength) || declaredLength > maxBytes) oversizedManagedSitePaymentWebhook()
+  }
+
+  const request = event.node.req as typeof event.node.req & { [H3_RAW_BODY]?: unknown; rawBody?: unknown; body?: unknown }
+  // Keep this precedence identical to h3's readRawBody so an already materialized/cached body is never read from the consumed Node stream again.
+  const materializedBody = event._requestBody || event.web?.request?.body || request[H3_RAW_BODY] || request.rawBody || request.body
+  if (materializedBody) {
+    const raw = await readRawBody(event, false)
+    if (raw && raw.byteLength > maxBytes) oversizedManagedSitePaymentWebhook()
+    return raw
+  }
+
+  const declaredLength = /^\d+$/u.test(normalizedLength) ? Number(normalizedLength) : 0
+  const chunked = /\bchunked\b/iu.test(String(request.headers['transfer-encoding'] ?? ''))
+  if (!declaredLength && !chunked) return readRawBody(event, false)
+
+  const rawBody = new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let accumulatedBytes = 0
+
+    const cleanup = () => {
+      request.off('error', onError)
+      request.off('data', onData)
+      request.off('end', onEnd)
+    }
+    const onError = (error: Error) => { cleanup(); reject(error) }
+    const onData = (chunk: Uint8Array | string) => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      if (accumulatedBytes + bytes.byteLength > maxBytes) {
+        cleanup()
+        request.pause()
+        const destroyRequest = () => { if (!request.destroyed) request.destroy() }
+        event.node.res.once('finish', destroyRequest)
+        event.node.res.once('close', destroyRequest)
+        try { oversizedManagedSitePaymentWebhook() } catch (error) { reject(error) }
+        return
+      }
+      accumulatedBytes += bytes.byteLength
+      chunks.push(bytes)
+    }
+    const onEnd = () => { cleanup(); resolve(Buffer.concat(chunks, accumulatedBytes)) }
+
+    request.on('error', onError).on('data', onData).on('end', onEnd)
+  })
+  request[H3_RAW_BODY] = rawBody
+  return rawBody
 }
 
 export async function strictManagedSiteBody(event: H3Event, allowedFields: readonly string[]): Promise<Record<string, unknown>> {

@@ -36,6 +36,7 @@ export type PreviewRepository = {
   findLeadIntentByFingerprint(fingerprint: string): Promise<ManagedSiteLeadIntent | null>
   insertLeadIntent(input: Omit<ManagedSiteLeadIntent, 'id' | 'createdAt'>): Promise<ManagedSiteLeadIntent>
   findDraftOrderById(orderId: number): Promise<ManagedSiteDraftOrder | null>
+  listDraftOrders(ownerUserId: number, options?: { status?: ManagedSiteDraftOrder['status']; limit?: number }): Promise<ManagedSiteDraftOrder[]>
   findDraftOrderByIdempotency(previewId: number, key: string): Promise<ManagedSiteDraftOrder | null>
   findDraftOrderByFingerprint(fingerprint: string): Promise<ManagedSiteDraftOrder | null>
   insertDraftOrder(input: Omit<ManagedSiteDraftOrder, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteDraftOrder>

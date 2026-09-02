@@ -33,15 +33,16 @@ export function assertManagedSiteCheckoutOrigin(value: unknown, raw?: string): s
   return origin
 }
 
-export function assertManagedSiteCheckoutUrl(value: unknown, configuredOrigin: string): string {
+export function assertManagedSiteCheckoutUrl(value: unknown, configuredOrigin: string, options: { allowFragment?: boolean } = {}): string {
   if (typeof value !== 'string' || value.length > 2048) throw createError({ statusCode: 409, statusMessage: 'Checkout URL is invalid or oversized.' })
   let parsed: URL
   try { parsed = new URL(value) } catch { throw createError({ statusCode: 409, statusMessage: 'Checkout URL is invalid.' }) }
-  if (parsed.username || parsed.password || parsed.hash || parsed.origin !== configuredOrigin || parsed.pathname.length > 1024 || parsed.search.length > 1024) throw createError({ statusCode: 409, statusMessage: 'Checkout URL is outside the configured exact checkout origin.' })
+  if (parsed.username || parsed.password || (parsed.hash && !options.allowFragment) || parsed.origin !== configuredOrigin || parsed.pathname.length > 1024 || parsed.search.length > 1024) throw createError({ statusCode: 409, statusMessage: 'Checkout URL is outside the configured exact checkout origin.' })
   for (const [key, parameter] of parsed.searchParams) {
     if (/^(?:redirect|redirect_uri|return|return_url|next|continue|callback|target|url)$/iu.test(key) || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/iu.test(parameter.trim())) throw createError({ statusCode: 409, statusMessage: 'Checkout URL contains a forbidden redirect-like parameter.' })
   }
-  const normalized = assertPublicHttpsUrl(value, 'Checkout URL')
-  if (new URL(normalized).origin !== configuredOrigin) throw createError({ statusCode: 409, statusMessage: 'Checkout URL origin is mismatched.' })
-  return normalized
+  const normalized = new URL(assertPublicHttpsUrl(value, 'Checkout URL'))
+  if (normalized.origin !== configuredOrigin) throw createError({ statusCode: 409, statusMessage: 'Checkout URL origin is mismatched.' })
+  if (options.allowFragment) normalized.hash = parsed.hash
+  return normalized.toString()
 }

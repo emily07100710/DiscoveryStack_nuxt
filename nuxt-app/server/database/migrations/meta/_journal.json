@@ -267,6 +267,13 @@
       "when": 1788344815481,
       "tag": "0037_legal_pete_wisdom",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "5",
+      "when": 1788377953485,
+      "tag": "0038_clammy_cerebro",
+      "breakpoints": true
     }
   ]
 }

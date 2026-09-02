@@ -3,7 +3,8 @@ import { createAuthenticatedBearerManagedSiteDeploymentAdapter } from './deploym
 import { createBailianQwenManagedSiteGenerationAdapter } from './adapters'
 import { resolveManagedSiteCredential, resolveManagedSiteProviderAuthority } from './provider-registry'
 import { createInternalDnsTlsBrokerHmacV1Adapter, createInternalDomainBrokerHmacV1Adapter, createInternalHmacV1CheckoutAdapter, createInternalOwnershipBrokerHmacV1Adapter } from './broker-adapters'
-import type { ManagedSiteLiveConnectorRepository } from './types'
+import { createStripeCheckoutSessionAdapter } from './stripe-adapters'
+import type { ManagedSiteCheckoutSessionAdapter, ManagedSiteLiveConnectorRepository } from './types'
 import { resolveManagedSiteBrokerFetchImpl } from './internal-broker/broker-fetch'
 
 export async function managedSiteLiveDeploymentAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) {
@@ -28,10 +29,24 @@ async function verifiedBroker(ownerUserId: number, capability: 'payment' | 'doma
   const transport = configuration?.transportConfiguration && typeof configuration.transportConfiguration === 'object' && !Array.isArray(configuration.transportConfiguration) ? configuration.transportConfiguration as Record<string, unknown> : {}
   if (!configuration || configuration.readinessStatus !== 'verified' || configuration.providerKey !== providerKey || !configuration.credentialReference || typeof transport.endpointOrigin !== 'string') throw createError({ statusCode: 503, statusMessage: `Verified ${providerKey} transport is not configured.` })
   if (configuration.configurationFingerprint !== authority.configurationFingerprint || configuration.providerKey !== authority.providerKey) throw createError({ statusCode: 409, statusMessage: `Provider ${capability} configuration changed during adapter resolution.` })
-  return { endpointOrigin: transport.endpointOrigin, ...(capability === 'payment' && typeof transport.checkoutOrigin === 'string' ? { checkoutOrigin: transport.checkoutOrigin } : {}), providerKey, credentialReference: configuration.credentialReference, resolveCredential: resolveManagedSiteCredential, providerAuthorityFingerprint: authority.authorityFingerprint, fetchImpl: resolveManagedSiteBrokerFetchImpl(transport.endpointOrigin) }
+  return { endpointOrigin: transport.endpointOrigin, ...(capability === 'payment' && typeof transport.checkoutOrigin === 'string' ? { checkoutOrigin: transport.checkoutOrigin } : {}), ...(capability === 'payment' && typeof transport.returnOrigin === 'string' ? { returnOrigin: transport.returnOrigin } : {}), providerKey, credentialReference: configuration.credentialReference, resolveCredential: resolveManagedSiteCredential, providerAuthorityFingerprint: authority.authorityFingerprint, fetchImpl: resolveManagedSiteBrokerFetchImpl(transport.endpointOrigin) }
 }
 
-export async function managedSiteLiveCheckoutAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalHmacV1CheckoutAdapter(await verifiedBroker(ownerUserId, 'payment', 'internal_hmac_v1', repository)) }
+type PaymentCheckoutAdapterFactory = (options: Awaited<ReturnType<typeof verifiedBroker>>) => ManagedSiteCheckoutSessionAdapter
+const PAYMENT_CHECKOUT_ADAPTERS: ReadonlyMap<string, PaymentCheckoutAdapterFactory> = new Map([
+  ['internal_hmac_v1', options => createInternalHmacV1CheckoutAdapter(options)],
+  ['stripe', options => {
+    if (typeof options.checkoutOrigin !== 'string' || typeof options.returnOrigin !== 'string') throw createError({ statusCode: 503, statusMessage: 'Verified Stripe checkout and return origins are not configured.' })
+    return createStripeCheckoutSessionAdapter({ ...options, checkoutOrigin: options.checkoutOrigin, returnOrigin: options.returnOrigin })
+  }],
+])
+
+export async function managedSiteLiveCheckoutAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) {
+  const configuration = await repository.findProviderConfiguration(ownerUserId, 'payment')
+  const factory = configuration ? PAYMENT_CHECKOUT_ADAPTERS.get(configuration.providerKey) : null
+  if (!configuration || !factory) throw createError({ statusCode: 503, statusMessage: 'Verified payment provider adapter is not registered.' })
+  return factory(await verifiedBroker(ownerUserId, 'payment', configuration.providerKey, repository))
+}
 export async function managedSiteLiveDomainAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalDomainBrokerHmacV1Adapter(await verifiedBroker(ownerUserId, 'domain_registration', 'internal-domain-broker-hmac-v1', repository)) }
 export async function managedSiteLiveDnsTlsAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalDnsTlsBrokerHmacV1Adapter(await verifiedBroker(ownerUserId, 'dns_tls', 'internal-dns-tls-broker-hmac-v1', repository)) }
 export async function managedSiteLiveOwnershipAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalOwnershipBrokerHmacV1Adapter(await verifiedBroker(ownerUserId, 'dns_tls', 'internal-dns-tls-broker-hmac-v1', repository)) }
