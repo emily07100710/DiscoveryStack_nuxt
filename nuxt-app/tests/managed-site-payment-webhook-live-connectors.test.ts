@@ -87,6 +87,10 @@ describe('managed-site raw-body payment lifecycle', () => {
     expect(refunded.ordering.state.orders.find(item => item.id === refunded.order.order.id)?.status).toBe('refunded')
   })
 
+  it('settles the greater receipt id when ignored refunds share an occurredAt timestamp', async () => {
+    const line = await webhookLineage(); const occurredAt = now.toISOString(); const first = { ...(await line.event('refund-tie-001', 'payment_refunded')), occurredAt }; const second = { ...(await line.event('refund-tie-002', 'payment_refunded')), occurredAt }; expect((await line.send(first)).effective).toBe(false); expect((await line.send(second)).effective).toBe(false); const firstReceipt = line.live.state.receipts.find(row => row.providerEventId === first.providerEventId)!; const secondReceipt = line.live.state.receipts.find(row => row.providerEventId === second.providerEventId)!; const greater = firstReceipt.id > secondReceipt.id ? firstReceipt : secondReceipt; const settled = await line.send(await line.event('success-refund-tie-001', 'checkout_succeeded')); expect(settled.event.metadata).toMatchObject({ settledByProviderEventId: greater.providerEventId, settledByReceiptFingerprint: greater.receiptFingerprint })
+  })
+
   it('rejects signed stale configuration and checkout authority lineage with zero joint-transaction writes', async () => {
     for (const patch of [
       { configurationFingerprint: 'f'.repeat(64) },
