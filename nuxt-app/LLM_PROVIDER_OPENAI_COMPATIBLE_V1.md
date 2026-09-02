@@ -31,6 +31,8 @@ An editor provider timeout, transport failure, malformed output, forbidden opera
 
 With the editor switch enabled, incomplete or non-allow-listed `NUXT_LLM_*` configuration is treated as `not_configured`: it uses the same fallback with `AI_PLANNER_FAILURE:not_configured`, consumes no quota, and is not persisted.
 
+Planner-provided warnings are sanitized and can never carry the reserved `AI_PLANNER_UNAVAILABLE` or `AI_PLANNER_FAILURE:*` markers; only the server-side fallback emits them, so provider output cannot make a request skip the budget commit or the stored proposal record.
+
 `pnpm test` uses mocked fetch implementations and makes no provider call. `pnpm test:real-llm` is explicitly opt-in and covers a minimal completion, editor planning, and GEO base draft.
 
 ## Manual test

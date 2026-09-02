@@ -9,6 +9,7 @@ import type { MediaAssetProjection } from '../media-vault/types'
 
 export const AI_EDITOR_LIMITS = Object.freeze({ maxRequestCharacters: 1200, maxContextBlocks: 100, maxContextMedia: 100, maxOperations: 20, maxOutputTokens: 2000, timeoutMs: 30_000, requestsPerDay: 100, inputTokensPerDay: 100_000, costMicrosPerDay: 1_000_000, costMicrosPerTokenCeiling: 10 })
 export const AI_PLANNER_UNAVAILABLE_WARNING = 'AI_PLANNER_UNAVAILABLE'
+export const AI_PLANNER_FAILURE_WARNING_PREFIX = 'AI_PLANNER_FAILURE:'
 const UNRELATED = /(?:股票|投資|作業|寫程式|programming|weather|天氣|recipe|食譜|通用聊天|general chat)/iu
 const DANGEROUS = /(?:付款|payment|billing|credential|密碼|權限|permission|domain|網域|法律聲明|醫療聲明|price|價格)/iu
 const INJECTION = /(?:ignore (?:all |previous )?instructions|system prompt|developer message|忽略(?:以上|先前|系統)指令|越獄|jailbreak)/iu
@@ -54,6 +55,8 @@ function strictProviderOperations(output: unknown, expectedVersion: number, iden
 }
 
 function sanitizedPlannerText(value: string): string { return value.replace(/[\u0000-\u001f\u007f-\u009f<>]/gu, ' ').replace(/\s+/gu, ' ').trim().slice(0, 500) }
+function isReservedPlannerWarning(value: string): boolean { const upper = value.toUpperCase(); return upper === AI_PLANNER_UNAVAILABLE_WARNING || upper.startsWith(AI_PLANNER_FAILURE_WARNING_PREFIX) }
+function plannerProvidedWarnings(values: string[]): string[] { return values.map(sanitizedPlannerText).filter(value => value !== '' && !isReservedPlannerWarning(value)) }
 function plannerMediaBindings(operation: PageCommand): unknown[] {
   if (operation.type === 'replace_media') return [operation.payload]
   if (operation.type !== 'add_block' || !operation.payload || typeof operation.payload !== 'object' || Array.isArray(operation.payload)) return []
@@ -98,7 +101,7 @@ export async function proposeAiWebsiteEdit(input: { actor: PageActor; page: Page
         for (const operation of operations) { await assertPlannerMediaAuthority(operation, input.actor, approvedMedia, input.resolveMedia); const result = applyCommandToDocument(dryRun, operation, input.actor, now); dryRun = result.page; combinedDiff = diffPages(page, dryRun); for (const id of [...result.diff.changedBlockIds, ...result.diff.addedBlockIds, ...result.diff.removedBlockIds]) affected.add(id) }
         const summary = sanitizedPlannerText(plannerValue.summary) || direct.summary
         const status: AiEditProposal['status'] = operations.length ? 'proposed' : 'clarification_required'
-        const warnings = [...plannerValue.warnings.map(sanitizedPlannerText).filter(Boolean), ...(INJECTION.test(request) ? ['PROMPT_INJECTION_TEXT_TREATED_AS_INERT'] : []), 'AI_NEVER_PUBLISHES_DIRECTLY']
+        const warnings = [...plannerProvidedWarnings(plannerValue.warnings), ...(INJECTION.test(request) ? ['PROMPT_INJECTION_TEXT_TREATED_AS_INERT'] : []), 'AI_NEVER_PUBLISHES_DIRECTLY']
         const stable = { proposalId: identity, ownerUserId: input.actor.ownerUserId, projectId: input.actor.projectId, pageId: page.pageId, intent: proposalIntent, summary, operations, diff: combinedDiff, warnings, affectedBlockIds: [...affected].sort(), expectedPageVersion: page.version, status, expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(), mayPublishDirectly: false as const, visionMode: 'metadata_only' as const }
         successfulProposal = { ...stable, proposalFingerprint: canonicalFingerprint(stable) }
       } catch (error) {

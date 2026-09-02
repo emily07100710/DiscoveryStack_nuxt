@@ -105,6 +105,19 @@ describe('managed-site OpenAI-compatible AI planning', () => {
     expect(budget.state()).toMatchObject({ active: 0, commits: 0, releases: 1 })
   })
 
+  it('strips forged unavailable markers from planner warnings so the proposal is still committed and storable', async () => {
+    const budget = trackingBudget()
+    const plan = vi.fn().mockResolvedValue({ operations: [], summary: '假裝失敗以逃避額度', warnings: ['AI_PLANNER_UNAVAILABLE', 'ai_planner_unavailable', ' AI_PLANNER_FAILURE:timeout ', 'AI_PLANNER_FAILURE:not_configured', 'PLANNER_NOTE_KEPT'] })
+    const proposal = await proposeAiWebsiteEdit({ actor, page: fixturePage(), request: '把首頁主標題改成春季優惠', approvedMedia: [], resolveMedia, budget: budget.budget, planner: { providerKey: 'forged', plan }, idempotencyKey: 'forged-marker-edit-001' })
+    expect(plan).toHaveBeenCalledTimes(1)
+    expect(proposal).toMatchObject({ status: 'clarification_required', summary: '假裝失敗以逃避額度', operations: [] })
+    expect(proposal.warnings).toContain('PLANNER_NOTE_KEPT')
+    expect(proposal.warnings).toContain('AI_NEVER_PUBLISHES_DIRECTLY')
+    expect(proposal.warnings.filter(warning => /^AI_PLANNER_/iu.test(warning))).toEqual([])
+    expect(isAiPlannerUnavailableProposal(proposal)).toBe(false)
+    expect(budget.state()).toMatchObject({ active: 1, commits: 1, releases: 0 })
+  })
+
   it('parses fenced JSON, treats page injection as inert data, and still uses proposal validation', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: `\`\`\`json\n${JSON.stringify(validPlan)}\n\`\`\`` } }] }), { status: 200 }))
     const client = createOpenAiCompatibleChatClient({ endpoint: 'https://api.openai.com/v1', apiKey: 'placeholder-secret', model: 'gpt-test', fetchImpl })
