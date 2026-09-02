@@ -106,6 +106,7 @@ export function analyzeProviderObservation(input: unknown): ProbeAnalysisResult 
       boundedExcerpt: buildBoundedExcerpt(response.responseText, plan.project),
       ...mentions,
       citationUrls: response.citationUrls,
+      ...(response.citationDates === undefined ? {} : { citationDates: response.citationDates }),
       citedDomain: resolveCitedDomain(response.citationUrls, plan.project.canonicalWebsiteDomain),
       ...(response.providerRequestId === undefined ? {} : { providerRequestId: response.providerRequestId }),
       evidenceLocator: buildEvidenceLocator(probe, responseHash),

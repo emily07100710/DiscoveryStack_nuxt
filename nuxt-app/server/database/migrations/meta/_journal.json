@@ -253,6 +253,13 @@
       "when": 1788290802820,
       "tag": "0035_tan_supernaut",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "5",
+      "when": 1788316869263,
+      "tag": "0036_early_chimera",
+      "breakpoints": true
     }
   ]
 }

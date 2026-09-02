@@ -72,6 +72,7 @@ export function syntheticSuccess(overrides: Partial<AdapterSuccess> = {}): Adapt
     modelLabel: overrides.modelLabel ?? 'synthetic-model-1',
     responseText: overrides.responseText ?? 'Acme is one option. RivalCo is another option.',
     citationUrls: overrides.citationUrls ?? ['https://example.com/guide', 'https://docs.example.net/source'],
+    ...(overrides.citationDates === undefined ? {} : { citationDates: overrides.citationDates }),
     observedAt: overrides.observedAt ?? '2026-08-24T00:00:00.000Z',
     providerRequestId: overrides.providerRequestId ?? 'request-synthetic-001',
     responseMetadata: overrides.responseMetadata ?? { finishReason: 'stop', inputTokens: 12, outputTokens: 18, totalTokens: 30 },

@@ -13,13 +13,27 @@ const routeFiles = [
   'server/api/llm-visibility/observations/[id]/review.post.ts',
   'server/api/llm-visibility/provider-observations.post.ts',
   'server/api/llm-visibility/projects/[id]/summary.get.ts',
+  'server/api/llm-visibility/queries/[id].patch.ts',
+  'server/api/llm-visibility/projects/[id]/competitors.get.ts',
+  'server/api/llm-visibility/projects/[id]/competitors.post.ts',
+  'server/api/llm-visibility/competitors/[id].patch.ts',
+  'server/api/llm-visibility/competitors/[id].delete.ts',
+  'server/api/llm-visibility/projects/[id]/registry/sync.post.ts',
+  'server/api/llm-visibility/benchmarks.post.ts',
+  'server/api/llm-visibility/benchmarks.get.ts',
+  'server/api/llm-visibility/benchmarks/[id].get.ts',
+  'server/api/llm-visibility/benchmarks/[id]/resume.post.ts',
+  'server/api/llm-visibility/benchmarks/compare.get.ts',
 ]
 
 describe('LLM visibility private API and projection contracts', () => {
-  it('exposes the seven owner-only routes including independent manual review', () => {
+  it('exposes all owner-only routes including benchmarks, registries and independent manual review', () => {
     const discovered = readdirSync(join(root, 'server/api/llm-visibility'), { recursive: true }).filter(name => typeof name === 'string' && name.endsWith('.ts')).map(String).sort()
-    expect(discovered).toEqual(['observations.post.ts', 'observations/[id]/review.post.ts', 'projects.post.ts', 'projects/[id]/summary.get.ts', 'provider-observations.post.ts', 'queries.post.ts', 'workspace.get.ts'])
-    for (const file of routeFiles) expect(read(file)).toContain('requireOwner(event)')
+    expect(discovered).toEqual(['benchmarks.get.ts', 'benchmarks.post.ts', 'benchmarks/[id].get.ts', 'benchmarks/[id]/resume.post.ts', 'benchmarks/compare.get.ts', 'competitors/[id].delete.ts', 'competitors/[id].patch.ts', 'observations.post.ts', 'observations/[id]/review.post.ts', 'projects.post.ts', 'projects/[id]/competitors.get.ts', 'projects/[id]/competitors.post.ts', 'projects/[id]/registry/sync.post.ts', 'projects/[id]/summary.get.ts', 'provider-observations.post.ts', 'queries.post.ts', 'queries/[id].patch.ts', 'workspace.get.ts'])
+    for (const file of routeFiles) {
+      expect(read(file)).toContain('requireOwner(event)')
+      expect(read(file)).toContain('setPrivateApiHeaders(event)')
+    }
   })
 
   it('keeps mutations strict, bounded and owner-scoped without external executor code', () => {
@@ -34,6 +48,9 @@ describe('LLM visibility private API and projection contracts', () => {
     expect(observationRoute).toContain("import { ownerManualObservationImportSchema }")
     expect(observationRoute).toContain('parseVisibilityBody(event, ownerManualObservationImportSchema)')
     expect(observationRoute).not.toContain('parseVisibilityBody(event, observationInputSchema)')
+    expect(read('server/api/llm-visibility/queries/[id].patch.ts')).toContain('parseVisibilityBody(event, visibilityQueryUpdateSchema)')
+    expect(read('server/api/llm-visibility/projects/[id]/competitors.post.ts')).toContain('parseVisibilityBody(event, visibilityCompetitorCreateSchema)')
+    expect(read('server/api/llm-visibility/competitors/[id].patch.ts')).toContain('parseVisibilityBody(event, visibilityCompetitorUpdateSchema)')
     expect(moduleFiles).not.toMatch(/globalThis\.fetch|from ['"]axios|puppeteer|playwright|page\.goto|browser\.newPage/i)
   })
 
@@ -52,7 +69,8 @@ describe('LLM visibility private API and projection contracts', () => {
     expect(page).toContain("content: 'noindex, nofollow, noarchive'")
     expect(page).toContain("$fetch<Workspace>('/api/llm-visibility/workspace')")
     expect(page).toContain('not_ready')
-    expect(page).toContain("observationMode: 'manual_verified'")
+    expect(page).not.toContain("observationMode: 'manual_verified'")
+    expect(page).not.toContain('verifiedByOwner: true')
     expect(page).not.toContain('<option value="provider_api_observation">')
     expect(page).not.toContain('observationForm.observationMode')
     expect(page).toContain('seen.has(canonicalKey)')

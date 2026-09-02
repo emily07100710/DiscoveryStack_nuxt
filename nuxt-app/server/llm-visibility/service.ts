@@ -3,11 +3,12 @@ import { VISIBILITY_LIMITATIONS, VisibilityContractError, providerObservationCan
 import type { ObservationCandidate } from '../llm-visibility-probes/types'
 import { canonicalHostname, canonicalizePublicHttps, citationMatchesDomain, normalizedPromptHash, validateObservationTimestamp } from './guards'
 import { countBrandMentions, countCompetitorMentions } from './matching'
-import { calculateVisibilityMetrics, type MetricObservation, type MetricQuery } from './metrics'
+import { calculateVisibilityMetrics, type MetricObservation, type MetricQuery, type VisibilityCompetitorRegistryEntry } from './metrics'
+import { createDefaultCitationHeadFetch, resolveCitationFreshness, type CitationHeadFetchOptions } from './citation-freshness'
 
 export type ProjectRecord = ProjectInput & { id: number, ownerUserId: number, canonicalDomain: string, status: 'active' | 'archived', createdAt?: Date | string, updatedAt?: Date | string }
 export type QueryRecord = QueryInput & { id: number, ownerUserId: number, promptHash: string, createdAt?: Date | string, updatedAt?: Date | string }
-export type RunRecord = { id: number, ownerUserId: number, projectId: number, provider: ObservationInput['provider'], modelLabel: string, observationMode: ObservationInput['observationMode'], status: ObservationInput['status'], observedAt: Date | string, requestFingerprint: string, limitationCode: string, createdAt?: Date | string }
+export type RunRecord = { id: number, ownerUserId: number, projectId: number, provider: ObservationInput['provider'], modelLabel: string, observationMode: ObservationInput['observationMode'], status: ObservationInput['status'], observedAt: Date | string, requestFingerprint: string, limitationCode: string, promptVersionId?: number | null, benchmarkRunId?: number | null, sampleIndex?: number | null, createdAt?: Date | string }
 
 export interface VisibilityWorkflowRepository {
   getProject(ownerUserId: number, projectId: number): Promise<ProjectRecord | null>
@@ -15,7 +16,8 @@ export interface VisibilityWorkflowRepository {
   getRun(ownerUserId: number, runId: number): Promise<RunRecord | null>
   findRunByFingerprint(ownerUserId: number, fingerprint: string): Promise<RunRecord | null>
   hasObservation(runId: number, queryId: number): Promise<boolean>
-  commitObservation(input: PersistableObservationInput & { ownerUserId: number, observedAtDate: Date, citedDomain: string | null }): Promise<{ runId: number, observationId: number }>
+  ensurePromptVersion?(query: QueryRecord): Promise<{ id: number, versionNumber: number }>
+  commitObservation(input: PersistableObservationInput & { ownerUserId: number, observedAtDate: Date, citedDomain: string | null, promptVersionId?: number, benchmarkRunId?: number, sampleIndex?: number, citationFreshness?: unknown }): Promise<{ runId: number, observationId: number }>
 }
 
 export function canonicalBrandKey(value: string): string {
@@ -100,10 +102,14 @@ export async function importObservationSnapshot(repository: VisibilityWorkflowRe
   } else if (await repository.findRunByFingerprint(ownerUserId, input.requestFingerprint)) {
     throw new VisibilityContractError(409, '此 owner 的 request fingerprint 已存在；請使用既有 runId 或更正輸入。')
   }
-  return repository.commitObservation({ ...input, observationMode: 'manual_verified', status: 'completed', verifiedByOwner: false, ownerUserId, observedAtDate, citedDomain })
+  const promptVersion = await repository.ensurePromptVersion?.(query)
+  const citationFreshness = await resolveCitationFreshness(input.citationUrls, { observedAt: observedAtDate })
+  return repository.commitObservation({ ...input, observationMode: 'manual_verified', status: 'completed', verifiedByOwner: false, ownerUserId, observedAtDate, citedDomain, promptVersionId: promptVersion?.id, citationFreshness })
 }
 
-export async function persistProviderObservationCandidate(repository: VisibilityWorkflowRepository, ownerUserId: number, candidate: Omit<ObservationCandidate, 'projectId' | 'queryId'> & { projectId: string | number, queryId: string | number }, now = new Date()) {
+export type ProviderObservationPersistenceOptions = { promptVersionId?: number, benchmarkRunId?: number, sampleIndex?: number, headFetch?: CitationHeadFetchOptions }
+
+export async function persistProviderObservationCandidate(repository: VisibilityWorkflowRepository, ownerUserId: number, candidate: Omit<ObservationCandidate, 'projectId' | 'queryId'> & { projectId: string | number, queryId: string | number }, now = new Date(), options: ProviderObservationPersistenceOptions = {}) {
   const parsed = providerObservationCandidateSchema.safeParse({
     ...candidate,
     persistenceStatus: 'persisted_secondary_only',
@@ -111,8 +117,8 @@ export async function persistProviderObservationCandidate(repository: Visibility
   })
   if (!parsed.success) throw new VisibilityContractError(422, 'Provider observation candidate is malformed or exceeds bounded evidence limits.')
   const input = parsed.data
-  const projectId = typeof input.projectId === 'number' ? input.projectId : /^\\d{1,12}$/u.test(input.projectId) ? Number(input.projectId) : 0
-  const queryId = typeof input.queryId === 'number' ? input.queryId : /^\\d{1,12}$/u.test(input.queryId) ? Number(input.queryId) : 0
+  const projectId = typeof input.projectId === 'number' ? input.projectId : /^\d{1,12}$/u.test(input.projectId) ? Number(input.projectId) : 0
+  const queryId = typeof input.queryId === 'number' ? input.queryId : /^\d{1,12}$/u.test(input.queryId) ? Number(input.queryId) : 0
   if (!Number.isSafeInteger(projectId) || projectId < 1 || !Number.isSafeInteger(queryId) || queryId < 1) throw new VisibilityContractError(422, 'Provider observation project/query identity is not a durable numeric reference.')
   const [project, query] = await Promise.all([repository.getProject(ownerUserId, projectId), repository.getQuery(ownerUserId, queryId)])
   if (!project || project.status !== 'active') throw new VisibilityContractError(404, '找不到此 owner 的 active LLM visibility project。')
@@ -120,6 +126,8 @@ export async function persistProviderObservationCandidate(repository: Visibility
   const observedAtDate = validateObservationTimestamp(input.observedAt, now)
   if (input.ownerScopeKey.trim().length === 0 || projectId !== project.id) throw new VisibilityContractError(422, 'Provider observation owner/project scope is invalid.')
   if (await repository.findRunByFingerprint(ownerUserId, input.requestFingerprint)) throw new VisibilityContractError(409, '此 owner 的 provider observation request fingerprint 已存在。')
+  const promptVersion = options.promptVersionId ? { id: options.promptVersionId } : await repository.ensurePromptVersion?.(query)
+  const citationFreshness = await resolveCitationFreshness(input.citationUrls, { observedAt: observedAtDate, providerDates: input.citationDates, headFetch: options.headFetch || createDefaultCitationHeadFetch() })
   return repository.commitObservation({
     projectId,
     queryId,
@@ -143,17 +151,22 @@ export async function persistProviderObservationCandidate(repository: Visibility
     verifiedByOwner: false,
     ownerUserId,
     observedAtDate,
+    promptVersionId: promptVersion?.id,
+    benchmarkRunId: options.benchmarkRunId,
+    sampleIndex: options.sampleIndex,
+    citationFreshness,
   })
 }
 
-export function buildSummaryProjection(input: { project: ProjectRecord, queries: MetricQuery[], observations: MetricObservation[], recentObservations: unknown[], now?: Date }) {
+export function buildSummaryProjection(input: { project: ProjectRecord, queries: MetricQuery[], observations: MetricObservation[], recentObservations: unknown[], competitorRegistry?: VisibilityCompetitorRegistryEntry[], now?: Date }) {
   const currentEnd = input.now || new Date()
   const currentStart = new Date(currentEnd.getTime() - 30 * 24 * 60 * 60 * 1000)
+  const metrics = calculateVisibilityMetrics({ queries: input.queries, observations: input.observations, canonicalDomain: input.project.canonicalDomain, currentStart, currentEnd, competitorRegistry: input.competitorRegistry })
   return {
     project: input.project,
-    metrics: calculateVisibilityMetrics({ queries: input.queries, observations: input.observations, canonicalDomain: input.project.canonicalDomain, currentStart, currentEnd }),
+    metrics,
     recentObservations: input.recentObservations,
-    limitations: VISIBILITY_LIMITATIONS,
+    limitations: [...VISIBILITY_LIMITATIONS, ...metrics.current.limitations],
     projection: 'traceable_model_observations_v1',
     metricBasis: 'manual_review_ledger_v1' as const,
     prohibitedClaims: ['search ranking', 'consumer UI exposure guarantee', 'traffic guarantee', 'conversion guarantee', 'revenue or ROI guarantee'],

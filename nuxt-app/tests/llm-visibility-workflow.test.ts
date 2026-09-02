@@ -20,9 +20,10 @@ function workflow(overrides: Partial<VisibilityWorkflowRepository> = {}): Visibi
 
 describe('LLM visibility mocked repository workflow', () => {
   it('commits a bounded, owner-scoped snapshot after validating references and evidence', async () => {
-    const repository = workflow()
+    const repository = workflow({ ensurePromptVersion: vi.fn(async () => ({ id: 91, versionNumber: 1 })) })
     await expect(importObservationSnapshot(repository, 7, validInput(), new Date('2026-08-24T02:00:00Z'))).resolves.toEqual({ runId: 30, observationId: 40 })
-    expect(repository.commitObservation).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 7, boundedExcerpt: 'Acme appears here.', responseHash: 'c'.repeat(64), citedDomain: 'example.com' }))
+    expect(repository.ensurePromptVersion).toHaveBeenCalledWith(query)
+    expect(repository.commitObservation).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 7, boundedExcerpt: 'Acme appears here.', responseHash: 'c'.repeat(64), citedDomain: 'example.com', promptVersionId: 91 }))
   })
 
   it('fails closed on provider API mode before repository access or commit', async () => {

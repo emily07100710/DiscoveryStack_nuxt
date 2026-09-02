@@ -63,8 +63,10 @@ describe('LLM visibility metrics', () => {
 
   it('returns null and not_ready for every zero denominator rather than invented zero percent', () => {
     const result = calculateVisibilityMetrics({ queries, observations: [], canonicalDomain: 'example.com', currentStart: new Date('2026-08-01T00:00:00Z'), currentEnd: new Date('2026-09-01T00:00:00Z') })
-    expect(result.current).toMatchObject({ status: 'not_ready', observedQueries: 0, brandMentionRate: null, citationRate: null, exactCitationRate: null, competitorShareOfVoice: null, averageFirstMentionPosition: null })
+    expect(result.current).toMatchObject({ status: 'not_ready', observedQueries: 0, n: 0, brandMentionRate: null, citationRate: null, exactCitationRate: null, competitorShareOfVoice: null, averageFirstMentionPosition: null, limitations: ['insufficient_sample'] })
+    expect(result.current.estimates.brandMentionRate).toBeNull()
     expect(result.delta.brandMentionRate).toBeNull()
+    expect(result.deltaLimitations).toContain('insufficient_sample')
   })
 
   it('separates manual/API modes and computes period delta, exact citation, locale and competitor share', () => {
@@ -85,6 +87,17 @@ describe('LLM visibility metrics', () => {
     expect(result.byProvider.perplexity.status).toBe('not_ready')
     expect(result.byLocale['zh-hant'].status).toBe('not_ready')
     expect(result.byLocale.en.brandMentionRate).toBe(1)
-    expect(result.delta.brandMentionRate).toBe(1)
+    expect(result.current.estimates.brandMentionRate?.confidenceInterval).toMatchObject({ level: 0.95 })
+    expect(result.current.limitations).toEqual(['single_sample_not_trend'])
+    expect(result.delta.brandMentionRate).toBeNull()
+    expect(result.deltaLimitations).toContain('single_sample_not_trend')
+  })
+
+  it('maps competitor aliases into registry share of voice and preserves unlisted attribution', () => {
+    const observations: MetricObservation[] = [
+      { ...base, observedAt: '2026-08-15T00:00:00Z', competitorMentions: { RivalAlias: 2, Mystery: 1 } },
+    ]
+    const result = calculateVisibilityMetrics({ queries, observations, canonicalDomain: 'example.com', currentStart: new Date('2026-08-01T00:00:00Z'), currentEnd: new Date('2026-09-01T00:00:00Z'), competitorRegistry: [{ id: 9, name: 'Rival Incorporated', canonicalKey: 'rival incorporated', aliases: ['RivalAlias'] }] })
+    expect(result.current.shareOfVoice).toMatchObject({ status: 'ready', n: 5, brandMentions: 2, brandShare: 0.4, listed: [{ competitorId: 9, name: 'Rival Incorporated', mentions: 2, share: 0.4 }], unlistedMentions: 1, unlistedShare: 0.2, unlistedNames: ['Mystery'] })
   })
 })
