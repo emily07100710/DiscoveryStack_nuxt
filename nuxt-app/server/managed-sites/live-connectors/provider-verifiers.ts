@@ -98,10 +98,33 @@ const hmacCapabilityVerifier: ManagedSiteProviderVerifier = async input => {
   return { capability: input.capability, providerKey: input.providerKey, configurationFingerprint: input.configurationFingerprint, capabilityIdentity: response.body.capabilityIdentity, providerEventId: response.providerRequestId, payloadHash: stableFingerprint({ configurationFingerprint: input.configurationFingerprint, bodyHash: response.bodyHash, providerRequestId: response.providerRequestId }), exactResponseIdentity: response.exactResponseIdentity, observedAt: response.observedAt }
 }
 
+/** Read-only Stripe credential/capability probe. It never creates or mutates a Stripe object. */
+const stripeBalanceVerifier: ManagedSiteProviderVerifier = async input => {
+  const endpointOrigin = typeof input.transportConfiguration.endpointOrigin === 'string' ? input.transportConfiguration.endpointOrigin : ''
+  const origin = assertAllowedManagedSiteProviderOrigin(endpointOrigin)
+  const credential = await input.resolveCredential(input.credentialReference)
+  if (!credential.ok) throw createError({ statusCode: 409, statusMessage: 'Stripe credential reference is unresolved.' })
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 10_000)
+  let response: Response
+  try { response = await (input.fetchImpl || fetch)(`${origin}/v1/balance`, { method: 'GET', redirect: 'error', signal: controller.signal, headers: { authorization: `Bearer ${credential.value}` } }) } catch { throw createError({ statusCode: 409, statusMessage: controller.signal.aborted ? 'Stripe balance verification timed out.' : 'Stripe balance verification transport failed.' }) } finally { clearTimeout(timer) }
+  if (!response.ok) throw createError({ statusCode: 409, statusMessage: 'Stripe balance verification was rejected.' })
+  const raw = await readBoundedManagedSiteResponse(response, 64 * 1024)
+  let value: unknown
+  try { value = JSON.parse(raw) } catch { throw createError({ statusCode: 409, statusMessage: 'Stripe balance verification response is malformed.' }) }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw createError({ statusCode: 409, statusMessage: 'Stripe balance verification response is malformed.' })
+  const balance = value as Record<string, unknown>
+  const validEntries = (entries: unknown) => Array.isArray(entries) && entries.every(entry => entry && typeof entry === 'object' && !Array.isArray(entry) && Object.getPrototypeOf(entry) === Object.prototype && Number.isSafeInteger((entry as any).amount) && typeof (entry as any).currency === 'string' && /^[a-z]{3}$/u.test((entry as any).currency))
+  const requestId = response.headers.get('request-id') || response.headers.get('stripe-request-id') || ''
+  if (balance.object !== 'balance' || typeof balance.livemode !== 'boolean' || !validEntries(balance.available) || !validEntries(balance.pending) || !/^req_[A-Za-z0-9_]{3,156}$/u.test(requestId)) throw createError({ statusCode: 409, statusMessage: 'Stripe balance verification identity is incomplete or mismatched.' })
+  const payloadHash = createHash('sha256').update(raw).digest('hex'); const observedAt = input.clock().toISOString()
+  return { capability: input.capability, providerKey: input.providerKey, configurationFingerprint: input.configurationFingerprint, capabilityIdentity: `stripe-balance:${balance.livemode ? 'live' : 'test'}`, providerEventId: requestId, payloadHash, exactResponseIdentity: `stripe-verification:${stableFingerprint({ providerKey: input.providerKey, path: '/v1/balance', requestId, payloadHash })}`, observedAt }
+}
+
 export const MANAGED_SITE_PROVIDER_VERIFIERS: ManagedSiteProviderVerifierRegistry = new Map([
   ['bailian-qwen', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['website_generator', bailianCapabilityProbe]])],
   ['internal-deployment-bearer-v1', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['deployment', internalDeploymentVerifier]])],
   ['internal_hmac_v1', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['payment', hmacCapabilityVerifier]])],
+  ['stripe', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['payment', stripeBalanceVerifier]])],
   ['internal-domain-broker-hmac-v1', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['domain_registration', hmacCapabilityVerifier]])],
   ['internal-dns-tls-broker-hmac-v1', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['dns_tls', hmacCapabilityVerifier]])],
 ])

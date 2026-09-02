@@ -21,7 +21,7 @@ const MAX_CREDENTIAL_BYTES = 8 * 1024
 const SENSITIVE_KEY = /(secret|token|password|authorization|api.?key|credential.?value)/iu
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u
 const CREDENTIAL_REFERENCE = /^(?:vault|secret-ref|kms|envref):[A-Za-z0-9][A-Za-z0-9._:/-]{2,154}$/u
-const TRANSPORT_CONFIGURATION_FIELDS = new Set(['endpointOrigin', 'model', 'checkoutOrigin'])
+const TRANSPORT_CONFIGURATION_FIELDS = new Set(['endpointOrigin', 'model', 'checkoutOrigin', 'returnOrigin'])
 
 function isManagedSiteCredentialReference(value: unknown): value is string { return typeof value === 'string' && CREDENTIAL_REFERENCE.test(value) && !/(?:sk-[A-Za-z0-9]|bearer\s|-----BEGIN)/iu.test(value) }
 function isManagedSiteProviderKey(value: unknown): value is string { return typeof value === 'string' && value.length >= 1 && value.length <= 96 && /^[a-z0-9][a-z0-9._-]*$/u.test(value) && !value.includes('..') }
@@ -97,9 +97,10 @@ export async function configureManagedSiteProvider(
   const hmacBroker = input.providerKey === 'internal_hmac_v1' && input.capability === 'payment'
     || input.providerKey === 'internal-domain-broker-hmac-v1' && input.capability === 'domain_registration'
     || input.providerKey === 'internal-dns-tls-broker-hmac-v1' && input.capability === 'dns_tls'
-  const allowedTransportFields = input.providerKey === 'bailian-qwen' && input.capability === 'website_generator' ? new Set(['endpointOrigin', 'model']) : input.providerKey === 'internal_hmac_v1' && input.capability === 'payment' ? new Set(['endpointOrigin', 'checkoutOrigin']) : input.providerKey === 'internal-deployment-bearer-v1' && input.capability === 'deployment' || hmacBroker ? new Set(['endpointOrigin']) : new Set<string>()
+  const paymentTransport = ['internal_hmac_v1', 'stripe'].includes(input.providerKey) && input.capability === 'payment'
+  const allowedTransportFields = input.providerKey === 'bailian-qwen' && input.capability === 'website_generator' ? new Set(['endpointOrigin', 'model']) : input.providerKey === 'stripe' && input.capability === 'payment' ? new Set(['endpointOrigin', 'checkoutOrigin', 'returnOrigin']) : paymentTransport ? new Set(['endpointOrigin', 'checkoutOrigin']) : input.providerKey === 'internal-deployment-bearer-v1' && input.capability === 'deployment' || hmacBroker ? new Set(['endpointOrigin']) : new Set<string>()
   if (Object.keys(transportConfiguration).some(key => !allowedTransportFields.has(key))) invalid('Transport configuration is not allowlisted for this exact provider and capability.')
-  if (input.providerKey === 'internal_hmac_v1' && input.capability === 'payment' && input.readinessStatus === 'configured') transportConfiguration.checkoutOrigin = assertManagedSiteCheckoutOrigin(transportConfiguration.checkoutOrigin)
+  if (paymentTransport && input.readinessStatus === 'configured') transportConfiguration.checkoutOrigin = assertManagedSiteCheckoutOrigin(transportConfiguration.checkoutOrigin)
   const configurationFingerprint = stableFingerprint({ capability: input.capability, providerKey: input.providerKey, readinessStatus: input.readinessStatus, credentialReference, transportConfiguration })
   const mockCapabilityIdentity = input.readinessStatus === 'mock' ? `mock-capability:${configurationFingerprint.slice(0, 48)}` : null
   const mockVerificationReceiptFingerprint = input.readinessStatus === 'mock' ? stableFingerprint({ authority: 'test-only-mock-provider-configuration', configurationFingerprint }) : null

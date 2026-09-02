@@ -1,0 +1,1 @@
+ALTER TABLE `managedSiteDraftOrders` MODIFY COLUMN `status` enum('draft','payment_pending','payment_verified','refunded','disputed','cancelled','expired') NOT NULL DEFAULT 'draft';

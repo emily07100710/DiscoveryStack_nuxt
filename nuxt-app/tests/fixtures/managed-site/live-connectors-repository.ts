@@ -84,6 +84,14 @@ export function createLiveConnectorMemoryRepository() {
     async listAttempts(ownerUserId, projectId) { return state.attempts.filter(row => row.ownerUserId === ownerUserId && row.projectId === projectId) },
     async listEligibleRetryAttempts(now, limit, ownerUserId) { return state.attempts.filter(row => row.status === 'retry_wait' && Boolean(row.retryEligibleAt && row.retryEligibleAt.getTime() <= now.getTime()) && (!ownerUserId || row.ownerUserId === ownerUserId)).sort((left, right) => (left.retryEligibleAt?.getTime() || 0) - (right.retryEligibleAt?.getTime() || 0) || left.id - right.id).slice(0, Math.min(Math.max(limit, 1), 50)) },
     async findReceiptByProviderEvent(providerKey, providerEventId) { return state.receipts.find(row => row.providerKey === providerKey && row.providerEventId === providerEventId) || null },
+    async findPaymentReceiptsByProviderObjectIds(providerKey, providerObjectIds) {
+      const ids = new Set(providerObjectIds)
+      return state.receipts.filter(row => {
+        if (row.capability !== 'payment' || row.providerKey !== providerKey || !['verified', 'ignored_out_of_order'].includes(row.receiptStatus)) return false
+        const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata as Record<string, unknown> : {}
+        return Boolean(row.externalReference && ids.has(row.externalReference)) || ['stripeCheckoutSessionId', 'stripePaymentIntentId', 'stripeChargeId', 'stripeInvoiceId', 'stripeSubscriptionId'].some(key => typeof metadata[key] === 'string' && ids.has(metadata[key] as string))
+      }).slice(0, 20)
+    },
     async findVerifiedDomainReceipt(canonicalDomain) { return state.receipts.find(row => row.canonicalDomain === canonicalDomain && row.receiptStatus === 'verified' && ['domain_registered', 'existing_site_ownership_verified'].includes(row.receiptType)) || null },
     async findReceiptByFingerprint(ownerUserId, fingerprint) { return state.receipts.find(row => row.ownerUserId === ownerUserId && row.receiptFingerprint === fingerprint) || null },
     async findOwnershipChallengeByReference(projectId, canonicalDomain, challengeReference) { return state.receipts.find(row => row.projectId === projectId && row.canonicalDomain === canonicalDomain && row.externalReference === challengeReference && row.receiptType === 'existing_site_challenge_created' && row.receiptStatus === 'verified') || null },

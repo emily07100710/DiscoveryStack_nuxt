@@ -14,6 +14,7 @@ type State = {
 }
 
 function copy<T>(rows: T[]): T[] { return rows.map(row => ({ ...(row as any) })) }
+const DRAFT_ORDER_STATUSES = ['draft', 'payment_pending', 'payment_verified', 'refunded', 'disputed', 'cancelled', 'expired'] as const satisfies readonly ManagedSiteDraftOrder['status'][]
 
 export function createInjectedManagedSiteCheckoutAuthorityResolver(ownerUserId: number): ManagedSiteCheckoutAuthorityResolver {
   return { resolve: async () => ({ ownerUserId, source: 'injected_mock' }) }
@@ -58,10 +59,11 @@ export function createOrderingMemoryRepository() {
     async findLeadIntentByFingerprint(fingerprint) { return state.leadIntents.find(row => row.requestFingerprint === fingerprint) || null },
     async insertLeadIntent(input) { return insert(state.leadIntents, input as Omit<ManagedSiteLeadIntent, 'id'>) },
     async findDraftOrderById(id) { return state.orders.find(row => row.id === id) || null },
+    async listDraftOrders(ownerUserId, options = {}) { const limit = Math.min(Math.max(Number.isSafeInteger(options.limit) ? Number(options.limit) : 100, 1), 100); return state.orders.filter(row => row.ownerUserId === ownerUserId && (!options.status || row.status === options.status)).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id - a.id).slice(0, limit) },
     async findDraftOrderByIdempotency(previewId, key) { return state.orders.find(row => row.previewId === previewId && row.idempotencyKey === key) || null },
     async findDraftOrderByFingerprint(fingerprint) { return state.orders.find(row => row.requestFingerprint === fingerprint) || null },
     async insertDraftOrder(input) { return insert(state.orders, input as Omit<ManagedSiteDraftOrder, 'id'>) },
-    async updateDraftOrder(id, patch) { const row = state.orders.find(item => item.id === id); if (!row) return null; Object.assign(row, patch); return row },
+    async updateDraftOrder(id, patch) { const row = state.orders.find(item => item.id === id); if (!row) return null; if (patch.status !== undefined && !(DRAFT_ORDER_STATUSES as readonly string[]).includes(patch.status)) throw new Error('unsupported managed-site draft order status'); Object.assign(row, patch); return row },
     async findPaymentEvent(ownerUserId, providerKey, eventId) { return state.paymentEvents.find(row => row.ownerUserId === ownerUserId && row.providerKey === providerKey && row.eventId === eventId) || null },
     async findPaymentEventByFingerprint(ownerUserId, fingerprint) { return state.paymentEvents.find(row => row.ownerUserId === ownerUserId && row.eventFingerprint === fingerprint) || null },
     async findVerifiedPaymentEventByDraftOrder(draftOrderId) { return state.paymentEvents.find(row => row.draftOrderId === draftOrderId && row.verificationStatus === 'verified') || null },

@@ -124,6 +124,11 @@ export function makeOrderingRepository(database: any): PreviewRepository {
       const [row] = await database.select().from(managedSiteDraftOrders).where(eq(managedSiteDraftOrders.id, orderId)).limit(1)
       return row || null
     },
+    async listDraftOrders(ownerUserId, options = {}) {
+      const limit = Math.min(Math.max(Number.isSafeInteger(options.limit) ? Number(options.limit) : 100, 1), 100)
+      const predicate = options.status ? and(eq(managedSiteDraftOrders.ownerUserId, ownerUserId), eq(managedSiteDraftOrders.status, options.status)) : eq(managedSiteDraftOrders.ownerUserId, ownerUserId)
+      return database.select().from(managedSiteDraftOrders).where(predicate).orderBy(desc(managedSiteDraftOrders.createdAt), desc(managedSiteDraftOrders.id)).limit(limit)
+    },
     async findDraftOrderByIdempotency(previewId, key) {
       const [row] = await database.select().from(managedSiteDraftOrders).where(and(eq(managedSiteDraftOrders.previewId, previewId), eq(managedSiteDraftOrders.idempotencyKey, key))).limit(1)
       return row || null

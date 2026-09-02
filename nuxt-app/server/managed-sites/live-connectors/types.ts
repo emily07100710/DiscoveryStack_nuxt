@@ -161,22 +161,46 @@ export type ManagedSiteGenerationAdapter = {
   }): Promise<ManagedSiteBlueprintProviderOutput>
 }
 
-export type ManagedSitePaymentEventType = 'checkout_succeeded' | 'checkout_failed' | 'checkout_cancelled' | 'payment_refunded'
-export type ManagedSiteVerifiedPaymentWebhook = {
+export type ManagedSitePaymentEventType = 'checkout_succeeded' | 'checkout_failed' | 'checkout_cancelled' | 'payment_refunded' | 'payment_disputed'
+type ManagedSiteSignatureVerifiedPaymentWebhookBase = {
   providerKey: string
   providerEventId: string
   providerReference: string
   eventType: ManagedSitePaymentEventType
-  draftOrderId: number
   amountMinor: number
   currency: string
   occurredAt: string
   exactResponseIdentity: string
   canonicalPayloadHash: string
+  stripeCheckoutSessionId?: string
+  stripePaymentIntentId?: string
+  stripeChargeId?: string
+  stripeInvoiceId?: string
+  stripeSubscriptionId?: string
+}
+
+export type ManagedSiteVerifiedPaymentWebhook = ManagedSiteSignatureVerifiedPaymentWebhookBase & {
+  draftOrderId: number
   configurationFingerprint: string
   verificationReceiptFingerprint: string
   checkoutReceiptFingerprint: string
+  /** Provider-signed Stripe metadata; optional for the legacy internal HMAC contract. */
+  ownerUserId?: number
+  releaseId?: number
+  snapshotFingerprint?: string
 }
+
+export type ManagedSiteUnboundPaymentWebhook = ManagedSiteSignatureVerifiedPaymentWebhookBase & {
+  draftOrderId?: never
+  configurationFingerprint?: never
+  verificationReceiptFingerprint?: never
+  checkoutReceiptFingerprint?: never
+  ownerUserId?: never
+  releaseId?: never
+  snapshotFingerprint?: never
+}
+
+export type ManagedSiteSignatureVerifiedPaymentWebhook = ManagedSiteVerifiedPaymentWebhook | ManagedSiteUnboundPaymentWebhook
 
 export type ManagedSitePaymentWebhookAdapter = {
   verifyRawWebhook(input: {
@@ -184,7 +208,7 @@ export type ManagedSitePaymentWebhookAdapter = {
     signatureHeader: string
     credentialReference: string
     resolveCredential: ManagedSiteCredentialResolver
-  }): Promise<ManagedSiteVerifiedPaymentWebhook | null>
+  }): Promise<ManagedSiteSignatureVerifiedPaymentWebhook | null>
 }
 
 export type ManagedSiteCheckoutSessionReceipt = {
@@ -203,7 +227,7 @@ export type ManagedSiteCheckoutSessionReceipt = {
 }
 
 export type ManagedSiteCheckoutSessionAdapter = {
-  createSession(input: { ownerUserId: number; projectId: number; releaseId: number; previewId: number; approvalFingerprint: string; draftOrderId: number; quoteId: number; amountMinor: number; currency: string; planKey: string; cadenceDays: number; domainOption: string; lineSnapshot: Array<{ lineKey: string; quantity: number; unitAmountMinor: number; lineAmountMinor: number }>; taxStatus: string; snapshotFingerprint: string; configurationFingerprint: string; verificationReceiptFingerprint: string; capabilityIdentity: string; idempotencyKey: string; timeoutMs: number }): Promise<ManagedSiteCheckoutSessionReceipt>
+  createSession(input: { ownerUserId: number; projectId: number; releaseId: number; previewId: number; approvalFingerprint: string; draftOrderId: number; quoteId: number; amountMinor: number; currency: string; planKey: string; cadenceDays: number; domainOption: string; lineSnapshot: Array<{ lineKey: string; quantity: number; unitAmountMinor: number; lineAmountMinor: number }>; taxStatus: string; snapshotFingerprint: string; checkoutReceiptFingerprint: string; configurationFingerprint: string; verificationReceiptFingerprint: string; capabilityIdentity: string; idempotencyKey: string; timeoutMs: number }): Promise<ManagedSiteCheckoutSessionReceipt>
 }
 
 export type ManagedSiteDomainQuote = {
@@ -327,6 +351,7 @@ export type ManagedSiteLiveConnectorRepository = {
   listAttempts(ownerUserId: number, projectId: number): Promise<ManagedSiteConnectorAttempt[]>
   listEligibleRetryAttempts(now: Date, limit: number, ownerUserId?: number): Promise<ManagedSiteConnectorAttempt[]>
   findReceiptByProviderEvent(providerKey: string, providerEventId: string): Promise<ManagedSiteConnectorReceipt | null>
+  findPaymentReceiptsByProviderObjectIds(providerKey: string, providerObjectIds: string[]): Promise<ManagedSiteConnectorReceipt[]>
   findVerifiedDomainReceipt(canonicalDomain: string): Promise<ManagedSiteConnectorReceipt | null>
   findReceiptByFingerprint(ownerUserId: number, receiptFingerprint: string): Promise<ManagedSiteConnectorReceipt | null>
   findOwnershipChallengeByReference(projectId: number, canonicalDomain: string, challengeReference: string): Promise<ManagedSiteConnectorReceipt | null>

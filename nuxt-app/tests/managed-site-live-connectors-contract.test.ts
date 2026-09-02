@@ -35,9 +35,21 @@ describe('managed-site live connectors durable and private contracts', () => {
       'server/api/managed-sites/projects/[id]/releases/rollback.post.ts',
       'server/api/managed-sites/live-connectors/providers/[capability]/verify.post.ts',
     ]
-    for (const route of fixedRoutes) expect(read(route)).toContain('managedSiteOwnerContext(event)')
+    // Browsers omit Origin on same-origin GET, so read routes opt out explicitly and every mutation stays origin-checked.
+    const readOnlyOwnerContextRoutes = ['server/api/managed-sites/projects/[id]/releases/[releaseId]/gates.get.ts']
+    for (const route of fixedRoutes) {
+      const source = read(route)
+      if (readOnlyOwnerContextRoutes.includes(route)) expect(source).toContain('managedSiteOwnerContext(event, false)')
+      else {
+        expect(source).toContain('managedSiteOwnerContext(event)')
+        expect(source).not.toContain('managedSiteOwnerContext(event, false)')
+      }
+    }
     expect(fixedRoutes).toHaveLength(20)
+    expect(fixedRoutes.filter(route => !readOnlyOwnerContextRoutes.includes(route) && route.endsWith('.get.ts'))).toHaveLength(0)
     const ownerContext = read('server/managed-sites/live-connectors/http.ts')
+    expect(ownerContext).toContain('async function managedSiteOwnerContext(event: H3Event, mutation = true)')
+    expect(ownerContext).toContain('if (mutation) assertSameOriginManagedSiteMutation(event)')
     expect(ownerContext).toContain('requireOwner(event)')
     expect(ownerContext).toContain('getOwnerDatabaseUserId(owner.openId)')
     expect(ownerContext).toContain("process.env.NODE_ENV !== 'test'")
@@ -46,6 +58,20 @@ describe('managed-site live connectors durable and private contracts', () => {
     expect(webhook).toContain('readRawBody(event, false)')
     expect(webhook).not.toContain('readBody(')
     expect(webhook).toContain('processManagedSiteRawPaymentWebhook')
+    for (const deletedRoute of [
+      'server/api/managed-sites/live-connectors/orders.get.ts',
+      'server/api/managed-sites/live-connectors/stripe-webhook.post.ts',
+      'server/api/managed-sites/projects/[id]/releases/[releaseId]/payment-reconcile.post.ts',
+    ]) expect(existsSync(new URL(`../${deletedRoute}`, import.meta.url))).toBe(false)
+    const paymentsRouter = read('server/api/managed-sites/payments/[...path].ts')
+    for (const subPath of ['/orders', '/stripe/webhook', '/projects/:projectId/releases/:releaseId/reconcile']) expect(paymentsRouter).toContain(subPath)
+    expect(paymentsRouter).toContain('requireOwner(event)')
+    expect(paymentsRouter).toContain('getOwnerDatabaseUserId(owner.openId)')
+    expect(paymentsRouter).toContain('managedSiteOwnerContext(event)')
+    expect(paymentsRouter).toContain('readBoundedManagedSitePaymentWebhookBody(event)')
+    expect(ownerContext).toContain('readRawBody(event, false)')
+    expect(paymentsRouter).toContain("getHeader(event, 'stripe-signature')")
+    expect(paymentsRouter).not.toContain('readBody(')
   })
 
   it('adds DDL-only durable tables with owner/project/order scope, immutable receipts, and collision indexes', () => {

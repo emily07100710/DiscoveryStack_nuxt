@@ -15,6 +15,7 @@
     "test:external-credentials": "DS_RUN_EXTERNAL_CREDENTIAL_TESTS=1 vitest run tests/provider-secrets.integration.test.ts tests/huggingface.credentials.test.ts tests/huggingface-namespace-secret.test.ts",
     "test:real-deployment": "DS_RUN_REAL_MANAGED_DEPLOYMENT_TESTS=1 vitest run tests/managed-site-internal-broker.real-deployment.test.ts",
     "test:real-ownership": "DS_RUN_REAL_OWNERSHIP_TESTS=1 vitest run tests/managed-site-internal-broker.real-ownership.test.ts",
+    "test:real-stripe": "DS_RUN_REAL_STRIPE_TESTS=1 vitest run tests/managed-site-stripe.real.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:check-identifiers": "node scripts/mysql-identifier-policy.mjs",
     "prepare": "nuxt prepare"

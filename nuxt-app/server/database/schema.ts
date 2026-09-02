@@ -2227,7 +2227,7 @@ export const managedSiteDraftOrders = mysqlTable('managedSiteDraftOrders', {
   quoteId: int('quoteId').notNull().references(() => managedSiteQuotes.id),
   projectId: int('projectId').references(() => managedSiteProjects.id),
   leadId: int('leadId').notNull().references(() => leads.id),
-  status: mysqlEnum('status', ['draft', 'payment_pending', 'payment_verified', 'cancelled', 'expired']).default('draft').notNull(),
+  status: mysqlEnum('status', ['draft', 'payment_pending', 'payment_verified', 'refunded', 'disputed', 'cancelled', 'expired']).default('draft').notNull(),
   requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   paymentIntentReference: varchar('paymentIntentReference', { length: 160 }),

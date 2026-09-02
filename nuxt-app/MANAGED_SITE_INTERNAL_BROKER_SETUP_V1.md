@@ -63,18 +63,20 @@ DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS=https://managed-sites-broke
 
 ## 4. 由擁有者設定並驗證兩個 capability
 
-先登入私有 Nuxt owner 後台。以下範例用 `curl` 表示兩個 API 步驟；`<private-nuxt-origin>` 換成私有 Nuxt 網址，`<owner-session-cookie>` 換成目前登入 session。不要把 cookie 存進 shell history 或分享出去。
+先登入私有 Nuxt owner 後台。以下範例用 `curl` 表示兩個 API 步驟；`<private-nuxt-origin>` 換成私有 Nuxt 網址，`<owner-session-cookie>` 換成目前登入 session。不要把 cookie 存進 shell history 或分享出去。擁有者 mutation 必須是 same-origin request，因此命令列呼叫必須明確送出 `Origin` header。
 
 ### Deployment
 
 ```bash
 curl -X POST 'https://<private-nuxt-origin>/api/managed-sites/live-connectors/provider-configurations' \
   -H 'content-type: application/json' \
+  -H 'origin: https://<private-nuxt-origin>' \
   -H 'cookie: <owner-session-cookie>' \
   --data '{"capability":"deployment","providerKey":"internal-deployment-bearer-v1","readinessStatus":"configured","credentialReference":"envref:managed-deployment-runtime","transportConfiguration":{"endpointOrigin":"https://managed-sites-broker.discoverystack.dev"},"idempotencyKey":"configure-internal-deployment-v1"}'
 
 curl -X POST 'https://<private-nuxt-origin>/api/managed-sites/live-connectors/providers/deployment/verify' \
   -H 'content-type: application/json' \
+  -H 'origin: https://<private-nuxt-origin>' \
   -H 'cookie: <owner-session-cookie>' \
   --data '{}'
 ```
@@ -86,11 +88,13 @@ Deployment verify 會真的呼叫 Cloudflare Pages API 做有時限的權限 pro
 ```bash
 curl -X POST 'https://<private-nuxt-origin>/api/managed-sites/live-connectors/provider-configurations' \
   -H 'content-type: application/json' \
+  -H 'origin: https://<private-nuxt-origin>' \
   -H 'cookie: <owner-session-cookie>' \
   --data '{"capability":"dns_tls","providerKey":"internal-dns-tls-broker-hmac-v1","readinessStatus":"configured","credentialReference":"envref:managed-dns-tls-hmac","transportConfiguration":{"endpointOrigin":"https://managed-sites-broker.discoverystack.dev"},"idempotencyKey":"configure-internal-dns-ownership-v1"}'
 
 curl -X POST 'https://<private-nuxt-origin>/api/managed-sites/live-connectors/providers/dns_tls/verify' \
   -H 'content-type: application/json' \
+  -H 'origin: https://<private-nuxt-origin>' \
   -H 'cookie: <owner-session-cookie>' \
   --data '{}'
 ```
