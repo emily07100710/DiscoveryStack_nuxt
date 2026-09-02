@@ -29,15 +29,21 @@ describe('managed-site raw-body payment lifecycle', () => {
     const signedSuccess = Buffer.from(JSON.stringify(success)); const tampered = Buffer.from(JSON.stringify({ ...success, amountMinor: line.quote.quote.totalMinor + 1 })); const signature = createHmac('sha256', line.runtimeCredential).update(signedSuccess).digest('hex')
     await expect(processManagedSiteRawPaymentWebhook({ rawBody: tampered, signatureHeader: signature, credentialReference: 'vault:payment-webhook-runtime', executionMode: 'mocked' }, createMockRawBodyPaymentWebhookAdapter('mock-payment'), { jointTransaction: line.jointTransaction, credentialResolver: async () => ({ ok: true, value: line.runtimeCredential }), clock: () => now })).rejects.toMatchObject({ statusCode: 403 })
     expect(line.live.state.receipts.filter(item => item.receiptType === 'checkout_succeeded')).toHaveLength(0)
-    const earlyRefund = await line.send(await line.event('refund-early-001', 'payment_refunded')); expect(earlyRefund.effective).toBe(false)
-    const paid = await line.send(success); expect(paid.effective).toBe(true)
+    const earlyRefund = await line.send(await line.event('refund-early-001', 'payment_refunded')); expect(earlyRefund.effective).toBe(false); expect(earlyRefund.event.metadata).toMatchObject({ effective: false })
+    const paid = await line.send(success); expect(paid.effective).toBe(true); expect(paid.event.metadata).toMatchObject({ settledAs: 'refunded', settledByProviderEventId: 'refund-early-001', settledByReceiptFingerprint: earlyRefund.event.receiptFingerprint })
+    expect(line.ordering.state.orders.find(item => item.id === line.order.order.id)?.status).toBe('refunded')
+    expect(line.live.state.releases.find(item => item.id === line.release.release.id)).toMatchObject({ status: 'blocked', blockedReasonCode: 'PAYMENT_REFUNDED', nextSafeAction: 'review_refund_and_live_site_suspension' })
+    expect(line.managed.state.projects.find(item => item.id === line.prePurchase.project.id)?.status).toBe('suspended')
+    expect(line.managed.state.subscriptions.find(item => item.projectId === line.prePurchase.project.id)?.status).toBe('suspended')
+    expect(line.live.state.receipts.filter(item => item.receiptType === 'provisioning_armed')).toHaveLength(0)
+    expect(line.live.state.receipts.filter(item => item.receiptType === 'release_payment_bound')).toHaveLength(0)
+    const settledRefunds = line.live.state.receipts.filter(item => item.receiptType === 'payment_refunded' && item.receiptStatus === 'verified' && (item.metadata as any)?.effective === true)
+    expect(settledRefunds).toHaveLength(1); expect(settledRefunds[0]?.metadata).toMatchObject({ settledFromProviderEventId: 'refund-early-001' })
     const replay = await line.send(success); expect(replay.replayed).toBe(true)
     const duplicateSuccess = await line.send(await line.event('success-duplicate-002', 'checkout_succeeded')); expect(duplicateSuccess.effective).toBe(false); expect(duplicateSuccess.event.receiptStatus).toBe('ignored_out_of_order')
     await expect(line.send({ ...success, eventType: 'checkout_cancelled' })).rejects.toMatchObject({ statusCode: 409 })
     const lateFailure = await line.send(await line.event('failure-late-001', 'checkout_failed')); expect(lateFailure.event.receiptStatus).toBe('ignored_out_of_order')
-    const refunded = await line.send(await line.event('refund-effective-001', 'payment_refunded')); expect(refunded.effective).toBe(true)
-    expect(line.live.state.releases.find(item => item.id === line.release.release.id)).toMatchObject({ status: 'blocked', blockedReasonCode: 'PAYMENT_REFUNDED', nextSafeAction: 'review_refund_and_live_site_suspension' })
-    expect(line.managed.state.projects.find(item => item.id === line.prePurchase.project.id)?.status).toBe('suspended')
+    const refunded = await line.send(await line.event('refund-effective-001', 'payment_refunded')); expect(refunded.effective).toBe(false); expect(refunded.event.receiptStatus).toBe('ignored_out_of_order')
     expect((await line.send(await line.event('refund-effective-001', 'payment_refunded'))).replayed).toBe(true)
     const duplicateRefund = await line.send(await line.event('refund-duplicate-002', 'payment_refunded')); expect(duplicateRefund.effective).toBe(false); expect(duplicateRefund.event.receiptStatus).toBe('ignored_out_of_order')
     expect(JSON.stringify(line.live.state)).not.toContain(line.runtimeCredential)
@@ -61,6 +67,24 @@ describe('managed-site raw-body payment lifecycle', () => {
     expect(lateSuccess.effective).toBe(false)
     expect(lateSuccess.event.receiptStatus).toBe('ignored_out_of_order')
     expect(line.managed.state.subscriptions).toHaveLength(0)
+  })
+
+  it('prefers an ignored dispute over refund and otherwise settles the newest terminal receipt', async () => {
+    const disputed = await webhookLineage()
+    const earlyDispute = { ...(await disputed.event('dispute-early-001', 'payment_disputed')), occurredAt: new Date(now.getTime() - 2_000).toISOString() }
+    const laterRefund = { ...(await disputed.event('refund-later-001', 'payment_refunded')), occurredAt: new Date(now.getTime() - 1_000).toISOString() }
+    expect((await disputed.send(earlyDispute)).effective).toBe(false); expect((await disputed.send(laterRefund)).effective).toBe(false)
+    const disputePaid = await disputed.send(await disputed.event('success-dispute-precedence-001', 'checkout_succeeded'))
+    expect(disputePaid.event.metadata).toMatchObject({ settledAs: 'disputed', settledByProviderEventId: 'dispute-early-001' })
+    expect(disputed.ordering.state.orders.find(item => item.id === disputed.order.order.id)?.status).toBe('disputed')
+
+    const refunded = await webhookLineage()
+    const olderRefund = { ...(await refunded.event('refund-older-001', 'payment_refunded')), occurredAt: new Date(now.getTime() - 2_000).toISOString() }
+    const newerRefund = { ...(await refunded.event('refund-newer-001', 'payment_refunded')), occurredAt: new Date(now.getTime() - 1_000).toISOString() }
+    expect((await refunded.send(olderRefund)).effective).toBe(false); expect((await refunded.send(newerRefund)).effective).toBe(false)
+    const refundPaid = await refunded.send(await refunded.event('success-newest-refund-001', 'checkout_succeeded'))
+    expect(refundPaid.event.metadata).toMatchObject({ settledAs: 'refunded', settledByProviderEventId: 'refund-newer-001' })
+    expect(refunded.ordering.state.orders.find(item => item.id === refunded.order.order.id)?.status).toBe('refunded')
   })
 
   it('rejects signed stale configuration and checkout authority lineage with zero joint-transaction writes', async () => {

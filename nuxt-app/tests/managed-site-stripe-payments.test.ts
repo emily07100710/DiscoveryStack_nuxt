@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from 'node:crypto'
 import { ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp, createError, createEvent, createRouter, defineEventHandler, send, setResponseStatus, toWebHandler } from 'h3'
 import { createManagedSiteCheckoutSession } from '../server/managed-sites/live-connectors/checkout-session'
 import { MANAGED_SITE_PAYMENT_WEBHOOK_MAX_BYTES, setManagedSitePaymentWebhookDependenciesForTests, setManagedSiteRouteDependencyFactoryForTests } from '../server/managed-sites/live-connectors/http'
@@ -279,6 +279,20 @@ describe('managed-site Stripe payment provider', () => {
     } finally { await server.close() }
   })
 
+  it('acknowledges unpaid Checkout completion without mutation and later arms from PaymentIntent success', async () => {
+    const line = await stripeLine({ canonicalDomain: 'unpaid-checkout-stripe.acme.taipei' }); const credential = randomBytes(32).toString('hex'); const server = await routeFor(line, credential)
+    try {
+      const before = structuredClone({ live: line.live.state, ordering: line.ordering.state, managed: line.managed.state })
+      const unpaid = await deliver(server, stripeEvent(line, { id: 'checkout_unpaid_001', type: 'checkout.session.completed', object: { payment_status: 'unpaid' } }), credential)
+      expect(unpaid.response.status).toBe(200); expect(unpaid.body).toEqual({ accepted: true, ignored: 'checkout_session_not_paid' })
+      expect({ live: line.live.state, ordering: line.ordering.state, managed: line.managed.state }).toEqual(before)
+      const paid = await deliver(server, stripeEvent(line, { id: 'intent_after_unpaid_001', type: 'payment_intent.succeeded' }), credential)
+      expect(paid.response.status).toBe(200); expect(paid.body).toMatchObject({ accepted: true, replayed: false, effective: true })
+      expect(line.ordering.state.orders.find(row => row.id === line.order.order.id)?.status).toBe('payment_verified')
+      expect(line.live.state.receipts.filter(row => row.receiptType === 'provisioning_armed')).toHaveLength(1)
+    } finally { await server.close() }
+  })
+
   it('acknowledges foreign handled events but rejects present malformed managed-site metadata', async () => {
     const line = await stripeLine({ canonicalDomain: 'foreign-stripe-events.acme.taipei' }); const credential = randomBytes(32).toString('hex'); const server = await routeFor(line, credential)
     try {
@@ -332,6 +346,45 @@ describe('managed-site Stripe payment provider', () => {
         expect(line.live.state.receipts.find(row => row.receiptType === lifecycle.receipt)?.metadata).toMatchObject({ amountMinor: amount, fullAmount: false })
       } finally { await server.close() }
     }
+  })
+
+  it('settles partial refunds and disputes that arrive before checkout success without arming provisioning', async () => {
+    for (const lifecycle of [
+      { type: 'charge.refunded', expectedOrder: 'refunded', reason: 'PAYMENT_REFUNDED', receipt: 'payment_refunded' },
+      { type: 'charge.dispute.created', expectedOrder: 'disputed', reason: 'PAYMENT_DISPUTED', receipt: 'payment_disputed' },
+    ]) {
+      const line = await stripeLine({ canonicalDomain: lifecycle.type === 'charge.refunded' ? 'early-refund-stripe.acme.taipei' : 'early-dispute-stripe.acme.taipei' }); const credential = randomBytes(32).toString('hex'); const server = await routeFor(line, credential)
+      try {
+        const amount = Math.max(1, Math.floor(line.quote.quote.totalMinor / 2))
+        const earlyId = `${lifecycle.receipt}_early_001`
+        const early = await deliver(server, stripeEvent(line, { id: earlyId, type: lifecycle.type, object: lifecycle.type === 'charge.refunded' ? { amount_refunded: amount } : { amount } }), credential)
+        expect(early.response.status).toBe(200); expect(early.body).toMatchObject({ accepted: true, effective: false })
+        const paid = await deliver(server, stripeEvent(line, { id: `${lifecycle.receipt}_paid_001`, type: 'checkout.session.completed' }), credential)
+        expect(paid.response.status).toBe(200); expect(paid.body).toMatchObject({ accepted: true, effective: true })
+        expect(line.ordering.state.orders.find(row => row.id === line.order.order.id)?.status).toBe(lifecycle.expectedOrder)
+        expect(line.live.state.releases.find(row => row.id === line.release.release.id)).toMatchObject({ status: 'blocked', blockedReasonCode: lifecycle.reason })
+        expect(line.managed.state.projects.find(row => row.id === line.prePurchase.project.id)?.status).toBe('suspended')
+        expect(line.managed.state.subscriptions.find(row => row.projectId === line.prePurchase.project.id)?.status).toBe('suspended')
+        expect(line.live.state.receipts.filter(row => row.receiptType === 'provisioning_armed')).toHaveLength(0)
+        expect(line.live.state.receipts.filter(row => row.receiptType === 'release_payment_bound')).toHaveLength(0)
+        const settled = line.live.state.receipts.filter(row => row.receiptType === lifecycle.receipt && row.receiptStatus === 'verified' && (row.metadata as any)?.effective === true)
+        expect(settled).toHaveLength(1); expect(settled[0]?.metadata).toMatchObject({ fullAmount: false, amountMinor: amount, settledFromProviderEventId: `evt_${earlyId}` })
+      } finally { await server.close() }
+    }
+  })
+
+  it('returns 404 for a signed unknown draft order before attempting an inbox write', async () => {
+    const line = await stripeLine({ canonicalDomain: 'unknown-order-stripe.acme.taipei' }); const credential = randomBytes(32).toString('hex'); const server = await routeFor(line, credential)
+    const inboxInsert = vi.spyOn(line.live.repository, 'insertPaymentWebhookInbox')
+    try {
+      const before = structuredClone({ live: line.live.state, ordering: line.ordering.state, managed: line.managed.state })
+      const unknownOrderId = Math.max(...line.ordering.state.orders.map(row => row.id)) + 10_000
+      const payload = stripeEvent(line, { id: 'unknown_order_001', type: 'checkout.session.completed', object: { metadata: { ...line.metadata, ds_draft_order_id: String(unknownOrderId) } } })
+      const result = await deliver(server, payload, credential)
+      expect(result.response.status).toBe(404)
+      expect({ live: line.live.state, ordering: line.ordering.state, managed: line.managed.state }).toEqual(before)
+      expect(inboxInsert).not.toHaveBeenCalled()
+    } finally { inboxInsert.mockRestore(); await server.close() }
   })
 
   it('rejects an unknown signed event and another owner order identity without mutation', async () => {

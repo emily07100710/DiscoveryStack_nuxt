@@ -46,7 +46,7 @@ async function stripeLine(canonicalDomain: string) {
     throw new Error(`unexpected Stripe read: ${url}`)
   }
   const reconcile = (state: 'paid' | 'unpaid' | 'disputed' | 'refunded', key: string) => reconcileManagedSiteStripePayment(line.ownerUserId, { projectId: line.prePurchase.project.id, releaseId: line.release.release.id, idempotencyKey: key }, { repository: line.live.repository, orderingRepository: line.ordering.repository, jointTransaction: line.jointTransaction, credentialResolver: resolveCredential, fetchImpl: reconciliationFetch(state), clock: () => managedSiteFixedNow })
-  return { ...line, reconcile, processSuccess }
+  return { ...line, reconcile, processSuccess, paymentIntentId, chargeId }
 }
 
 describe('managed-site Stripe payment reconciliation', () => {
@@ -102,15 +102,29 @@ describe('managed-site Stripe payment reconciliation', () => {
     expect(line.live.state.receipts.find(receipt => receipt.receiptType === 'payment_refunded')?.metadata).toMatchObject({ fullAmount: false, amountMinor: Math.floor(line.quote.quote.totalMinor / 2) })
   })
 
-  it('replays a deterministic out-of-order reconciliation instead of colliding on a fresh local timestamp', async () => {
-    const line = await stripeLine('reconcile-out-of-order-refund.acme.taipei')
-    const first = await line.reconcile('refunded', 'reconcile-out-of-order-refund-001')
-    expect(first).toMatchObject({ reported: { lifecycle: 'refunded' }, agreesWithLocalState: false, transition: { replayed: false, effective: false } })
-    expect(line.ordering.state.orders.find(order => order.id === line.order.order.id)?.status).toBe('payment_pending')
-    const second = await line.reconcile('refunded', 'reconcile-out-of-order-refund-002')
-    expect(second).toMatchObject({ reported: { lifecycle: 'refunded' }, agreesWithLocalState: false, transition: { replayed: true, effective: false } })
-    expect(line.live.state.receipts.filter(receipt => receipt.receiptType === 'payment_refunded')).toHaveLength(1)
-    expect(line.live.state.receipts.find(receipt => receipt.receiptType === 'payment_refunded')?.metadata).toMatchObject({ occurredAt: new Date((Math.floor(managedSiteFixedNow.getTime() / 1000) - 10) * 1000).toISOString() })
-    expect(line.live.state.receipts.filter(receipt => receipt.receiptType === 'payment_reconciliation')).toHaveLength(2)
+  it('settles refunded and disputed provider state when no success webhook arrived', async () => {
+    for (const lifecycle of [
+      { state: 'refunded' as const, reason: 'PAYMENT_REFUNDED', receiptType: 'payment_refunded' },
+      { state: 'disputed' as const, reason: 'PAYMENT_DISPUTED', receiptType: 'payment_disputed' },
+    ]) {
+      const line = await stripeLine(`reconcile-out-of-order-${lifecycle.state}.acme.taipei`)
+      const first = await line.reconcile(lifecycle.state, `reconcile-out-of-order-${lifecycle.state}-001`)
+      expect(first).toMatchObject({ reported: { lifecycle: lifecycle.state }, agreesWithLocalState: false, transition: { replayed: false, effective: true } })
+      expect(line.ordering.state.orders.find(order => order.id === line.order.order.id)?.status).toBe(lifecycle.state)
+      expect(line.live.state.releases.find(release => release.id === line.release.release.id)).toMatchObject({ status: 'blocked', blockedReasonCode: lifecycle.reason })
+      expect(line.managed.state.projects.find(project => project.id === line.prePurchase.project.id)?.status).toBe('suspended')
+      expect(line.managed.state.subscriptions.find(subscription => subscription.projectId === line.prePurchase.project.id)?.status).toBe('suspended')
+      expect(line.live.state.receipts.filter(receipt => receipt.receiptType === 'provisioning_armed')).toHaveLength(0)
+      expect(line.live.state.receipts.filter(receipt => receipt.receiptType === 'release_payment_bound')).toHaveLength(0)
+      expect(line.live.state.paymentWebhookInbox).toEqual(expect.arrayContaining([
+        expect.objectContaining({ providerEventId: `reconcile-${lifecycle.state}-${line.chargeId}`, processingStatus: 'ignored' }),
+        expect.objectContaining({ providerEventId: `reconcile-paid-${line.paymentIntentId}`, processingStatus: 'succeeded' }),
+      ]))
+      expect(line.live.state.receipts.filter(receipt => receipt.receiptType === lifecycle.receiptType && receipt.receiptStatus === 'verified' && (receipt.metadata as any)?.effective === true)).toHaveLength(1)
+      const inboxCount = line.live.state.paymentWebhookInbox.length
+      const second = await line.reconcile(lifecycle.state, `reconcile-out-of-order-${lifecycle.state}-002`)
+      expect(second).toMatchObject({ reported: { lifecycle: lifecycle.state }, agreesWithLocalState: true, transition: null })
+      expect(line.live.state.paymentWebhookInbox).toHaveLength(inboxCount)
+    }
   })
 })

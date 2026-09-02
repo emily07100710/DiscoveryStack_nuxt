@@ -147,7 +147,21 @@ export async function reconcileManagedSiteStripePayment(ownerUserId: number, inp
       ...(invoiceId ? { stripeInvoiceId: invoiceId } : {}),
       ...(subscriptionId ? { stripeSubscriptionId: subscriptionId } : {}),
     }
-    transition = await processManagedSiteVerifiedPaymentWebhook({ verifiedEvent, executionMode: 'live' }, dependencies.jointTransaction ? { jointTransaction: dependencies.jointTransaction, credentialResolver: resolver, clock } : { credentialResolver: resolver, clock })
+    const transitionDependencies = dependencies.jointTransaction ? { jointTransaction: dependencies.jointTransaction, credentialResolver: resolver, clock } : { credentialResolver: resolver, clock }
+    transition = await processManagedSiteVerifiedPaymentWebhook({ verifiedEvent, executionMode: 'live' }, transitionDependencies)
+    if ((lifecycle === 'refunded' || lifecycle === 'disputed') && localLifecycle === 'unpaid') {
+      const paidReference = paymentIntentId || sessionId
+      const paidEvent: ManagedSiteVerifiedPaymentWebhook = {
+        ...verifiedEvent,
+        providerEventId: `reconcile-paid-${paidReference}`.slice(0, 160),
+        providerReference: paidReference,
+        eventType: 'checkout_succeeded',
+        amountMinor: Number(session.amount_total),
+        currency: String(paymentIntent?.currency || session.currency).toUpperCase(),
+        occurredAt: new Date(Number(paymentIntent?.created ?? session.created) * 1000).toISOString(),
+      }
+      transition = await processManagedSiteVerifiedPaymentWebhook({ verifiedEvent: paidEvent, executionMode: 'live' }, transitionDependencies)
+    }
   }
   return { reported, agreesWithLocalState, evidenceReceiptId: observation.id, transition: transition ? { replayed: transition.replayed, effective: transition.effective } : null }
 }

@@ -33,7 +33,7 @@ function sha256(value: string | Uint8Array): string { return createHash('sha256'
 function plain(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype) }
 function mismatch(message = 'Stripe response does not match the exact managed-site checkout snapshot.'): never { throw createError({ statusCode: 409, statusMessage: message }) }
 function invalidWebhook(): never { throw createError({ statusCode: 400, statusMessage: 'Stripe webhook signature or payload is invalid.' }) }
-export type StripeWebhookIgnoredReason = 'unsupported_event_type' | 'unbindable_provider_reference'
+export type StripeWebhookIgnoredReason = 'unsupported_event_type' | 'unbindable_provider_reference' | 'checkout_session_not_paid'
 export class StripeWebhookIgnoredError extends Error {
   constructor(readonly ignored: StripeWebhookIgnoredReason) { super(`Stripe webhook ignored: ${ignored}`); this.name = 'StripeWebhookIgnoredError' }
 }
@@ -204,7 +204,8 @@ function stripeEvent(value: unknown, rawBody: Uint8Array): ManagedSiteSignatureV
   let expectedObject: string
   let amountField: string
   if (value.type === 'checkout.session.completed') {
-    eventType = object.payment_status === 'paid' ? 'checkout_succeeded' : 'checkout_failed'; expectedObject = 'checkout_session'; amountField = 'amount_total'
+    if (object.payment_status !== 'paid') ignoredWebhook('checkout_session_not_paid')
+    eventType = 'checkout_succeeded'; expectedObject = 'checkout_session'; amountField = 'amount_total'
   } else if (value.type === 'payment_intent.succeeded') {
     eventType = 'checkout_succeeded'; expectedObject = 'payment_intent'; amountField = 'amount_received'
   } else if (value.type === 'charge.refunded') {
