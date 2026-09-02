@@ -24,11 +24,10 @@
 - 驗收基準:GEO_ENGINEERING_SPEC_v2.0,標準是「完整商業產品,不是 MVP」;完成度細節看 PROJECT_MAP.md §8
 
 ## 進度
-- 目標:讓老闆以付費客戶身分把一鍵建站完整走一遍(付款 → 開站 → 用一句話改網站);對話 5、6、7 併進 main + Render 設好環境變數就能試;現在開出來的是 *.pages.dev 網址,自動買網域還沒做
-- 🔵 進行中(對話 6):Stripe 真收款接上訂購鏈 — 客戶付錢 → 確認收到 → 觸發開站 → 退款/爭議停站 → 對帳;09-02 發包,不裝套件自己打 API;09-02 交件 9e97647 + 8cf5aea(單一路由檔、webhook 內容上限 1MB、手冊補 Origin;PM 試併 main 型別 0 錯、8 測試檔綠、37 檔全在 nuxt-app);跟對話 5 撞號 0037 → 退回 rebase;09-03 PM 看到已 rebase 到新 main 壓成 746ddee(0038_clammy_cerebro),等它的完成報告 + Fresh Review 貼回再驗;真 Stripe 測試模式 NOT RUN
+- 目標:讓老闆以付費客戶身分把一鍵建站完整走一遍(付款 → 開站 → 用一句話改網站);09-03 對話 5、6、7 全併進 main,剩兩件才能真的試:① 老闆按一次 Run 把 0037+0038 套到正式資料庫 ② 在 Render 設環境變數;現在開出來的是 *.pages.dev 網址,自動買網域還沒做
+- 🟡 待老闆按一下:0037+0038 一起套到正式資料庫 — 介入閉環(7 張表)+ Stripe(訂單狀態加「已退款/有爭議」)的程式都已在 main 上線,表還沒開;PM 的自動套用被安全閘擋住,指令已給老闆按 Run;套完回報 PM 核對(預期 39 支、181 張表)
 - 🟡 待驗收:GA4 收數 — 09-01 PM 真瀏覽器實測追蹤碼會發送(程式載入+page_view 送出;先前抓原始碼的檢法不適用動態載入);等老闆開 GA4 即時報表看到數字回報,就點亮
-- 🟡 待老闆按一下:0037_legal_pete_wisdom 套到正式資料庫 — 介入閉環程式已在 main 推上線,7 張新表還沒開;PM 的自動套用被安全閘擋住,指令已給老闆按 Run;套完回報 PM 核對(預期 38 支、181 張表);也可以等 Stripe 併進 main 後再按一次,0037、0038 一起套(那時預期 39 支)
-- ⚪ 排隊 1:客戶完整走一遍 — 09-03 剩 6 還沒併;之後老闆在 Render 設環境變數(換新的 Cloudflare 金鑰、百煉 key + AI 開關 5 個變數、Stripe 測試金鑰,照 nuxt-app/MANAGED_SITE_INTERNAL_BROKER_SETUP_V1.md、LLM_PROVIDER_OPENAI_COMPATIBLE_V1.md 與 Stripe 交件說明)、跑一次 DNS TXT 所有權驗證(目前 NOT RUN),PM 給逐步試跑清單;走完再決定要不要做自動買網域
+- ⚪ 排隊 1:客戶完整走一遍 — 5、6、7 都併好了;剩老闆在 Render 設環境變數(換新的 Cloudflare 金鑰、百煉 key + AI 開關 5 個變數、Stripe 測試金鑰,照 nuxt-app/MANAGED_SITE_INTERNAL_BROKER_SETUP_V1.md、LLM_PROVIDER_OPENAI_COMPATIBLE_V1.md、STRIPE_PAYMENTS_RUNTIME_V1.md)、跑一次 DNS TXT 所有權驗證(NOT RUN)、真 Stripe 測試模式跑一次(pnpm test:real-stripe,NOT RUN),PM 給逐步試跑清單;走完再決定要不要做自動買網域
 - ⚪ 排隊 2:整合期 — 觀測站 benchmark 續跑掛上排程(nuxt.config.ts 加一行 + 一支 task);拿 doalignment.com 真資料實跑爬蟲證據+知識底座+觀測站 benchmark(0034–0036 都套好了);約 60 條沒前端的 API 挑關鍵的補畫面;自有模型訓練照交接規則排最後
 - 🔴 老闆要做(安全):Backblaze 刪掉 Application Key「discoverystack-vault」並重產 Master Key(B2 已棄用);Cloudflare 的 R2 鑰匙與 Pages token 出現過在對話 1 聊天裡,重產後貼給對話 1 更新 .env;Cloudflare 測試痕跡可刪(Pages 專案 ds-o1-p1 + 一個 preview 部署、R2/B2 桶裡的測試小檔)
 - 另外掛著:換掉臨時登入密碼(正式前,直接在 Render 改環境變數);Render 免費方案會睡 → 排程睡著時不會跑;正式網域還沒買;5 個孤兒引擎逐一給歸屬;root db:push 死 script;CI 的 NUXT_BUILD_TYPECHECK=false;POST 請求大小只靠 Content-Length 標頭擋(沒標頭的分段傳輸擋不到,建站編輯器與介入引擎都一樣,全專案統一處理);路由額度只剩約 1 個引擎的份(PM 實測:5、6 都併後再加 1 個萬用路由還過;對話 7 沒加路由檔、額度沒動;升級 Nuxt/Nitro 或改設定要老闆拍板);AI 供應商層兩個已知折衷(對話 7):工作紀錄的供應商欄位沒有 openai_compatible 這個值、先存舊名 autogeo_bailian_qwen 當別名(要補值得另開 migration);GEO 工作台手動優化(server/geo/optimise.ts)與建站產生器(live-connectors)仍走舊的百煉專用通道,整合期一起換
@@ -60,6 +59,7 @@
 - (日期不詳)不從零訓練通用大語言模型;自有模型只學「哪裡有問題、先改什麼、什麼有效」
 
 ## 已完成
+- 2026-09-03 Stripe 真收款接上訂購鏈併入 main(對話 6 交件 746ddee + 810c141 + ef99fe3:建付款連結 → 自己驗 webhook 簽章 → 訂單狀態 → 自動開站 → 退款/爭議停站 → 對帳,不裝套件自己打 Stripe API;Fresh Review 抓到「退款/爭議比結帳成功早到」的結算 bug → 810c141 修好、ef99fe3 補上 14+1 中斷點測試與同秒退款以收據 id 決勝;PM 驗收:38 檔全在 nuxt-app、單一路由檔、併最新 main 零衝突、型別 0 錯、13 測試檔綠(108 過/4 opt-in 跳過)、0038 只擴充訂單狀態列舉 TiDB 安全、識別字政策通過;合併 commit 0d25844 推兩邊;真 Stripe 測試模式 NOT RUN,0038 待老闆連 0037 一起套)
 - 2026-09-03 真實 AI 供應商層併入 main(對話 7 交件 a17e40c + 4d9c7fa:程式只認 OpenAI 相容端點,端點/key/模型全用環境變數,白名單=百煉國際版工作區主機、中國版、api.openai.com;GEO 草稿與建站「一句話改網站」都能切到真 AI;第一次 Fresh Review C(規劃器輸出可偽造「AI 不可用」標記跳過額度與存檔)→ 4d9c7fa 修好、第二次 A;PM 驗收:25 檔、沒新路由檔、沒 migration、沒新套件、合併後型別 0 錯、8 相關測試檔綠、識別字政策通過;合併 commit 6da38d1 推兩邊;真百煉呼叫 NOT RUN,等 Render 設 key)
 - 2026-09-02 介入與實驗閉環併入 main(對話 5 交件 3b7d298:改動登記簿+事件流水、部署/重抓確認(沒問到 Google 前不給結論、回 409)、實驗結果一定附樣本數與因果免責、refresh 佇列可調門檻、已取消的不進佇列、超過 200 筆分頁走完;改四輪後 Fresh Review 過;PM 驗收:43 檔全在 nuxt-app、合併後型別 0 錯、17 測試檔綠、識別字政策通過;合併 commit eb97bc2 推兩邊;0037_legal_pete_wisdom(7 張表)待老闆套;真 Google 呼叫 NOT RUN)
 - 2026-09-02 0036 修好併入 main、正式資料庫套到 37 支(對話 4 修:兩個 json 欄位改 $defaultFn、還原到 0035 重產 0036_silent_stranger、加一條「migration 裡 json 欄位不准字面預設值」的測試;PM 驗收:6 個檔案全在觀測站地盤、migration 與 benchmark 測試綠、識別字政策通過;PM 用 drizzle-kit 重套,36→37 支、170→174 張表,4 張 benchmark 表與 5 個新欄位都在;線上觀測站頁面應該恢復,沒開頁驗)
