@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createError } from 'h3'
+import { notifyInterventionLoopOutcomeAssessed } from '../intervention-loop'
 import {
   assessPublishedContentOutcome,
   buildOutcomeLearningCandidate,
@@ -671,11 +672,13 @@ export async function recordOwnerOutcomeAssessment(ownerUserId: number, input: u
     idempotencyKey: parsed.idempotencyKey,
     measuredAt,
   }
-  return db.transaction(async transaction => {
+  const result = await db.transaction(async transaction => {
     const persisted = await transaction.insertOutcome(outcomeInsert)
     await transaction.appendEvent(eventInput(ownerUserId, { entryId: publication.entry.id, runId: outcomeInsert.runId, eventType: 'outcome_assessed', fromStatus: publication.entry.status, toStatus: assessment.status, metadata: { targetId: outcomeInsert.targetId, publicationReceiptFingerprint: outcomeInsert.publicationReceiptFingerprint, assessmentStatus: assessment.status, assessmentFingerprint: assessment.assessmentFingerprint, learningCandidateStatus: learningCandidate?.candidateStatus || 'not_requested', providerExecution: false }, key: { event: 'outcome_assessed', fingerprint, idempotencyKey: parsed.idempotencyKey } }))
     return { assessment, learningCandidate, persisted }
   })
+  await notifyInterventionLoopOutcomeAssessed(ownerUserId, result.persisted)
+  return result
 }
 
 function nextActionForEntry(entry: ContentOperationCalendarEntryRow, hasApprovedDraft: boolean, hasPassedRiskGate: boolean, hasOutcome: boolean): WorkspacePayload['entries'][number]['nextAction'] {

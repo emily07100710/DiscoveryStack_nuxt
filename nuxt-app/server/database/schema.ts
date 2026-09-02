@@ -3904,3 +3904,191 @@ export type KnowledgeEntityMergeCandidateRecord = typeof knowledgeEntityMergeCan
 export type KnowledgeEntityMergeEventRecord = typeof knowledgeEntityMergeEvents.$inferSelect
 export type KnowledgeContentEntityLinkRecord = typeof knowledgeContentEntityLinks.$inferSelect
 export type KnowledgePublisherSettingRecord = typeof knowledgePublisherSettings.$inferSelect
+
+/** Owner-scoped experiment registry for intervention comparisons. */
+export const interventionExperiments = mysqlTable('interventionExperiments', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  name: varchar('name', { length: 200 }).notNull(),
+  design: mysqlEnum('design', ['pre_post', 'grouped']).notNull(),
+  hypothesis: text('hypothesis'),
+  status: mysqlEnum('status', ['draft', 'running', 'concluded']).default('draft').notNull(),
+  primaryMetric: mysqlEnum('primaryMetric', ['clicks', 'impressions', 'ctr', 'averagePosition']).default('clicks').notNull(),
+  startedAt: timestamp('startedAt'),
+  concludedAt: timestamp('concludedAt'),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_intv_exp_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  uniqueIndex('intv_exp_owner_key_uq').on(table.ownerUserId, table.idempotencyKey),
+])
+
+/** One registered page change and its deployment, recrawl, and measurement state. */
+export const interventions = mysqlTable('interventions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  targetUrl: varchar('targetUrl', { length: 2048 }).notNull(),
+  normalizedUrl: varchar('normalizedUrl', { length: 2048 }).notNull(),
+  urlHash: varchar('urlHash', { length: 64 }).notNull(),
+  siteHost: varchar('siteHost', { length: 255 }).notNull(),
+  briefId: int('briefId'),
+  draftId: int('draftId'),
+  entryId: int('entryId'),
+  targetId: int('targetId'),
+  interventionType: mysqlEnum('interventionType', ['content_update', 'new_page', 'structured_data', 'internal_linking', 'technical', 'entity_claim', 'other']).notNull(),
+  changeSummary: varchar('changeSummary', { length: 1000 }).notNull(),
+  hypothesis: text('hypothesis'),
+  expectedImpact: json('expectedImpact'),
+  expectedSnippet: varchar('expectedSnippet', { length: 500 }),
+  registrationSource: mysqlEnum('registrationSource', ['manual', 'content_operations_delivery', 'outcome_assessment']).notNull(),
+  status: mysqlEnum('status', ['registered', 'deployed', 'recrawl_confirmed', 'measured', 'assessed', 'cancelled']).default('registered').notNull(),
+  baselineContentHash: varchar('baselineContentHash', { length: 64 }),
+  baselineHashSource: mysqlEnum('baselineHashSource', ['site_evidence_inventory', 'live_fetch', 'content_operations']),
+  baselineCapturedAt: timestamp('baselineCapturedAt'),
+  deployedAt: timestamp('deployedAt'),
+  deployEvidenceLevel: mysqlEnum('deployEvidenceLevel', ['strong', 'weak']),
+  deployEvidenceSource: mysqlEnum('deployEvidenceSource', ['expected_snippet', 'fingerprint_change', 'manual', 'publication_receipt', 'site_evidence_scan']),
+  deployedContentHash: varchar('deployedContentHash', { length: 64 }),
+  deploymentNote: varchar('deploymentNote', { length: 1000 }),
+  recrawlStatus: mysqlEnum('recrawlStatus', ['not_checked', 'unknown', 'confirmed']).default('not_checked').notNull(),
+  recrawlConfirmedAt: timestamp('recrawlConfirmedAt'),
+  recrawlSource: mysqlEnum('recrawlSource', ['gsc_url_inspection', 'manual']),
+  recrawlLastCrawlTime: timestamp('recrawlLastCrawlTime'),
+  recrawlNote: varchar('recrawlNote', { length: 1000 }),
+  recrawlAutoAttempts: int('recrawlAutoAttempts').default(0).notNull(),
+  recrawlLastAutoAttemptAt: timestamp('recrawlLastAutoAttemptAt'),
+  recrawlAutoFailureCount: int('recrawlAutoFailureCount').default(0).notNull(),
+  recrawlAutoFailureDay: varchar('recrawlAutoFailureDay', { length: 10 }),
+  recrawlLastReason: varchar('recrawlLastReason', { length: 120 }),
+  measuredAt: timestamp('measuredAt'),
+  assessedAt: timestamp('assessedAt'),
+  cancelledAt: timestamp('cancelledAt'),
+  lastMetricsPullAt: timestamp('lastMetricsPullAt'),
+  lastMetricsPullReason: varchar('lastMetricsPullReason', { length: 120 }),
+  experimentId: int('experimentId'),
+  experimentGroup: mysqlEnum('experimentGroup', ['treatment', 'control']),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 64 }).notNull(),
+  registeredAt: timestamp('registeredAt').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_intv_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_intv_brief', columns: [table.briefId], foreignColumns: [seoGeoContentBriefs.id] }),
+  foreignKey({ name: 'fk_intv_draft', columns: [table.draftId], foreignColumns: [seoGeoContentDrafts.id] }),
+  foreignKey({ name: 'fk_intv_entry', columns: [table.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+  foreignKey({ name: 'fk_intv_exp', columns: [table.experimentId], foreignColumns: [interventionExperiments.id] }),
+  uniqueIndex('intv_owner_key_uq').on(table.ownerUserId, table.idempotencyKey),
+  index('intv_owner_status_idx').on(table.ownerUserId, table.status),
+  index('intv_owner_url_idx').on(table.ownerUserId, table.urlHash),
+  index('intv_owner_entry_idx').on(table.ownerUserId, table.entryId),
+])
+
+/** Append-only evidence ledger for every intervention transition and observation. */
+export const interventionEvents = mysqlTable('interventionEvents', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  interventionId: int('interventionId').notNull(),
+  eventType: varchar('eventType', { length: 64 }).notNull(),
+  fromStatus: varchar('fromStatus', { length: 32 }),
+  toStatus: varchar('toStatus', { length: 32 }),
+  evidence: json('evidence').notNull(),
+  evidenceFingerprint: varchar('evidenceFingerprint', { length: 64 }).notNull(),
+  occurredAt: timestamp('occurredAt').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_intv_events_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_intv_events_intv', columns: [table.interventionId], foreignColumns: [interventions.id] }),
+  index('intv_events_owner_time_idx').on(table.ownerUserId, table.interventionId, table.occurredAt),
+])
+
+/** Daily or owner-entered aggregate measurements for one intervention. */
+export const interventionMeasurements = mysqlTable('interventionMeasurements', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  interventionId: int('interventionId').notNull(),
+  origin: mysqlEnum('origin', ['system_pulled', 'manual']).notNull(),
+  source: mysqlEnum('source', ['google_search_console', 'llm_visibility', 'first_party_analytics', 'lead_conversion']).notNull(),
+  windowStart: timestamp('windowStart').notNull(),
+  windowEnd: timestamp('windowEnd').notNull(),
+  metrics: json('metrics').notNull(),
+  sampleSize: int('sampleSize').notNull(),
+  sourceHash: varchar('sourceHash', { length: 64 }).notNull(),
+  capturedAt: timestamp('capturedAt').notNull(),
+  property: varchar('property', { length: 255 }),
+  pullReason: mysqlEnum('pullReason', ['owner_request', 'scheduled_tick']),
+  note: varchar('note', { length: 500 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_intv_meas_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_intv_meas_intv', columns: [table.interventionId], foreignColumns: [interventions.id] }),
+  uniqueIndex('intv_meas_window_uq').on(table.ownerUserId, table.interventionId, table.origin, table.source, table.windowStart, table.windowEnd),
+])
+
+/** Immutable computed result with explicit sample sizes and non-causal limitations. */
+export const experimentResults = mysqlTable('experimentResults', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  experimentId: int('experimentId').notNull(),
+  interventionId: int('interventionId'),
+  resultKind: mysqlEnum('resultKind', ['pre_post', 'grouped_difference']).notNull(),
+  metric: varchar('metric', { length: 40 }).notNull(),
+  sampleSizeBaseline: int('sampleSizeBaseline').notNull(),
+  sampleSizeFollowUp: int('sampleSizeFollowUp').notNull(),
+  effect: json('effect').notNull(),
+  signal: mysqlEnum('signal', ['positive_signal', 'negative_signal', 'no_material_change', 'mixed_signal', 'insufficient_data']).notNull(),
+  limitations: json('limitations').notNull(),
+  causalStatement: text('causalStatement').notNull(),
+  computedAt: timestamp('computedAt').notNull(),
+  resultFingerprint: varchar('resultFingerprint', { length: 64 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_exp_results_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_exp_results_exp', columns: [table.experimentId], foreignColumns: [interventionExperiments.id] }),
+  foreignKey({ name: 'fk_exp_results_intv', columns: [table.interventionId], foreignColumns: [interventions.id] }),
+  uniqueIndex('exp_results_owner_fp_uq').on(table.ownerUserId, table.resultFingerprint),
+])
+
+/** Reviewable refresh work created only by manual, regression, or expiry rules. */
+export const refreshQueue = mysqlTable('refreshQueue', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  interventionId: int('interventionId'),
+  targetUrl: varchar('targetUrl', { length: 2048 }).notNull(),
+  urlHash: varchar('urlHash', { length: 64 }).notNull(),
+  trigger: mysqlEnum('trigger', ['manual', 'regression', 'expiry']).notNull(),
+  severity: mysqlEnum('severity', ['info', 'warning', 'critical']).notNull(),
+  reasonRule: varchar('reasonRule', { length: 120 }).notNull(),
+  reasonText: varchar('reasonText', { length: 1000 }).notNull(),
+  reasonEvidence: json('reasonEvidence').notNull(),
+  recommendedAction: varchar('recommendedAction', { length: 500 }).notNull(),
+  status: mysqlEnum('status', ['open', 'in_progress', 'done', 'dismissed']).default('open').notNull(),
+  dueAt: timestamp('dueAt'),
+  resolvedAt: timestamp('resolvedAt'),
+  dedupeKey: varchar('dedupeKey', { length: 160 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_refresh_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_refresh_intv', columns: [table.interventionId], foreignColumns: [interventions.id] }),
+  index('refresh_owner_status_idx').on(table.ownerUserId, table.status),
+  index('refresh_owner_dedupe_idx').on(table.ownerUserId, table.dedupeKey),
+])
+
+/** Per-owner refresh thresholds; defaults remain explicit and editable. */
+export const refreshPolicies = mysqlTable('refreshPolicies', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  regressionDropPercent: int('regressionDropPercent').default(20).notNull(),
+  minimumSampleSize: int('minimumSampleSize').default(30).notNull(),
+  staleAfterDays: int('staleAfterDays').default(90).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_refresh_policy_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  uniqueIndex('refresh_policy_owner_uq').on(table.ownerUserId),
+])

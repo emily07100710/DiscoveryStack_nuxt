@@ -3,6 +3,7 @@ import { MEASUREMENT_MAX_RESPONSE_BYTES, type AdapterFailure, type GoogleReadOnl
 
 export { GOOGLE_ANALYTICS_READONLY_SCOPE, GOOGLE_SEARCH_CONSOLE_READONLY_SCOPE }
 export type GoogleScope = typeof GOOGLE_ANALYTICS_READONLY_SCOPE | typeof GOOGLE_SEARCH_CONSOLE_READONLY_SCOPE
+export type GoogleRequestContext = Pick<MeasurementAdapterContext, 'ownerUserId' | 'connection' | 'resolver' | 'fetcher' | 'now'>
 
 export function dateOnly(date: Date): string {
   return date.toISOString().slice(0, 10)
@@ -12,7 +13,7 @@ function safeFailure(status: AdapterFailure['status'], code: string, retryable: 
   return { status, code, retryable, summary: code.replace(/_/gu, ' ').toLocaleLowerCase('en-US').slice(0, 240), limitations: [...new Set(limitations)].slice(0, 20) }
 }
 
-export async function resolveGoogleCredential(context: MeasurementAdapterContext, requiredScope: GoogleScope): Promise<{ credential: GoogleReadOnlyCredential } | { failure: AdapterFailure }> {
+export async function resolveGoogleCredential(context: GoogleRequestContext, requiredScope: GoogleScope): Promise<{ credential: GoogleReadOnlyCredential } | { failure: AdapterFailure }> {
   if (!context.connection.credentialReference) return { failure: safeFailure('blocked', 'CREDENTIAL_NOT_CONFIGURED', false, ['credential_reference_not_configured']) }
   let credential: GoogleReadOnlyCredential | null
   try {
@@ -28,7 +29,7 @@ export async function resolveGoogleCredential(context: MeasurementAdapterContext
   return { credential }
 }
 
-export async function postFixedJson(context: MeasurementAdapterContext, endpoint: string, credential: GoogleReadOnlyCredential, requestBody: unknown, timeoutMs = 15_000): Promise<{ ok: true; body: unknown; status: number } | { ok: false; failure: AdapterFailure }> {
+export async function postFixedJson(context: GoogleRequestContext, endpoint: string, credential: GoogleReadOnlyCredential, requestBody: unknown, timeoutMs = 15_000): Promise<{ ok: true; body: unknown; status: number } | { ok: false; failure: AdapterFailure }> {
   const fetcher: FetchLike = context.fetcher || fetch
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), Math.max(500, Math.min(timeoutMs, 30_000)))
