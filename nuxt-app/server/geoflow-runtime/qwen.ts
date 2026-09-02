@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
-import { isAllowedBailianEndpoint } from '../geo/autogeo-bailian-qwen'
 import { assertSourceBoundRewrite } from '../geo/output-safety'
 import { buildGeoFlowRequest, validateGeoFlowResponse, type ContentArtifact, type GeoFlowRequest, type GeoFlowResponse, type ProviderProvenance, type ValidationFailure, type ValidationResult, type ValidationSuccess } from '../geoflow-integration'
 import { deriveExternalArticleKey } from '../geoflow-integration'
+import { createOpenAiCompatibleChatClient, isAllowedOpenAiCompatibleEndpoint, openAiCompatibleProviderLabel, OpenAiCompatibleProviderError, OPENAI_COMPATIBLE_MODEL_PATTERN } from '../llm-provider/openai-compatible'
 
 export const GEOFLOW_QWEN_RUNTIME_VERSION = 'geoflow-qwen-runtime-v1'
 export const GEOFLOW_QWEN_DEFAULT_MODEL = 'qwen-plus'
@@ -11,14 +11,7 @@ export const GEOFLOW_QWEN_MAX_OUTPUT_BYTES = 200_000
 export const GEOFLOW_QWEN_MAX_ERROR_BYTES = 500
 export const GEOFLOW_QWEN_MAX_RESPONSE_BYTES = GEOFLOW_QWEN_MAX_OUTPUT_BYTES + 50_000
 
-const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
-
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>
-type QwenResponse = {
-  model?: unknown
-  choices?: Array<{ message?: { content?: unknown } }>
-  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown }
-}
 
 export type GeoFlowQwenCredentialResolver = (credentialRef: string) => string | undefined | Promise<string | undefined>
 
@@ -62,8 +55,8 @@ function bodyHash(bodyMarkdown: string): string {
   return createHash('sha256').update(Buffer.from(bodyMarkdown, 'utf8')).digest('hex')
 }
 
-function providerProvenance(model: string): ProviderProvenance {
-  return { provider: 'bailian', model, mode: 'provider', fallbackReason: null }
+function providerProvenance(endpoint: string, model: string): ProviderProvenance {
+  return { provider: openAiCompatibleProviderLabel(endpoint) || 'bailian', model, mode: 'provider', fallbackReason: null }
 }
 
 function providerPrompt(request: GeoFlowRequest): string {
@@ -133,35 +126,6 @@ function failureResponse(request: GeoFlowRequest, options: GeoFlowQwenGeneration
   return validated.ok ? validated : validated
 }
 
-async function readBoundedJson(response: Response): Promise<QwenResponse> {
-  if (!response.body) {
-    const text = await response.text()
-    if (Buffer.byteLength(text, 'utf8') > GEOFLOW_QWEN_MAX_RESPONSE_BYTES) throw new QwenRuntimeError('malformed_response', false, 'Qwen response exceeded the bounded response limit.')
-    return JSON.parse(text) as QwenResponse
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let bytes = 0
-  let text = ''
-  try {
-    while (true) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      bytes += chunk.value.byteLength
-      if (bytes > GEOFLOW_QWEN_MAX_RESPONSE_BYTES) throw new QwenRuntimeError('malformed_response', false, 'Qwen response exceeded the bounded response limit.')
-      text += decoder.decode(chunk.value, { stream: true })
-    }
-    text += decoder.decode()
-  } finally { reader.releaseLock() }
-  return JSON.parse(text) as QwenResponse
-}
-
-function parseQwenResponse(payload: QwenResponse): { model: string; content: string } {
-  const content = boundedText(payload.choices?.[0]?.message?.content, GEOFLOW_QWEN_MAX_OUTPUT_BYTES)
-  const model = typeof payload.model === 'string' && MODEL_ID_PATTERN.test(payload.model) ? payload.model : GEOFLOW_QWEN_DEFAULT_MODEL
-  return { model, content }
-}
-
 function buildArtifact(request: GeoFlowRequest, title: string, content: string): ContentArtifact {
   return { schemaVersion: 'geoflow-content-artifact-v1', contentType: request.contentType, language: request.language, title: boundedText(title, 300), summary: summaryOf(content), bodyMarkdown: content, bodyHash: bodyHash(content) }
 }
@@ -182,32 +146,24 @@ export function createGeoFlowQwenGenerationRuntime(options: GeoFlowQwenGeneratio
       if (!built.ok) return built
       const request = built.value
       if (request.requestedCapabilities.includes('autogeo_optimization')) return failureResponse(request, options, 'REQUIRED_RULE_MISSING', false, 'Qwen Base Draft runtime does not claim AutoGEO rule application; run the isolated optimization stage separately.')
-      if (!endpoint || !isAllowedBailianEndpoint(endpoint) || !MODEL_ID_PATTERN.test(model) || !options.credentialRef.trim()) return failureResponse(request, options, 'PROVIDER_PROVENANCE_MISSING', false, 'Qwen runtime configuration is unavailable or invalid; no provider request was executed.')
+      if (!endpoint || !isAllowedOpenAiCompatibleEndpoint(endpoint) || !OPENAI_COMPATIBLE_MODEL_PATTERN.test(model) || !options.credentialRef.trim()) return failureResponse(request, options, 'PROVIDER_PROVENANCE_MISSING', false, 'Qwen runtime configuration is unavailable or invalid; no provider request was executed.')
       let apiKey: string | undefined
       try { apiKey = (await options.resolveCredential(options.credentialRef))?.trim() } catch { apiKey = undefined }
       if (!apiKey) return failureResponse(request, options, 'IDENTITY_MISMATCH', false, 'Qwen runtime credential reference could not be resolved; no provider request was executed.')
 
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), timeoutMs)
-      let response: Response
+      let completed: { model: string; content: string }
       try {
-        response = await fetchImpl(endpoint, { method: 'POST', redirect: 'error', signal: controller.signal, headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model, stream: false, messages: [{ role: 'user', content: providerPrompt(request) }] }) })
+        const client = createOpenAiCompatibleChatClient({ endpoint, apiKey, model, fetchImpl: fetchImpl as typeof fetch, timeoutMs, maxResponseBytes: GEOFLOW_QWEN_MAX_RESPONSE_BYTES })
+        completed = await client.complete({ messages: [{ role: 'user', content: providerPrompt(request) }], responseFormat: 'text', timeoutMs, requestId: request.requestId, maxResponseBytes: GEOFLOW_QWEN_MAX_RESPONSE_BYTES })
       } catch (error) {
-        clearTimeout(timer)
-        const reason = controller.signal.aborted ? 'timeout' : 'transport'
-        return failureResponse(request, options, 'INVALID_INPUT', true, reason === 'timeout' ? 'Qwen provider request timed out; no draft artifact was accepted.' : 'Qwen provider transport failed; no draft artifact was accepted.')
-      } finally { clearTimeout(timer) }
-      if (!response.ok) {
-        const retryable = response.status === 429 || response.status >= 500
-        const code: ValidationFailure['reason'] = response.status === 401 || response.status === 403 ? 'IDENTITY_MISMATCH' : 'INVALID_INPUT'
-        return failureResponse(request, options, code, retryable, retryable ? 'Qwen provider returned a retryable failure; no draft artifact was accepted.' : 'Qwen provider rejected the request; no draft artifact was accepted.')
+        const providerError = error instanceof OpenAiCompatibleProviderError ? error : new OpenAiCompatibleProviderError('transport', true)
+        const runtimeError = new QwenRuntimeError(providerError.code, providerError.retryable, `OpenAI-compatible provider failure: ${providerError.code}.`)
+        const code: ValidationFailure['reason'] = runtimeError.reason === 'configuration' ? 'PROVIDER_PROVENANCE_MISSING' : runtimeError.reason === 'unauthorized' ? 'IDENTITY_MISMATCH' : 'INVALID_INPUT'
+        return failureResponse(request, options, code, runtimeError.retryable, runtimeError.reason === 'timeout' ? 'Qwen provider request timed out; no draft artifact was accepted.' : runtimeError.reason === 'malformed_response' ? 'Qwen provider returned malformed or oversized JSON; no draft artifact was accepted.' : runtimeError.retryable ? 'Qwen provider returned a retryable failure; no draft artifact was accepted.' : 'Qwen provider rejected the request; no draft artifact was accepted.')
       }
-      let payload: QwenResponse
-      try { payload = await readBoundedJson(response) } catch { return failureResponse(request, options, 'INVALID_INPUT', false, 'Qwen provider returned malformed or oversized JSON; no draft artifact was accepted.') }
       let parsed: { model: string; content: string }
-      try { parsed = parseQwenResponse(payload) } catch (error) {
-        const detail = error instanceof QwenRuntimeError ? error.message : 'Qwen provider returned an unusable response.'
-        return failureResponse(request, options, 'INVALID_INPUT', false, detail)
+      try { parsed = { model: completed.model, content: boundedText(completed.content, GEOFLOW_QWEN_MAX_OUTPUT_BYTES) } } catch (error) {
+        return failureResponse(request, options, 'INVALID_INPUT', false, error instanceof QwenRuntimeError ? error.message : 'Qwen provider returned an unusable response.')
       }
       try {
         const source = request.evidenceChunks.map(chunk => chunk.reviewedText).join('\n\n') || request.brief.title
@@ -225,8 +181,8 @@ export function createGeoFlowQwenGenerationRuntime(options: GeoFlowQwenGeneratio
         evidenceSnapshotHash: request.evidenceSnapshotHash,
         citationBindings: request.requestedCapabilities.includes('knowledge_rag') ? citationBindings(request) : [],
         appliedRuleIds: [],
-        providerProvenance: providerProvenance(parsed.model),
-        limitations: limitation('Provider generation executed through the injected server-side Bailian/Qwen adapter; no provider credential is returned.'),
+        providerProvenance: providerProvenance(endpoint, parsed.model),
+        limitations: limitation('Provider generation executed through the injected server-side OpenAI-compatible adapter; no provider credential is returned.'),
         completedAt: safeNow(options, request),
       }
       const validated = validateGeoFlowResponse(responsePayload, request)

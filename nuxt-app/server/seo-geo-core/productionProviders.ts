@@ -1,14 +1,15 @@
 import { createHash } from 'node:crypto'
 import { createAutoGeoApiAdapter } from '../geo/autogeo-api'
-import { createAutoGeoBailianQwenAdapter, isAllowedBailianEndpoint } from '../geo/autogeo-bailian-qwen'
+import { createAutoGeoOpenAiCompatibleAdapter } from '../geo/autogeo-openai-compatible'
 import type { GeoRewriteAdapter } from '../geo/contracts'
 import { referenceRulesAdapter } from '../geo/optimise'
 import { createDeterministicScaffoldGenerator, type ContentDraftGenerator, type ContentDraftGenerationContext } from './contentGenerator'
 import type { ContentDraftGenerationInput, ContentDraftGenerationResult } from './contracts'
 import { createGeoFlowQwenGenerationRuntime, type GeoFlowQwenGenerationRuntime } from '../geoflow-runtime/qwen'
 import { GEOFLOW_PROTOCOL_VERSION } from '../geoflow-integration'
+import { createOpenAiCompatibleChatClient, resolveOpenAiCompatibleProviderConfiguration, type OpenAiCompatibleProviderLabel } from '../llm-provider/openai-compatible'
 
-export type ProductionProviderMode = 'reference_rules' | 'autogeo_bailian_qwen' | 'autogeo_api'
+export type ProductionProviderMode = 'reference_rules' | 'openai_compatible' | 'autogeo_bailian_qwen' | 'autogeo_api'
 
 export type ProductionRuntimeProviders = {
   mode: ProductionProviderMode
@@ -19,7 +20,7 @@ export type ProductionRuntimeProviders = {
   provenance: Record<string, unknown>
 }
 
-type RuntimeOverrides = { qwenRuntime?: GeoFlowQwenGenerationRuntime; optimizationAdapter?: GeoRewriteAdapter }
+type RuntimeOverrides = { qwenRuntime?: GeoFlowQwenGenerationRuntime; optimizationAdapter?: GeoRewriteAdapter; fetchImpl?: typeof fetch }
 
 function configuredValue(name: string, runtimeValue?: unknown): string {
   const environmentValue = String(process.env[name] || '').trim()
@@ -34,14 +35,6 @@ function runtimeConfig(): Record<string, unknown> {
 function requestedMode(): string {
   const config = runtimeConfig()
   return configuredValue('NUXT_CONTENT_DRAFT_PROVIDER', config.contentDraftProvider)
-}
-
-function qwenConfiguration(config: Record<string, unknown>) {
-  const endpoint = configuredValue('NUXT_GEOFLOW_QWEN_ENDPOINT', config.geoflowQwenEndpoint) || configuredValue('NUXT_AUTOGEO_BAILIAN_ENDPOINT', config.autoGeoBailianEndpoint)
-  const model = configuredValue('NUXT_GEOFLOW_QWEN_MODEL', config.geoflowQwenModel) || configuredValue('NUXT_AUTOGEO_BAILIAN_MODEL', config.autoGeoBailianModel) || 'qwen-plus'
-  const credentialRef = configuredValue('NUXT_GEOFLOW_QWEN_CREDENTIAL_REFERENCE', config.geoflowQwenCredentialReference) || 'ref-env-geoflow-qwen'
-  const apiKey = configuredValue('NUXT_GEOFLOW_QWEN_API_KEY', config.geoflowQwenApiKey) || configuredValue('NUXT_AUTOGEO_BAILIAN_API_KEY', config.autoGeoBailianApiKey)
-  return { endpoint, model, credentialRef, apiKey }
 }
 
 function createCanonicalQwenGenerator(runtime: GeoFlowQwenGenerationRuntime): ContentDraftGenerator {
@@ -87,22 +80,21 @@ function createCanonicalQwenGenerator(runtime: GeoFlowQwenGenerationRuntime): Co
   }
 }
 
-function configuredProvider(mode: Exclude<ProductionProviderMode, 'reference_rules'>, overrides: RuntimeOverrides): { adapter: GeoRewriteAdapter; qwenRuntime: GeoFlowQwenGenerationRuntime } | undefined {
+function configuredProvider(mode: Exclude<ProductionProviderMode, 'reference_rules'>, overrides: RuntimeOverrides): { adapter: GeoRewriteAdapter; qwenRuntime: GeoFlowQwenGenerationRuntime; providerLabel?: OpenAiCompatibleProviderLabel } | undefined {
   const config = runtimeConfig()
-  const qwen = qwenConfiguration(config)
-  const qwenRuntime = overrides.qwenRuntime || (qwen.apiKey && qwen.endpoint && isAllowedBailianEndpoint(qwen.endpoint) ? createGeoFlowQwenGenerationRuntime({ endpoint: qwen.endpoint, model: qwen.model, credentialRef: qwen.credentialRef, resolveCredential: reference => reference === qwen.credentialRef ? qwen.apiKey : undefined }) : undefined)
+  const provider = resolveOpenAiCompatibleProviderConfiguration({ runtimeConfig: config })
+  const credentialRef = configuredValue('NUXT_GEOFLOW_QWEN_CREDENTIAL_REFERENCE', config.geoflowQwenCredentialReference) || 'ref-env-geoflow-qwen'
+  const qwenRuntime = overrides.qwenRuntime || (provider.configured ? createGeoFlowQwenGenerationRuntime({ endpoint: provider.endpoint, model: provider.model, credentialRef, resolveCredential: reference => reference === credentialRef ? provider.apiKey : undefined, fetchImpl: overrides.fetchImpl }) : undefined)
   if (!qwenRuntime) return undefined
-  if (overrides.optimizationAdapter) return { adapter: overrides.optimizationAdapter, qwenRuntime }
+  if (overrides.optimizationAdapter) return { adapter: overrides.optimizationAdapter, qwenRuntime, ...(provider.configured ? { providerLabel: provider.providerLabel } : {}) }
   if (mode === 'autogeo_api') {
     const apiKey = configuredValue('NUXT_AUTOGEO_GEMINI_API_KEY', config.autoGeoGeminiApiKey)
     if (!apiKey) return undefined
-    return { adapter: createAutoGeoApiAdapter({ apiKey }), qwenRuntime }
+    return { adapter: createAutoGeoApiAdapter({ apiKey }), qwenRuntime, ...(provider.configured ? { providerLabel: provider.providerLabel } : {}) }
   }
-  const apiKey = configuredValue('NUXT_AUTOGEO_BAILIAN_API_KEY', config.autoGeoBailianApiKey)
-  const endpoint = configuredValue('NUXT_AUTOGEO_BAILIAN_ENDPOINT', config.autoGeoBailianEndpoint)
-  const model = configuredValue('NUXT_AUTOGEO_BAILIAN_MODEL', config.autoGeoBailianModel) || 'qwen-plus'
-  if (!apiKey || !endpoint || !isAllowedBailianEndpoint(endpoint)) return undefined
-  return { adapter: createAutoGeoBailianQwenAdapter({ apiKey, endpoint, model }), qwenRuntime }
+  if (!provider.configured) return undefined
+  const client = createOpenAiCompatibleChatClient({ endpoint: provider.endpoint, apiKey: provider.apiKey, model: provider.model, fetchImpl: overrides.fetchImpl })
+  return { adapter: createAutoGeoOpenAiCompatibleAdapter({ client }), qwenRuntime, providerLabel: provider.providerLabel }
 }
 
 function fallback(fallbackReason: string, requested?: string): ProductionRuntimeProviders {
@@ -112,11 +104,11 @@ function fallback(fallbackReason: string, requested?: string): ProductionRuntime
 export function resolveProductionRuntimeProviders(requested = requestedMode(), overrides: RuntimeOverrides = {}): ProductionRuntimeProviders {
   const normalized = requested.trim().toLowerCase()
   if (normalized === 'reference_rules' || !normalized) return fallback(normalized ? 'provider-not-configured' : 'content-provider-not-configured', normalized)
-  if (normalized !== 'autogeo_api' && normalized !== 'autogeo_bailian_qwen') return fallback('unknown-content-provider-mode', normalized)
+  if (normalized !== 'autogeo_api' && normalized !== 'autogeo_bailian_qwen' && normalized !== 'openai_compatible') return fallback('unknown-content-provider-mode', normalized)
   const mode = normalized as Exclude<ProductionProviderMode, 'reference_rules'>
   const configured = configuredProvider(mode, overrides)
   if (!configured) return fallback('provider-credentials-endpoint-or-optimizer-not-configured', mode)
-  return { mode, configured: true, baseDraftGenerator: createCanonicalQwenGenerator(configured.qwenRuntime), optimizationAdapter: configured.adapter, provenance: { mode, configured: true, providerExecution: true, baseDraftRole: 'geoflow-qwen', optimizerRole: configured.adapter.id === 'reference-rules-v1' ? 'reference-rules' : 'isolated-autogeo-optimizer', provider: configured.adapter.id, canonicalBaseRuntime: 'geoflow-qwen-runtime-v1' } }
+  return { mode, configured: true, baseDraftGenerator: createCanonicalQwenGenerator(configured.qwenRuntime), optimizationAdapter: configured.adapter, provenance: { mode, configured: true, providerExecution: true, baseDraftRole: 'geoflow-qwen', optimizerRole: configured.adapter.id === 'reference-rules-v1' ? 'reference-rules' : 'isolated-autogeo-optimizer', provider: configured.adapter.id, ...(configured.providerLabel ? { providerLabel: configured.providerLabel } : {}), canonicalBaseRuntime: 'geoflow-qwen-runtime-v1' } }
 }
 
 export function createProviderRuntimeForTests(input: { qwenRuntime: GeoFlowQwenGenerationRuntime; optimizationAdapter: GeoRewriteAdapter }): ProductionRuntimeProviders {

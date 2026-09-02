@@ -4,9 +4,12 @@ import { BLOCK_CATALOG } from './catalog'
 import { applyCommandToDocument, applyPageCommandInTransaction, restorePageVersionInTransaction } from './engine'
 import { canonicalFingerprint, diffPages, parsePageDocument } from './canonical'
 import { BLOCK_TYPES, PAGE_COMMAND_VERSION, type AiEditProposal, type AiPlannerPort, type MediaAuthorityResolver, type PageActor, type PageCommand, type PageDiff, type PageDocument, type PageEditorRepository, type PageMediaBinding, type WebsiteEditIntent } from './types'
+import { AiPlannerUnavailableError } from './ai-planner-openai-compatible'
 import type { MediaAssetProjection } from '../media-vault/types'
 
-export const AI_EDITOR_LIMITS = Object.freeze({ maxRequestCharacters: 1200, maxContextBlocks: 100, maxContextMedia: 100, maxOperations: 20, maxOutputTokens: 2000, timeoutMs: 12_000, requestsPerDay: 100, inputTokensPerDay: 100_000, costMicrosPerDay: 1_000_000, costMicrosPerTokenCeiling: 10 })
+export const AI_EDITOR_LIMITS = Object.freeze({ maxRequestCharacters: 1200, maxContextBlocks: 100, maxContextMedia: 100, maxOperations: 20, maxOutputTokens: 2000, timeoutMs: 30_000, requestsPerDay: 100, inputTokensPerDay: 100_000, costMicrosPerDay: 1_000_000, costMicrosPerTokenCeiling: 10 })
+export const AI_PLANNER_UNAVAILABLE_WARNING = 'AI_PLANNER_UNAVAILABLE'
+export const AI_PLANNER_FAILURE_WARNING_PREFIX = 'AI_PLANNER_FAILURE:'
 const UNRELATED = /(?:股票|投資|作業|寫程式|programming|weather|天氣|recipe|食譜|通用聊天|general chat)/iu
 const DANGEROUS = /(?:付款|payment|billing|credential|密碼|權限|permission|domain|網域|法律聲明|醫療聲明|price|價格)/iu
 const INJECTION = /(?:ignore (?:all |previous )?instructions|system prompt|developer message|忽略(?:以上|先前|系統)指令|越獄|jailbreak)/iu
@@ -48,8 +51,29 @@ function deterministicPlan(intent: WebsiteEditIntent, request: string, page: Pag
 
 function strictProviderOperations(output: unknown, expectedVersion: number, identity: string): PageCommand[] {
   if (!output || typeof output !== 'object' || Array.isArray(output) || Object.keys(output as object).sort().join(',') !== ['operations', 'summary', 'warnings'].sort().join(',')) throw createError({ statusCode: 502, statusMessage: 'AI planner output schema is invalid.' }); const value = output as any; if (!Array.isArray(value.operations) || value.operations.length > AI_EDITOR_LIMITS.maxOperations || typeof value.summary !== 'string' || !Array.isArray(value.warnings) || value.warnings.some((item: unknown) => typeof item !== 'string')) throw createError({ statusCode: 502, statusMessage: 'AI planner output bounds are invalid.' })
-  return value.operations.map((item: any, index: number) => { if (!item || typeof item !== 'object' || Array.isArray(item) || !['update_text', 'update_link', 'replace_media', 'add_block', 'remove_block', 'duplicate_block', 'move_block', 'update_block_variant', 'update_items', 'toggle_visibility', 'schedule_visibility', 'update_seo'].includes(item.type)) throw createError({ statusCode: 502, statusMessage: 'AI planner proposed an unknown or forbidden operation.' }); return { schemaVersion: PAGE_COMMAND_VERSION, type: item.type, expectedPageVersion: expectedVersion + index, idempotencyKey: `ai:${identity}:provider:${index}`, target: item.target, payload: item.payload, reason: typeof item.reason === 'string' ? item.reason.slice(0, 500) : 'AI structured website edit proposal' } })
+  return value.operations.map((item: any, index: number) => { if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).sort().join(',') !== ['payload', 'reason', 'target', 'type'].join(',') || !['update_text', 'update_link', 'replace_media', 'add_block', 'remove_block', 'duplicate_block', 'move_block', 'update_block_variant', 'update_items', 'toggle_visibility', 'schedule_visibility', 'update_seo'].includes(item.type) || !item.target || typeof item.target !== 'object' || Array.isArray(item.target) || typeof item.reason !== 'string' || !item.reason.trim()) throw createError({ statusCode: 502, statusMessage: 'AI planner proposed an unknown or forbidden operation.' }); return { schemaVersion: PAGE_COMMAND_VERSION, type: item.type, expectedPageVersion: expectedVersion + index, idempotencyKey: `ai:${identity}:provider:${index}`, target: item.target, payload: item.payload, reason: item.reason.trim().slice(0, 500) } })
 }
+
+function sanitizedPlannerText(value: string): string { return value.replace(/[\u0000-\u001f\u007f-\u009f<>]/gu, ' ').replace(/\s+/gu, ' ').trim().slice(0, 500) }
+function isReservedPlannerWarning(value: string): boolean { const upper = value.toUpperCase(); return upper === AI_PLANNER_UNAVAILABLE_WARNING || upper.startsWith(AI_PLANNER_FAILURE_WARNING_PREFIX) }
+function plannerProvidedWarnings(values: string[]): string[] { return values.map(sanitizedPlannerText).filter(value => value !== '' && !isReservedPlannerWarning(value)) }
+function plannerMediaBindings(operation: PageCommand): unknown[] {
+  if (operation.type === 'replace_media') return [operation.payload]
+  if (operation.type !== 'add_block' || !operation.payload || typeof operation.payload !== 'object' || Array.isArray(operation.payload)) return []
+  return Array.isArray((operation.payload as any).mediaBindings) ? (operation.payload as any).mediaBindings : []
+}
+async function assertPlannerMediaAuthority(operation: PageCommand, actor: PageActor, approvedMedia: MediaAssetProjection[], resolveMedia: MediaAuthorityResolver): Promise<void> {
+  for (const raw of plannerMediaBindings(operation)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw createError({ statusCode: 422, statusMessage: 'AI planner media binding is invalid.' })
+    const binding = raw as PageMediaBinding
+    const approved = approvedMedia.find(asset => asset.assetId === binding.assetId && asset.version === binding.assetVersion && asset.sha256 === binding.assetSha256)
+    if (!approved || binding.provenance !== 'ai_suggestion_pending') throw createError({ statusCode: 403, statusMessage: 'AI planner media is outside the approved tenant scope.' })
+    const resolved = await resolveMedia(actor, binding)
+    if (!resolved || resolved.ownerUserId !== actor.ownerUserId || resolved.projectId !== actor.projectId || resolved.status !== 'ready' || resolved.assetId !== binding.assetId || resolved.version !== binding.assetVersion || resolved.sha256 !== binding.assetSha256) throw createError({ statusCode: 403, statusMessage: 'AI planner media authority could not be verified.' })
+  }
+}
+
+export function isAiPlannerUnavailableProposal(proposal: AiEditProposal): boolean { return proposal.status === 'clarification_required' && proposal.operations.length === 0 && proposal.warnings.includes(AI_PLANNER_UNAVAILABLE_WARNING) }
 
 export function aiEditRequestFingerprint(input: { actor: PageActor; page: PageDocument; request: string; selectedMediaAssetIds?: string[] }): string {
   return canonicalFingerprint({ ownerUserId: input.actor.ownerUserId, projectId: input.actor.projectId, pageId: input.page.pageId, pageVersion: input.page.version, request: input.request.trim(), selected: [...new Set(input.selectedMediaAssetIds || [])].sort() })
@@ -59,12 +83,42 @@ export async function proposeAiWebsiteEdit(input: { actor: PageActor; page: Page
   const now = input.now || new Date(); const page = parsePageDocument(input.page); if (input.actor.ownerUserId < 1 || input.actor.projectId < 1 || input.actor.role === 'viewer') throw createError({ statusCode: 403, statusMessage: 'AI website editing requires content-write authority.' }); if (typeof input.request !== 'string' || !input.request.trim() || input.request.length > AI_EDITOR_LIMITS.maxRequestCharacters) throw createError({ statusCode: 422, statusMessage: 'AI website edit request is empty or too long.' })
   const request = input.request.trim(); const intent = classifyWebsiteEditIntent(request); const selected = new Set(input.selectedMediaAssetIds || []); const approvedMedia = input.approvedMedia.filter(asset => asset.ownerUserId === input.actor.ownerUserId && asset.projectId === input.actor.projectId && asset.status === 'ready' && (!selected.size || selected.has(asset.assetId))).slice(0, AI_EDITOR_LIMITS.maxContextMedia)
   const requestFingerprint = aiEditRequestFingerprint({ actor: input.actor, page, request, selectedMediaAssetIds: input.selectedMediaAssetIds }); const budgetIdempotencyKey = input.idempotencyKey || requestFingerprint; const identity = input.idempotencyKey ? `aip_${canonicalFingerprint({ ownerUserId: input.actor.ownerUserId, projectId: input.actor.projectId, idempotencyKey: input.idempotencyKey }).slice(0, 32)}` : randomUUID(); const budget = await input.budget.claim(input.actor, { idempotencyKey: budgetIdempotencyKey, requestFingerprint, estimatedInputTokens: Math.ceil((request.length + JSON.stringify(page).length) / 4), maxOutputTokens: AI_EDITOR_LIMITS.maxOutputTokens, now }); if (!budget.allowed) throw createError({ statusCode: 429, statusMessage: 'AI website edit daily plan budget is exhausted.' })
-  try { const direct = deterministicPlan(intent, request, page, approvedMedia, identity); let operations = direct.operations
-  if (input.planner && intent !== 'unrelated_refusal' && intent !== 'bounded_clarification' && !DANGEROUS.test(request)) { const contextPage = { ...page, sections: page.sections.slice(0, AI_EDITOR_LIMITS.maxContextBlocks) }; const output = await input.planner.plan({ intent, request: `[UNTRUSTED_CUSTOMER_REQUEST]\n${request}\n[/UNTRUSTED_CUSTOMER_REQUEST]`, context: { page: contextPage, approvedMedia: approvedMedia.map(({ assetId, version, sha256, width, height, filename, visibility, status }) => ({ assetId, version, sha256, width, height, filename, visibility, status })), commandCatalog: ['update_text', 'update_link', 'replace_media', 'add_block', 'remove_block', 'duplicate_block', 'move_block', 'update_block_variant', 'update_items', 'toggle_visibility', 'schedule_visibility', 'update_seo'], untrustedContentBoundary: true, maxOperations: AI_EDITOR_LIMITS.maxOperations }, maxOutputTokens: AI_EDITOR_LIMITS.maxOutputTokens, timeoutMs: AI_EDITOR_LIMITS.timeoutMs }); operations = strictProviderOperations(output, page.version, identity) }
-  let dryRun = page; let combinedDiff: PageDiff | null = null; const affected = new Set<string>()
-  if (operations.length > AI_EDITOR_LIMITS.maxOperations) throw createError({ statusCode: 422, statusMessage: 'AI proposal exceeds the operation limit.' })
-  if (intent !== 'undo') for (const operation of operations) { const result = applyCommandToDocument(dryRun, operation, input.actor, now); dryRun = result.page; combinedDiff = diffPages(page, dryRun); for (const id of [...result.diff.changedBlockIds, ...result.diff.addedBlockIds, ...result.diff.removedBlockIds]) affected.add(id) }
-  const status: AiEditProposal['status'] = intent === 'unrelated_refusal' ? 'refused' : direct.clarification || !operations.length ? 'clarification_required' : 'proposed'; const stable = { proposalId: identity, ownerUserId: input.actor.ownerUserId, projectId: input.actor.projectId, pageId: page.pageId, intent, summary: direct.summary, operations, diff: combinedDiff, warnings: [...direct.warnings, ...(INJECTION.test(request) ? ['PROMPT_INJECTION_TEXT_TREATED_AS_INERT'] : []), 'AI_NEVER_PUBLISHES_DIRECTLY'], affectedBlockIds: [...affected].sort(), expectedPageVersion: page.version, status, expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(), mayPublishDirectly: false as const, visionMode: 'metadata_only' as const }; const proposal = { ...stable, proposalFingerprint: canonicalFingerprint(stable) }; if (!input.deferBudgetCommit) await input.budget.commit?.(input.actor, { idempotencyKey: budgetIdempotencyKey, requestFingerprint, proposalId: proposal.proposalId, now }); return proposal } catch (error) { await input.budget.release?.(input.actor, { idempotencyKey: budgetIdempotencyKey, requestFingerprint, now }); throw error }
+  try {
+    const direct = deterministicPlan(intent, request, page, approvedMedia, identity)
+    const usePlanner = Boolean(input.planner && intent !== 'unrelated_refusal' && !DANGEROUS.test(request))
+    if (usePlanner) {
+      const proposalIntent: WebsiteEditIntent = intent === 'bounded_clarification' ? 'freeform_edit' : intent
+      let phase: 'planner' | 'validation' | 'dry_run' = 'planner'
+      let successfulProposal: AiEditProposal
+      try {
+        const contextPage = { ...page, sections: page.sections.slice(0, AI_EDITOR_LIMITS.maxContextBlocks) }
+        const output = await input.planner!.plan({ intent: proposalIntent, request: `[UNTRUSTED_CUSTOMER_REQUEST]\n${request}\n[/UNTRUSTED_CUSTOMER_REQUEST]`, context: { page: contextPage, approvedMedia: approvedMedia.map(({ assetId, version, sha256, width, height, filename, visibility, status }) => ({ assetId, version, sha256, width, height, filename, visibility, status })), commandCatalog: ['update_text', 'update_link', 'replace_media', 'add_block', 'remove_block', 'duplicate_block', 'move_block', 'update_block_variant', 'update_items', 'toggle_visibility', 'schedule_visibility', 'update_seo'], untrustedContentBoundary: true, maxOperations: AI_EDITOR_LIMITS.maxOperations }, maxOutputTokens: AI_EDITOR_LIMITS.maxOutputTokens, timeoutMs: AI_EDITOR_LIMITS.timeoutMs })
+        phase = 'validation'
+        const operations = strictProviderOperations(output, page.version, identity)
+        const plannerValue = output as { summary: string; warnings: string[] }
+        phase = 'dry_run'
+        let dryRun = page; let combinedDiff: PageDiff | null = null; const affected = new Set<string>()
+        for (const operation of operations) { await assertPlannerMediaAuthority(operation, input.actor, approvedMedia, input.resolveMedia); const result = applyCommandToDocument(dryRun, operation, input.actor, now); dryRun = result.page; combinedDiff = diffPages(page, dryRun); for (const id of [...result.diff.changedBlockIds, ...result.diff.addedBlockIds, ...result.diff.removedBlockIds]) affected.add(id) }
+        const summary = sanitizedPlannerText(plannerValue.summary) || direct.summary
+        const status: AiEditProposal['status'] = operations.length ? 'proposed' : 'clarification_required'
+        const warnings = [...plannerProvidedWarnings(plannerValue.warnings), ...(INJECTION.test(request) ? ['PROMPT_INJECTION_TEXT_TREATED_AS_INERT'] : []), 'AI_NEVER_PUBLISHES_DIRECTLY']
+        const stable = { proposalId: identity, ownerUserId: input.actor.ownerUserId, projectId: input.actor.projectId, pageId: page.pageId, intent: proposalIntent, summary, operations, diff: combinedDiff, warnings, affectedBlockIds: [...affected].sort(), expectedPageVersion: page.version, status, expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(), mayPublishDirectly: false as const, visionMode: 'metadata_only' as const }
+        successfulProposal = { ...stable, proposalFingerprint: canonicalFingerprint(stable) }
+      } catch (error) {
+        const code = error instanceof AiPlannerUnavailableError ? error.code : phase === 'validation' ? 'invalid_operations' : phase === 'dry_run' ? 'dry_run_failed' : 'provider_error'
+        const stable = { proposalId: identity, ownerUserId: input.actor.ownerUserId, projectId: input.actor.projectId, pageId: page.pageId, intent: proposalIntent, summary: 'AI 暫時無法處理這個要求，請換個說法再試一次。', operations: [] as PageCommand[], diff: diffPages(page, page), warnings: [AI_PLANNER_UNAVAILABLE_WARNING, `AI_PLANNER_FAILURE:${code}`, 'PROMPT_INJECTION_TEXT_TREATED_AS_INERT', 'AI_NEVER_PUBLISHES_DIRECTLY'], affectedBlockIds: [] as string[], expectedPageVersion: page.version, status: 'clarification_required' as const, expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(), mayPublishDirectly: false as const, visionMode: 'metadata_only' as const }
+        const proposal = { ...stable, proposalFingerprint: canonicalFingerprint(stable) }
+        if (!input.deferBudgetCommit) await input.budget.release?.(input.actor, { idempotencyKey: budgetIdempotencyKey, requestFingerprint, now })
+        return proposal
+      }
+      if (!input.deferBudgetCommit) await input.budget.commit?.(input.actor, { idempotencyKey: budgetIdempotencyKey, requestFingerprint, proposalId: successfulProposal.proposalId, now })
+      return successfulProposal
+    }
+    const operations = direct.operations; let dryRun = page; let combinedDiff: PageDiff | null = null; const affected = new Set<string>()
+    if (operations.length > AI_EDITOR_LIMITS.maxOperations) throw createError({ statusCode: 422, statusMessage: 'AI proposal exceeds the operation limit.' })
+    if (intent !== 'undo') for (const operation of operations) { const result = applyCommandToDocument(dryRun, operation, input.actor, now); dryRun = result.page; combinedDiff = diffPages(page, dryRun); for (const id of [...result.diff.changedBlockIds, ...result.diff.addedBlockIds, ...result.diff.removedBlockIds]) affected.add(id) }
+    const status: AiEditProposal['status'] = intent === 'unrelated_refusal' ? 'refused' : direct.clarification || !operations.length ? 'clarification_required' : 'proposed'; const stable = { proposalId: identity, ownerUserId: input.actor.ownerUserId, projectId: input.actor.projectId, pageId: page.pageId, intent, summary: direct.summary, operations, diff: combinedDiff, warnings: [...direct.warnings, ...(INJECTION.test(request) ? ['PROMPT_INJECTION_TEXT_TREATED_AS_INERT'] : []), 'AI_NEVER_PUBLISHES_DIRECTLY'], affectedBlockIds: [...affected].sort(), expectedPageVersion: page.version, status, expiresAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(), mayPublishDirectly: false as const, visionMode: 'metadata_only' as const }; const proposal = { ...stable, proposalFingerprint: canonicalFingerprint(stable) }; if (!input.deferBudgetCommit) await input.budget.commit?.(input.actor, { idempotencyKey: budgetIdempotencyKey, requestFingerprint, proposalId: proposal.proposalId, now }); return proposal
+  } catch (error) { if (!input.deferBudgetCommit) await input.budget.release?.(input.actor, { idempotencyKey: budgetIdempotencyKey, requestFingerprint, now }); throw error }
 }
 
 export async function applyAiProposalToDraft(input: { repository: PageEditorRepository; actor: PageActor; proposal: AiEditProposal; now?: Date }) {

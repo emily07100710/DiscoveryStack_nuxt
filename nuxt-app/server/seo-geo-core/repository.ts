@@ -695,7 +695,7 @@ export async function getOwnerContentJob(ownerUserId: number, jobId: number) {
   return job
 }
 
-export async function createContentJob(input: { ownerUserId: number, briefId: number, operation: 'autogeo_recommendation' | 'content_draft' | 'risk_scan' | 'delivery_preview' | 'delivery_publish', providerMode: 'reference_rules' | 'autogeo_bailian_qwen' | 'autogeo_api' | 'manual', idempotencyKey: string, productionPlanId?: number, strategyRecommendationId?: number, productionDeliverableId?: number }) {
+export async function createContentJob(input: { ownerUserId: number, briefId: number, operation: 'autogeo_recommendation' | 'content_draft' | 'risk_scan' | 'delivery_preview' | 'delivery_publish', providerMode: 'reference_rules' | 'openai_compatible' | 'autogeo_bailian_qwen' | 'autogeo_api' | 'manual', idempotencyKey: string, productionPlanId?: number, strategyRecommendationId?: number, productionDeliverableId?: number }) {
   const database = requireAuditDatabase()
   const [brief] = await database.select().from(seoGeoContentBriefs).where(and(eq(seoGeoContentBriefs.id, input.briefId), eq(seoGeoContentBriefs.ownerUserId, input.ownerUserId), eq(seoGeoContentBriefs.status, 'ready_for_generation'))).limit(1)
   if (!brief) throw createError({ statusCode: 422, statusMessage: 'Content Brief 必須為 owner-owned 且 ready_for_generation 才可建立工作。' })
@@ -709,7 +709,8 @@ export async function createContentJob(input: { ownerUserId: number, briefId: nu
     if (existing.requestFingerprint !== requestFingerprint || existing.briefId !== brief.id || existing.productionPlanId !== (input.productionPlanId ?? null) || existing.strategyRecommendationId !== (input.strategyRecommendationId ?? null) || existing.productionDeliverableId !== (input.productionDeliverableId ?? null)) throw createError({ statusCode: 409, statusMessage: 'Idempotency key is already associated with a different content job request.' })
     return existing
   }
-  await database.insert(seoGeoContentJobs).values({ ownerUserId: input.ownerUserId, briefId: brief.id, productionPlanId: input.productionPlanId ?? null, strategyRecommendationId: input.strategyRecommendationId ?? null, productionDeliverableId: input.productionDeliverableId ?? null, requestFingerprint, operation: input.operation, providerMode: input.providerMode, status: 'queued', idempotencyKey: input.idempotencyKey, evidenceSnapshotHash: brief.evidenceSnapshotHash })
+  const storedProviderMode = input.providerMode === 'openai_compatible' ? 'autogeo_bailian_qwen' : input.providerMode
+  await database.insert(seoGeoContentJobs).values({ ownerUserId: input.ownerUserId, briefId: brief.id, productionPlanId: input.productionPlanId ?? null, strategyRecommendationId: input.strategyRecommendationId ?? null, productionDeliverableId: input.productionDeliverableId ?? null, requestFingerprint, operation: input.operation, providerMode: storedProviderMode, status: 'queued', idempotencyKey: input.idempotencyKey, evidenceSnapshotHash: brief.evidenceSnapshotHash })
   const [job] = await database.select().from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.ownerUserId, input.ownerUserId), eq(seoGeoContentJobs.idempotencyKey, input.idempotencyKey))).limit(1)
   if (!job) throw createError({ statusCode: 500, statusMessage: 'Content job could not be recorded.' })
   return job

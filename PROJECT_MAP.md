@@ -219,7 +219,7 @@ flowchart TD
 3. **策略** — 同一支 `runOwnerPublicDiagnosis` 在 `engine === 'deterministic-diagnosis-v1'` 且有 findings 時直接呼叫 `repository.ts#createStrategyRecommendations`。
 4. **生產計畫** — `seo-geo.vue#createGuidedPlan` → `POST /api/seo-geo/production-plans` → `repository.ts#createProductionPlan`，用 `#assertProductionPlanEvidenceSnapshot` 綁死步驟 1 的 hash。
 5. **生成＋風險閘** — `POST /api/seo-geo/production-plans/{id}/generate` → `server/seo-geo-core/service.ts#runOwnerProductionDeliverableInternal`。兩段草稿：base draft → `#evaluateContentRisk` ＋ `#withEvidenceMaterialGate` → `server/geo/optimise.ts#optimiseGeoDocument` 做 selected-rule 優化 → 再跑一次風險閘 → job 落在 `needs_human_review` 或 `blocked`。
-   - ⚠ **斷點 A** — `server/seo-geo-core/productionProviders.ts#resolveProductionRuntimeProviders`：`NUXT_CONTENT_DRAFT_PROVIDER` 未設或憑證缺失時回 `fallback('content-provider-not-configured')`，改用 `contentGenerator.ts#createDeterministicScaffoldGenerator`，`provenance.providerExecution = false`。**這不是造假**（誠實落 provenance），但會讓下游機器授權永久拒絕（見斷點 C）。
+   - ⚠ **斷點 A** — `server/seo-geo-core/productionProviders.ts#resolveProductionRuntimeProviders`：`NUXT_CONTENT_DRAFT_PROVIDER=openai_compatible` 與 `NUXT_LLM_*` 未設或設定無效時會 fail closed，改用 `contentGenerator.ts#createDeterministicScaffoldGenerator`，`provenance.providerExecution = false`。**這不是造假**（誠實落 provenance），但會讓下游機器授權永久拒絕（見斷點 C）。
 6. **人工審查** — `seo-geo.vue#submitGuidedReview` → `POST /api/seo-geo/reviews` → `repository.ts#createContentReview`，四種裁決：`approved_for_preview` / `approved_for_delivery` / `changes_requested` / `rejected`。
 
 ### 中段：客戶 → 日曆 → 排程產出
@@ -298,15 +298,15 @@ Migration 演進：0000 地基 → 0001 audit → 0002–0010 intelligence／訓
 
 ### 6.3 環境變數（**只列名稱與用途，本檔絕不寫值**）
 
-**Secret 類**：`JWT_SECRET`／`NUXT_SESSION_SECRET`（session JWT，**同時是 provider vault 的 master secret**）、`DATABASE_URL`、`FIRECRAWL_API_KEY`、`HUGGINGFACE_API_TOKEN`、`NUXT_AUTOGEO_GEMINI_API_KEY`、`NUXT_AUTOGEO_BAILIAN_API_KEY`、`NUXT_GEOFLOW_QWEN_API_KEY`、`SHOPIFY_API_SECRET`、`SHOPIFY_CLIENT_ID`、`NUXT_PAGE_EDITOR_PREVIEW_SECRET`、`NUXT_MEDIA_LOCAL_SIGNING_SECRET`、`NUXT_MEDIA_SCANNER_CREDENTIAL_REF`、`SYSTEM_FACTORY_HMAC_SECRET`／`_KEY_ID`／`_CREDENTIAL_REF`、`SYSTEM_FACTORY_FRAPPE_AUTHORIZATION`、`DISCOVERYSTACK_PAYMENT_WEBHOOK_CREDENTIAL_REF`／`_PROVIDER_KEY`、`DISCOVERYSTACK_FIRST_PARTY_CREDENTIALS_JSON`、`DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON`、`DISCOVERYSTACK_MANAGED_SITE_VAULT_JSON`、`DS_MEDIA_S3_ACCESS_KEY`／`_SECRET_KEY`。
+**Secret 類**：`JWT_SECRET`／`NUXT_SESSION_SECRET`（session JWT，**同時是 provider vault 的 master secret**）、`DATABASE_URL`、`FIRECRAWL_API_KEY`、`HUGGINGFACE_API_TOKEN`、`NUXT_LLM_API_KEY`、`NUXT_AUTOGEO_GEMINI_API_KEY`、`NUXT_AUTOGEO_BAILIAN_API_KEY`、`NUXT_GEOFLOW_QWEN_API_KEY`、`SHOPIFY_API_SECRET`、`SHOPIFY_CLIENT_ID`、`NUXT_PAGE_EDITOR_PREVIEW_SECRET`、`NUXT_MEDIA_LOCAL_SIGNING_SECRET`、`NUXT_MEDIA_SCANNER_CREDENTIAL_REF`、`SYSTEM_FACTORY_HMAC_SECRET`／`_KEY_ID`／`_CREDENTIAL_REF`、`SYSTEM_FACTORY_FRAPPE_AUTHORIZATION`、`DISCOVERYSTACK_PAYMENT_WEBHOOK_CREDENTIAL_REF`／`_PROVIDER_KEY`、`DISCOVERYSTACK_FIRST_PARTY_CREDENTIALS_JSON`、`DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON`、`DISCOVERYSTACK_MANAGED_SITE_VAULT_JSON`、`DS_MEDIA_S3_ACCESS_KEY`／`_SECRET_KEY`。
 
-**Origin／設定類**：`DISCOVERYSTACK_PUBLIC_SITE_ORIGIN`、`NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN`、`OAUTH_SERVER_URL`、`VITE_OAUTH_PORTAL_URL`、`VITE_APP_ID`、`NUXT_DISCOVERY_STACK_OAUTH_ALLOWED_ORIGIN`、`OWNER_OPEN_ID`、`FIRECRAWL_API_BASE_URL`、`HUGGINGFACE_{NAMESPACE,BASE_MODEL_ID,JOB_FLAVOR}`、`NUXT_CONTENT_DRAFT_PROVIDER`、`NUXT_GEOFLOW_QWEN_{ENDPOINT,MODEL,CREDENTIAL_REFERENCE}`、`NUXT_AUTOGEO_BAILIAN_{ENDPOINT,MODEL}`、`NUXT_MEDIA_SCANNER_ENDPOINT`、`DS_MEDIA_S3_{BUCKET,ENDPOINT}`、`SYSTEM_FACTORY_FRAPPE_{ORIGIN,ALLOWED_ORIGINS}`、`DISCOVERYSTACK_MANAGED_SITE_ALLOWED_{CHECKOUT,PROVIDER}_ORIGINS`、`PUBLIC_SITE_URL`、`PUBLIC_OPS_API_ORIGIN`。
+**Origin／設定類**：`DISCOVERYSTACK_PUBLIC_SITE_ORIGIN`、`NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN`、`OAUTH_SERVER_URL`、`VITE_OAUTH_PORTAL_URL`、`VITE_APP_ID`、`NUXT_DISCOVERY_STACK_OAUTH_ALLOWED_ORIGIN`、`OWNER_OPEN_ID`、`FIRECRAWL_API_BASE_URL`、`HUGGINGFACE_{NAMESPACE,BASE_MODEL_ID,JOB_FLAVOR}`、`NUXT_LLM_{ENDPOINT,MODEL}`、`NUXT_CONTENT_DRAFT_PROVIDER`、`NUXT_PAGE_EDITOR_AI_{PROVIDER,MODEL}`、`NUXT_GEOFLOW_QWEN_{ENDPOINT,MODEL,CREDENTIAL_REFERENCE}`、`NUXT_AUTOGEO_BAILIAN_{ENDPOINT,MODEL}`、`NUXT_MEDIA_SCANNER_ENDPOINT`、`DS_MEDIA_S3_{BUCKET,ENDPOINT}`、`SYSTEM_FACTORY_FRAPPE_{ORIGIN,ALLOWED_ORIGINS}`、`DISCOVERYSTACK_MANAGED_SITE_ALLOWED_{CHECKOUT,PROVIDER}_ORIGINS`、`PUBLIC_SITE_URL`、`PUBLIC_OPS_API_ORIGIN`。
 
 **Feature flag（全部 `=== 'true'` 字串比對）**：`NUXT_SYSTEM_FACTORY_EXECUTION_ENABLED`、`SYSTEM_FACTORY_CONTROL_PLANE_LIVE_ENABLED`、`SYSTEM_FACTORY_TENANT_APP_LIVE_ENABLED`、`SYSTEM_FACTORY_RUNTIME_PRODUCTION_APPROVED`、`NUXT_MODEL_IMPROVEMENT_AUTO_TRAIN`、`NUXT_BUILD_TYPECHECK`。
 
 **Cron**：`MODEL_IMPROVEMENT_CRON`、`GEO_MODELOPS_CRON`、`MANAGED_SITE_EDITOR_CRON`、`SYSTEM_FACTORY_CRON`。
 
-**測試 gate**：`DS_RUN_EXTERNAL_CREDENTIAL_TESTS`、`DS_RUN_{MANAGED_EDITOR_DB,MEDIA_S3,SYSTEM_FACTORY_DB,SYSTEM_FACTORY_FULL_MIGRATION_DB}_INTEGRATION`。
+**測試 gate**：`DS_RUN_EXTERNAL_CREDENTIAL_TESTS`、`DS_RUN_REAL_LLM_TESTS`、`DS_RUN_{MANAGED_EDITOR_DB,MEDIA_S3,SYSTEM_FACTORY_DB,SYSTEM_FACTORY_FULL_MIGRATION_DB}_INTEGRATION`。
 
 ### 6.4 外部服務與 transport 邊界
 
@@ -315,7 +315,7 @@ Migration 演進：0000 地基 → 0001 audit → 0002–0010 intelligence／訓
 | Firecrawl | `server/public-intelligence/firecrawl.ts` | 真實 HTTP，無注入 seam |
 | HuggingFace Inference／Jobs | `server/audit/huggingface.ts`、`public-intelligence/huggingface-jobs.ts` | 真實 HTTP，硬編碼 origin |
 | Gemini（AutoGEO） | `server/geo/autogeo-api.ts#GEMINI_GENERATE_CONTENT_URL` | 真實 HTTP，可注入 `fetchImpl` |
-| Bailian／Qwen | `server/geoflow-runtime/qwen.ts`、`seo-geo-core/productionProviders.ts` | 真實 HTTP，endpoint 需過 `isAllowedBailianEndpoint` 白名單；未設定則 fallback |
+| OpenAI-compatible（Bailian intl／CN／workspace、OpenAI） | `server/llm-provider/openai-compatible.ts`、`server/geoflow-runtime/qwen.ts`、`seo-geo-core/productionProviders.ts` | 真實 HTTP、可注入 `fetchImpl`；endpoint 需過單一 allowlist 並固定 chat-completions path，未設定則 fallback |
 | LLM visibility probe（OpenAI／Gemini／Perplexity） | `server/llm-visibility-probes/server-adapters.ts` | 真實 HTTP ＋ `redirect: 'error'`，**接線最完整的一條** |
 | GA4／Search Console | `measurement-collection/adapters/{ga4-data-api,google-search-console}.ts` | 真實 transport，但 credential resolver 永遠回 `null` |
 | Shopify | `server/managed-sites/shopify-service.ts` | ⚠ `mock_verified`，`externalCalls: false` |
@@ -497,10 +497,10 @@ AI／Google 是否引用  🟡 LLM 引用量得到；Google 引用（GSC）adapt
 | 公開／私有雙 origin 隔離 | ✅ VERIFIED COMPLETE | `server/utils/publicCors.ts#PUBLIC_CORS_PATHS`、`public-site/src/lib/publicApi.ts#PUBLIC_API_PATHS` | 已完成。路徑全等比對、mismatch 403、production 強制 HTTPS，3,799 測試通過 | 高 |
 | CI 保護 | ✅ VERIFIED COMPLETE | `.github/workflows/ci.yml`（push ＋ pull_request，兩個 job，`pnpm/action-setup@v4` 以 `package_json_file:` 指向各 app） | **本次改版期間補上並驗證。** run `33359408453` 綠：public-site 30s（7 檔／1.97s）、nuxt-app 5m4s（143 檔通過／10 skip、138.75s）。三次 run 的完整因果見 §9 第 13 條 | 高 |
 | Owner OAuth 登入 | 🟡 PARTIAL | `server/api/auth/callback.get.ts`、`nuxt-app/todo.md` | 修正 production redirect URI（`a.run.app` callback 被 portal 拒絕）與 nonce cookie 403；`oauth-origin.runtime.test.ts` 目前 skip | 高 |
-| 真實 Qwen／Bailian 內容生成 | 🟡 PARTIAL | `seo-geo-core/productionProviders.ts#resolveProductionRuntimeProviders`、`server/geoflow-runtime/qwen.ts` | transport 真實且 endpoint 有白名單；缺部署環境設定 `NUXT_CONTENT_DRAFT_PROVIDER` ＋ 憑證，並實跑一次 `providerExecution: true` | 高 |
+| 真實 OpenAI-compatible 內容生成 | 🟦 IMPLEMENTED — UNVERIFIED | `llm-provider/openai-compatible.ts`、`seo-geo-core/productionProviders.ts#resolveProductionRuntimeProviders`、`server/geoflow-runtime/qwen.ts` | Bailian intl／CN／workspace 與 OpenAI 共用 allowlisted transport；缺部署設定 `NUXT_LLM_*` ＋ `NUXT_CONTENT_DRAFT_PROVIDER=openai_compatible` 及 opt-in 真打證據 | 高 |
 | 網域購買／DNS／TLS／部署／金流 | 🟠 STUB / MOCK | `live-connectors/hmac-broker-transport.ts`、`ordering-service.ts#FAIL_CLOSED_PAYMENT_EVENT_VERIFIER`、`provisioning-service.ts#truthfulBoundary`（`externalCalls: false`） | **實作那個不存在的 `/v1/managed-sites/*` HMAC broker sidecar**，並接真實 registrar／DNS／CA／host／PSP。這同時也是 Phase 0「站台所有權驗證」的阻塞點 | 高 |
 | 內容營運排程自動化（3/7/15/30 天自動產文） | 🟡 PARTIAL | `nuxt.config.ts#nitro.scheduledTasks`（已註冊 4 個）、`server/tasks/content-operations-{,execution-,measurement-}tick.ts`（**未註冊**） | 把 3 個已寫好但未排程的 task 加進 cron map。其中 `measurement-tick` 正是 GSC／GA4 收集的排程器 —— **adapter 真實、憑證缺失、排程也缺失，三層都要補** | 高 |
-| 自然語言修改網站（AI 編輯） | 🟠 STUB / MOCK | `managed-sites/page-editor/ai.ts#classifyWebsiteEditIntent`、`api/managed-sites/editor/ai/propose.post.ts` | **完全沒有接 LLM。** `AiPlannerPort` 唯一實作是 `createDeterministicAiPlannerAdapter`（`providerKey: 'deterministic-injected-mock'`），propose 路由沒傳 planner，實跑的是寫死正則 | 高 |
+| 自然語言修改網站（AI 編輯） | 🟦 IMPLEMENTED — UNVERIFIED | `managed-sites/page-editor/ai-planner-openai-compatible.ts`、`managed-sites/page-editor/ai.ts`、`api/managed-sites/editor/ai/propose.post.ts` | `NUXT_PAGE_EDITOR_AI_PROVIDER=openai_compatible` 時接真實 planner；失敗不存檔、不扣額度、不套用。仍缺部署 `NUXT_LLM_*` 與 opt-in 真打證據 | 高 |
 | Shopify 整合 | 🟠 STUB / MOCK | `server/managed-sites/shopify-service.ts#authorize` | 用真實 Admin GraphQL／Storefront 呼叫取代 `mock_verified`（目前 `externalCalls: false`） | 高 |
 | System Factory（Frappe／ERPNext 租戶） | 🟡 PARTIAL | `server/system-factory/control-plane.ts#invoke`、`frappe-adapter.ts` | control plane 是 deterministic mock（`mock-control:` fingerprint）；另缺租戶運維 UI（21 條路由只有 4 條有前端） | 高 |
 | 客戶自助編輯器（媒體庫／區塊／版本） | 🟦 IMPLEMENTED — UNVERIFIED | `pages/customer/managed-sites/editor.vue`、`managed-sites/page-editor/scheduler-drizzle.ts` | 唯一有 cron 的內容執行路徑；缺真實 DB ＋ S3 驗證 | 高 |
@@ -754,7 +754,7 @@ repo 有 **149 張表**，但與 §26 要求的 50 張只有部分交集。**表
 **Phase 3 對 specialist 報告的實質更正（三處）**
 1. **first-party-publishing 並非「無注入點」。** `server/api/content-operations/entries/[id]/execute.post.ts` 匯入 `runtime-dependencies.ts#getContentOperationsRuntimeDependencies`，提供 `fetchImpl: createBoundedFetch()` ＋ `serverCredentialResolver`。狀態從 🟠 STUB 上修為 🟦。
 2. **`managedSiteOwnerContext` 的測試 seam 不是可利用的繞過**（寫入端有硬守衛）。已降級為 §9 第 5 條的縱深防禦不一致。
-3. **Qwen 憑證並非「只能靠純 env var」。** `productionProviders.ts#configuredValue` 對每個 `NUXT_GEOFLOW_QWEN_*` 都有 `NUXT_AUTOGEO_BAILIAN_*` 的 fallback，後者確實在 `runtimeConfig` 內。
+3. **OpenAI-compatible 憑證有單一優先序。** `llm-provider/openai-compatible.ts#resolveOpenAiCompatibleProviderConfiguration` 先讀 `NUXT_LLM_*`／runtimeConfig，再依序相容 `NUXT_GEOFLOW_QWEN_*` 與 `NUXT_AUTOGEO_BAILIAN_*`；OpenAI endpoint 不會繼承 `qwen-plus` 預設。
 
 ---
 

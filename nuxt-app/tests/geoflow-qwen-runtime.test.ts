@@ -115,6 +115,18 @@ describe('GEOFlow Qwen generation runtime', () => {
     expect(result.value.attempt).toBe(2)
   })
 
+  it('blocks NUL-containing provider content without retrying or returning an artifact', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '核准內容\u0000不可接受' } }] }), { status: 200 }))
+    const result = await runtime(fetchImpl).generate(request())
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.status).toBe('blocked')
+    if (result.value.status !== 'blocked') return
+    expect(result.value.failure.retryable).toBe(false)
+    expect(result.value.failure.code).toBe('INVALID_INPUT')
+    expect('contentArtifact' in result.value).toBe(false)
+  })
+
   it('rejects malformed request input before any provider resolution', async () => {
     const fetchImpl = vi.fn()
     const resolver = vi.fn().mockResolvedValue('fake-placeholder-secret')

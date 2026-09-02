@@ -67,6 +67,11 @@ export default defineNuxtConfig({
     autoGeoBailianApiKey: process.env.NUXT_AUTOGEO_BAILIAN_API_KEY || '',
     autoGeoBailianEndpoint: process.env.NUXT_AUTOGEO_BAILIAN_ENDPOINT || '',
     autoGeoBailianModel: process.env.NUXT_AUTOGEO_BAILIAN_MODEL || 'qwen-plus',
+    llmEndpoint: process.env.NUXT_LLM_ENDPOINT || '',
+    llmApiKey: process.env.NUXT_LLM_API_KEY || '',
+    llmModel: process.env.NUXT_LLM_MODEL || '',
+    pageEditorAiProvider: process.env.NUXT_PAGE_EDITOR_AI_PROVIDER || '',
+    pageEditorAiModel: process.env.NUXT_PAGE_EDITOR_AI_MODEL || '',
     modelImprovementAutoTrain: process.env.NUXT_MODEL_IMPROVEMENT_AUTO_TRAIN || 'false',
     pageEditorPreviewSecret: process.env.NUXT_PAGE_EDITOR_PREVIEW_SECRET || '',
     public: {

@@ -78,7 +78,7 @@ Normalizer 會重新計算並比對傳入 hash；reviewed text 改變而 hash �
 | --- | --- |
 | `knowledge_rag` | `authoritySourceIds` 與 `evidenceChunks` 都至少一項；draft result 必須有 citations，且每個 binding 精確符合 source、artifact、chunk、chunkHash |
 | `autogeo_optimization` | `selectedRuleIds` 至少一項；draft result `appliedRuleIds` 必須非空且與 selected rule IDs 完全一致，不接受 subset 或只修改 metadata 的假套用 |
-| `qwen_generation` | provenance mode 必須是 `provider`，provider 必須明確為 Qwen／Bailian adapter identity；deterministic scaffold 不得冒充 Qwen |
+| `qwen_generation` | provenance mode 必須是 `provider`，provider 必須明確為 Qwen／Bailian adapter identity，或使用 `openai` 前綴的 OpenAI-compatible endpoint identity；deterministic scaffold 不得冒充 provider execution |
 | `prompt_pack` | 不額外要求 evidence，但仍受一般 request、artifact 與 identity 驗證 |
 | `human_review` | 表示 downstream 需要 DiscoveryStack-side review；不把 review authority 移交 GEOFlow |
 
