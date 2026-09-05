@@ -274,6 +274,34 @@
       "when": 1788377953485,
       "tag": "0038_clammy_cerebro",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "5",
+      "when": 1788414739931,
+      "tag": "0039_famous_vindicator",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "5",
+      "when": 1788422606033,
+      "tag": "0040_familiar_harry_osborn",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "5",
+      "when": 1788468705916,
+      "tag": "0041_flashy_absorbing_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "5",
+      "when": 1788470406556,
+      "tag": "0042_stormy_umar",
+      "breakpoints": true
     }
   ]
 }

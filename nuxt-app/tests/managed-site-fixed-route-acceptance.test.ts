@@ -53,7 +53,7 @@ describe('managed-site actual fixed H3 route acceptance', () => {
       const request = JSON.parse(String(init.body)); expect(init.redirect).toBe('error')
       if (request.max_tokens === 4) { probeCalls++; return new Response(JSON.stringify({ id: 'route-probe-request-001', object: 'chat.completion', created: 1787788800, model: 'qwen-plus', choices: [{ index: 0, message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 1, total_tokens: 13 } }), { status: 200, headers: { 'x-request-id': 'route-probe-request-001' } }) }
       generationCalls++; expect(qwenBlueprint).not.toBeNull(); const id = 'route-generation-request-001'
-      return new Response(JSON.stringify({ id, model: 'qwen-plus', choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(qwenBlueprint) }, finish_reason: 'stop' }], usage: { prompt_tokens: 40, completion_tokens: 80, total_tokens: 120 } }), { status: 200, headers: { 'x-request-id': id } })
+      return new Response(JSON.stringify({ id, model: 'qwen-plus', choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify({ schemaVersion: 'managed-site-preview-copy-v1', navigation: [], pages: [], sections: [], faq: [], summaryAnswer: qwenBlueprint.seoGeo.summaryAnswer }) }, finish_reason: 'stop' }], usage: { prompt_tokens: 40, completion_tokens: 80, total_tokens: 120 } }), { status: 200, headers: { 'x-request-id': id } })
     }) as typeof fetch
     const generationAdapter = createBailianQwenManagedSiteGenerationAdapter({ endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-plus', fetchImpl: qwenFetch })
     let domainPurchaseCalls = 0; const domainBase = createMockManagedSiteDomainAdapter({ now: () => new Date() }); const domainAdapter = { ...domainBase, createPurchaseIntent: async (input: any) => { domainPurchaseCalls++; return domainBase.createPurchaseIntent(input) } }
@@ -114,8 +114,8 @@ describe('managed-site actual fixed H3 route acceptance', () => {
       const previewId = Number(preview.body.previewId); const previewAccessToken = String(preview.body.previewAccessToken)
       expect((await getRequest(`/api/managed-sites/previews/${previewId}`)).response.status).toBe(405)
       expect((await request(`/api/managed-sites/previews/${previewId}`, { accessToken: previewAccessToken }, visitorHeaders)).response.status).toBe(200)
-      expect((await request(`/api/managed-sites/previews/${previewId}/quote`, { previewAccessToken, planKey: 'basic', cadenceDays: 7, domainOption: 'new', idempotencyKey: `${prefix}-quote`, apiKey: 'forbidden-browser-secret' }, visitorHeaders)).response.status).toBe(422)
-      const quote = await request(`/api/managed-sites/previews/${previewId}/quote`, { previewAccessToken, planKey: 'basic', cadenceDays: 7, domainOption: 'new', idempotencyKey: `${prefix}-quote` }, visitorHeaders); expect(quote.response.status, quote.text).toBe(200)
+      expect((await request(`/api/managed-sites/previews/${previewId}/quote`, { previewAccessToken, planKey: 'site_geo', cadenceDays: 7, domainOption: 'new', domainTld: 'com', idempotencyKey: `${prefix}-quote`, apiKey: 'forbidden-browser-secret' }, visitorHeaders)).response.status).toBe(422)
+      const quote = await request(`/api/managed-sites/previews/${previewId}/quote`, { previewAccessToken, planKey: 'site_geo', cadenceDays: 7, domainOption: 'new', domainTld: 'com', idempotencyKey: `${prefix}-quote` }, visitorHeaders); expect(quote.response.status, quote.text).toBe(200)
       const quoteId = Number(quote.body.quote.quoteId)
       const lead = await request(`/api/managed-sites/previews/${previewId}/lead`, { previewAccessToken, quoteId, name: 'Route Owner', email: 'not-authority@example.invalid', company: 'Route Managed Site', website: `https://${canonicalDomain}`, privacyConsent: true, recontactConsent: false, idempotencyKey: `${prefix}-lead` }, visitorHeaders); expect(lead.response.status, lead.text).toBe(200)
       const leadIntentId = Number(lead.body.leadIntent.id)
@@ -136,7 +136,7 @@ describe('managed-site actual fixed H3 route acceptance', () => {
         const rejected = await fetch(`${server.origin}/api/managed-sites/live-connectors/provider-configurations`, { method: 'POST', headers, body: '{}' })
         expect(rejected.status).toBe(403)
       }
-      const catalog = await getRequest('/api/managed-sites/price-catalog'); expect(catalog.response.status).toBe(200); expect(catalog.body.version).toBe('managed-site-pricing-v1')
+      const catalog = await getRequest('/api/managed-sites/price-catalog'); expect(catalog.response.status).toBe(200); expect(catalog.body.version).toBe('managed-site-pricing-twd-v6')
       const orderingLine = await createOrderingJourney('route-generated.acme.taipei', 'route-full')
       const prepurchaseBody = { previewId: orderingLine.previewId, quoteId: orderingLine.quoteId, leadIntentId: orderingLine.leadIntentId, draftOrderId: orderingLine.draftOrderId, idempotencyKey: 'route-full-prepurchase' }
       expect((await request('/api/managed-sites/projects/prepurchase', prepurchaseBody, { 'content-type': 'application/json' })).response.status).toBe(401)

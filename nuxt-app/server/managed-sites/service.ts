@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { createError } from 'h3'
 import { stableFingerprint } from '../seo-geo-core/repository'
+import { managedSiteStableFingerprint } from './live-connectors/canonical'
 import { getManagedSiteRepository } from './repository'
 import {
   eventFingerprint,
@@ -9,6 +10,7 @@ import {
   parseManagedSiteProjectInput,
   parseManagedSiteRoleUpdate,
   tokenHash,
+  versionFingerprint,
 } from './normalization'
 import { parseSiteSpecSnapshot } from './site-spec'
 import {
@@ -140,10 +142,12 @@ export async function createManagedSiteProject(ownerUserId: number, actor: Manag
       siteType: parsed.siteType,
       activeVersionId: null,
       catalogVersion: MANAGED_SITE_CATALOG_VERSION,
-       subscriptionReference: null,
-       projectFingerprint: fingerprint,
-       creationIdempotencyKey: parsed.idempotencyKey,
-       createdAt,
+      subscriptionReference: null,
+      contactFormTokenVersion: 1,
+      contactFormTokenHash: null,
+      projectFingerprint: fingerprint,
+      creationIdempotencyKey: parsed.idempotencyKey,
+      createdAt,
     } as any)
     const membership = await transaction.insertMembership({
       ownerUserId,
@@ -225,8 +229,8 @@ export async function createManagedSiteVersion(ownerUserId: number, projectId: n
   if (input.createdByAuthority === 'verified_payment_order_conversion' && actor.authority !== 'system_workflow') throw createError({ statusCode: 403, statusMessage: 'Paid conversion version authority requires a server workflow.' })
   if (input.createdByAuthority === 'system_workflow' && actor.authority !== 'system_workflow') throw createError({ statusCode: 403, statusMessage: 'System version authority requires a server workflow.' })
   if (typeof input.contentFingerprint !== 'string' || !/^[a-f0-9]{64}$/iu.test(input.contentFingerprint)) throw createError({ statusCode: 422, statusMessage: 'Managed site content fingerprint must be a SHA-256 value.' })
-  if (stableFingerprint(input.designTokenSnapshot) !== stableFingerprint(siteSpec.designTokens)) throw createError({ statusCode: 409, statusMessage: 'Managed site design-token snapshot does not match the canonical SiteSpec.' })
-  if (stableFingerprint(input.selectedModuleSnapshot) !== stableFingerprint(siteSpec.selectedModules)) throw createError({ statusCode: 409, statusMessage: 'Managed site module snapshot does not match the canonical SiteSpec.' })
+  if (managedSiteStableFingerprint(input.designTokenSnapshot) !== managedSiteStableFingerprint(siteSpec.designTokens)) throw createError({ statusCode: 409, statusMessage: 'Managed site design-token snapshot does not match the canonical SiteSpec.' })
+  if (managedSiteStableFingerprint(input.selectedModuleSnapshot) !== managedSiteStableFingerprint(siteSpec.selectedModules)) throw createError({ statusCode: 409, statusMessage: 'Managed site module snapshot does not match the canonical SiteSpec.' })
   const VERSION_ALLOCATION_MAX_ATTEMPTS = 3
   for (let allocationAttempt = 0; allocationAttempt < VERSION_ALLOCATION_MAX_ATTEMPTS; allocationAttempt++) {
     try {
@@ -234,7 +238,7 @@ export async function createManagedSiteVersion(ownerUserId: number, projectId: n
         const currentVersions = await transaction.listVersions(ownerUserId, projectId)
         const nextVersion = (currentVersions[0]?.version || 0) + 1
         const snapshot = { siteSpecSnapshot: siteSpec, designTokenSnapshot: siteSpec.designTokens, selectedModuleSnapshot: siteSpec.selectedModules }
-        const fingerprint = stableFingerprint({ projectId, version: nextVersion, snapshot, contentFingerprint: input.contentFingerprint })
+        const fingerprint = versionFingerprint(projectId, nextVersion, snapshot, input.contentFingerprint)
         const sameFingerprint = currentVersions.find(version => version.versionFingerprint === fingerprint)
         if (sameFingerprint) return { version: sameFingerprint, replayed: true }
         const sameVersion = currentVersions.find(version => version.version === nextVersion)

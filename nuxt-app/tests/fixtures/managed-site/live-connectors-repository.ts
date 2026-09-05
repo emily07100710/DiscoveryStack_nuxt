@@ -4,6 +4,7 @@ import type {
   ManagedSiteDomainClaim,
   ManagedSiteGateResult,
   ManagedSiteGenerationCandidate,
+  ManagedSiteModuleFulfilment,
   ManagedSiteProviderConfiguration,
   ManagedSitePrePurchaseBinding,
   ManagedSitePaymentWebhookInbox,
@@ -21,13 +22,14 @@ type State = {
   gates: ManagedSiteGateResult[]
   domainClaims: ManagedSiteDomainClaim[]
   paymentWebhookInbox: ManagedSitePaymentWebhookInbox[]
+  moduleFulfilments: ManagedSiteModuleFulfilment[]
   nextId: number
 }
 
 function copy<T>(value: T): T { return structuredClone(value) }
 
 export function createLiveConnectorMemoryRepository() {
-  const state: State = { configurations: [], candidates: [], releases: [], attempts: [], receipts: [], bindings: [], gates: [], domainClaims: [], paymentWebhookInbox: [], nextId: 1 }
+  const state: State = { configurations: [], candidates: [], releases: [], attempts: [], receipts: [], bindings: [], gates: [], domainClaims: [], paymentWebhookInbox: [], moduleFulfilments: [], nextId: 1 }
   let queue = Promise.resolve()
   const insert = <T extends { id: number }>(rows: T[], input: Omit<T, 'id'>): T => { const row = { ...input, id: state.nextId++ } as T; rows.push(row); return row }
   const make = (): ManagedSiteLiveConnectorRepository => ({
@@ -45,6 +47,11 @@ export function createLiveConnectorMemoryRepository() {
     async insertProviderConfiguration(input) { const now = new Date(); return insert(state.configurations, { ...input, createdAt: now, updatedAt: now } as Omit<ManagedSiteProviderConfiguration, 'id'>) },
     async updateProviderConfiguration(ownerUserId, id, patch) { const row = state.configurations.find(item => item.ownerUserId === ownerUserId && item.id === id); if (!row) return null; Object.assign(row, patch, { updatedAt: new Date() }); return row },
     async verifyProviderConfigurationCas(ownerUserId, id, expectedFingerprint, patch) { const row = state.configurations.find(item => item.ownerUserId === ownerUserId && item.id === id && item.configurationFingerprint === expectedFingerprint && item.readinessStatus === 'configured'); if (!row) return null; Object.assign(row, patch, { updatedAt: new Date() }); return row },
+    async findModuleFulfilment(ownerUserId, draftOrderId, moduleKey) { return state.moduleFulfilments.find(row => row.ownerUserId === ownerUserId && row.draftOrderId === draftOrderId && row.moduleKey === moduleKey) || null },
+    async insertModuleFulfilment(input) { const existing = state.moduleFulfilments.find(row => row.draftOrderId === input.draftOrderId && row.moduleKey === input.moduleKey); if (existing) { if (existing.ownerUserId === input.ownerUserId && existing.quoteId === input.quoteId && existing.mode === input.mode) return existing; throw Object.assign(new Error('module fulfilment collision'), { statusCode: 409 }) } const now = new Date(); return insert(state.moduleFulfilments, { ...input, createdAt: now, updatedAt: now } as Omit<ManagedSiteModuleFulfilment, 'id'>) },
+    async listModuleFulfilmentsByDraftOrder(ownerUserId, draftOrderId) { return state.moduleFulfilments.filter(row => row.ownerUserId === ownerUserId && row.draftOrderId === draftOrderId).sort((left, right) => left.id - right.id) },
+    async listPendingManualModuleFulfilments(ownerUserId) { return state.moduleFulfilments.filter(row => row.ownerUserId === ownerUserId && row.status === 'pending_manual_setup').sort((left, right) => left.id - right.id) },
+    async closePendingManualModuleFulfilment(ownerUserId, draftOrderId, moduleKey, completedAt) { const row = state.moduleFulfilments.find(item => item.ownerUserId === ownerUserId && item.draftOrderId === draftOrderId && item.moduleKey === moduleKey && item.status === 'pending_manual_setup'); if (!row) return null; Object.assign(row, { status: 'manual_setup_completed', customerVisibleStatus: '客服已完成設定', ownerActionRequired: false, completedAt, updatedAt: completedAt }); return row },
     async findPrePurchaseBinding(ownerUserId, projectId) { return state.bindings.find(row => row.ownerUserId === ownerUserId && row.projectId === projectId) || null },
     async findPrePurchaseBindingByIdempotency(ownerUserId, key) { return state.bindings.find(row => row.ownerUserId === ownerUserId && row.idempotencyKey === key) || null },
     async insertPrePurchaseBinding(input) { if (state.bindings.some(row => row.projectId === input.projectId || row.draftOrderId === input.draftOrderId || row.ownerUserId === input.ownerUserId && (row.idempotencyKey === input.idempotencyKey || row.requestFingerprint === input.requestFingerprint))) throw Object.assign(new Error('prepurchase collision'), { statusCode: 409 }); return insert(state.bindings, { ...input, createdAt: new Date() } as Omit<ManagedSitePrePurchaseBinding, 'id'>) },

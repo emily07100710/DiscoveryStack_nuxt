@@ -4,7 +4,7 @@ import type { ManagedSiteBlueprintV1, ManagedSiteGeneratedFile } from '../server
 
 const blueprint: ManagedSiteBlueprintV1 = {
   schemaVersion: 'managed-site-blueprint-v1', brandName: 'A&B <Brand>', locale: 'en', siteType: 'one_page', navigation: [{ label: 'Home "quoted"', route: '/' }],
-  pages: [{ pageKey: 'home', route: '/', title: '<script>alert(1)</script>', description: '"quoted" & safe', sections: [{ sectionId: 'hero', kind: 'hero', heading: '<img src=x onerror=alert(1)>', body: "Tom & 'friends'", ctaLabel: 'Go >', ctaHref: '/', moduleKey: null }] }],
+  pages: [{ pageKey: 'home', route: '/', title: '<script>alert(1)</script>', description: '"quoted" & safe', sections: [{ sectionId: 'hero', kind: 'hero', heading: '<img src=x onerror=alert(1)>', body: "Tom & 'friends'", ctaLabel: 'Go >', ctaHref: '/', moduleKey: null, formEndpoint: null }] }],
   faq: [{ question: '<question>', answer: '<answer>' }], selectedModulePlacements: [], seoGeo: { summaryAnswer: 'summary', canonicalPlaceholder: '{{CANONICAL_ORIGIN}}', organizationName: 'A&B', evidenceLimitations: ['No <claim>'], structuredDataKinds: ['Organization'] }, provenance: { evidenceSnapshotHash: 'a'.repeat(64), authoritySourceIds: [], providerContentHash: 'b'.repeat(64) },
 }
 

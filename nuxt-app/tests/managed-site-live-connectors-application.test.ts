@@ -1,12 +1,118 @@
 import { createHmac, randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { createMockRawBodyPaymentWebhookAdapter } from '../server/managed-sites/live-connectors/adapters'
+import { claimManagedSiteCheckout } from '../server/managed-sites/checkout-claim-service'
+import { createManagedSiteDraftOrder, createManagedSiteLeadIntent, createManagedSitePreview, createManagedSiteQuote } from '../server/managed-sites/ordering-service'
+import { convertClaimedManagedSitePrePurchase } from '../server/managed-sites/prepurchase-service'
 import { processManagedSiteRawPaymentWebhook } from '../server/managed-sites/live-connectors/payment-webhook'
 import { activateManagedSiteGeoOperations, approveManagedSitePreview, bindManagedSiteReleasePayment, deployManagedSiteProduction } from '../server/managed-sites/live-connectors/deployment-orchestrator'
 import { createMockManagedSiteDnsTlsAdapter, createMockManagedSiteDomainAdapter, createManagedSiteDomainPurchaseIntent, executeManagedSiteDnsTls, managedSiteDomainConfirmationFingerprint, quoteManagedSiteDomain } from '../server/managed-sites/live-connectors/domain-connectors'
 import { createAuthoritativeManagedSiteReleaseFixture, managedSiteExactPaymentWebhookPayload, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
+import { createLiveConnectorMemoryRepository } from './fixtures/managed-site/live-connectors-repository'
+import { createOrderingMemoryRepository } from './fixtures/managed-site/ordering-repository'
+import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
+
+async function createClaimedPrePurchaseLine() {
+  const ownerUserId = 1
+  const managed = createManagedSiteMemoryRepository()
+  const ordering = createOrderingMemoryRepository()
+  const live = createLiveConnectorMemoryRepository()
+  const preview = await createManagedSitePreview(null, { draftIdentity: 'atomic-prepurchase', brandName: 'Atomic Pre-purchase', audience: 'Taiwan buyers', brief: 'A governed test site.', businessGoals: ['increase_inquiries'], siteType: 'brand_blog', selectedModules: ['managed_content_admin'], styleReferences: [] }, ordering.repository, () => managedSiteFixedNow)
+  const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'site_geo', cadenceDays: 7, domainOption: 'new', domainTld: 'com', idempotencyKey: 'atomic-prepurchase-quote' }, ordering.repository, () => managedSiteFixedNow)
+  const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Atomic Owner', email: 'atomic@example.invalid', company: 'Atomic Pre-purchase', website: 'https://atomic-prepurchase.example.invalid', privacyConsent: true, recontactConsent: false, idempotencyKey: 'atomic-prepurchase-lead' }, ordering.repository, () => managedSiteFixedNow)
+  const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'atomic-prepurchase-order' }, ordering.repository, () => managedSiteFixedNow)
+  await claimManagedSiteCheckout(ownerUserId, { previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, draftOrderId: order.order.id }, ordering.repository, () => managedSiteFixedNow)
+  return {
+    ownerUserId,
+    managed,
+    ordering,
+    live,
+    input: { previewId: preview.preview.id, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, draftOrderId: order.order.id, idempotencyKey: 'atomic-prepurchase-conversion' },
+  }
+}
 
 describe('managed-site authoritative mocked application path', () => {
+  it('uses the scoped repositories supplied by a pre-purchase transaction', async () => {
+    const line = await createClaimedPrePurchaseLine()
+    const calls: string[] = []
+    const scoped = {
+      ordering: new Proxy(line.ordering.repository, { get(target, property, receiver) { const value = Reflect.get(target, property, receiver); return typeof value === 'function' ? (...args: any[]) => { calls.push(`ordering.${String(property)}`); return value.apply(target, args) } : value } }),
+      managed: new Proxy(line.managed.repository, { get(target, property, receiver) { const value = Reflect.get(target, property, receiver); return typeof value === 'function' ? (...args: any[]) => { calls.push(`managed.${String(property)}`); return value.apply(target, args) } : value } }),
+      live: new Proxy(line.live.repository, { get(target, property, receiver) { const value = Reflect.get(target, property, receiver); return typeof value === 'function' ? (...args: any[]) => { calls.push(`live.${String(property)}`); return value.apply(target, args) } : value } }),
+    }
+    let transactions = 0
+    const outer = {
+      ordering: { transaction: async () => { throw new Error('outer ordering repository must not be used') } },
+      managed: new Proxy({}, { get() { throw new Error('outer managed repository must not be used') } }),
+      live: new Proxy({}, { get() { throw new Error('outer live repository must not be used') } }),
+      withTransaction: async <T>(work: (repositories: typeof scoped) => Promise<T>) => { transactions++; return work(scoped) },
+    }
+
+    await convertClaimedManagedSitePrePurchase(line.ownerUserId, line.input, outer as any, () => managedSiteFixedNow)
+
+    expect(transactions).toBe(1)
+    expect(calls.some(call => call.startsWith('ordering.'))).toBe(true)
+    expect(calls.some(call => call.startsWith('managed.'))).toBe(true)
+    expect(calls.some(call => call.startsWith('live.'))).toBe(true)
+  })
+
+  it('rolls back the complete pre-purchase unit when its scoped binding write fails', async () => {
+    const line = await createClaimedPrePurchaseLine()
+    let rolledBack = false
+    const scoped = { ordering: line.ordering.repository, managed: line.managed.repository, live: { ...line.live.repository, async insertPrePurchaseBinding() { throw new Error('binding write failed') } } }
+    const outer = {
+      ordering: line.ordering.repository,
+      managed: line.managed.repository,
+      live: line.live.repository,
+      withTransaction: async <T>(work: (repositories: typeof scoped) => Promise<T>) => {
+        const snapshot = { ordering: structuredClone(line.ordering.state), managed: structuredClone(line.managed.state), live: structuredClone(line.live.state) }
+        try {
+          return await work(scoped)
+        } catch (error) {
+          rolledBack = true
+          Object.assign(line.ordering.state, snapshot.ordering)
+          Object.assign(line.managed.state, snapshot.managed)
+          Object.assign(line.live.state, snapshot.live)
+          throw error
+        }
+      },
+    }
+
+    await expect(convertClaimedManagedSitePrePurchase(line.ownerUserId, line.input, outer as any, () => managedSiteFixedNow)).rejects.toThrow('binding write failed')
+
+    expect(rolledBack).toBe(true)
+    expect(line.managed.state.projects).toHaveLength(0)
+    expect(line.managed.state.versions).toHaveLength(0)
+    expect(line.live.state.bindings).toHaveLength(0)
+    expect(line.ordering.state.orders.find(item => item.id === line.input.draftOrderId)?.projectId).toBeNull()
+    expect(line.ordering.state.quotes.find(item => item.id === line.input.quoteId)?.projectId).toBeNull()
+    expect(line.ordering.state.subscriptionIntents.find(item => item.quoteId === line.input.quoteId)?.projectId).toBeNull()
+  })
+
+  it('reuses the persisted draft version when a create-path retry follows a partial legacy conversion', async () => {
+    const line = await createClaimedPrePurchaseLine()
+    let rejectBinding = true
+    const live = {
+      ...line.live.repository,
+      async insertPrePurchaseBinding(input: any) {
+        if (rejectBinding) {
+          rejectBinding = false
+          throw new Error('legacy binding write failed')
+        }
+        return line.live.repository.insertPrePurchaseBinding(input)
+      },
+    }
+
+    await expect(convertClaimedManagedSitePrePurchase(line.ownerUserId, line.input, { ordering: line.ordering.repository, managed: line.managed.repository, live }, () => managedSiteFixedNow)).rejects.toThrow('legacy binding write failed')
+    expect(line.managed.state.projects).toHaveLength(1)
+    expect(line.managed.state.versions).toHaveLength(1)
+    expect(line.ordering.state.orders.find(item => item.id === line.input.draftOrderId)?.projectId).toBeNull()
+
+    await convertClaimedManagedSitePrePurchase(line.ownerUserId, line.input, { ordering: line.ordering.repository, managed: line.managed.repository, live }, () => managedSiteFixedNow)
+
+    expect(line.managed.state.versions).toHaveLength(1)
+  })
+
   it('generates and gates preview before checkout/payment, then requires exact domain/deploy receipts before GEO activation', async () => {
     const line = await createAuthoritativeManagedSiteReleaseFixture()
     expect(line.prePurchase.project.status).toBe('payment_pending')

@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { createError } from 'h3'
 import { stableFingerprint } from '../../seo-geo-core/repository'
+import { managedSiteQuoteLineBilling } from '../quote-line-billing'
 import { assertManagedSiteCheckoutOrigin } from './canonical'
 import { readBoundedManagedSiteResponse } from './hmac-broker-transport'
 import { assertAllowedManagedSiteProviderOrigin } from './provider-verifiers'
@@ -33,6 +34,20 @@ function sha256(value: string | Uint8Array): string { return createHash('sha256'
 function plain(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype) }
 function mismatch(message = 'Stripe response does not match the exact managed-site checkout snapshot.'): never { throw createError({ statusCode: 409, statusMessage: message }) }
 function invalidWebhook(): never { throw createError({ statusCode: 400, statusMessage: 'Stripe webhook signature or payload is invalid.' }) }
+/** Returns the provider-unit multiplier for a domain minor-unit amount. */
+export function stripeAmountScale(currency: string): number { return ['TWD', 'HUF', 'ISK', 'UGX'].includes(currency.toUpperCase()) ? 100 : 1 }
+/** Converts a domain minor-unit amount to Stripe units and rejects unsafe integers. */
+export function stripeAmountFromMinor(currency: string, minor: number): number {
+  const amount = minor * stripeAmountScale(currency)
+  if (!Number.isSafeInteger(minor) || minor < 0 || !Number.isSafeInteger(amount)) throw createError({ statusCode: 422, statusMessage: 'Stripe amount exceeds the supported integer range.' })
+  return amount
+}
+/** Converts Stripe units to domain minor units and fails closed on invalid divisibility. */
+export function minorFromStripeAmount(currency: string, amount: number, reject: () => never = invalidWebhook): number {
+  const scale = stripeAmountScale(currency)
+  if (!Number.isSafeInteger(amount) || amount < 0 || amount % scale !== 0) reject()
+  return amount / scale
+}
 export type StripeWebhookIgnoredReason = 'unsupported_event_type' | 'unbindable_provider_reference' | 'checkout_session_not_paid'
 export class StripeWebhookIgnoredError extends Error {
   constructor(readonly ignored: StripeWebhookIgnoredReason) { super(`Stripe webhook ignored: ${ignored}`); this.name = 'StripeWebhookIgnoredError' }
@@ -89,13 +104,8 @@ function assertEchoedMetadata(value: unknown, expected: StripeMetadata): void {
   for (const key of STRIPE_METADATA_KEYS) if (value[key] !== expected[key]) mismatch('Stripe checkout metadata echo does not match the exact server-derived snapshot.')
 }
 
-/**
- * A positive cadenceDays is the server contract for a recurring plan. It maps
- * directly to Stripe's daily interval_count; zero is the one-time payment rule.
- */
-export function stripeCheckoutMode(cadenceDays: number): 'subscription' | 'payment' {
-  if (!Number.isSafeInteger(cadenceDays) || cadenceDays < 0 || cadenceDays > 1095) throw createError({ statusCode: 422, statusMessage: 'Stripe checkout cadence is invalid.' })
-  return cadenceDays > 0 ? 'subscription' : 'payment'
+export function stripeCheckoutMode(lines: Array<{ lineKey: string }>): 'subscription' | 'payment' {
+  return lines.some(line => managedSiteQuoteLineBilling(line.lineKey) === 'monthly') ? 'subscription' : 'payment'
 }
 
 export function createStripeCheckoutSessionAdapter(options: StripeCheckoutOptions): ManagedSiteCheckoutSessionAdapter {
@@ -105,17 +115,21 @@ export function createStripeCheckoutSessionAdapter(options: StripeCheckoutOption
   const fetchImpl = options.fetchImpl || fetch
   return {
     async createSession(input) {
-      const mode = stripeCheckoutMode(input.cadenceDays)
-      const maxLines = mode === 'subscription' ? 20 : 100
-      if (!input.lineSnapshot.length || input.lineSnapshot.length > maxLines) throw createError({ statusCode: 422, statusMessage: 'Stripe checkout line count is invalid for the selected mode.' })
+      if (!Number.isSafeInteger(input.cadenceDays) || input.cadenceDays < 0 || input.cadenceDays > 1095) throw createError({ statusCode: 422, statusMessage: 'Stripe checkout cadence is invalid.' })
       let total = 0
       for (const line of input.lineSnapshot) {
         if (typeof line.lineKey !== 'string' || line.lineKey.length < 1 || line.lineKey.length > 120 || !Number.isSafeInteger(line.quantity) || line.quantity < 1 || !Number.isSafeInteger(line.unitAmountMinor) || line.unitAmountMinor < 0 || !Number.isSafeInteger(line.lineAmountMinor) || line.lineAmountMinor !== line.quantity * line.unitAmountMinor) mismatch('Stripe checkout line snapshot is invalid or internally inconsistent.')
+        managedSiteQuoteLineBilling(line.lineKey)
         total += line.lineAmountMinor
         if (!Number.isSafeInteger(total)) mismatch('Stripe checkout line total exceeds the supported integer range.')
       }
       if (total !== input.amountMinor) mismatch('Stripe checkout line total does not match the canonical order amount.')
       if (!/^[A-Z]{3}$/u.test(input.currency)) throw createError({ statusCode: 422, statusMessage: 'Stripe checkout currency is invalid.' })
+      const billableLines = input.lineSnapshot.filter(line => line.lineAmountMinor > 0)
+      if (!billableLines.length) throw createError({ statusCode: 422, statusMessage: 'Stripe checkout line count is invalid for the selected mode.' })
+      const mode = stripeCheckoutMode(billableLines)
+      const maxLines = mode === 'subscription' ? 20 : 100
+      if (billableLines.length > maxLines) throw createError({ statusCode: 422, statusMessage: 'Stripe checkout line count is invalid for the selected mode.' })
 
       const metadata = metadataFor(input)
       const body = new URLSearchParams()
@@ -125,14 +139,14 @@ export function createStripeCheckoutSessionAdapter(options: StripeCheckoutOption
       body.append('cancel_url', `${returnOrigin}/managed-sites/checkout/cancel`)
       appendMetadata(body, 'metadata', metadata)
       appendMetadata(body, mode === 'subscription' ? 'subscription_data[metadata]' : 'payment_intent_data[metadata]', metadata)
-      input.lineSnapshot.forEach((line, index) => {
+      billableLines.forEach((line, index) => {
         body.append(`line_items[${index}][quantity]`, String(line.quantity))
         body.append(`line_items[${index}][price_data][currency]`, input.currency.toLowerCase())
-        body.append(`line_items[${index}][price_data][unit_amount]`, String(line.unitAmountMinor))
+        body.append(`line_items[${index}][price_data][unit_amount]`, String(stripeAmountFromMinor(input.currency, line.unitAmountMinor)))
         body.append(`line_items[${index}][price_data][product_data][name]`, line.lineKey)
-        if (mode === 'subscription') {
-          body.append(`line_items[${index}][price_data][recurring][interval]`, 'day')
-          body.append(`line_items[${index}][price_data][recurring][interval_count]`, String(input.cadenceDays))
+        if (managedSiteQuoteLineBilling(line.lineKey) === 'monthly') {
+          body.append(`line_items[${index}][price_data][recurring][interval]`, 'month')
+          body.append(`line_items[${index}][price_data][recurring][interval_count]`, '1')
         }
       })
 
@@ -148,7 +162,7 @@ export function createStripeCheckoutSessionAdapter(options: StripeCheckoutOption
       let parsed: unknown
       try { parsed = JSON.parse(raw) } catch { mismatch('Stripe checkout response is malformed.') }
       if (!plain(parsed)) mismatch('Stripe checkout response must be a plain JSON object.')
-      if (parsed.object !== 'checkout_session' || typeof parsed.id !== 'string' || !/^cs_[A-Za-z0-9_]{3,156}$/u.test(parsed.id) || typeof parsed.url !== 'string' || !Number.isSafeInteger(parsed.amount_total) || parsed.amount_total !== input.amountMinor || typeof parsed.currency !== 'string' || parsed.currency.toUpperCase() !== input.currency) mismatch()
+      if (parsed.object !== 'checkout.session' || typeof parsed.id !== 'string' || !/^cs_[A-Za-z0-9_]{3,156}$/u.test(parsed.id) || typeof parsed.url !== 'string' || !Number.isSafeInteger(parsed.amount_total) || typeof parsed.currency !== 'string' || parsed.currency.toUpperCase() !== input.currency || minorFromStripeAmount(input.currency, Number(parsed.amount_total), mismatch) !== input.amountMinor) mismatch()
       assertEchoedMetadata(parsed.metadata, metadata)
       const responseBodyHash = sha256(raw)
       return { providerKey: 'stripe', providerEventId: parsed.id, providerReference: parsed.id, checkoutUrl: parsed.url, draftOrderId: input.draftOrderId, amountMinor: input.amountMinor, currency: input.currency, snapshotFingerprint: input.snapshotFingerprint, configurationFingerprint: input.configurationFingerprint, verificationReceiptFingerprint: input.verificationReceiptFingerprint, capabilityIdentity: input.capabilityIdentity, exactResponseIdentity: `stripe-response:${stableFingerprint({ providerKey: 'stripe', path: STRIPE_CHECKOUT_PATH, sessionId: parsed.id, responseBodyHash })}` }
@@ -205,7 +219,7 @@ function stripeEvent(value: unknown, rawBody: Uint8Array): ManagedSiteSignatureV
   let amountField: string
   if (value.type === 'checkout.session.completed') {
     if (object.payment_status !== 'paid') ignoredWebhook('checkout_session_not_paid')
-    eventType = 'checkout_succeeded'; expectedObject = 'checkout_session'; amountField = 'amount_total'
+    eventType = 'checkout_succeeded'; expectedObject = 'checkout.session'; amountField = 'amount_total'
   } else if (value.type === 'payment_intent.succeeded') {
     eventType = 'checkout_succeeded'; expectedObject = 'payment_intent'; amountField = 'amount_received'
   } else if (value.type === 'charge.refunded') {
@@ -213,18 +227,19 @@ function stripeEvent(value: unknown, rawBody: Uint8Array): ManagedSiteSignatureV
   } else if (value.type === 'charge.dispute.created') {
     eventType = 'payment_disputed'; expectedObject = object.object === 'dispute' ? 'dispute' : 'charge'; amountField = 'amount'
   } else ignoredWebhook('unsupported_event_type')
-  if (object.object !== expectedObject || typeof object.id !== 'string' || !Number.isSafeInteger(object[amountField]) || Number(object[amountField]) < 0 || typeof object.currency !== 'string' || !/^[a-z]{3}$/u.test(object.currency)) invalidWebhook()
+  if (object.object !== expectedObject || typeof object.id !== 'string' || !Number.isSafeInteger(object[amountField]) || typeof object.currency !== 'string' || !/^[a-z]{3}$/u.test(object.currency)) invalidWebhook()
+  const amountMinor = minorFromStripeAmount(object.currency, Number(object[amountField]))
   const metadata = bindableMetadata(object.metadata)
   const providerReference = expectedObject === 'dispute' ? object.charge : object.id
   if (typeof providerReference !== 'string' || !/^(?:cs|pi|ch)_[A-Za-z0-9_]{3,156}$/u.test(providerReference)) invalidWebhook()
-  const stripeCheckoutSessionId = stripeObjectId(expectedObject === 'checkout_session' ? object.id : object.checkout_session, 'cs')
+  const stripeCheckoutSessionId = stripeObjectId(expectedObject === 'checkout.session' ? object.id : object.checkout_session, 'cs')
   const stripePaymentIntentId = stripeObjectId(expectedObject === 'payment_intent' ? object.id : object.payment_intent, 'pi')
   const stripeChargeId = stripeObjectId(expectedObject === 'charge' ? object.id : expectedObject === 'dispute' ? object.charge : object.latest_charge, 'ch')
   const stripeInvoiceId = stripeObjectId(object.invoice, 'in')
   const stripeSubscriptionId = stripeObjectId(object.subscription, 'sub')
   const verified = {
     providerKey: 'stripe', providerEventId: value.id, providerReference, eventType,
-    amountMinor: Number(object[amountField]), currency: object.currency.toUpperCase(), occurredAt: new Date(Number(value.created) * 1000).toISOString(),
+    amountMinor, currency: object.currency.toUpperCase(), occurredAt: new Date(Number(value.created) * 1000).toISOString(),
     exactResponseIdentity: `stripe-event:${stableFingerprint({ providerKey: 'stripe', providerEventId: value.id })}`,
     canonicalPayloadHash: sha256(rawBody),
     ...(stripeCheckoutSessionId ? { stripeCheckoutSessionId } : {}),

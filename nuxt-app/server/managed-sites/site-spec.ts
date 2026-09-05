@@ -2,6 +2,7 @@ import { createError } from 'h3'
 import { stableFingerprint } from '../seo-geo-core/repository'
 import { MANAGED_SITE_CATALOG_VERSION, MANAGED_SITE_TYPES, type ManagedSiteType } from './types'
 import { assertPublicHttpsUrl } from '../content-operations/normalization'
+import { managedSiteStableFingerprint } from './live-connectors/canonical'
 
 export const SITE_SPEC_VERSION = 'site-spec-v1'
 export const STYLE_PROFILE_VERSION = 'style-profile-v1'
@@ -10,8 +11,25 @@ export const PREVIEW_TTL_MS = 1000 * 60 * 60 * 24
 export const BUSINESS_GOALS = ['increase_inquiries', 'increase_bookings', 'sell_online', 'reduce_support', 'build_brand', 'improve_search_ai_understanding', 'membership_repurchase'] as const
 export type BusinessGoal = typeof BUSINESS_GOALS[number]
 
-export const SITE_MODULES = ['managed_content_admin', 'bounded_ai_assistant', 'shopify_commerce', 'line_assisted_integration', 'google_booking_assisted_integration', 'geo_content_subscription', 'geo_measurement_dashboard', 'pwa_reference_only'] as const
+export const SITE_MODULES = ['managed_content_admin', 'contact_lead_capture', 'bounded_ai_assistant', 'shopify_commerce', 'line_assisted_integration', 'google_booking_assisted_integration', 'geo_content_subscription', 'geo_measurement_dashboard', 'pwa_reference_only', 'stripe_payment', 'newebpay_payment', 'ecpay_payment', 'einvoice', 'logistics', 'erp_crm_backoffice'] as const
 export type SiteModule = typeof SITE_MODULES[number]
+export const SITE_MODULE_LABELS_ZH: Record<SiteModule, string> = {
+  stripe_payment: 'Stripe 金流',
+  newebpay_payment: '藍新金流',
+  ecpay_payment: '綠界金流',
+  einvoice: '電子發票',
+  logistics: '物流整合',
+  erp_crm_backoffice: 'ERP／CRM 後台',
+  bounded_ai_assistant: 'AI 助理',
+  line_assisted_integration: 'LINE 官方帳號整合',
+  google_booking_assisted_integration: 'Google 預約整合',
+  managed_content_admin: '內容管理後台',
+  contact_lead_capture: '聯絡表單／名單收集',
+  shopify_commerce: 'Shopify 電商',
+  geo_content_subscription: 'GEO 內容服務',
+  geo_measurement_dashboard: 'GEO 成效儀表板',
+  pwa_reference_only: 'PWA 參考功能',
+}
 
 export const STYLE_PREFERENCES = ['color', 'typography_mood', 'whitespace_density', 'homepage_structure', 'image_ratio', 'animation_rhythm'] as const
 export type StylePreference = typeof STYLE_PREFERENCES[number]
@@ -218,9 +236,9 @@ export function buildSiteSpec(input: unknown, capturedAt = new Date()): SiteSpec
   const siteType = candidate.siteType || defaultSiteType(businessGoals)
   if (!(MANAGED_SITE_TYPES as readonly string[]).includes(siteType)) invalid('Site type is not available in V1.')
   const styleReferenceProfile = buildStyleProfile(candidate.styleReferences, capturedAt)
-  const selectedModules = candidate.selectedModules ? uniqueSorted(candidate.selectedModules.filter((value): value is SiteModule => typeof value === 'string') as SiteModule[]) : defaultModules(businessGoals, siteType)
+  const selectedModules = Array.isArray(candidate.selectedModules) ? uniqueSorted(candidate.selectedModules.filter((value): value is SiteModule => typeof value === 'string') as SiteModule[]) : defaultModules(businessGoals, siteType)
   if (!selectedModules.every(value => (SITE_MODULES as readonly string[]).includes(value))) invalid('Site module is not available in V1.')
-  if (siteType === 'simple_commerce' && !selectedModules.includes('shopify_commerce')) invalid('Simple commerce requires the Shopify commerce module in V1.')
+  if (siteType === 'simple_commerce' && !selectedModules.includes('shopify_commerce')) invalid('簡易電商網站必須選擇 Shopify 電商模組，請返回模組步驟勾選後再繼續。')
   const pages = pagesFor(siteType, businessGoals)
   const navigation = pages.map(page => ({ page, label: page === 'home' ? brandName : page.replace('_', ' ') }))
   const evidence = Array.isArray(candidate.approvedEvidenceReferences) ? candidate.approvedEvidenceReferences.map(reference => ({ sourceId: Number(reference.sourceId), artifactId: reference.artifactId === null || reference.artifactId === undefined ? null : Number(reference.artifactId), locator: typeof reference.locator === 'string' ? reference.locator : undefined, artifactHash: typeof reference.artifactHash === 'string' ? reference.artifactHash : undefined, approvedAt: typeof reference.approvedAt === 'string' ? reference.approvedAt : undefined, purpose: reference.purpose })) : []
@@ -262,7 +280,7 @@ export function buildSiteSpec(input: unknown, capturedAt = new Date()): SiteSpec
     generatorVersion: 'managed-site-generator-v1',
     catalogVersion: MANAGED_SITE_CATALOG_VERSION,
   }
-  return { ...draft, deterministicFingerprint: stableFingerprint(draft) }
+  return { ...draft, deterministicFingerprint: managedSiteStableFingerprint(draft) }
 }
 
 export function parseSiteSpecSnapshot(input: unknown): SiteSpec {
@@ -270,7 +288,7 @@ export function parseSiteSpecSnapshot(input: unknown): SiteSpec {
   const candidate = input as Partial<SiteSpec>
   if (candidate.schemaVersion !== SITE_SPEC_VERSION || typeof candidate.deterministicFingerprint !== 'string' || !candidate.businessIdentity || typeof candidate.businessIdentity !== 'object') invalid('Persisted SiteSpec version or identity is invalid.')
   if (!Array.isArray(candidate.businessGoals) || !candidate.businessGoals.length || candidate.businessGoals.some(value => typeof value !== 'string' || !(BUSINESS_GOALS as readonly string[]).includes(value))) invalid('Persisted SiteSpec business goals are invalid.')
-  if (!Array.isArray(candidate.selectedModules) || !candidate.selectedModules.length || candidate.selectedModules.some(value => typeof value !== 'string' || !(SITE_MODULES as readonly string[]).includes(value))) invalid('Persisted SiteSpec modules are invalid.')
+  if (!Array.isArray(candidate.selectedModules) || candidate.selectedModules.some(value => typeof value !== 'string' || !(SITE_MODULES as readonly string[]).includes(value))) invalid('Persisted SiteSpec modules are invalid.')
   if (new Set(candidate.selectedModules).size !== candidate.selectedModules.length) invalid('Persisted SiteSpec modules contain duplicates.')
   if (!candidate.siteType || !(MANAGED_SITE_TYPES as readonly string[]).includes(candidate.siteType)) invalid('Persisted SiteSpec site type is invalid.')
   if (!Array.isArray(candidate.approvedEvidenceReferences)) invalid('Persisted SiteSpec evidence references are invalid.')
@@ -287,7 +305,7 @@ export function parseSiteSpecSnapshot(input: unknown): SiteSpec {
     if (provenance.source !== 'diagnosis_projection') invalid('Persisted SiteSpec diagnosis binding has an invalid provenance source.')
   }
   const { deterministicFingerprint, ...withoutFingerprint } = candidate as SiteSpec
-  if (stableFingerprint(withoutFingerprint) !== deterministicFingerprint) invalid('Persisted SiteSpec fingerprint mismatch.')
+  if (managedSiteStableFingerprint(withoutFingerprint) !== deterministicFingerprint) invalid('Persisted SiteSpec fingerprint mismatch.')
   return candidate as SiteSpec
 }
 

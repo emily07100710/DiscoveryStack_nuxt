@@ -8,8 +8,9 @@ import type {
   ManagedSiteSubscriptionIntent,
 } from '../database/schema'
 import type { SiteBriefInput, SiteSpec } from './site-spec'
+import type { ManagedSiteModuleFulfilmentRepository } from './funnel/module-fulfilment'
 
-export type PreviewRepository = {
+export type PreviewRepository = ManagedSiteModuleFulfilmentRepository & {
   transaction<T>(work: (repository: PreviewRepository) => Promise<T>): Promise<T>
   findPreviewById(previewId: number): Promise<ManagedSitePreview | null>
   /** Locking read used as the single serialization point for checkout ownership claims. */
@@ -59,9 +60,12 @@ export type QuoteLineInput = { lineKey: string; description: string; quantity: n
 export type QuoteInput = {
   previewId: number
   previewAccessToken: string
-  planKey: 'basic' | 'business'
-  cadenceDays: 3 | 7 | 15 | 30
+  planKey: 'site_only' | 'site_geo' | 'site_geo_autopost'
+  /** Only meaningful for `site_geo_autopost`; other plans normalise to 30 and ignore any client value. */
+  cadenceDays?: 3 | 7 | 15 | 30
   domainOption: 'existing' | 'new' | 'assisted'
+  designTier?: 'template' | 'designer'
+  domainTld?: 'com' | 'com.tw' | 'tw' | 'shop' | 'store'
   moduleKeys?: string[]
   idempotencyKey: string
 }

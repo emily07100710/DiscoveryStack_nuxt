@@ -4,6 +4,7 @@ import { stableFingerprint } from '../../seo-geo-core/repository'
 import { isOpaqueReference } from '../../first-party-publishing/normalization'
 import { getManagedSiteRepository } from '../repository'
 import { parseSiteSpecSnapshot } from '../site-spec'
+import { resolveManagedSiteContactFormToken } from '../contact-form/token-service'
 import type { ManagedSiteRepository } from '../types'
 import { admitManagedSiteGenerationOutput } from './generation-artifact'
 import { blueprintCompilerFingerprint, compileManagedSiteBlueprint, validateManagedSiteBlueprintProviderOutput } from './blueprint'
@@ -20,7 +21,7 @@ import type {
   ManagedSiteBlueprintProviderOutput,
   ManagedSiteBlueprintV1,
 } from './types'
-import { compareCodeUnits } from './canonical'
+import { compareCodeUnits, managedSiteStableFingerprint } from './canonical'
 
 const REQUEST_SCHEMA_VERSION = 'managed-site-generation-request-v1' as const
 const GENERATION_TIMEOUT_MS = 30_000
@@ -73,7 +74,7 @@ function validateVaultBundle(value: unknown, expected: { ownerUserId: number; pr
   if (Object.keys(bundle).length !== keys.length || Object.keys(bundle).some(key => !keys.includes(key)) || bundle.schemaVersion !== 'managed-site-owner-vault-bundle-v2' || bundle.ownerUserId !== expected.ownerUserId || bundle.projectId !== expected.projectId || bundle.requestFingerprint !== expected.request.requestFingerprint) vaultCollision()
   const structured = validateManagedSiteBlueprintProviderOutput(bundle.providerOutput, expected.request, expected.providerKey)
   if (expected.expectedModel && structured.output.providerModel !== expected.expectedModel) vaultCollision('Managed-site vault provider model does not match the configured model.')
-  if (stableFingerprint(structured.blueprint) !== stableFingerprint(bundle.blueprint) || structured.blueprintHash !== bundle.blueprintHash) vaultCollision()
+  if (managedSiteStableFingerprint(structured.blueprint) !== managedSiteStableFingerprint(bundle.blueprint) || structured.blueprintHash !== bundle.blueprintHash) vaultCollision()
   const compiledFiles = compileManagedSiteBlueprint(structured.blueprint)
   const compilerFingerprint = blueprintCompilerFingerprint(structured.blueprint, compiledFiles)
   if (compilerFingerprint !== bundle.compilerFingerprint || stableFingerprint(compiledFiles) !== stableFingerprint(bundle.files)) vaultCollision('Managed-site vault compiler lineage is mismatched.')
@@ -96,16 +97,19 @@ function boundedTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
 
 function safeError(error: unknown): { code: string; summary: string; retryable: boolean } {
   const candidate = error as { code?: unknown; retryable?: unknown; statusCode?: unknown }
-  const code = typeof candidate?.code === 'string' && /^[A-Z0-9_:-]{1,80}$/u.test(candidate.code) ? candidate.code : Number(candidate?.statusCode) === 422 ? 'ARTIFACT_REJECTED' : 'GENERATION_FAILED'
-  return { code, summary: code === 'TIMEOUT' ? 'Provider request timed out before an admissible candidate was stored.' : code === 'ARTIFACT_REJECTED' ? 'Provider output failed strict artifact admission.' : 'Provider execution failed without storing a candidate.', retryable: candidate?.retryable === true || code === 'TIMEOUT' }
+  const hasCode = typeof candidate?.code === 'string' && /^[A-Z0-9_:-]{1,80}$/u.test(candidate.code)
+  const hasStatusCode = typeof candidate?.statusCode === 'number' && Number.isFinite(candidate.statusCode)
+  const code: string = hasCode ? candidate.code as string : Number(candidate?.statusCode) === 422 ? 'ARTIFACT_REJECTED' : 'GENERATION_FAILED'
+  return { code, summary: code === 'TIMEOUT' ? 'Provider request timed out before an admissible candidate was stored.' : code === 'ARTIFACT_REJECTED' ? 'Provider output failed strict artifact admission.' : 'Provider execution failed without storing a candidate.', retryable: candidate?.retryable === true || code === 'TIMEOUT' || (!hasCode && !hasStatusCode) }
 }
 
-export function buildManagedSiteGenerationRequest(ownerUserId: number, projectId: number, sourceVersionId: number, versionFingerprint: string, siteSpecInput: unknown, templateIntent: 'astro' | 'nuxt', idempotencyKey: string): ManagedSiteGenerationRequest {
+export function buildManagedSiteGenerationRequest(ownerUserId: number, projectId: number, sourceVersionId: number, versionFingerprint: string, siteSpecInput: unknown, templateIntent: 'astro' | 'nuxt', idempotencyKey: string, contactFormTokenVersion = 1): ManagedSiteGenerationRequest {
   if (![ownerUserId, projectId, sourceVersionId].every(value => Number.isSafeInteger(value) && value > 0)) invalid('Generation lineage identity is invalid.')
   if (!isOpaqueReference(idempotencyKey, 128)) invalid('Generation idempotency key is invalid.')
   const siteSpec = parseSiteSpecSnapshot(siteSpecInput)
   const authoritySourceIds = siteSpec.approvedEvidenceReferences.map(reference => `source:${reference.sourceId}${reference.artifactId ? `:artifact:${reference.artifactId}` : ''}`).sort()
   const evidenceSnapshotHash = siteSpec.contentProvenance.evidenceSnapshotHash || stableFingerprint({ source: 'validated_customer_brief', businessIdentity: siteSpec.businessIdentity, siteSpecFingerprint: siteSpec.deterministicFingerprint })
+  const formEndpoint = siteSpec.selectedModules.includes('contact_lead_capture') ? resolveManagedSiteContactFormToken(projectId, contactFormTokenVersion).endpoint : null
   const identity = {
     schemaVersion: REQUEST_SCHEMA_VERSION,
     ownerUserId,
@@ -115,6 +119,7 @@ export function buildManagedSiteGenerationRequest(ownerUserId: number, projectId
     siteSpecFingerprint: siteSpec.deterministicFingerprint,
     locale: siteSpec.locale,
     selectedModules: [...siteSpec.selectedModules].sort(),
+    formEndpoint,
     templateIntent,
     evidenceSnapshotHash,
     authoritySourceIds,
@@ -129,6 +134,7 @@ export function buildManagedSiteGenerationRequest(ownerUserId: number, projectId
     brandContent: siteSpec.businessIdentity,
     locale: siteSpec.locale,
     selectedModules: [...siteSpec.selectedModules].sort(),
+    formEndpoint,
     templateIntent,
     geoBrief: { structuralRequirements: siteSpec.seoGeoStructuralRequirements, diagnosisBinding: siteSpec.diagnosisBinding, contentProvenance: siteSpec.contentProvenance },
     evidenceConstraints: { evidenceSnapshotHash, authoritySourceIds, limitations: [...siteSpec.limitations], humanReviewRequired: true },
@@ -161,7 +167,14 @@ export async function generateManagedSiteCandidate(
   if (!project || !version || version.projectId !== project.id) throw createError({ statusCode: 404, statusMessage: 'Managed-site generation lineage was not found.' })
   if (project.status === 'suspended') conflict('Suspended projects cannot create generation candidates.')
   if (!['active', 'preview', 'draft'].includes(version.lifecycleStatus)) conflict('Generation requires a current managed-site version snapshot.')
-  const request = buildManagedSiteGenerationRequest(ownerUserId, project.id, version.id, version.versionFingerprint, version.siteSpecSnapshot, input.templateIntent, input.idempotencyKey)
+  const request = buildManagedSiteGenerationRequest(ownerUserId, project.id, version.id, version.versionFingerprint, version.siteSpecSnapshot, input.templateIntent, input.idempotencyKey, project.contactFormTokenVersion)
+  if (input.executionMode !== 'dry_run' && request.selectedModules.includes('contact_lead_capture')) {
+    const token = resolveManagedSiteContactFormToken(project.id, project.contactFormTokenVersion)
+    if (token.tokenHash && token.tokenHash !== project.contactFormTokenHash) {
+      const updated = await managedRepository.updateProject(ownerUserId, project.id, { contactFormTokenHash: token.tokenHash })
+      if (!updated) conflict('Managed-site contact form token identity could not be persisted.')
+    }
+  }
   const replay = await repository.findGenerationCandidateByIdempotency(ownerUserId, input.idempotencyKey)
   if (replay) {
     if (replay.requestFingerprint !== request.requestFingerprint) conflict('Generation idempotency key was already used for another immutable request.')

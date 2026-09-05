@@ -13,7 +13,14 @@ import { getManagedSiteLiveConnectorRepository, makeManagedSiteLiveConnectorRepo
 import type { ManagedSiteLiveConnectorRepository } from './live-connectors/types'
 import { compareCodeUnits } from './live-connectors/canonical'
 
-type Repositories = { ordering: PreviewRepository; managed: ManagedSiteRepository; live: ManagedSiteLiveConnectorRepository }
+type Repositories = {
+  ordering: PreviewRepository
+  managed: ManagedSiteRepository
+  live: ManagedSiteLiveConnectorRepository
+  /** Runs the whole conversion with all three repositories bound to ONE database transaction.
+   *  Without it the conversion would split across connections and deadlock against itself. */
+  withTransaction?: <T>(work: (scoped: Repositories) => Promise<T>) => Promise<T>
+}
 type Input = { previewId: number; quoteId: number; leadIntentId: number; draftOrderId: number; idempotencyKey: string }
 
 function invalid(message: string): never { throw createError({ statusCode: 422, statusMessage: message }) }
@@ -53,7 +60,9 @@ async function convertWithin(ownerUserId: number, input: Input, repositories: Re
   const actor: ManagedSiteActor = { ownerUserId, actorUserId: ownerUserId, authority: 'owner_session', role: 'owner', principal: `owner-session-prepurchase:${order.id}` }
   const managed = nonNested(repositories.managed)
   const created = await createManagedSiteProject(ownerUserId, actor, { canonicalClientIdentity: lead.company, canonicalWebsiteIdentity: lead.website || `managed-site://prepurchase/${order.id}`, siteType: spec.siteType, idempotencyKey: projectKey }, managed)
-  const version = (await createManagedSiteVersion(ownerUserId, created.project.id, actor, { siteSpecSnapshot: spec, designTokenSnapshot: spec.designTokens, selectedModuleSnapshot: spec.selectedModules, contentFingerprint: versionContentFingerprint, createdByAuthority: 'owner_session', lifecycleStatus: 'draft' }, managed)).version
+  const existingVersions = await repositories.managed.listVersions(ownerUserId, created.project.id)
+  const reusableVersion = existingVersions.find(item => item.createdByAuthority === 'owner_session' && item.lifecycleStatus === 'draft' && item.contentFingerprint === versionContentFingerprint)
+  const version = reusableVersion || (await createManagedSiteVersion(ownerUserId, created.project.id, actor, { siteSpecSnapshot: spec, designTokenSnapshot: spec.designTokens, selectedModuleSnapshot: spec.selectedModules, contentFingerprint: versionContentFingerprint, createdByAuthority: 'owner_session', lifecycleStatus: 'draft' }, managed)).version
   await repositories.managed.updateProject(ownerUserId, created.project.id, { status: 'payment_pending', activeVersionId: null } as any)
   await repositories.ordering.updateDraftOrder(order.id, { projectId: created.project.id, updatedAt: now } as any)
   await repositories.ordering.updateQuote(quote.id, { projectId: created.project.id, updatedAt: now } as any)
@@ -66,10 +75,31 @@ async function convertWithin(ownerUserId: number, input: Input, repositories: Re
 }
 
 export async function convertClaimedManagedSitePrePurchase(ownerUserId: number, input: Input, repositories?: Repositories, clock: () => Date = () => new Date()) {
-  if (repositories) return repositories.ordering.transaction(transaction => convertWithin(ownerUserId, input, { ordering: transaction, managed: repositories.managed, live: repositories.live }, clock))
-  const database = getDatabase()
-  if (!database) throw createError({ statusCode: 503, statusMessage: 'Pre-purchase conversion storage is unavailable.' })
-  return database.transaction((transaction: any) => convertWithin(ownerUserId, input, { ordering: makeOrderingRepository(transaction), managed: makeManagedSiteRepository(transaction), live: makeManagedSiteLiveConnectorRepository(transaction) }, clock))
+  if (repositories?.withTransaction) return repositories.withTransaction(scoped => convertWithin(ownerUserId, input, scoped, clock))
+  if (repositories) return repositories.ordering.transaction(transaction => convertWithin(ownerUserId, input, { ...repositories, ordering: transaction }, clock))
+  return withPrePurchaseDatabaseTransaction(scoped => convertWithin(ownerUserId, input, scoped, clock))
 }
 
-export function getManagedSitePrePurchaseRepositories(): Repositories { return { ordering: getPreviewRepository(), managed: getManagedSiteRepository(), live: getManagedSiteLiveConnectorRepository() } }
+function transactionRepositories(transaction: any): Repositories {
+  return { ordering: makeOrderingRepository(transaction), managed: makeManagedSiteRepository(transaction), live: makeManagedSiteLiveConnectorRepository(transaction) }
+}
+
+function prePurchaseDatabase(): any {
+  const database = getDatabase()
+  if (!database) throw createError({ statusCode: 503, statusMessage: 'Pre-purchase conversion storage is unavailable.' })
+  return database
+}
+
+function withPrePurchaseDatabaseTransaction<T>(work: (scoped: Repositories) => Promise<T>, database = prePurchaseDatabase()): Promise<T> {
+  return database.transaction((transaction: any) => work(transactionRepositories(transaction)))
+}
+
+export function getManagedSitePrePurchaseRepositories(): Repositories {
+  const database = prePurchaseDatabase()
+  return {
+    ordering: getPreviewRepository(),
+    managed: getManagedSiteRepository(),
+    live: getManagedSiteLiveConnectorRepository(),
+    withTransaction: work => withPrePurchaseDatabaseTransaction(work, database),
+  }
+}

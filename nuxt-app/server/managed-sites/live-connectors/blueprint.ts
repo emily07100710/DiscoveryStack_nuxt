@@ -1,18 +1,19 @@
 import { createHash } from 'node:crypto'
 import { createError } from 'h3'
-import { stableFingerprint } from '../../seo-geo-core/repository'
 import { SITE_MODULES, type SiteModule, type SiteSpec } from '../site-spec'
 import type { ManagedSiteBlueprintProviderOutput, ManagedSiteBlueprintSectionV1, ManagedSiteBlueprintV1, ManagedSiteGeneratedFile, ManagedSiteGenerationRequest } from './types'
-import { compareCodeUnits } from './canonical'
+import { compareCodeUnits, managedSiteStableFingerprint } from './canonical'
+import { normalizePublicSiteOrigin } from '../../utils/publicCors'
 
 export const MANAGED_SITE_BLUEPRINT_MAX_BYTES = 256_000
 const TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u
 const ACTIVE_CONTENT = /<\s*\/?\s*(?:script|iframe|object|embed|base)|\bon[a-z]+\s*=|javascript\s*:|data\s*:\s*text\/html|(?:ignore|override|disregard)\s+(?:all\s+)?(?:previous(?:\s+(?:system|developer))?|system|developer)\s+(?:instructions?|prompts?)/iu
 const SAFE_ROUTE = /^\/(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$/u
 const PAGE_KEYS = ['home', 'about', 'services', 'faq', 'contact', 'blog', 'shop'] as const
-const SECTION_KINDS = ['hero', 'summary', 'services', 'about', 'contact', 'blog_index', 'shop_index', 'faq', 'module_slot'] as const
+const SECTION_KINDS = ['hero', 'summary', 'services', 'about', 'contact', 'contact_form', 'blog_index', 'shop_index', 'faq', 'module_slot'] as const
 const MODULE_MODES: Record<SiteModule, 'safe_placeholder' | 'first_party'> = {
   managed_content_admin: 'first_party',
+  contact_lead_capture: 'first_party',
   bounded_ai_assistant: 'safe_placeholder',
   shopify_commerce: 'safe_placeholder',
   line_assisted_integration: 'safe_placeholder',
@@ -20,6 +21,16 @@ const MODULE_MODES: Record<SiteModule, 'safe_placeholder' | 'first_party'> = {
   geo_content_subscription: 'first_party',
   geo_measurement_dashboard: 'first_party',
   pwa_reference_only: 'safe_placeholder',
+  stripe_payment: 'safe_placeholder',
+  newebpay_payment: 'safe_placeholder',
+  ecpay_payment: 'safe_placeholder',
+  einvoice: 'safe_placeholder',
+  logistics: 'safe_placeholder',
+  erp_crm_backoffice: 'safe_placeholder',
+}
+
+export function managedSiteBlueprintModuleMode(moduleKey: SiteModule): 'safe_placeholder' | 'first_party' {
+  return MODULE_MODES[moduleKey]
 }
 
 function blocked(message: string): never { throw createError({ statusCode: 422, statusMessage: message }) }
@@ -38,6 +49,13 @@ function safeHref(value: unknown): string | null {
   const candidate = text(value, 'Blueprint CTA href', 240)
   if (!/^(?:\/(?:[a-z0-9-]+(?:\/[a-z0-9-]+)*)?|#[a-z][a-z0-9-]*)$/u.test(candidate)) blocked('Blueprint CTA URL is not an internal route or anchor.')
   return candidate
+}
+export function safeFormEndpoint(value: unknown): string | null {
+  if (value === null) return null
+  if (typeof value !== 'string') blocked('Blueprint form endpoint is invalid.')
+  const configuredOrigin = normalizePublicSiteOrigin(process.env.DISCOVERYSTACK_MANAGED_SITE_FORM_INGEST_ORIGIN, process.env.NODE_ENV || 'production')
+  if (!configuredOrigin || !new RegExp(`^${configuredOrigin.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}/api/managed-sites/site-forms/[a-f0-9]{64}/submit$`, 'u').test(value)) blocked('Blueprint form endpoint is outside the configured managed-site ingest origin.')
+  return value
 }
 function expectedPageKeys(siteType: SiteSpec['siteType']): Array<typeof PAGE_KEYS[number]> {
   if (siteType === 'one_page') return ['home']
@@ -68,14 +86,19 @@ export function validateManagedSiteBlueprintProviderOutput(input: unknown, reque
     const sectionIds = new Set<string>()
     const sections = item.sections.map(section => {
       if (!record(section)) blocked('Managed-site blueprint section is malformed.')
-      exact(section, ['sectionId', 'kind', 'heading', 'body', 'ctaLabel', 'ctaHref', 'moduleKey'])
+      exact(section, ['sectionId', 'kind', 'heading', 'body', 'ctaLabel', 'ctaHref', 'moduleKey', 'formEndpoint'])
       const sectionId = text(section.sectionId, 'Blueprint section id', 80)
       if (!/^[a-z][a-z0-9-]{0,79}$/u.test(sectionId) || sectionIds.has(sectionId)) blocked('Managed-site blueprint section identity is invalid or duplicated.')
       sectionIds.add(sectionId)
       if (typeof section.kind !== 'string' || !(SECTION_KINDS as readonly string[]).includes(section.kind)) blocked('Managed-site blueprint section kind is unsupported.')
       const moduleKey = section.moduleKey === null ? null : text(section.moduleKey, 'Blueprint module key', 96)
-      if ((section.kind === 'module_slot') !== Boolean(moduleKey)) blocked('Managed-site module slots require exactly one module identity.')
-      return { sectionId, kind: section.kind, heading: text(section.heading, 'Blueprint section heading', 300), body: text(section.body, 'Blueprint section body'), ctaLabel: nullableText(section.ctaLabel, 'Blueprint CTA label', 160), ctaHref: safeHref(section.ctaHref), moduleKey } as ManagedSiteBlueprintSectionV1
+      if (section.kind === 'module_slot' && !moduleKey) blocked('Managed-site module slots require exactly one module identity.')
+      if (section.kind === 'contact_form' && moduleKey !== 'contact_lead_capture') blocked('Managed-site contact forms require the contact lead capture module identity.')
+      if (section.kind !== 'module_slot' && section.kind !== 'contact_form' && moduleKey) blocked('Managed-site non-module sections cannot carry a module identity.')
+      const formEndpoint = safeFormEndpoint(section.formEndpoint)
+      if (section.kind !== 'contact_form' && formEndpoint !== null) blocked('Only managed-site contact forms may carry a form endpoint.')
+      if (section.kind === 'contact_form' && formEndpoint !== request.formEndpoint) blocked('Managed-site contact form endpoint does not match the deterministic generation request.')
+      return { sectionId, kind: section.kind, heading: text(section.heading, 'Blueprint section heading', 300), body: text(section.body, 'Blueprint section body'), ctaLabel: nullableText(section.ctaLabel, 'Blueprint CTA label', 160), ctaHref: safeHref(section.ctaHref), moduleKey, formEndpoint } as ManagedSiteBlueprintSectionV1
     })
     return { pageKey: pageKey as typeof PAGE_KEYS[number], route: expectedRoute(pageKey as any), title: text(item.title, 'Blueprint page title', 200), description: text(item.description, 'Blueprint page description', 500), sections }
   })
@@ -89,7 +112,7 @@ export function validateManagedSiteBlueprintProviderOutput(input: unknown, reque
     const moduleKey = text(item.moduleKey, 'Blueprint module placement key', 96)
     if (!(SITE_MODULES as readonly string[]).includes(moduleKey) || item.mode !== MODULE_MODES[moduleKey as SiteModule]) blocked('Blueprint module placement is unsupported or uses an unsafe mode.')
     const page = pages.find(candidate => candidate.pageKey === item.pageKey)
-    if (!page || !page.sections.some(section => section.sectionId === item.sectionId && section.kind === 'module_slot' && section.moduleKey === moduleKey)) blocked('Blueprint module placement does not reference its exact allowlisted slot.')
+    if (!page || !page.sections.some(section => section.sectionId === item.sectionId && ((section.kind === 'module_slot' && section.moduleKey === moduleKey) || (section.kind === 'contact_form' && moduleKey === 'contact_lead_capture' && section.moduleKey === moduleKey)))) blocked('Blueprint module placement does not reference its exact allowlisted slot.')
     return { moduleKey, pageKey: String(item.pageKey), sectionId: String(item.sectionId), mode: item.mode as 'safe_placeholder' | 'first_party' }
   }).sort((left, right) => compareCodeUnits(left.moduleKey, right.moduleKey))
   if (new Set(placements.map(item => item.moduleKey)).size !== placements.length || placements.some((item, index) => item.moduleKey !== selected[index])) blocked('Blueprint selected module coverage is missing, duplicated, or excessive.')
@@ -104,7 +127,7 @@ export function validateManagedSiteBlueprintProviderOutput(input: unknown, reque
   exact(raw.provenance, ['evidenceSnapshotHash', 'authoritySourceIds', 'providerContentHash'])
   if (raw.provenance.evidenceSnapshotHash !== request.evidenceConstraints.evidenceSnapshotHash || !Array.isArray(raw.provenance.authoritySourceIds) || JSON.stringify([...raw.provenance.authoritySourceIds].sort()) !== JSON.stringify([...request.evidenceConstraints.authoritySourceIds].sort()) || typeof raw.provenance.providerContentHash !== 'string' || !/^[a-f0-9]{64}$/u.test(raw.provenance.providerContentHash)) blocked('Blueprint provenance is not bound to the exact evidence request.')
   const blueprint: ManagedSiteBlueprintV1 = { schemaVersion: 'managed-site-blueprint-v1', brandName: spec.businessIdentity.brandName, locale: spec.locale, siteType: spec.siteType, navigation, pages, faq, selectedModulePlacements: placements, seoGeo: { summaryAnswer: text(raw.seoGeo.summaryAnswer, 'Blueprint GEO summary', 2_000), canonicalPlaceholder: '{{CANONICAL_ORIGIN}}', organizationName: text(raw.seoGeo.organizationName, 'Blueprint organization', 160), evidenceLimitations: raw.seoGeo.evidenceLimitations.map(item => text(item, 'Blueprint evidence limitation', 1_000)), structuredDataKinds: raw.seoGeo.structuredDataKinds as ManagedSiteBlueprintV1['seoGeo']['structuredDataKinds'] }, provenance: { evidenceSnapshotHash: String(raw.provenance.evidenceSnapshotHash), authoritySourceIds: [...request.evidenceConstraints.authoritySourceIds].sort(), providerContentHash: String(raw.provenance.providerContentHash) } }
-  const blueprintHash = stableFingerprint(blueprint)
+  const blueprintHash = managedSiteStableFingerprint(blueprint)
   if (input.blueprintHash !== blueprintHash) blocked('Blueprint hash does not match the deterministic structured result.')
   return { output: { schemaVersion: 'managed-site-blueprint-provider-response-v1', providerKey, providerModel, providerRequestId, requestFingerprint: request.requestFingerprint, blueprint, blueprintHash }, blueprint, blueprintHash }
 }
@@ -112,17 +135,31 @@ export function validateManagedSiteBlueprintProviderOutput(input: unknown, reque
 function escapeHtml(value: string): string { return value.replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;').replace(/"/gu, '&quot;').replace(/'/gu, '&#39;') }
 function sha256(value: string): string { return createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex') }
 
+export function renderManagedSiteContactForm(section: ManagedSiteBlueprintSectionV1): string {
+  if (section.kind !== 'contact_form') return ''
+  return section.formEndpoint === null
+    ? '<form class="contact-form contact-form--demo" aria-disabled="true"><label>姓名 <input name="name" type="text" maxlength="160" required disabled></label><label>Email <input name="email" type="email" maxlength="320" required disabled></label><label>電話（選填） <input name="phone" type="tel" maxlength="64" disabled></label><label>訊息 <textarea name="message" maxlength="2000" required disabled></textarea></label><button type="button" disabled>送出</button></form><p class="module-note">示意表單：網站正式上線並完成收信信箱綁定後才會真的送出。</p>'
+    : `<form class="contact-form" method="post" action="${escapeHtml(section.formEndpoint)}" accept-charset="utf-8"><label>姓名 <input name="name" type="text" maxlength="160" required></label><label>Email <input name="email" type="email" maxlength="320" required></label><label>電話（選填） <input name="phone" type="tel" maxlength="64"></label><label>訊息 <textarea name="message" maxlength="2000" required></textarea></label><input type="text" name="companyFax" tabindex="-1" autocomplete="off" aria-hidden="true" class="hp-field"><button type="submit">送出</button></form>`
+}
+
 export function compileManagedSiteBlueprint(blueprint: ManagedSiteBlueprintV1): ManagedSiteGeneratedFile[] {
   const navigation = blueprint.navigation.map(item => `<a href="${item.route}">${escapeHtml(item.label)}</a>`).join('')
   const files: ManagedSiteGeneratedFile[] = blueprint.pages.map(page => {
-    const sections = page.sections.map(section => `<section id="${section.sectionId}" data-section-kind="${section.kind}"${section.moduleKey ? ` data-module-slot="${section.moduleKey}"` : ''}><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.body)}</p>${section.ctaLabel && section.ctaHref ? `<a class="cta" href="${section.ctaHref}">${escapeHtml(section.ctaLabel)}</a>` : ''}${section.kind === 'module_slot' ? '<p class="module-note">Configuration is completed only through the private owner workbench. This preview performs no external action.</p>' : ''}</section>`).join('')
+    const sections = page.sections.map(section => {
+      const contactForm = renderManagedSiteContactForm(section)
+      return `<section id="${section.sectionId}" data-section-kind="${section.kind}"${section.moduleKey ? ` data-module-slot="${section.moduleKey}"` : ''}><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.body)}</p>${section.ctaLabel && section.ctaHref ? `<a class="cta" href="${section.ctaHref}">${escapeHtml(section.ctaLabel)}</a>` : ''}${section.kind === 'module_slot' ? '<p class="module-note">Configuration is completed only through the private owner workbench. This preview performs no external action.</p>' : ''}${contactForm}</section>`
+    }).join('')
     const faq = page.pageKey === 'faq' ? `<section id="faq-items" data-schema-kind="FAQPage">${blueprint.faq.map(item => `<article><h2>${escapeHtml(item.question)}</h2><p>${escapeHtml(item.answer)}</p></article>`).join('')}</section>` : ''
     const metadata = escapeHtml(JSON.stringify({ canonical: blueprint.seoGeo.canonicalPlaceholder, kinds: blueprint.seoGeo.structuredDataKinds, evidenceLimitations: blueprint.seoGeo.evidenceLimitations }))
     const content = `---\nimport '../styles/site.css'\nconst managedMetadata = ${JSON.stringify(metadata)}\n---\n<!doctype html><html lang="${blueprint.locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(page.title)}</title><meta name="description" content="${escapeHtml(page.description)}"><meta name="managed-site-structured-metadata" content={managedMetadata}></head><body><header><strong>${escapeHtml(blueprint.brandName)}</strong><nav aria-label="Primary">${navigation}</nav></header><main><h1>${escapeHtml(page.title)}</h1><p class="geo-summary">${escapeHtml(blueprint.seoGeo.summaryAnswer)}</p>${sections}${faq}</main><footer><p>${escapeHtml(blueprint.seoGeo.evidenceLimitations.join(' '))}</p></footer></body></html>`
     const path = page.pageKey === 'home' ? 'src/pages/index.astro' : `src/pages/${page.pageKey}.astro`
     return { path, mediaType: 'text/astro' as const, content, sha256: sha256(content) }
   })
-  const css = ':root{font-family:system-ui,sans-serif;color:#17233b;background:#f7f5ef}body{margin:0}header,main,footer{max-width:72rem;margin:auto;padding:1.5rem}nav{display:flex;gap:1rem;flex-wrap:wrap}section{padding:2rem 0;border-bottom:1px solid #d8d4c8}.cta{display:inline-block;padding:.7rem 1rem;background:#315bd6;color:#fff}.module-note{font-size:.9rem;color:#536176}'
+  if (blueprint.selectedModulePlacements.some(item => item.moduleKey === 'contact_lead_capture')) {
+    const content = `---\nimport '../styles/site.css'\n---\n<!doctype html><html lang="${blueprint.locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>謝謝你的訊息</title><meta name="robots" content="noindex, nofollow, noarchive"></head><body><main><h1>謝謝你的訊息</h1><p>我們已收到你的訊息，會儘快與你聯絡。</p></main></body></html>`
+    files.push({ path: 'src/pages/thanks.astro', mediaType: 'text/astro', content, sha256: sha256(content) })
+  }
+  const css = ':root{font-family:system-ui,sans-serif;color:#17233b;background:#f7f5ef}body{margin:0}header,main,footer{max-width:72rem;margin:auto;padding:1.5rem}nav{display:flex;gap:1rem;flex-wrap:wrap}section{padding:2rem 0;border-bottom:1px solid #d8d4c8}.cta{display:inline-block;padding:.7rem 1rem;background:#315bd6;color:#fff}.module-note{font-size:.9rem;color:#536176}.contact-form{display:grid;gap:1rem;max-width:38rem}.contact-form label{display:grid;gap:.35rem}.contact-form input,.contact-form textarea{font:inherit;padding:.7rem}.contact-form textarea{min-height:9rem}.contact-form--demo{opacity:.65}.hp-field{position:absolute;left:-9999px}'
   files.push({ path: 'src/styles/site.css', mediaType: 'text/css', content: css, sha256: sha256(css) })
   const robots = 'User-agent: *\nDisallow: /\n# Preview candidate only. Release compiler replaces this policy after verified deployment.\n'
   files.push({ path: 'public/robots.txt', mediaType: 'text/markdown', content: robots, sha256: sha256(robots) })
@@ -132,5 +169,5 @@ export function compileManagedSiteBlueprint(blueprint: ManagedSiteBlueprintV1): 
 }
 
 export function blueprintCompilerFingerprint(blueprint: ManagedSiteBlueprintV1, files: readonly ManagedSiteGeneratedFile[]): string {
-  return stableFingerprint({ compilerVersion: 'managed-site-first-party-compiler-v1', blueprintHash: stableFingerprint(blueprint), files: files.map(file => ({ path: file.path, mediaType: file.mediaType, sha256: file.sha256 })) })
+  return managedSiteStableFingerprint({ compilerVersion: 'managed-site-first-party-compiler-v1', blueprintHash: managedSiteStableFingerprint(blueprint), files: files.map(file => ({ path: file.path, mediaType: file.mediaType, sha256: file.sha256 })) })
 }

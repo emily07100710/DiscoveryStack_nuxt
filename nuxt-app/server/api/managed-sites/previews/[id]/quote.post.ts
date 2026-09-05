@@ -6,6 +6,6 @@ import { managedSitePublicOrderingRepository, privateManagedSiteHeaders, strictM
 export default defineEventHandler(async (event) => {
   privateManagedSiteHeaders(event)
   const previewId = parsePathId(getRouterParam(event, 'id'), 'Managed site preview id')
-  const body = await strictManagedSiteBody(event, ['previewAccessToken', 'planKey', 'cadenceDays', 'domainOption', 'moduleKeys', 'idempotencyKey'])
+  const body = await strictManagedSiteBody(event, ['previewAccessToken', 'planKey', 'cadenceDays', 'domainOption', 'designTier', 'domainTld', 'moduleKeys', 'idempotencyKey'])
   return createManagedSiteQuote({ ...body, previewId } as any, managedSitePublicOrderingRepository())
 })

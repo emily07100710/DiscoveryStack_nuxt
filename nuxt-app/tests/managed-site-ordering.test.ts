@@ -47,18 +47,18 @@ describe('managed site preview and ordering flow', () => {
     const test = createOrderingMemoryRepository()
     const preview = await createManagedSitePreview(null, { ...brief, draftIdentity: 'preview-quote-001' }, test.repository)
     const catalog = getManagedSitePriceCatalog()
-    const first = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 7, domainOption: 'new', moduleKeys: ['managed_content_admin', 'geo_content_subscription'], idempotencyKey: 'quote-quote-001' }, test.repository)
-    const replay = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 7, domainOption: 'new', moduleKeys: ['managed_content_admin', 'geo_content_subscription'], idempotencyKey: 'quote-quote-001' }, test.repository)
+    const first = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'site_geo', cadenceDays: 7, domainOption: 'new', domainTld: 'com', moduleKeys: ['managed_content_admin', 'geo_content_subscription'], idempotencyKey: 'quote-quote-001' }, test.repository)
+    const replay = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'site_geo', cadenceDays: 7, domainOption: 'new', domainTld: 'com', moduleKeys: ['managed_content_admin', 'geo_content_subscription'], idempotencyKey: 'quote-quote-001' }, test.repository)
     expect(first.quote.totalMinor).toBeGreaterThan(0)
-    expect(first.quote.totalMinor).not.toBe((catalog as any).plans[0].siteBuildMinor)
+    expect(first.quote.totalMinor).not.toBe((catalog as any).plans[0].monthlyMinor)
     expect(replay.replayed).toBe(true)
-    await expect(createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: 'wrong-token', planKey: 'basic', cadenceDays: 7, domainOption: 'new', idempotencyKey: 'quote-quote-bad' }, test.repository)).rejects.toMatchObject({ statusCode: 404 })
+    await expect(createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: 'wrong-token', planKey: 'site_geo', cadenceDays: 7, domainOption: 'new', domainTld: 'com', idempotencyKey: 'quote-quote-bad' }, test.repository)).rejects.toMatchObject({ statusCode: 404 })
   })
 
   it('requires consent and exact lead lineage before creating a draft order', async () => {
     const test = createOrderingMemoryRepository()
     const preview = await createManagedSitePreview(null, { ...brief, draftIdentity: 'preview-order-001' }, test.repository)
-    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'business', cadenceDays: 3, domainOption: 'existing', idempotencyKey: 'quote-order-001' }, test.repository)
+    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'site_geo_autopost', cadenceDays: 3, domainOption: 'existing', idempotencyKey: 'quote-order-001' }, test.repository)
     await expect(createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: 'owner@acme.taipei', company: 'Acme', privacyConsent: false, idempotencyKey: 'lead-order-bad' }, test.repository)).rejects.toMatchObject({ statusCode: 422 })
     const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: 'owner@acme.taipei', company: 'Acme', privacyConsent: true, recontactConsent: true, idempotencyKey: 'lead-order-001' }, test.repository)
     const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'order-order-001' }, test.repository)
@@ -71,7 +71,7 @@ describe('managed site preview and ordering flow', () => {
   it('accepts only verified mocked payment events and transitions the exact order, quote, and subscription intent', async () => {
     const test = createOrderingMemoryRepository()
     const preview = await createManagedSitePreview(null, { ...brief, draftIdentity: 'preview-payment-001' }, test.repository)
-    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 30, domainOption: 'assisted', idempotencyKey: 'quote-payment-001' }, test.repository)
+    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'site_geo', cadenceDays: 30, domainOption: 'assisted', idempotencyKey: 'quote-payment-001' }, test.repository)
     const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: 'paying@acme.taipei', company: 'Paying Co', privacyConsent: true, idempotencyKey: 'lead-payment-001' }, test.repository)
     const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'order-payment-001' }, test.repository)
     const paymentInput = { draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'evt_mock_001', providerReference: 'mock_payment_001', eventType: 'payment_succeeded', amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'a'.repeat(64) }
@@ -101,7 +101,7 @@ describe('managed site payment hardening', () => {
   async function createPaymentFixture() {
     const test = createOrderingMemoryRepository()
     const preview = await createManagedSitePreview(7, { ...brief, draftIdentity: 'payment-hardening-001' }, test.repository)
-    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 30, domainOption: 'existing', idempotencyKey: `quote-${preview.preview.id}-hardening` }, test.repository)
+    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'site_geo', cadenceDays: 30, domainOption: 'existing', idempotencyKey: `quote-${preview.preview.id}-hardening` }, test.repository)
     const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Owner', email: `owner-${preview.preview.id}@acme.taipei`, company: 'Acme Studio', privacyConsent: true, idempotencyKey: `lead-${preview.preview.id}-hardening` }, test.repository)
     const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: `order-${preview.preview.id}-hardening` }, test.repository)
     const input = { draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: `evt-${preview.preview.id}-hardening`, providerReference: `ref-${preview.preview.id}`, eventType: 'payment_succeeded' as const, amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'c'.repeat(64) }

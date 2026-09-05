@@ -1701,6 +1701,8 @@ export const managedSiteProjects = mysqlTable('managedSiteProjects', {
   activeVersionId: int('activeVersionId'),
   catalogVersion: varchar('catalogVersion', { length: 96 }).notNull(),
   subscriptionReference: varchar('subscriptionReference', { length: 160 }),
+  contactFormTokenVersion: int('contactFormTokenVersion').default(1).notNull(),
+  contactFormTokenHash: varchar('contactFormTokenHash', { length: 128 }),
   projectFingerprint: varchar('projectFingerprint', { length: 128 }).notNull(),
   creationIdempotencyKey: varchar('creationIdempotencyKey', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
@@ -1713,6 +1715,7 @@ export const managedSiteProjects = mysqlTable('managedSiteProjects', {
   uniqueIndex('managed_site_projects_owner_fingerprint_unique').on(table.ownerUserId, table.projectFingerprint),
   uniqueIndex('managed_site_projects_owner_creation_idempotency_unique').on(table.ownerUserId, table.creationIdempotencyKey),
   index('managed_site_projects_owner_status_idx').on(table.ownerUserId, table.status),
+  index('ms_projects_contact_form_token_idx').on(table.contactFormTokenHash),
 ])
 
 /** Immutable version snapshots; SiteSpec and design tokens are opaque JSON snapshots, never executable source. */
@@ -2113,6 +2116,73 @@ export const managedSiteAiBudgetClaims = mysqlTable('managedSiteAiBudgetClaims',
   requests: int('requests').notNull(), inputTokens: int('inputTokens').notNull(), costMicros: int('costMicros').notNull(), status: mysqlEnum('status', ['reserved', 'committed', 'released']).default('reserved').notNull(), proposalId: varchar('proposalId', { length: 64 }), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, table => [uniqueIndex('managed_site_ai_budget_claim_unique').on(table.ownerUserId, table.projectId, table.dayKey, table.idempotencyKey), index('managed_site_ai_budget_claim_status_idx').on(table.ownerUserId, table.projectId, table.status)])
 
+/** Token-bound public funnel progress. Only bearer-token hashes and server-owned lineage are persisted. */
+export const managedSiteFunnelSessions = mysqlTable('managedSiteFunnelSessions', {
+  id: int('id').autoincrement().primaryKey(),
+  sessionTokenHash: varchar('sessionTokenHash', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['active', 'building', 'checkout_pending', 'converted', 'expired', 'abandoned']).default('active').notNull(),
+  currentStep: int('currentStep').default(1).notNull(),
+  answers: json('answers').notNull(),
+  consentSnapshot: json('consentSnapshot'),
+  previewId: int('previewId'),
+  previewAccessTokenHash: varchar('previewAccessTokenHash', { length: 128 }),
+  quoteId: int('quoteId'),
+  leadIntentId: int('leadIntentId'),
+  draftOrderId: int('draftOrderId'),
+  projectId: int('projectId'),
+  releaseId: int('releaseId'),
+  builtPreviewUrl: varchar('builtPreviewUrl', { length: 512 }),
+  checkoutUrl: varchar('checkoutUrl', { length: 2048 }),
+  expiresAt: timestamp('expiresAt').notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex('managed_site_funnel_sessions_token_hash_unique').on(table.sessionTokenHash),
+])
+
+/** Verified receiving inbox for the bundled first-party contact form. Verification codes are stored only as salted hashes. */
+export const managedSiteContactInboxBindings = mysqlTable('managedSiteContactInboxBindings', {
+  id: int('id').autoincrement().primaryKey(),
+  funnelSessionId: int('funnelSessionId').notNull(),
+  projectId: int('projectId'),
+  email: varchar('email', { length: 320 }).notNull(),
+  status: mysqlEnum('status', ['pending', 'bound', 'superseded', 'locked']).default('pending').notNull(),
+  codeHash: varchar('codeHash', { length: 128 }),
+  codeExpiresAt: timestamp('codeExpiresAt'),
+  attemptCount: int('attemptCount').default(0).notNull(),
+  sendCount: int('sendCount').default(0).notNull(),
+  lastSentAt: timestamp('lastSentAt'),
+  boundAt: timestamp('boundAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'ms_contact_binding_session_fk', columns: [table.funnelSessionId], foreignColumns: [managedSiteFunnelSessions.id] }),
+  foreignKey({ name: 'ms_contact_binding_project_fk', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  index('ms_contact_binding_session_idx').on(table.funnelSessionId),
+  index('ms_contact_binding_project_idx').on(table.projectId),
+])
+
+/** Visitor contact submissions are stored before best-effort forwarding to the project's verified inbox. */
+export const managedSiteContactSubmissions = mysqlTable('managedSiteContactSubmissions', {
+  id: int('id').autoincrement().primaryKey(),
+  projectId: int('projectId').notNull(),
+  submittedName: varchar('submittedName', { length: 160 }).notNull(),
+  submittedEmail: varchar('submittedEmail', { length: 320 }).notNull(),
+  submittedPhone: varchar('submittedPhone', { length: 64 }),
+  submittedMessage: text('submittedMessage').notNull(),
+  status: mysqlEnum('status', ['received', 'forwarded', 'forward_failed']).default('received').notNull(),
+  forwardTargetEmail: varchar('forwardTargetEmail', { length: 320 }),
+  forwardedAt: timestamp('forwardedAt'),
+  forwardErrorCode: varchar('forwardErrorCode', { length: 64 }),
+  requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
+  dedupeKey: varchar('dedupeKey', { length: 128 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'ms_contact_submission_project_fk', columns: [table.projectId], foreignColumns: [managedSiteProjects.id] }),
+  index('ms_contact_submission_project_idx').on(table.projectId, table.createdAt),
+  index('ms_contact_submission_dedupe_idx').on(table.dedupeKey),
+])
+
 export type ManagedSiteProject = typeof managedSiteProjects.$inferSelect
 export type ManagedSiteVersion = typeof managedSiteVersions.$inferSelect
 export type ManagedSiteAsset = typeof managedSiteAssets.$inferSelect
@@ -2121,6 +2191,9 @@ export type ManagedSiteInvitation = typeof managedSiteInvitations.$inferSelect
 export type ManagedSiteAuditEvent = typeof managedSiteAuditEvents.$inferSelect
 export type ManagedSiteSubscription = typeof managedSiteSubscriptions.$inferSelect
 export type ManagedSiteSession = typeof managedSiteSessions.$inferSelect
+export type ManagedSiteFunnelSession = typeof managedSiteFunnelSessions.$inferSelect
+export type ManagedSiteContactInboxBinding = typeof managedSiteContactInboxBindings.$inferSelect
+export type ManagedSiteContactSubmission = typeof managedSiteContactSubmissions.$inferSelect
 export type ManagedSiteStorageConnection = typeof managedSiteStorageConnections.$inferSelect
 export type ManagedSiteMediaAsset = typeof managedSiteMediaAssets.$inferSelect
 export type ManagedSiteMediaAssetVersion = typeof managedSiteMediaAssetVersions.$inferSelect
@@ -2264,6 +2337,30 @@ export const managedSitePaymentEvents = mysqlTable('managedSitePaymentEvents', {
   index('managed_site_payment_events_order_idx').on(table.draftOrderId, table.receivedAt),
 ])
 
+/** One truthful fulfilment projection per purchased module. It is not an activation or provider receipt. */
+export const managedSiteModuleFulfilments = mysqlTable('managedSiteModuleFulfilments', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  draftOrderId: int('draftOrderId').notNull(),
+  quoteId: int('quoteId').notNull(),
+  moduleKey: mysqlEnum('moduleKey', ['managed_content_admin', 'contact_lead_capture', 'bounded_ai_assistant', 'shopify_commerce', 'line_assisted_integration', 'google_booking_assisted_integration', 'geo_content_subscription', 'geo_measurement_dashboard', 'pwa_reference_only', 'stripe_payment', 'newebpay_payment', 'ecpay_payment', 'einvoice', 'logistics', 'erp_crm_backoffice']).notNull(),
+  mode: mysqlEnum('mode', ['automatic', 'manual_service']).notNull(),
+  status: mysqlEnum('status', ['automatic', 'pending_manual_setup', 'manual_setup_completed', 'recorded_intent_unbilled', 'cancelled']).notNull(),
+  billedMinor: int('billedMinor').notNull(),
+  customerVisibleStatus: varchar('customerVisibleStatus', { length: 120 }).notNull(),
+  ownerActionRequired: boolean('ownerActionRequired').notNull(),
+  completedAt: timestamp('completedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, table => [
+  foreignKey({ name: 'fk_ms_module_fulfilment_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'fk_ms_module_fulfilment_order', columns: [table.draftOrderId], foreignColumns: [managedSiteDraftOrders.id] }),
+  foreignKey({ name: 'fk_ms_module_fulfilment_quote', columns: [table.quoteId], foreignColumns: [managedSiteQuotes.id] }),
+  uniqueIndex('managed_site_module_fulfilment_order_module_unique').on(table.draftOrderId, table.moduleKey),
+  index('managed_site_module_fulfilment_owner_status_idx').on(table.ownerUserId, table.status, table.createdAt),
+  index('managed_site_module_fulfilment_owner_order_idx').on(table.ownerUserId, table.draftOrderId),
+])
+
 /** Subscription entitlement intent bound to the exact quote cadence and plan. */
 export const managedSiteSubscriptionIntents = mysqlTable('managedSiteSubscriptionIntents', {
   id: int('id').autoincrement().primaryKey(),
@@ -2291,6 +2388,7 @@ export type ManagedSiteQuoteLine = typeof managedSiteQuoteLines.$inferSelect
 export type ManagedSiteLeadIntent = typeof managedSiteLeadIntents.$inferSelect
 export type ManagedSiteDraftOrder = typeof managedSiteDraftOrders.$inferSelect
 export type ManagedSitePaymentEvent = typeof managedSitePaymentEvents.$inferSelect
+export type ManagedSiteModuleFulfilment = typeof managedSiteModuleFulfilments.$inferSelect
 export type ManagedSiteSubscriptionIntent = typeof managedSiteSubscriptionIntents.$inferSelect
 
 

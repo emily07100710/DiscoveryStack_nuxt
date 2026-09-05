@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -55,7 +56,7 @@ async function stripeLine(options: { ownerUserId?: number; canonicalDomain?: str
     expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${apiCredential}`); expect(new Headers(init?.headers).get('content-type')).toBe('application/x-www-form-urlencoded')
     requestCapture.body = new URLSearchParams(String(init?.body || ''))
     const metadata = Object.fromEntries(metadataKeys.map(key => [key, requestCapture.body!.get(`metadata[${key}]`)]))
-    return new Response(JSON.stringify({ id: `cs_test_${line.ownerUserId}_001`, object: 'checkout_session', url: `https://checkout.stripe.com/c/pay/cs_test_${line.ownerUserId}_001#fidkdWxOYHwnPyd1blpxYHZxWjA0`, amount_total: line.quote.quote.totalMinor, currency: line.quote.quote.currency.toLowerCase(), metadata, extra_provider_field: true }), { status: 200 })
+    return new Response(JSON.stringify({ id: `cs_test_${line.ownerUserId}_001`, object: 'checkout.session', url: `https://checkout.stripe.com/c/pay/cs_test_${line.ownerUserId}_001#fidkdWxOYHwnPyd1blpxYHZxWjA0`, amount_total: line.quote.quote.totalMinor * 100, currency: line.quote.quote.currency.toLowerCase(), metadata, extra_provider_field: true }), { status: 200 })
   }
   const checkout = await createManagedSiteCheckoutSession(line.ownerUserId, { releaseId: line.release.release.id, draftOrderId: line.order.order.id, executionMode: 'mocked', idempotencyKey: `fixture-stripe-checkout-${line.ownerUserId}` }, createStripeCheckoutSessionAdapter({ endpointOrigin: 'https://api.stripe.com', checkoutOrigin: 'https://checkout.stripe.com', returnOrigin, credentialReference: 'vault:stripe-api-test', resolveCredential: async () => ({ ok: true, value: apiCredential }), fetchImpl }), { connectorRepository: line.live.repository, orderingRepository: line.ordering.repository, clock: () => managedSiteFixedNow })
   const sentBody = requestCapture.body
@@ -66,12 +67,12 @@ async function stripeLine(options: { ownerUserId?: number; canonicalDomain?: str
 
 function stripeEvent(line: Awaited<ReturnType<typeof stripeLine>>, input: { id: string; type: string; object?: Record<string, unknown> }) {
   const base = input.type === 'checkout.session.completed'
-    ? { id: `cs_event_${input.id}`, object: 'checkout_session', payment_status: 'paid', amount_total: line.quote.quote.totalMinor, currency: line.quote.quote.currency.toLowerCase(), payment_intent: `pi_event_${input.id}`, invoice: `in_event_${input.id}`, subscription: `sub_event_${input.id}`, metadata: line.metadata }
+    ? { id: `cs_event_${input.id}`, object: 'checkout.session', payment_status: 'paid', amount_total: line.quote.quote.totalMinor * 100, currency: line.quote.quote.currency.toLowerCase(), payment_intent: `pi_event_${input.id}`, invoice: `in_event_${input.id}`, subscription: `sub_event_${input.id}`, metadata: line.metadata }
     : input.type === 'payment_intent.succeeded'
-      ? { id: `pi_event_${input.id}`, object: 'payment_intent', amount_received: line.quote.quote.totalMinor, currency: line.quote.quote.currency.toLowerCase(), latest_charge: `ch_event_${input.id}`, invoice: `in_event_${input.id}`, metadata: line.metadata }
+      ? { id: `pi_event_${input.id}`, object: 'payment_intent', amount_received: line.quote.quote.totalMinor * 100, currency: line.quote.quote.currency.toLowerCase(), latest_charge: `ch_event_${input.id}`, invoice: `in_event_${input.id}`, metadata: line.metadata }
       : input.type === 'charge.refunded'
-        ? { id: `ch_event_${input.id}`, object: 'charge', payment_intent: `pi_event_${input.id}`, amount_refunded: line.quote.quote.totalMinor, currency: line.quote.quote.currency.toLowerCase(), metadata: line.metadata }
-        : { id: `dp_event_${input.id}`, object: 'dispute', charge: `ch_event_${input.id}`, payment_intent: `pi_event_${input.id}`, amount: line.quote.quote.totalMinor, currency: line.quote.quote.currency.toLowerCase(), metadata: line.metadata }
+        ? { id: `ch_event_${input.id}`, object: 'charge', payment_intent: `pi_event_${input.id}`, amount_refunded: line.quote.quote.totalMinor * 100, currency: line.quote.quote.currency.toLowerCase(), metadata: line.metadata }
+        : { id: `dp_event_${input.id}`, object: 'dispute', charge: `ch_event_${input.id}`, payment_intent: `pi_event_${input.id}`, amount: line.quote.quote.totalMinor * 100, currency: line.quote.quote.currency.toLowerCase(), metadata: line.metadata }
   return { id: `evt_${input.id}`, object: 'event', type: input.type, created: Math.floor(managedSiteFixedNow.getTime() / 1000), data: { object: { ...base, ...input.object } } }
 }
 
@@ -260,7 +261,7 @@ describe('managed-site Stripe payment provider', () => {
       expect(line.sentBody.get('mode')).toBe('subscription'); expect(line.sentBody.get('currency')).toBe(line.quote.quote.currency.toLowerCase())
       expect(line.sentBody.get('success_url')).toBe(`${line.returnOrigin}/managed-sites/checkout/success`); expect(line.sentBody.get('cancel_url')).toBe(`${line.returnOrigin}/managed-sites/checkout/cancel`)
       expect(line.sentBody.get('success_url')).not.toContain('checkout.stripe.com'); expect(line.checkout.checkout.url).toContain('#fidkdWxOYHwnPyd1blpx')
-      expect(line.sentBody.get('line_items[0][price_data][recurring][interval]')).toBe('day'); expect(line.sentBody.get('line_items[0][price_data][recurring][interval_count]')).toBe('7')
+      expect(line.sentBody.get('line_items[0][price_data][recurring][interval]')).toBeNull(); expect(line.sentBody.get('line_items[2][price_data][recurring][interval]')).toBe('month'); expect(line.sentBody.get('line_items[2][price_data][recurring][interval_count]')).toBe('1')
       expect(metadataKeys.every(key => line.sentBody.get(`subscription_data[metadata][${key}]`) === line.metadata[key])).toBe(true)
       expect(line.live.state.receipts.find(row => row.receiptType === 'checkout_session_created')?.receiptFingerprint).toBe(line.metadata.ds_checkout_receipt_fingerprint)
       const payload = stripeEvent(line, { id: 'checkout_success_001', type: 'checkout.session.completed' })
@@ -336,7 +337,7 @@ describe('managed-site Stripe payment provider', () => {
       try {
         expect((await deliver(server, stripeEvent(line, { id: `${lifecycle.receipt}_success`, type: 'checkout.session.completed' }), credential)).response.status).toBe(200)
         const amount = Math.max(1, Math.floor(line.quote.quote.totalMinor / 2))
-        const result = await deliver(server, stripeEvent(line, { id: `${lifecycle.receipt}_event`, type: lifecycle.type, object: lifecycle.type === 'charge.refunded' ? { amount_refunded: amount } : { amount } }), credential)
+        const result = await deliver(server, stripeEvent(line, { id: `${lifecycle.receipt}_event`, type: lifecycle.type, object: lifecycle.type === 'charge.refunded' ? { amount_refunded: amount * 100 } : { amount: amount * 100 } }), credential)
         expect(result.response.status).toBe(200); expect(result.body.effective).toBe(true)
         expect(line.ordering.state.orders.find(row => row.id === line.order.order.id)?.status).toBe(lifecycle.expectedOrder)
         expect(line.live.state.releases.find(row => row.id === line.release.release.id)).toMatchObject({ status: 'blocked', blockedReasonCode: lifecycle.reason })
@@ -357,7 +358,7 @@ describe('managed-site Stripe payment provider', () => {
       try {
         const amount = Math.max(1, Math.floor(line.quote.quote.totalMinor / 2))
         const earlyId = `${lifecycle.receipt}_early_001`
-        const early = await deliver(server, stripeEvent(line, { id: earlyId, type: lifecycle.type, object: lifecycle.type === 'charge.refunded' ? { amount_refunded: amount } : { amount } }), credential)
+        const early = await deliver(server, stripeEvent(line, { id: earlyId, type: lifecycle.type, object: lifecycle.type === 'charge.refunded' ? { amount_refunded: amount * 100 } : { amount: amount * 100 } }), credential)
         expect(early.response.status).toBe(200); expect(early.body).toMatchObject({ accepted: true, effective: false })
         const paid = await deliver(server, stripeEvent(line, { id: `${lifecycle.receipt}_paid_001`, type: 'checkout.session.completed' }), credential)
         expect(paid.response.status).toBe(200); expect(paid.body).toMatchObject({ accepted: true, effective: true })
@@ -413,7 +414,7 @@ describe('managed-site Stripe payment provider', () => {
       expect(intent.response.status).toBe(200); expect(intent.body).toMatchObject({ accepted: true, effective: false })
       expect(line.live.state.receipts.find(row => row.providerEventId === 'evt_bind_charge_id')?.metadata).toMatchObject({ stripePaymentIntentId: paymentIntentId, stripeChargeId: chargeId })
       const amount = Math.max(1, Math.floor(line.quote.quote.totalMinor / 2))
-      const dispute = await deliver(server, stripeEvent(line, { id: 'real_dispute_empty_metadata', type: 'charge.dispute.created', object: { charge: chargeId, payment_intent: paymentIntentId, amount, metadata: {} } }), credential)
+      const dispute = await deliver(server, stripeEvent(line, { id: 'real_dispute_empty_metadata', type: 'charge.dispute.created', object: { charge: chargeId, payment_intent: paymentIntentId, amount: amount * 100, metadata: {} } }), credential)
       expect(dispute.response.status).toBe(200); expect(dispute.body).toMatchObject({ accepted: true, effective: true })
       expect(line.ordering.state.orders.find(row => row.id === line.order.order.id)?.status).toBe('disputed')
       expect(line.live.state.releases.find(row => row.id === line.release.release.id)).toMatchObject({ status: 'blocked', blockedReasonCode: 'PAYMENT_DISPUTED' })
@@ -421,9 +422,33 @@ describe('managed-site Stripe payment provider', () => {
       expect(line.managed.state.subscriptions.find(row => row.projectId === line.prePurchase.project.id)?.status).toBe('suspended')
 
       const before = structuredClone({ live: line.live.state, ordering: line.ordering.state, managed: line.managed.state })
-      const excessive = await deliver(server, stripeEvent(line, { id: 'refund_excessive', type: 'charge.refunded', object: { amount_refunded: line.quote.quote.totalMinor + 1 } }), credential)
+      const excessive = await deliver(server, stripeEvent(line, { id: 'refund_excessive', type: 'charge.refunded', object: { amount_refunded: (line.quote.quote.totalMinor + 1) * 100 } }), credential)
       expect(excessive.response.status).toBe(409)
       expect({ live: line.live.state, ordering: line.ordering.state, managed: line.managed.state }).toEqual(before)
     } finally { await server.close() }
+  })
+})
+
+/**
+ * Stripe's Checkout Session resource reports `"object": "checkout.session"` — dotted, unlike
+ * `payment_intent` / `charge` / `dispute`, which use underscores. Every fixture in this repo is
+ * written by us, so a wrong constant here would stay green in CI and only fail against the real
+ * API. Pin the literal so a "consistency" cleanup cannot silently reintroduce `checkout_session`.
+ */
+describe('stripe object-name constants match the real Stripe API', () => {
+  const adapterSource = readFileSync(new URL('../server/managed-sites/live-connectors/stripe-adapters.ts', import.meta.url), 'utf8')
+  const reconciliationSource = readFileSync(new URL('../server/managed-sites/live-connectors/payment-reconciliation.ts', import.meta.url), 'utf8')
+
+  it('asserts the dotted checkout.session object name everywhere it is compared', () => {
+    for (const source of [adapterSource, reconciliationSource]) {
+      expect(source).toContain("'checkout.session'")
+      expect(source).not.toMatch(/'checkout_session'/u)
+    }
+  })
+
+  it('keeps the underscored names that Stripe really does use', () => {
+    expect(adapterSource).toContain("'payment_intent'")
+    expect(adapterSource).toContain("'charge'")
+    expect(adapterSource).toContain("'dispute'")
   })
 })

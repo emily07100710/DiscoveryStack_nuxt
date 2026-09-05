@@ -1,4 +1,4 @@
-import type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent } from '../../../server/database/schema'
+import type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSiteModuleFulfilment, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent } from '../../../server/database/schema'
 import type { ManagedSiteCheckoutAuthorityResolver, PreviewRepository } from '../../../server/managed-sites/ordering-types'
 
 type State = {
@@ -8,6 +8,7 @@ type State = {
   leadIntents: ManagedSiteLeadIntent[]
   orders: ManagedSiteDraftOrder[]
   paymentEvents: ManagedSitePaymentEvent[]
+  moduleFulfilments: ManagedSiteModuleFulfilment[]
   subscriptionIntents: ManagedSiteSubscriptionIntent[]
   leads: Array<{ id: number; name: string; email: string; company: string; website: string | null; requestFingerprint: string }>
   nextId: number
@@ -21,9 +22,9 @@ export function createInjectedManagedSiteCheckoutAuthorityResolver(ownerUserId: 
 }
 
 export function createOrderingMemoryRepository() {
-  const state: State = { previews: [], quotes: [], lines: [], leadIntents: [], orders: [], paymentEvents: [], subscriptionIntents: [], leads: [], nextId: 1 }
+  const state: State = { previews: [], quotes: [], lines: [], leadIntents: [], orders: [], paymentEvents: [], moduleFulfilments: [], subscriptionIntents: [], leads: [], nextId: 1 }
   let transactionQueue = Promise.resolve()
-  const snapshot = (): State => ({ previews: copy(state.previews), quotes: copy(state.quotes), lines: copy(state.lines), leadIntents: copy(state.leadIntents), orders: copy(state.orders), paymentEvents: copy(state.paymentEvents), subscriptionIntents: copy(state.subscriptionIntents), leads: copy(state.leads), nextId: state.nextId })
+  const snapshot = (): State => ({ previews: copy(state.previews), quotes: copy(state.quotes), lines: copy(state.lines), leadIntents: copy(state.leadIntents), orders: copy(state.orders), paymentEvents: copy(state.paymentEvents), moduleFulfilments: copy(state.moduleFulfilments), subscriptionIntents: copy(state.subscriptionIntents), leads: copy(state.leads), nextId: state.nextId })
   const restore = (saved: State) => { Object.assign(state, saved) }
   const insert = <T extends { id: number }>(rows: T[], input: Omit<T, 'id'>): T => { const row = { ...input, id: state.nextId++ } as T; rows.push(row); return row }
   const make = (): PreviewRepository => ({
@@ -69,6 +70,11 @@ export function createOrderingMemoryRepository() {
     async findVerifiedPaymentEventByDraftOrder(draftOrderId) { return state.paymentEvents.find(row => row.draftOrderId === draftOrderId && row.verificationStatus === 'verified') || null },
     async insertPaymentEvent(input) { return insert(state.paymentEvents, { ...input, receivedAt: new Date() } as Omit<ManagedSitePaymentEvent, 'id'>) },
     async updatePaymentEvent(id, patch) { const row = state.paymentEvents.find(item => item.id === id); if (!row) return null; Object.assign(row, patch); return row },
+    async findModuleFulfilment(ownerUserId, draftOrderId, moduleKey) { return state.moduleFulfilments.find(row => row.ownerUserId === ownerUserId && row.draftOrderId === draftOrderId && row.moduleKey === moduleKey) || null },
+    async insertModuleFulfilment(input) { const existing = state.moduleFulfilments.find(row => row.draftOrderId === input.draftOrderId && row.moduleKey === input.moduleKey); if (existing) { if (existing.ownerUserId === input.ownerUserId && existing.quoteId === input.quoteId && existing.mode === input.mode) return existing; throw Object.assign(new Error('module fulfilment collision'), { statusCode: 409 }) } const now = new Date(); return insert(state.moduleFulfilments, { ...input, createdAt: now, updatedAt: now } as Omit<ManagedSiteModuleFulfilment, 'id'>) },
+    async listModuleFulfilmentsByDraftOrder(ownerUserId, draftOrderId) { return state.moduleFulfilments.filter(row => row.ownerUserId === ownerUserId && row.draftOrderId === draftOrderId).sort((left, right) => left.id - right.id) },
+    async listPendingManualModuleFulfilments(ownerUserId) { return state.moduleFulfilments.filter(row => row.ownerUserId === ownerUserId && row.status === 'pending_manual_setup').sort((left, right) => left.id - right.id) },
+    async closePendingManualModuleFulfilment(ownerUserId, draftOrderId, moduleKey, completedAt) { const row = state.moduleFulfilments.find(item => item.ownerUserId === ownerUserId && item.draftOrderId === draftOrderId && item.moduleKey === moduleKey && item.status === 'pending_manual_setup'); if (!row) return null; Object.assign(row, { status: 'manual_setup_completed', customerVisibleStatus: '客服已完成設定', ownerActionRequired: false, completedAt, updatedAt: completedAt }); return row },
     async findSubscriptionIntentByQuote(quoteId) { return state.subscriptionIntents.find(row => row.quoteId === quoteId) || null },
     async insertSubscriptionIntent(input) { return insert(state.subscriptionIntents, input as Omit<ManagedSiteSubscriptionIntent, 'id'>) },
     async updateSubscriptionIntent(quoteId, patch) { const row = state.subscriptionIntents.find(item => item.quoteId === quoteId); if (!row) return null; Object.assign(row, patch); return row },

@@ -1,7 +1,7 @@
 import { createError } from 'h3'
 import { and, asc, desc, eq } from 'drizzle-orm'
 import { getDatabase } from '../database'
-import { leads, managedSiteDraftOrders, managedSiteLeadIntents, managedSitePaymentEvents, managedSitePreviews, managedSiteQuoteLines, managedSiteQuotes, managedSiteSubscriptionIntents } from '../database/schema'
+import { leads, managedSiteDraftOrders, managedSiteLeadIntents, managedSiteModuleFulfilments, managedSitePaymentEvents, managedSitePreviews, managedSiteQuoteLines, managedSiteQuotes, managedSiteSubscriptionIntents } from '../database/schema'
 import type { PreviewRepository } from './ordering-types'
 
 function requireDatabase() {
@@ -169,6 +169,35 @@ export function makeOrderingRepository(database: any): PreviewRepository {
       await database.update(managedSitePaymentEvents).set(patch as any).where(eq(managedSitePaymentEvents.id, id))
       const [row] = await database.select().from(managedSitePaymentEvents).where(eq(managedSitePaymentEvents.id, id)).limit(1)
       return row || null
+    },
+    async findModuleFulfilment(ownerUserId, draftOrderId, moduleKey) {
+      const [row] = await database.select().from(managedSiteModuleFulfilments).where(and(eq(managedSiteModuleFulfilments.ownerUserId, ownerUserId), eq(managedSiteModuleFulfilments.draftOrderId, draftOrderId), eq(managedSiteModuleFulfilments.moduleKey, moduleKey))).limit(1)
+      return row || null
+    },
+    async insertModuleFulfilment(input) {
+      try {
+        const id = rowId(await database.insert(managedSiteModuleFulfilments).values(input as any))
+        const [row] = await database.select().from(managedSiteModuleFulfilments).where(eq(managedSiteModuleFulfilments.id, id)).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed site module fulfilment could not be loaded.' })
+        return row
+      } catch (error) {
+        const candidate = error as { code?: string; errno?: number; message?: string }
+        if (candidate?.code !== 'ER_DUP_ENTRY' && candidate?.errno !== 1062 && !/duplicate entry|unique constraint/iu.test(candidate?.message || '')) throw error
+        const replay = await repository.findModuleFulfilment(input.ownerUserId, input.draftOrderId, input.moduleKey)
+        if (replay && replay.quoteId === input.quoteId && replay.mode === input.mode) return replay
+        throw createError({ statusCode: 409, statusMessage: 'Module fulfilment collides with another paid order lineage.' })
+      }
+    },
+    async listModuleFulfilmentsByDraftOrder(ownerUserId, draftOrderId) {
+      return database.select().from(managedSiteModuleFulfilments).where(and(eq(managedSiteModuleFulfilments.ownerUserId, ownerUserId), eq(managedSiteModuleFulfilments.draftOrderId, draftOrderId))).orderBy(asc(managedSiteModuleFulfilments.id)).limit(100)
+    },
+    async listPendingManualModuleFulfilments(ownerUserId) {
+      return database.select().from(managedSiteModuleFulfilments).where(and(eq(managedSiteModuleFulfilments.ownerUserId, ownerUserId), eq(managedSiteModuleFulfilments.status, 'pending_manual_setup'))).orderBy(asc(managedSiteModuleFulfilments.createdAt), asc(managedSiteModuleFulfilments.id)).limit(500)
+    },
+    async closePendingManualModuleFulfilment(ownerUserId, draftOrderId, moduleKey, completedAt) {
+      const result = await database.update(managedSiteModuleFulfilments).set({ status: 'manual_setup_completed', customerVisibleStatus: '客服已完成設定', ownerActionRequired: false, completedAt, updatedAt: completedAt } as any).where(and(eq(managedSiteModuleFulfilments.ownerUserId, ownerUserId), eq(managedSiteModuleFulfilments.draftOrderId, draftOrderId), eq(managedSiteModuleFulfilments.moduleKey, moduleKey), eq(managedSiteModuleFulfilments.status, 'pending_manual_setup')))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      return repository.findModuleFulfilment(ownerUserId, draftOrderId, moduleKey)
     },
     async findSubscriptionIntentByQuote(quoteId) {
       const [row] = await database.select().from(managedSiteSubscriptionIntents).where(eq(managedSiteSubscriptionIntents.quoteId, quoteId)).limit(1)
