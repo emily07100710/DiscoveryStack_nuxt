@@ -1,5 +1,6 @@
 import { createError } from 'h3'
 import { stableFingerprint } from '../../seo-geo-core/repository'
+import { managedSiteStableFingerprint } from './canonical'
 import type { ManagedSiteGateResult } from '../../database/schema'
 import { admitManagedSiteGenerationOutput, computeManagedSiteProviderManifestHash } from './generation-artifact'
 import { blueprintCompilerFingerprint, compileManagedSiteBlueprint } from './blueprint'
@@ -27,7 +28,7 @@ export async function runManagedSitePreviewGates(ownerUserId: number, releaseId:
   const files = compileManagedSiteBlueprint(blueprint)
   const compilerFingerprint = blueprintCompilerFingerprint(blueprint, files)
   const admitted = admitManagedSiteGenerationOutput({ schemaVersion: 'managed-site-generation-provider-response-v1', providerKey: candidate.providerKey, providerModel: candidate.providerModel, providerRequestId: candidate.providerRequestId, requestFingerprint: candidate.requestFingerprint, files, manifestHash: computeManagedSiteProviderManifestHash(files) }, { requestFingerprint: candidate.requestFingerprint, providerKey: candidate.providerKey })
-  if (admitted.manifest.contentHash !== candidate.contentHash || manifest.compilerFingerprint !== compilerFingerprint || manifest.blueprintHash !== stableFingerprint(blueprint)) conflict('Recompiled candidate does not match immutable compiler or content authority.')
+  if (admitted.manifest.contentHash !== candidate.contentHash || manifest.compilerFingerprint !== compilerFingerprint || manifest.blueprintHash !== managedSiteStableFingerprint(blueprint)) conflict('Recompiled candidate does not match immutable compiler or content authority.')
   const observedAt = clock()
   const base = { ownerUserId, projectId: release.projectId, versionId: release.versionId, generationCandidateId: candidate.id, releaseId: release.id, contentHash: release.contentHash, observedAt }
   const common = gateFingerprint({ candidateId: candidate.id, releaseId: release.id, contentHash: release.contentHash, previewReceiptFingerprint, compilerFingerprint })

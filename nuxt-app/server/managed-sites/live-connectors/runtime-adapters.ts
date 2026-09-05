@@ -4,7 +4,8 @@ import { createBailianQwenManagedSiteGenerationAdapter } from './adapters'
 import { resolveManagedSiteCredential, resolveManagedSiteProviderAuthority } from './provider-registry'
 import { createInternalDnsTlsBrokerHmacV1Adapter, createInternalDomainBrokerHmacV1Adapter, createInternalHmacV1CheckoutAdapter, createInternalOwnershipBrokerHmacV1Adapter } from './broker-adapters'
 import { createStripeCheckoutSessionAdapter } from './stripe-adapters'
-import type { ManagedSiteCheckoutSessionAdapter, ManagedSiteLiveConnectorRepository } from './types'
+import { createPorkbunDomainAdapter } from './porkbun-adapters'
+import type { ManagedSiteCheckoutSessionAdapter, ManagedSiteDomainAdapter, ManagedSiteLiveConnectorRepository } from './types'
 import { resolveManagedSiteBrokerFetchImpl } from './internal-broker/broker-fetch'
 
 export async function managedSiteLiveDeploymentAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) {
@@ -47,6 +48,17 @@ export async function managedSiteLiveCheckoutAdapter(ownerUserId: number, reposi
   if (!configuration || !factory) throw createError({ statusCode: 503, statusMessage: 'Verified payment provider adapter is not registered.' })
   return factory(await verifiedBroker(ownerUserId, 'payment', configuration.providerKey, repository))
 }
-export async function managedSiteLiveDomainAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalDomainBrokerHmacV1Adapter(await verifiedBroker(ownerUserId, 'domain_registration', 'internal-domain-broker-hmac-v1', repository)) }
+type DomainAdapterFactory = (options: Awaited<ReturnType<typeof verifiedBroker>>) => ManagedSiteDomainAdapter
+const DOMAIN_ADAPTERS: ReadonlyMap<string, DomainAdapterFactory> = new Map([
+  ['internal-domain-broker-hmac-v1', options => createInternalDomainBrokerHmacV1Adapter(options)],
+  ['porkbun', options => createPorkbunDomainAdapter(options)],
+])
+
+export async function managedSiteLiveDomainAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) {
+  const configuration = await repository.findProviderConfiguration(ownerUserId, 'domain_registration')
+  const factory = configuration ? DOMAIN_ADAPTERS.get(configuration.providerKey) : null
+  if (!configuration || !factory) throw createError({ statusCode: 503, statusMessage: 'Verified domain_registration provider adapter is not registered.' })
+  return factory(await verifiedBroker(ownerUserId, 'domain_registration', configuration.providerKey, repository))
+}
 export async function managedSiteLiveDnsTlsAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalDnsTlsBrokerHmacV1Adapter(await verifiedBroker(ownerUserId, 'dns_tls', 'internal-dns-tls-broker-hmac-v1', repository)) }
 export async function managedSiteLiveOwnershipAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) { return createInternalOwnershipBrokerHmacV1Adapter(await verifiedBroker(ownerUserId, 'dns_tls', 'internal-dns-tls-broker-hmac-v1', repository)) }

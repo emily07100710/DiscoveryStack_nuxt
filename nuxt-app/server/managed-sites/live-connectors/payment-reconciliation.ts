@@ -8,6 +8,7 @@ import { processManagedSiteVerifiedPaymentWebhook, type ManagedSiteJointTransact
 import { requireVerifiedManagedSiteProvider, resolveManagedSiteCredential } from './provider-registry'
 import { assertAllowedManagedSiteProviderOrigin } from './provider-verifiers'
 import { getManagedSiteLiveConnectorRepository } from './repository'
+import { minorFromStripeAmount } from './stripe-adapters'
 import type { ManagedSiteCredentialResolver, ManagedSiteLiveConnectorRepository, ManagedSitePaymentEventType, ManagedSiteVerifiedPaymentWebhook } from './types'
 
 const STRIPE_READ_TIMEOUT_MS = 10_000
@@ -72,7 +73,8 @@ export async function reconcileManagedSiteStripePayment(ownerUserId: number, inp
 
   const sessionRead = await stripeGet(origin, `/v1/checkout/sessions/${sessionId}`, credential.value, fetchImpl)
   const session = sessionRead.value
-  if (session.object !== 'checkout_session' || session.id !== sessionId || !Number.isSafeInteger(session.created) || Number(session.created) < 1 || !Number.isSafeInteger(session.amount_total) || typeof session.currency !== 'string' || !/^[a-z]{3}$/u.test(session.currency) || typeof session.payment_status !== 'string' || typeof session.status !== 'string') conflict('Stripe checkout reconciliation identity is mismatched.')
+  if (session.object !== 'checkout.session' || session.id !== sessionId || !Number.isSafeInteger(session.created) || Number(session.created) < 1 || !Number.isSafeInteger(session.amount_total) || typeof session.currency !== 'string' || !/^[a-z]{3}$/u.test(session.currency) || typeof session.payment_status !== 'string' || typeof session.status !== 'string') conflict('Stripe checkout reconciliation identity is mismatched.')
+  const sessionAmount = minorFromStripeAmount(session.currency, Number(session.amount_total), () => conflict('Stripe checkout reconciliation amount is mismatched.'))
   const succeededReceipt = receipts.find(receipt => receipt.receiptType === 'checkout_succeeded' && receipt.receiptStatus === 'verified' && record(receipt.metadata))
   const succeededMetadata = succeededReceipt && record(succeededReceipt.metadata) ? succeededReceipt.metadata : {}
   const paymentIntentId = stripeId(succeededMetadata.stripePaymentIntentId ?? session.payment_intent, 'pi')
@@ -90,14 +92,15 @@ export async function reconcileManagedSiteStripePayment(ownerUserId: number, inp
   }
 
   const paid = session.payment_status === 'paid' || paymentIntent?.status === 'succeeded'
-  const refundedAmount = charge && Number(charge.amount_refunded) > 0 ? Number(charge.amount_refunded) : 0
+  const refundedAmount = charge ? minorFromStripeAmount(String(charge.currency), Number(charge.amount_refunded), () => conflict('Stripe Charge reconciliation amount is mismatched.')) : 0
+  const chargeAmount = charge ? minorFromStripeAmount(String(charge.currency), Number(charge.amount), () => conflict('Stripe Charge reconciliation amount is mismatched.')) : null
   const lifecycle = charge?.disputed === true ? 'disputed' : refundedAmount > 0 || charge?.refunded === true ? 'refunded' : paid ? 'paid' : 'unpaid'
   const chargeId = stripeId(charge?.id, 'ch')
   const invoiceId = stripeId(session.invoice ?? paymentIntent?.invoice, 'in')
   const subscriptionId = stripeId(session.subscription, 'sub')
   const objectId = lifecycle === 'paid' ? paymentIntentId || sessionId : chargeId || paymentIntentId || sessionId
   const providerCreated = lifecycle === 'refunded' || lifecycle === 'disputed' ? Number(charge?.created) : paymentIntent ? Number(paymentIntent.created) : Number(session.created)
-  const amountMinor = lifecycle === 'refunded' ? refundedAmount : lifecycle === 'disputed' ? Number(charge?.amount || quote.totalMinor) : Number(session.amount_total)
+  const amountMinor = lifecycle === 'refunded' ? refundedAmount : lifecycle === 'disputed' ? chargeAmount ?? quote.totalMinor : sessionAmount
   const currency = String(charge?.currency || paymentIntent?.currency || session.currency).toUpperCase()
   const reported = {
     lifecycle,
@@ -156,7 +159,7 @@ export async function reconcileManagedSiteStripePayment(ownerUserId: number, inp
         providerEventId: `reconcile-paid-${paidReference}`.slice(0, 160),
         providerReference: paidReference,
         eventType: 'checkout_succeeded',
-        amountMinor: Number(session.amount_total),
+        amountMinor: sessionAmount,
         currency: String(paymentIntent?.currency || session.currency).toUpperCase(),
         occurredAt: new Date(Number(paymentIntent?.created ?? session.created) * 1000).toISOString(),
       }

@@ -10,7 +10,7 @@ describe('managed-site payment conversion orchestration', () => {
     const ordering = createOrderingMemoryRepository()
     const managed = createManagedSiteMemoryRepository()
     const preview = await createManagedSitePreview(null, { draftIdentity: 'orchestration-public-001', brandName: 'Public Client', audience: 'Taiwan customers', brief: 'A public managed-site brief.', businessGoals: ['increase_inquiries'], siteType: 'brand_blog', selectedModules: ['managed_content_admin', 'geo_content_subscription'], styleReferences: [] }, ordering.repository)
-    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 7, domainOption: 'new', idempotencyKey: 'orchestration-quote-001' }, ordering.repository)
+    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'site_geo', cadenceDays: 7, domainOption: 'new', domainTld: 'com', idempotencyKey: 'orchestration-quote-001' }, ordering.repository)
     const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Public Owner', email: 'public-owner@acme.taipei', company: 'Public Client', privacyConsent: true, idempotencyKey: 'orchestration-lead-001' }, ordering.repository)
     const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'orchestration-order-001' }, ordering.repository)
     const paymentVerifier: PaymentEventVerifier = { verify: async request => request.draftOrderId === order.order.id }
@@ -33,7 +33,7 @@ describe('managed-site payment conversion orchestration', () => {
     const ordering = createOrderingMemoryRepository()
     const managed = createManagedSiteMemoryRepository()
     const preview = await createManagedSitePreview(7, { draftIdentity: 'orchestration-recovery-001', brandName: 'Recovery Client', audience: 'Taiwan customers', brief: 'A recovery-safe managed-site brief.', businessGoals: ['increase_inquiries'], siteType: 'one_page', selectedModules: ['managed_content_admin'], styleReferences: [] }, ordering.repository)
-    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'basic', cadenceDays: 30, domainOption: 'existing', idempotencyKey: 'orchestration-recovery-quote' }, ordering.repository)
+    const quote = await createManagedSiteQuote({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, planKey: 'site_geo', cadenceDays: 30, domainOption: 'existing', idempotencyKey: 'orchestration-recovery-quote' }, ordering.repository)
     const lead = await createManagedSiteLeadIntent({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, name: 'Recovery Owner', email: 'recovery@acme.taipei', company: 'Recovery Client', privacyConsent: true, idempotencyKey: 'orchestration-recovery-lead' }, ordering.repository)
     const order = await createManagedSiteDraftOrder({ previewId: preview.preview.id, previewAccessToken: preview.accessToken!, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, idempotencyKey: 'orchestration-recovery-order' }, ordering.repository)
     const input = { draftOrderId: order.order.id, providerKey: 'mock-payment', eventId: 'orchestration-recovery-payment', providerReference: 'orchestration-recovery-reference', eventType: 'payment_succeeded' as const, amountMinor: quote.quote.totalMinor, currency: quote.quote.currency, canonicalPayloadHash: 'b'.repeat(64), idempotencyKey: 'orchestration-recovery-conversion' }
@@ -57,4 +57,3 @@ describe('managed-site payment conversion orchestration', () => {
     expect(managed.state.versions).toHaveLength(1)
   })
 })
-

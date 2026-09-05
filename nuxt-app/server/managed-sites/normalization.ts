@@ -1,6 +1,7 @@
 import { createError } from 'h3'
 import { z } from 'zod'
 import { stableFingerprint } from '../seo-geo-core/repository'
+import { managedSiteStableFingerprint } from './live-connectors/canonical'
 import { MANAGED_SITE_ROLES, MANAGED_SITE_TYPES, type ManagedSiteMemberInput, type ManagedSiteProjectInput, type ManagedSiteRoleUpdate } from './types'
 
 const idempotencyKey = z.string().trim().min(8).max(128)
@@ -65,8 +66,8 @@ export function projectFingerprint(ownerUserId: number, input: ManagedSiteProjec
   })
 }
 
-export function versionFingerprint(projectId: number, version: number, snapshot: unknown): string {
-  return stableFingerprint({ projectId, version, snapshot })
+export function versionFingerprint(projectId: number, version: number, snapshot: unknown, contentFingerprint: string): string {
+  return managedSiteStableFingerprint({ projectId, version, snapshot, contentFingerprint })
 }
 
 export function eventFingerprint(ownerUserId: number, projectId: number, action: string, idempotencyKey: string, beforeFingerprint: string | null, afterFingerprint: string | null): string {

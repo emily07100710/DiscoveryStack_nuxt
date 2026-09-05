@@ -15,6 +15,7 @@ import {
 } from './types'
 import { MANAGED_SITE_PROVIDER_VERIFIERS, resolveManagedSiteProviderVerifier, type ManagedSiteProviderVerifierRegistry } from './provider-verifiers'
 import { assertManagedSiteCheckoutOrigin } from './canonical'
+import { evaluateManagedSiteLaunchReadiness, isManagedSiteProductionPaymentIdentity } from './launch-readiness'
 
 const MAX_REGISTRY_BYTES = 64 * 1024
 const MAX_CREDENTIAL_BYTES = 8 * 1024
@@ -46,7 +47,9 @@ function safeTransportConfiguration(value: unknown): Record<string, string | num
     if (typeof item === 'number' && !Number.isSafeInteger(item)) invalid('Transport configuration contains an invalid number.')
     output[key] = item
   }
-  return output
+  // Keys are allowlisted above, so a normal prototype cannot be polluted here; the
+  // persistence layer rejects null-prototype objects, so hand it a plain one.
+  return { ...output }
 }
 
 type CredentialRegistry = Record<string, string>
@@ -98,7 +101,7 @@ export async function configureManagedSiteProvider(
     || input.providerKey === 'internal-domain-broker-hmac-v1' && input.capability === 'domain_registration'
     || input.providerKey === 'internal-dns-tls-broker-hmac-v1' && input.capability === 'dns_tls'
   const paymentTransport = ['internal_hmac_v1', 'stripe'].includes(input.providerKey) && input.capability === 'payment'
-  const allowedTransportFields = input.providerKey === 'bailian-qwen' && input.capability === 'website_generator' ? new Set(['endpointOrigin', 'model']) : input.providerKey === 'stripe' && input.capability === 'payment' ? new Set(['endpointOrigin', 'checkoutOrigin', 'returnOrigin']) : paymentTransport ? new Set(['endpointOrigin', 'checkoutOrigin']) : input.providerKey === 'internal-deployment-bearer-v1' && input.capability === 'deployment' || hmacBroker ? new Set(['endpointOrigin']) : new Set<string>()
+  const allowedTransportFields = input.providerKey === 'bailian-qwen' && input.capability === 'website_generator' ? new Set(['endpointOrigin', 'model']) : input.providerKey === 'stripe' && input.capability === 'payment' ? new Set(['endpointOrigin', 'checkoutOrigin', 'returnOrigin']) : paymentTransport ? new Set(['endpointOrigin', 'checkoutOrigin']) : input.providerKey === 'porkbun' && input.capability === 'domain_registration' || input.providerKey === 'internal-deployment-bearer-v1' && input.capability === 'deployment' || hmacBroker ? new Set(['endpointOrigin']) : new Set<string>()
   if (Object.keys(transportConfiguration).some(key => !allowedTransportFields.has(key))) invalid('Transport configuration is not allowlisted for this exact provider and capability.')
   if (paymentTransport && input.readinessStatus === 'configured') transportConfiguration.checkoutOrigin = assertManagedSiteCheckoutOrigin(transportConfiguration.checkoutOrigin)
   const configurationFingerprint = stableFingerprint({ capability: input.capability, providerKey: input.providerKey, readinessStatus: input.readinessStatus, credentialReference, transportConfiguration })
@@ -170,6 +173,10 @@ export async function verifyManagedSiteProviderConfiguration(
   const observedAt = new Date(receipt.observedAt)
   const verifiedAt = clock()
   if (receipt.capability !== capability || receipt.providerKey !== providerKey || receipt.configurationFingerprint !== configurationFingerprint || !isOpaqueReference(receipt.capabilityIdentity, 160) || !isOpaqueReference(receipt.providerEventId, 160) || !/^[a-f0-9]{64}$/u.test(receipt.payloadHash) || !isOpaqueReference(receipt.exactResponseIdentity, 256) || !Number.isFinite(observedAt.getTime()) || Math.abs(verifiedAt.getTime() - observedAt.getTime()) > 10 * 60_000) conflict('Provider verification receipt identity or timestamp is incomplete or mismatched.')
+  if (capability === 'payment' && isManagedSiteProductionPaymentIdentity(providerKey, receipt.capabilityIdentity)) {
+    const launchReadiness = await evaluateManagedSiteLaunchReadiness(ownerUserId, repository)
+    if (!launchReadiness.ready) conflict(`無法將付款服務切換至正式環境：${launchReadiness.blockers.map(blocker => blocker.messageZh).join('；')}`)
+  }
   const receiptFingerprint = stableFingerprint(receipt)
   const verified = await repository.verifyProviderConfigurationCas(ownerUserId, configuration.id, configurationFingerprint, { readinessStatus: 'verified', blockedReasonCode: null, verificationReceiptFingerprint: receiptFingerprint, capabilityIdentity: receipt.capabilityIdentity, verifiedAt })
   if (!verified) conflict('Provider configuration changed before verification completed.')

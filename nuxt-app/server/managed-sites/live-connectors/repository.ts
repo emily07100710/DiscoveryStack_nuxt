@@ -7,6 +7,7 @@ import {
   managedSiteDomainClaims,
   managedSiteGateResults,
   managedSiteGenerationCandidates,
+  managedSiteModuleFulfilments,
   managedSiteProviderConfigurations,
   managedSitePrePurchaseBindings,
   managedSitePaymentWebhookInbox,
@@ -70,6 +71,34 @@ export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSi
       if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
       const rows = await repository.listProviderConfigurations(ownerUserId)
       return rows.find(item => item.id === id) || null
+    },
+    async findModuleFulfilment(ownerUserId, draftOrderId, moduleKey) {
+      const [row] = await database.select().from(managedSiteModuleFulfilments).where(and(eq(managedSiteModuleFulfilments.ownerUserId, ownerUserId), eq(managedSiteModuleFulfilments.draftOrderId, draftOrderId), eq(managedSiteModuleFulfilments.moduleKey, moduleKey))).limit(1)
+      return row || null
+    },
+    async insertModuleFulfilment(input) {
+      try {
+        const id = rowId(await database.insert(managedSiteModuleFulfilments).values(input as any))
+        const [row] = await database.select().from(managedSiteModuleFulfilments).where(eq(managedSiteModuleFulfilments.id, id)).limit(1)
+        if (!row) throw createError({ statusCode: 500, statusMessage: 'Managed site module fulfilment could not be loaded.' })
+        return row
+      } catch (error) {
+        if (!duplicate(error)) throw error
+        const replay = await repository.findModuleFulfilment(input.ownerUserId, input.draftOrderId, input.moduleKey)
+        if (replay && replay.quoteId === input.quoteId && replay.mode === input.mode) return replay
+        throw createError({ statusCode: 409, statusMessage: 'Module fulfilment collides with another paid order lineage.' })
+      }
+    },
+    async listModuleFulfilmentsByDraftOrder(ownerUserId, draftOrderId) {
+      return database.select().from(managedSiteModuleFulfilments).where(and(eq(managedSiteModuleFulfilments.ownerUserId, ownerUserId), eq(managedSiteModuleFulfilments.draftOrderId, draftOrderId))).orderBy(asc(managedSiteModuleFulfilments.id)).limit(100)
+    },
+    async listPendingManualModuleFulfilments(ownerUserId) {
+      return database.select().from(managedSiteModuleFulfilments).where(and(eq(managedSiteModuleFulfilments.ownerUserId, ownerUserId), eq(managedSiteModuleFulfilments.status, 'pending_manual_setup'))).orderBy(asc(managedSiteModuleFulfilments.createdAt), asc(managedSiteModuleFulfilments.id)).limit(500)
+    },
+    async closePendingManualModuleFulfilment(ownerUserId, draftOrderId, moduleKey, completedAt) {
+      const result = await database.update(managedSiteModuleFulfilments).set({ status: 'manual_setup_completed', customerVisibleStatus: '客服已完成設定', ownerActionRequired: false, completedAt, updatedAt: completedAt } as any).where(and(eq(managedSiteModuleFulfilments.ownerUserId, ownerUserId), eq(managedSiteModuleFulfilments.draftOrderId, draftOrderId), eq(managedSiteModuleFulfilments.moduleKey, moduleKey), eq(managedSiteModuleFulfilments.status, 'pending_manual_setup')))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      return repository.findModuleFulfilment(ownerUserId, draftOrderId, moduleKey)
     },
     async findPrePurchaseBinding(ownerUserId, projectId) {
       const [row] = await database.select().from(managedSitePrePurchaseBindings).where(and(eq(managedSitePrePurchaseBindings.ownerUserId, ownerUserId), eq(managedSitePrePurchaseBindings.projectId, projectId))).limit(1)

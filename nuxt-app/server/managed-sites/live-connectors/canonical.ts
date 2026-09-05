@@ -1,9 +1,34 @@
 import { createError } from 'h3'
 import { assertPublicHttpsUrl } from '../../content-operations/normalization'
+import { stableFingerprint } from '../../seo-geo-core/repository'
 
 /** Locale-independent UTF-16 code-unit ordering for persisted fingerprints. */
 export function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object') return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+/** Deep key-sorted canonical form. Persisted fingerprints must not depend on JSON key order,
+ * because MySQL/TiDB `json` columns return object keys sorted rather than in write order. */
+export function canonicalFingerprintValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalFingerprintValue)
+  if (!isPlainObject(value)) return value
+  const canonical: Record<string, unknown> = {}
+  for (const key of Object.keys(value).sort(compareCodeUnits)) {
+    if (value[key] !== undefined) canonical[key] = canonicalFingerprintValue(value[key])
+  }
+  return canonical
+}
+
+/** stableFingerprint over the canonical form; use this for any fingerprint that is persisted
+ * and later recomputed from a database read. */
+export function managedSiteStableFingerprint(value: unknown): string {
+  return stableFingerprint(canonicalFingerprintValue(value))
 }
 
 /** NFKC plus ASCII-only case folding; artifact paths are admitted as ASCII. */

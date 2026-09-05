@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createError } from 'h3'
 import { stableFingerprint } from '../../../seo-geo-core/repository'
+import { managedSiteStableFingerprint } from '../canonical'
 import { assertPublicHttpsUrl } from '../../../content-operations/normalization'
 import { isOpaqueReference } from '../../../first-party-publishing/normalization'
 import { createS3ManagedSiteArtifactVault } from '../s3-vault'
@@ -65,7 +66,7 @@ function authority(value: unknown): ManagedSiteProviderAuthoritySnapshot {
 function validateBundle(value: unknown, expected: { ownerUserId: number; projectId: number; requestFingerprint: string; contentHash: string }): ManagedSiteArtifactVaultBundle {
   if (!plain(value)) fail(409, 'Managed-site vault bundle is malformed.')
   const keys = ['schemaVersion', 'ownerUserId', 'projectId', 'requestFingerprint', 'providerOutput', 'blueprint', 'blueprintHash', 'compilerFingerprint', 'manifest', 'files']
-  if (!exact(value, keys) || value.schemaVersion !== 'managed-site-owner-vault-bundle-v2' || value.ownerUserId !== expected.ownerUserId || value.projectId !== expected.projectId || value.requestFingerprint !== expected.requestFingerprint || !plain(value.manifest) || value.manifest.contentHash !== expected.contentHash || !plain(value.blueprint) || !Array.isArray(value.files) || typeof value.blueprintHash !== 'string' || !FINGERPRINT.test(value.blueprintHash) || stableFingerprint(value.blueprint) !== value.blueprintHash || value.files.some(file => !plain(file) || typeof file.path !== 'string' || typeof file.content !== 'string' || typeof file.sha256 !== 'string' || sha256(file.content) !== file.sha256)) fail(409, 'Managed-site vault bundle identity is mismatched.')
+  if (!exact(value, keys) || value.schemaVersion !== 'managed-site-owner-vault-bundle-v2' || value.ownerUserId !== expected.ownerUserId || value.projectId !== expected.projectId || value.requestFingerprint !== expected.requestFingerprint || !plain(value.manifest) || value.manifest.contentHash !== expected.contentHash || !plain(value.blueprint) || !Array.isArray(value.files) || typeof value.blueprintHash !== 'string' || !FINGERPRINT.test(value.blueprintHash) || managedSiteStableFingerprint(value.blueprint) !== value.blueprintHash || value.files.some(file => !plain(file) || typeof file.path !== 'string' || typeof file.content !== 'string' || typeof file.sha256 !== 'string' || sha256(file.content) !== file.sha256)) fail(409, 'Managed-site vault bundle identity is mismatched.')
   return value as unknown as ManagedSiteArtifactVaultBundle
 }
 

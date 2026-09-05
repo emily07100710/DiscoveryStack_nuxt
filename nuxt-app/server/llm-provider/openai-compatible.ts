@@ -27,6 +27,7 @@ export interface OpenAiCompatibleChatClient {
   complete(input: {
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
     responseFormat?: 'text' | 'json_object'
+    reasoning?: 'default' | 'disabled'
     timeoutMs?: number
     requestId?: string
     maxResponseBytes?: number
@@ -168,7 +169,7 @@ export function createOpenAiCompatibleChatClient(options: { endpoint: string; ap
             authorization: `Bearer ${apiKey}`,
             ...(input.requestId ? { 'x-discoverystack-request-id': input.requestId } : {}),
           },
-          body: JSON.stringify({ model, stream: false, messages: input.messages, ...(input.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}) }),
+          body: JSON.stringify({ model, stream: false, messages: input.messages, ...(input.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}), ...(input.reasoning === 'disabled' ? { enable_thinking: false } : {}) }),
         })
       } catch (error) {
         const aborted = controller.signal.aborted || (typeof DOMException !== 'undefined' && error instanceof DOMException && error.name === 'AbortError')

@@ -2,22 +2,66 @@ import { randomBytes } from 'node:crypto'
 import { createError } from 'h3'
 import { stableFingerprint } from '../seo-geo-core/repository'
 import { getPreviewRepository } from './ordering-repository'
-import { assertExistingSiteUrl, buildPreviewProjection, buildSiteSpec, BUSINESS_GOALS, SITE_MODULES, type SiteBriefInput, type SiteModule, type SiteSpec } from './site-spec'
+import { assertExistingSiteUrl, buildPreviewProjection, buildSiteSpec, BUSINESS_GOALS, SITE_MODULE_LABELS_ZH, SITE_MODULES, type SiteBriefInput, type SiteModule, type SiteSpec } from './site-spec'
 import { FAIL_CLOSED_EXISTING_SITE_DIAGNOSIS_RESOLVER, type ExistingSiteDiagnosisResolver } from './diagnosis-binding'
 import { normalizeRecipientEmail, tokenHash } from './normalization'
 import type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEvent, ManagedSitePreview, ManagedSiteQuote, ManagedSiteQuoteLine, ManagedSiteSubscriptionIntent } from '../database/schema'
 import type { DraftOrderInput, LeadInput, ManagedSiteCheckoutAuthority, ManagedSiteCheckoutAuthorityInput, ManagedSiteCheckoutAuthorityResolver, PaymentEventVerifier, PreviewGenerationResult, PreviewRepository, QuoteInput } from './ordering-types'
+import { MANAGED_SITE_TYPES, type ManagedSiteType } from './types'
+import { createPaidManagedSiteModuleFulfilments } from './funnel/module-fulfilment'
 
-export const MANAGED_SITE_PRICE_CATALOG_VERSION = 'managed-site-pricing-v1'
+export const MANAGED_SITE_PRICE_CATALOG_VERSION = 'managed-site-pricing-twd-v6'
+export const MANAGED_SITE_CURRENCY = 'TWD' as const
 export const MANAGED_SITE_TERM_MONTHS = 12
 export const MANAGED_SITE_QUOTE_TTL_MS = 1000 * 60 * 60 * 24
 
-const PLAN_CATALOG = {
-  basic: { siteBuildMinor: 9900, geoSubscriptionMinor: 9900, description: 'Basic managed site + GEO subscription' },
-  business: { siteBuildMinor: 19900, geoSubscriptionMinor: 19900, description: 'Business managed site + GEO subscription' },
+const SITE_BUILD_CATALOG: Record<ManagedSiteType, { buildMinor: number; labelZh: string; descriptionZh: string }> = {
+  one_page: { buildMinor: 12000, labelZh: '一頁式網站', descriptionZh: '適合用一個頁面清楚介紹品牌與服務。' },
+  brand_blog: { buildMinor: 18000, labelZh: '品牌內容網站', descriptionZh: '適合持續發布品牌內容與案例。' },
+  simple_commerce: { buildMinor: 30000, labelZh: '簡易電商網站', descriptionZh: '適合展示商品並建立基本線上銷售流程。' },
+}
+
+const DESIGN_TIER_CATALOG = {
+  template: { oneTimeMinor: 0, labelZh: '模板設計', descriptionZh: '使用既有設計系統完成網站視覺。' },
+  designer: { oneTimeMinor: 15000, labelZh: '設計師客製', descriptionZh: '由設計師依品牌需求調整網站視覺。' },
 } as const
 
-const CADENCE_CATALOG: Record<3 | 7 | 15 | 30, number> = { 3: 4900, 7: 2900, 15: 1900, 30: 990 }
+export const MODULE_CATALOG: Record<SiteModule, { buildMinor: number; monthlyMinor: number; activation: 'automatic' | 'manual_service'; readiness: 'available' | 'manual_setup' | 'coming_soon'; labelZh: string; descriptionZh: string }> = {
+  stripe_payment: { buildMinor: 3000, monthlyMinor: 0, activation: 'manual_service', readiness: 'manual_setup', labelZh: SITE_MODULE_LABELS_ZH.stripe_payment, descriptionZh: '串接 Stripe 以收取線上付款。' },
+  newebpay_payment: { buildMinor: 3000, monthlyMinor: 0, activation: 'manual_service', readiness: 'coming_soon', labelZh: SITE_MODULE_LABELS_ZH.newebpay_payment, descriptionZh: '串接藍新金流以收取線上付款。' },
+  ecpay_payment: { buildMinor: 3000, monthlyMinor: 0, activation: 'manual_service', readiness: 'coming_soon', labelZh: SITE_MODULE_LABELS_ZH.ecpay_payment, descriptionZh: '串接綠界金流以收取線上付款。' },
+  einvoice: { buildMinor: 4000, monthlyMinor: 200, activation: 'manual_service', readiness: 'coming_soon', labelZh: SITE_MODULE_LABELS_ZH.einvoice, descriptionZh: '提供電子發票開立與管理功能。' },
+  logistics: { buildMinor: 3000, monthlyMinor: 0, activation: 'manual_service', readiness: 'coming_soon', labelZh: SITE_MODULE_LABELS_ZH.logistics, descriptionZh: '串接出貨與物流處理流程。' },
+  erp_crm_backoffice: { buildMinor: 8000, monthlyMinor: 500, activation: 'manual_service', readiness: 'coming_soon', labelZh: SITE_MODULE_LABELS_ZH.erp_crm_backoffice, descriptionZh: '整合訂單、客戶與營運管理後台。' },
+  bounded_ai_assistant: { buildMinor: 6000, monthlyMinor: 800, activation: 'manual_service', readiness: 'coming_soon', labelZh: SITE_MODULE_LABELS_ZH.bounded_ai_assistant, descriptionZh: '提供受控範圍內的網站訪客問答協助。' },
+  line_assisted_integration: { buildMinor: 3000, monthlyMinor: 300, activation: 'manual_service', readiness: 'coming_soon', labelZh: SITE_MODULE_LABELS_ZH.line_assisted_integration, descriptionZh: '付款後由客服協助串接 LINE 官方帳號。' },
+  google_booking_assisted_integration: { buildMinor: 4000, monthlyMinor: 0, activation: 'manual_service', readiness: 'coming_soon', labelZh: SITE_MODULE_LABELS_ZH.google_booking_assisted_integration, descriptionZh: '連結 Google 預約服務，方便客戶安排時段。' },
+  managed_content_admin: { buildMinor: 0, monthlyMinor: 0, activation: 'automatic', readiness: 'available', labelZh: SITE_MODULE_LABELS_ZH.managed_content_admin, descriptionZh: '讓你自行管理網站的文字與內容。' },
+  contact_lead_capture: { buildMinor: 0, monthlyMinor: 0, activation: 'automatic', readiness: 'available', labelZh: SITE_MODULE_LABELS_ZH.contact_lead_capture, descriptionZh: '網站訪客留下姓名、Email 與訊息，直接寄到你綁定的收信信箱。' },
+  shopify_commerce: { buildMinor: 0, monthlyMinor: 0, activation: 'manual_service', readiness: 'manual_setup', labelZh: SITE_MODULE_LABELS_ZH.shopify_commerce, descriptionZh: '連結 Shopify 商品與電商流程。' },
+  geo_content_subscription: { buildMinor: 0, monthlyMinor: 0, activation: 'automatic', readiness: 'available', labelZh: SITE_MODULE_LABELS_ZH.geo_content_subscription, descriptionZh: '提供網站內容的 GEO 規劃支援。' },
+  geo_measurement_dashboard: { buildMinor: 0, monthlyMinor: 0, activation: 'automatic', readiness: 'available', labelZh: SITE_MODULE_LABELS_ZH.geo_measurement_dashboard, descriptionZh: '集中查看 GEO 相關追蹤資訊。' },
+  pwa_reference_only: { buildMinor: 0, monthlyMinor: 0, activation: 'manual_service', readiness: 'coming_soon', labelZh: SITE_MODULE_LABELS_ZH.pwa_reference_only, descriptionZh: '提供 PWA 規劃參考，不包含上架服務。' },
+}
+
+const PLAN_CATALOG = {
+  site_only: { monthlyMinor: 500, geoTracking: false, autoPosting: false, labelZh: '網站維護', descriptionZh: '提供網站基本維護與持續服務。' },
+  site_geo: { monthlyMinor: 2500, geoTracking: true, autoPosting: false, labelZh: '網站＋GEO 追蹤', descriptionZh: '提供網站維護與 GEO 追蹤服務。' },
+  site_geo_autopost: { monthlyMinor: null, geoTracking: true, autoPosting: true, labelZh: '網站＋GEO 追蹤＋自動發文', descriptionZh: '提供網站維護、GEO 追蹤與定期自動發文。' },
+} as const
+
+// Only "30 天 = 5,000" comes from the owner's price list ("5,000 起"); the 15/7/3-day steps are a placeholder ladder.
+const CADENCE_CATALOG: Record<3 | 7 | 15 | 30, number> = { 3: 12000, 7: 8500, 15: 6500, 30: 5000 }
+
+const DOMAIN_TLD_CATALOG = {
+  com: 600,
+  'com.tw': 800,
+  tw: 900,
+  shop: 1200,
+  store: 1400,
+} as const
+
+const ASSISTED_DOMAIN_SETUP_MINOR = 2000
 
 function invalid(message: string): never {
   throw createError({ statusCode: 422, statusMessage: message })
@@ -51,6 +95,10 @@ function assertPreviewAccess(preview: ManagedSitePreview, accessToken: unknown) 
 }
 
 function quoteProjection(quote: ManagedSiteQuote, lines: ManagedSiteQuoteLine[]) {
+  const selectedModules = Array.isArray(quote.moduleSnapshot) ? quote.moduleSnapshot as SiteModule[] : []
+  const manualServiceModules = selectedModules.filter(module => MODULE_CATALOG[module]?.activation === 'manual_service')
+  const manualSetupModules = selectedModules.filter(module => MODULE_CATALOG[module]?.readiness === 'manual_setup')
+  const comingSoonModules = selectedModules.filter(module => MODULE_CATALOG[module]?.readiness === 'coming_soon')
   return {
     quoteId: quote.id,
     status: quote.status,
@@ -66,20 +114,101 @@ function quoteProjection(quote: ManagedSiteQuote, lines: ManagedSiteQuoteLine[])
     expiresAt: quote.expiresAt,
     lockedAt: quote.lockedAt,
     lines: lines.map(line => ({ lineKey: line.lineKey, description: line.description, quantity: line.quantity, unitAmountMinor: line.unitAmountMinor, lineAmountMinor: line.lineAmountMinor, catalogVersion: line.catalogVersion })),
-    limitations: ['Tax is not calculated in V1.', 'Payment, domain purchase, DNS, TLS and deployment are not executed by this contract until separately authorized and configured.', 'AI visibility, ranking, traffic, conversion and revenue are not guaranteed.'],
+    totals: managedSiteQuoteTotals(lines, quote.totalMinor),
+    manualServiceModules,
+    manualSetupModules,
+    comingSoonModules,
+    limitations: [
+      '目前報價未計算稅金。',
+      '付款、網域購買、DNS、TLS 與部署，須在另行授權與完成設定後才會執行。',
+      '不保證 AI 能見度、排名、流量、轉換或營收成果。',
+      '月費自第二個月起收取，今日僅收首月。',
+      ...(manualSetupModules.length ? ['所選的人工設定模組會依報價收費；付款後由我們為你設定開通，完成前不會顯示為已開通。'] : []),
+      ...(comingSoonModules.length ? ['即將推出模組只登記需求，本次不開通，也不收取建置費或月費。'] : []),
+    ],
   }
 }
 
 export function getManagedSitePriceCatalog() {
   return {
     version: MANAGED_SITE_PRICE_CATALOG_VERSION,
-    currency: 'USD' as const,
+    currency: MANAGED_SITE_CURRENCY,
     termMonths: MANAGED_SITE_TERM_MONTHS,
-    plans: Object.entries(PLAN_CATALOG).map(([key, value]) => ({ key, siteBuildMinor: value.siteBuildMinor, geoSubscriptionMinor: value.geoSubscriptionMinor, description: value.description })),
+    siteTypes: Object.entries(SITE_BUILD_CATALOG).map(([key, value]) => ({ key, ...value })),
+    designTiers: Object.entries(DESIGN_TIER_CATALOG).map(([key, value]) => ({ key, ...value })),
+    modules: SITE_MODULES.map(key => ({ key, ...MODULE_CATALOG[key] })),
+    plans: Object.entries(PLAN_CATALOG).map(([key, value]) => ({ key, ...value })),
     cadence: Object.entries(CADENCE_CATALOG).map(([days, amount]) => ({ days: Number(days), monthlyMinor: amount })),
     domainOptions: ['existing', 'new', 'assisted'] as const,
-    modules: SITE_MODULES,
+    domainTlds: Object.entries(DOMAIN_TLD_CATALOG).map(([tld, annualMinor]) => ({ tld, annualMinor })),
+    assistedDomainSetupMinor: ASSISTED_DOMAIN_SETUP_MINOR,
   }
+}
+
+type ManagedSiteCatalogQuoteInput = {
+  siteType: ManagedSiteType
+  planKey: QuoteInput['planKey']
+  cadenceDays?: QuoteInput['cadenceDays']
+  domainOption: QuoteInput['domainOption']
+  designTier?: QuoteInput['designTier']
+  domainTld?: QuoteInput['domainTld']
+  moduleKeys: string[]
+}
+
+function managedSiteQuoteTotals(lines: Array<Pick<ManagedSiteQuoteLine, 'lineKey' | 'lineAmountMinor'>>, dueTodayMinor: number) {
+  const amountFor = (predicate: (line: Pick<ManagedSiteQuoteLine, 'lineKey' | 'lineAmountMinor'>) => boolean) => lines.filter(predicate).reduce((sum, line) => sum + line.lineAmountMinor, 0)
+  const isDomainYearOne = (lineKey: string) => /^domain-[a-z0-9-]+-year1$/u.test(lineKey)
+  // Assisted setup is a one-time service fee, not a domain annual fee, so it must not appear under the domain bucket.
+  const oneTimeMinor = amountFor(line => line.lineKey.startsWith('build-') || line.lineKey.startsWith('design-') || (line.lineKey.startsWith('module-') && line.lineKey.endsWith('-setup')) || line.lineKey === 'domain-assisted-setup')
+  const firstMonthMinor = amountFor(line => line.lineKey.startsWith('monthly-'))
+  const domainFirstYearMinor = amountFor(line => isDomainYearOne(line.lineKey))
+  return { oneTimeMinor, firstMonthMinor, domainFirstYearMinor, dueTodayMinor, recurringMonthlyMinor: firstMonthMinor, domainRenewalAnnualMinor: domainFirstYearMinor }
+}
+
+/** Pure Phase-A catalog projection used by both persisted quotes and pre-checkout funnel display. */
+export function projectManagedSiteCatalogQuote(input: ManagedSiteCatalogQuoteInput) {
+  if (!(MANAGED_SITE_TYPES as readonly string[]).includes(input.siteType)) invalid('Site type is not available in V1.')
+  if (!Object.hasOwn(PLAN_CATALOG, input.planKey)) invalid('Plan is not available in V1.')
+  if (!['existing', 'new', 'assisted'].includes(input.domainOption)) invalid('Domain option is not available in V1.')
+  const designTier = input.designTier === undefined ? 'template' : input.designTier
+  if (!Object.hasOwn(DESIGN_TIER_CATALOG, designTier)) invalid('Design tier is not available in V1.')
+  if (input.domainOption === 'new' && (!input.domainTld || !Object.hasOwn(DOMAIN_TLD_CATALOG, input.domainTld))) invalid('Domain TLD is required for a new domain.')
+  if (input.domainOption !== 'new' && input.domainTld !== undefined) invalid('Domain TLD is only available for a new domain.')
+  const cadenceDays: 3 | 7 | 15 | 30 = input.planKey === 'site_geo_autopost'
+    ? (input.cadenceDays !== undefined && Object.hasOwn(CADENCE_CATALOG, input.cadenceDays) ? input.cadenceDays : invalid('GEO cadence is not available in V1.'))
+    : 30
+  const selectedModules = [...new Set(input.moduleKeys)]
+  if (selectedModules.length > SITE_MODULES.length || selectedModules.some(module => !Object.hasOwn(MODULE_CATALOG, module))) invalid('Selected module is not available in V1.')
+  if (input.siteType === 'simple_commerce' && !selectedModules.includes('shopify_commerce')) invalid('簡易電商網站必須選擇 Shopify 電商模組，請返回模組步驟勾選後再繼續。')
+  const plan = PLAN_CATALOG[input.planKey]
+  const siteBuild = SITE_BUILD_CATALOG[input.siteType]
+  const lines: QuoteLineInput[] = [{ lineKey: `build-${input.siteType}`, description: `${siteBuild.labelZh}建置費`, quantity: 1, unitAmountMinor: siteBuild.buildMinor }]
+  const design = DESIGN_TIER_CATALOG[designTier]
+  if (design.oneTimeMinor > 0) lines.push({ lineKey: `design-${designTier}`, description: `${design.labelZh}費`, quantity: 1, unitAmountMinor: design.oneTimeMinor })
+  for (const module of selectedModules) {
+    const item = MODULE_CATALOG[module as SiteModule]
+    if (item.readiness === 'coming_soon') {
+      lines.push({ lineKey: `module-${module}-intent`, description: `${item.labelZh}（即將推出・本次不收費）`, quantity: 1, unitAmountMinor: 0 })
+      continue
+    }
+    if (item.buildMinor > 0) lines.push({ lineKey: `module-${module}-setup`, description: `${item.labelZh}建置費${item.readiness === 'manual_setup' ? '・需人工設定' : ''}`, quantity: 1, unitAmountMinor: item.buildMinor })
+  }
+  const planMonthlyMinor = input.planKey === 'site_geo_autopost' ? CADENCE_CATALOG[cadenceDays] : plan.monthlyMinor!
+  lines.push({ lineKey: `monthly-plan-${input.planKey}`, description: `月費・${plan.labelZh}（首月）`, quantity: 1, unitAmountMinor: planMonthlyMinor })
+  for (const module of selectedModules) {
+    const item = MODULE_CATALOG[module as SiteModule]
+    if (item.readiness === 'coming_soon') continue
+    if (item.monthlyMinor > 0) lines.push({ lineKey: `monthly-module-${module}`, description: `${item.labelZh}（首月${item.readiness === 'manual_setup' ? '・需人工設定' : ''}）`, quantity: 1, unitAmountMinor: item.monthlyMinor })
+  }
+  if (input.domainOption === 'new') {
+    const domainTld = input.domainTld!
+    lines.push({ lineKey: `domain-${domainTld.replaceAll('.', '-')}-year1`, description: `網域 ${domainTld} 第一年註冊費`, quantity: 1, unitAmountMinor: DOMAIN_TLD_CATALOG[domainTld] })
+  }
+  if (input.domainOption === 'assisted') lines.push({ lineKey: 'domain-assisted-setup', description: '網域人工協助設定費', quantity: 1, unitAmountMinor: ASSISTED_DOMAIN_SETUP_MINOR })
+  const projectedLines = lines.map(line => ({ ...line, lineAmountMinor: line.quantity * line.unitAmountMinor }))
+  const totalMinor = projectedLines.reduce((total, line) => total + line.lineAmountMinor, 0)
+  if (projectedLines.some(line => !Number.isSafeInteger(line.unitAmountMinor) || line.unitAmountMinor < 0 || !Number.isSafeInteger(line.lineAmountMinor) || line.lineAmountMinor < 0) || !Number.isSafeInteger(totalMinor) || totalMinor < 0) invalid('報價金額無效，請重新整理後再試。')
+  return { lines: projectedLines, totalMinor, totals: managedSiteQuoteTotals(projectedLines as any, totalMinor), currency: MANAGED_SITE_CURRENCY, cadenceDays, designTier, selectedModules, manualServiceModules: selectedModules.filter(module => MODULE_CATALOG[module as SiteModule].activation === 'manual_service') as SiteModule[], manualSetupModules: selectedModules.filter(module => MODULE_CATALOG[module as SiteModule].readiness === 'manual_setup') as SiteModule[], comingSoonModules: selectedModules.filter(module => MODULE_CATALOG[module as SiteModule].readiness === 'coming_soon') as SiteModule[] }
 }
 
 export async function createManagedSitePreview(ownerUserId: number | null, input: unknown, repository = getPreviewRepository(), clock: () => Date = () => new Date(), diagnosisResolver: ExistingSiteDiagnosisResolver = FAIL_CLOSED_EXISTING_SITE_DIAGNOSIS_RESOLVER): Promise<PreviewGenerationResult> {
@@ -161,19 +290,25 @@ export async function saveManagedSitePreview(ownerUserId: number | null, preview
 
 export async function createManagedSiteQuote(input: QuoteInput, repository = getPreviewRepository(), clock: () => Date = () => new Date()) {
   if (!Number.isSafeInteger(input.previewId) || input.previewId < 1) invalid('Preview id is invalid.')
-  if (!['basic', 'business'].includes(input.planKey)) invalid('Plan is not available in V1.')
-  if (![3, 7, 15, 30].includes(input.cadenceDays)) invalid('GEO cadence is not available in V1.')
+  if (!Object.hasOwn(PLAN_CATALOG, input.planKey)) invalid('Plan is not available in V1.')
   if (!['existing', 'new', 'assisted'].includes(input.domainOption)) invalid('Domain option is not available in V1.')
+  const designTier = input.designTier === undefined ? 'template' : input.designTier
+  if (!Object.hasOwn(DESIGN_TIER_CATALOG, designTier)) invalid('Design tier is not available in V1.')
+  if (input.domainOption === 'new' && (!input.domainTld || !Object.hasOwn(DOMAIN_TLD_CATALOG, input.domainTld))) invalid('Domain TLD is required for a new domain.')
+  if (input.domainOption !== 'new' && input.domainTld !== undefined) invalid('Domain TLD is only available for a new domain.')
+  const cadenceDays: 3 | 7 | 15 | 30 = input.planKey === 'site_geo_autopost'
+    ? (input.cadenceDays !== undefined && Object.hasOwn(CADENCE_CATALOG, input.cadenceDays) ? input.cadenceDays : invalid('GEO cadence is not available in V1.'))
+    : 30
   const preview = await repository.findPreviewById(input.previewId)
   if (!preview) notFound('Managed site preview was not found.')
   assertPreviewAccess(preview, input.previewAccessToken)
   assertPreviewUsable(preview, clock())
   const spec = preview.siteSpecSnapshot as unknown as SiteSpec
   const selectedModules = input.moduleKeys ? [...new Set(input.moduleKeys)] : spec.selectedModules
-  if (selectedModules.length > SITE_MODULES.length || selectedModules.some(module => !(SITE_MODULES as readonly string[]).includes(module))) invalid('Selected module is not available in V1.')
-  if (spec.siteType === 'simple_commerce' && !selectedModules.includes('shopify_commerce')) invalid('Simple commerce requires Shopify commerce in V1.')
+  if (selectedModules.length > SITE_MODULES.length || selectedModules.some(module => !Object.hasOwn(MODULE_CATALOG, module))) invalid('Selected module is not available in V1.')
+  if (spec.siteType === 'simple_commerce' && !selectedModules.includes('shopify_commerce')) invalid('簡易電商網站必須選擇 Shopify 電商模組，請返回模組步驟勾選後再繼續。')
   const idempotencyKey = stringField(input.idempotencyKey, 'Quote idempotency key', 128)!
-  const quoteFingerprint = stableFingerprint({ previewFingerprint: preview.previewFingerprint, planKey: input.planKey, cadenceDays: input.cadenceDays, domainOption: input.domainOption, selectedModules: [...selectedModules].sort(), catalogVersion: MANAGED_SITE_PRICE_CATALOG_VERSION })
+  const quoteFingerprint = stableFingerprint({ previewFingerprint: preview.previewFingerprint, planKey: input.planKey, cadenceDays, domainOption: input.domainOption, domainTld: input.domainTld, designTier, selectedModules: [...selectedModules].sort(), catalogVersion: MANAGED_SITE_PRICE_CATALOG_VERSION })
   const replayByKey = await repository.findQuoteByIdempotency(preview.id, idempotencyKey)
   if (replayByKey) {
     if (replayByKey.quoteFingerprint !== quoteFingerprint) throw createError({ statusCode: 409, statusMessage: 'Quote idempotency key was already used for a different request.' })
@@ -186,17 +321,10 @@ export async function createManagedSiteQuote(input: QuoteInput, repository = get
   }
   const createdAt = clock()
   const expiresAt = new Date(createdAt.getTime() + MANAGED_SITE_QUOTE_TTL_MS)
-  const plan = PLAN_CATALOG[input.planKey]
-  const lines: QuoteLineInput[] = [
-    { lineKey: 'site-build', description: plan.description, quantity: 1, unitAmountMinor: plan.siteBuildMinor },
-    { lineKey: `geo-${input.cadenceDays}d`, description: `GEO content subscription · every ${input.cadenceDays} days`, quantity: 1, unitAmountMinor: plan.geoSubscriptionMinor + CADENCE_CATALOG[input.cadenceDays] },
-  ]
-  if (input.domainOption === 'new') lines.push({ lineKey: 'domain-registration-intent', description: 'Domain registration intent (provider confirmation required)', quantity: 1, unitAmountMinor: 1200 })
-  if (input.domainOption === 'assisted') lines.push({ lineKey: 'domain-assisted-setup', description: 'Domain setup assistance', quantity: 1, unitAmountMinor: 2500 })
-  if (selectedModules.includes('bounded_ai_assistant')) lines.push({ lineKey: 'bounded-ai-assistant', description: 'Bounded AI assistant module', quantity: 1, unitAmountMinor: 4900 })
-  const totalMinor = lines.reduce((total, line) => total + line.quantity * line.unitAmountMinor, 0)
+  const catalogProjection = projectManagedSiteCatalogQuote({ siteType: spec.siteType, planKey: input.planKey, cadenceDays, domainOption: input.domainOption, designTier, domainTld: input.domainTld, moduleKeys: selectedModules })
+  const { lines, totalMinor } = catalogProjection
   const quote = await repository.transaction(async transaction => {
-      const created = await transaction.insertQuote({ ownerUserId: preview.ownerUserId, previewId: preview.id, projectId: null, quoteVersion: MANAGED_SITE_PRICE_CATALOG_VERSION, idempotencyKey, planKey: input.planKey, currency: 'USD', totalMinor, taxStatus: 'not_calculated', moduleSnapshot: selectedModules, cadenceDays: input.cadenceDays, domainOption: input.domainOption, siteSpecFingerprint: spec.deterministicFingerprint, quoteFingerprint, status: 'quoted', expiresAt, lockedAt: null, createdAt, updatedAt: createdAt } as any)
+      const created = await transaction.insertQuote({ ownerUserId: preview.ownerUserId, previewId: preview.id, projectId: null, quoteVersion: MANAGED_SITE_PRICE_CATALOG_VERSION, idempotencyKey, planKey: input.planKey, currency: MANAGED_SITE_CURRENCY, totalMinor, taxStatus: 'not_calculated', moduleSnapshot: selectedModules, cadenceDays, domainOption: input.domainOption, siteSpecFingerprint: spec.deterministicFingerprint, quoteFingerprint, status: 'quoted', expiresAt, lockedAt: null, createdAt, updatedAt: createdAt } as any)
     for (const line of lines) await transaction.insertQuoteLine({ quoteId: created.id, lineKey: line.lineKey, description: line.description, quantity: line.quantity, unitAmountMinor: line.unitAmountMinor, lineAmountMinor: line.quantity * line.unitAmountMinor, catalogVersion: MANAGED_SITE_PRICE_CATALOG_VERSION, lineFingerprint: stableFingerprint({ quoteId: created.id, ...line, catalogVersion: MANAGED_SITE_PRICE_CATALOG_VERSION }) } as any)
     await transaction.updatePreview(preview.id, { status: 'saved', updatedAt: createdAt } as any)
     return created
@@ -392,6 +520,7 @@ export async function recordVerifiedPaymentEvent(input: unknown, verifier: Payme
     const boundQuote = boundLineage.quote
     if (currentOrder.status !== 'payment_pending' || boundQuote.totalMinor !== amountMinor || boundQuote.currency !== currency) throw createError({ statusCode: 409, statusMessage: 'Payment order changed while verification was in progress.' })
     const event = await transaction.insertPaymentEvent({ ownerUserId: authority.ownerUserId, draftOrderId: boundLineage.draftOrder.id, previewId: boundLineage.preview.id, quoteId: boundQuote.id, providerKey, eventId, providerReference, eventType: 'payment_succeeded', amountMinor, currency, canonicalPayloadHash, verificationStatus: 'verified', eventFingerprint, receivedAt } as any)
+    await createPaidManagedSiteModuleFulfilments(authority.ownerUserId, boundLineage.draftOrder.id, boundQuote, await transaction.listQuoteLines(boundQuote.id), transaction)
     const changed = await transaction.updateDraftOrder(boundLineage.draftOrder.id, { status: 'payment_verified', paymentIntentReference: providerReference, updatedAt: receivedAt } as any)
     if (!changed) notFound('Draft order was not found.')
     await transaction.updateQuote(boundQuote.id, { status: 'locked', lockedAt: receivedAt, updatedAt: receivedAt } as any)

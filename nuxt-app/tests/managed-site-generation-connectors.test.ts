@@ -82,6 +82,13 @@ describe('managed-site provider registry and generation admission', () => {
     await expect(generateManagedSiteCandidate(1, { ...request, sourceVersionId: secondVersion.version.id }, { adapter, vault, repository: line.live.repository, managedRepository: line.managed.repository, clock: () => now })).rejects.toMatchObject({ statusCode: 409 })
   })
 
+  it('retries an unclassified adapter crash instead of permanently blocking the attempt', async () => {
+    const line = await sourceLineage()
+    const adapter = { async generate() { throw new Error('boom') } }
+    await expect(generateManagedSiteCandidate(1, { projectId: line.project.id, sourceVersionId: line.version.id, templateIntent: 'astro', executionMode: 'mocked', idempotencyKey: 'generation-unclassified-crash-001' }, { adapter, vault: createMemoryManagedSiteArtifactVault(), repository: line.live.repository, managedRepository: line.managed.repository, clock: () => new Date('2026-08-27T00:00:00.000Z') })).rejects.toMatchObject({ statusCode: 503 })
+    expect(line.live.state.attempts[0]).toMatchObject({ status: 'retry_wait', errorCode: 'GENERATION_FAILED', attemptNumber: 1 })
+  })
+
   it('reconciles a provider-success and vault-success candidate after the local transaction fails without calling Qwen twice', async () => {
     const line = await sourceLineage(); let now = new Date('2026-08-27T00:00:00.000Z'); let providerCalls = 0; let fail = true
     const base = createMockManagedSiteGenerationAdapter(); const adapter = { generate: async (...args: Parameters<typeof base.generate>) => { providerCalls++; return base.generate(...args) } }

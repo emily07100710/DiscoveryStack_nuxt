@@ -10,6 +10,7 @@ import type { ManagedSiteRepository } from './types'
 import type { PreviewRepository } from './ordering-types'
 import { getPreviewRepository } from './ordering-repository'
 import { parseSiteSpecSnapshot } from './site-spec'
+import { versionFingerprint } from './normalization'
 
 function invalid(message: string): never { throw createError({ statusCode: 422, statusMessage: message }) }
 function notFound(message: string): never { throw createError({ statusCode: 404, statusMessage: message }) }
@@ -81,7 +82,7 @@ async function assertPaidProvisioningLineage(ownerUserId: number, project: NonNu
   if (project.status === 'suspended' || project.status !== 'active') conflict('Provisioning requires an active managed-site project.')
   if (project.activeVersionId !== version.id || version.lifecycleStatus !== 'active') conflict('Provisioning requires the active validated site version.')
   const siteSpec = parseSiteSpecSnapshot(version.siteSpecSnapshot)
-  const expectedVersionFingerprint = stableFingerprint({ projectId: version.projectId, version: version.version, snapshot: { siteSpecSnapshot: version.siteSpecSnapshot, designTokenSnapshot: version.designTokenSnapshot, selectedModuleSnapshot: version.selectedModuleSnapshot }, contentFingerprint: version.contentFingerprint })
+  const expectedVersionFingerprint = versionFingerprint(version.projectId, version.version, { siteSpecSnapshot: version.siteSpecSnapshot, designTokenSnapshot: version.designTokenSnapshot, selectedModuleSnapshot: version.selectedModuleSnapshot }, version.contentFingerprint)
   if (version.versionFingerprint !== expectedVersionFingerprint) conflict('Provisioning version fingerprint or SiteSpec lineage is invalid.')
   const subscription = await managedRepository.findSubscription(ownerUserId, project.id)
   if (!subscription || subscription.status !== 'active' || subscription.projectId !== project.id || subscription.ownerUserId !== ownerUserId) conflict('Provisioning requires an active paid subscription.')

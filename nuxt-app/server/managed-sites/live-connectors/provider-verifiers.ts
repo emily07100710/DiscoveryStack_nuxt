@@ -3,6 +3,7 @@ import { createError } from 'h3'
 import { isAllowedBailianEndpoint } from '../../geo/autogeo-bailian-qwen'
 import { assertPublicHttpsUrl } from '../../content-operations/normalization'
 import { stableFingerprint } from '../../seo-geo-core/repository'
+import { porkbunEnvironment } from './porkbun-adapters'
 import type { ManagedSiteProviderVerificationReceipt } from './provider-registry'
 import type { ManagedSiteConnectorCapability, ManagedSiteCredentialResolver } from './types'
 import { assertExactManagedSiteProviderObject, createManagedSiteHmacBrokerTransport, readBoundedManagedSiteResponse } from './hmac-broker-transport'
@@ -78,9 +79,16 @@ const bailianCapabilityProbe: ManagedSiteProviderVerifier = async input => {
   let value: any
   try { value = JSON.parse(raw) } catch { throw createError({ statusCode: 409, statusMessage: 'Bailian capability probe response is malformed.' }) }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw createError({ statusCode: 409, statusMessage: 'Bailian capability probe response is malformed.' })
-  const keys = ['id', 'object', 'created', 'model', 'choices', 'usage', 'system_fingerprint']; const actualKeys = Object.keys(value)
+  // OpenAI-compatible vendors legitimately append additive metadata (`logprobs`, `reasoning_content`,
+  // token detail objects) and prefix the body id over the transport request id, so every field the probe
+  // actually trusts is pinned exactly while unrecognised extras are only bounded, never enumerated.
+  const requiredKeys = ['id', 'object', 'created', 'model', 'choices', 'usage']; const actualKeys = Object.keys(value)
   const choice = value.choices?.[0]; const message = choice?.message; const usage = value.usage
-  if (actualKeys.length < 6 || actualKeys.length > 7 || actualKeys.some(key => !keys.includes(key)) || !['id', 'object', 'created', 'model', 'choices', 'usage'].every(key => Object.hasOwn(value, key)) || typeof value.id !== 'string' || !/^[A-Za-z0-9._:-]{3,160}$/u.test(value.id) || response.headers.get('x-request-id') !== value.id || value.object !== 'chat.completion' || !Number.isSafeInteger(value.created) || value.model !== model || !Array.isArray(value.choices) || value.choices.length !== 1 || !choice || typeof choice !== 'object' || Array.isArray(choice) || Object.keys(choice).length !== 3 || choice.index !== 0 || choice.finish_reason !== 'stop' || !message || typeof message !== 'object' || Array.isArray(message) || Object.keys(message).length !== 2 || message.role !== 'assistant' || typeof message.content !== 'string' || message.content.length > 128 || !usage || typeof usage !== 'object' || Array.isArray(usage) || Object.keys(usage).length !== 3 || !['prompt_tokens', 'completion_tokens', 'total_tokens'].every(key => Number.isSafeInteger(usage[key]) && usage[key] >= 0) || usage.prompt_tokens + usage.completion_tokens !== usage.total_tokens) throw createError({ statusCode: 409, statusMessage: 'Bailian capability probe response identity is mismatched.' })
+  const identifier = typeof value.id === 'string' ? value.id : ''
+  const transportRequestId = response.headers.get('x-request-id') || ''
+  const vendorIdPrefix = identifier.length > transportRequestId.length ? identifier.slice(0, identifier.length - transportRequestId.length) : ''
+  const identifierBoundToTransport = transportRequestId.length >= 3 && (identifier === transportRequestId || (identifier.endsWith(transportRequestId) && /^[A-Za-z0-9._:-]{1,32}-$/u.test(vendorIdPrefix)))
+  if (actualKeys.length < requiredKeys.length || actualKeys.length > 12 || !requiredKeys.every(key => Object.hasOwn(value, key)) || !/^[A-Za-z0-9._:-]{3,160}$/u.test(identifier) || !identifierBoundToTransport || value.object !== 'chat.completion' || !Number.isSafeInteger(value.created) || value.model !== model || !Array.isArray(value.choices) || value.choices.length !== 1 || !choice || typeof choice !== 'object' || Array.isArray(choice) || Object.keys(choice).length > 8 || choice.index !== 0 || (choice.finish_reason !== 'stop' && choice.finish_reason !== 'length') || !message || typeof message !== 'object' || Array.isArray(message) || Object.keys(message).length > 6 || message.role !== 'assistant' || typeof message.content !== 'string' || message.content.length > 128 || !usage || typeof usage !== 'object' || Array.isArray(usage) || Object.keys(usage).length > 8 || !['prompt_tokens', 'completion_tokens', 'total_tokens'].every(key => Number.isSafeInteger(usage[key]) && usage[key] >= 0) || usage.prompt_tokens + usage.completion_tokens !== usage.total_tokens) throw createError({ statusCode: 409, statusMessage: 'Bailian capability probe response identity is mismatched.' })
   const observedAt = input.clock().toISOString()
   const responseMetadata = { id: value.id, object: value.object, created: value.created, model: value.model, choiceCount: value.choices.length, finishReason: choice.finish_reason, usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens, totalTokens: usage.total_tokens } }
   const payloadHash = stableFingerprint({ configurationFingerprint: input.configurationFingerprint, requestIdentity, responseMetadata })
@@ -120,11 +128,37 @@ const stripeBalanceVerifier: ManagedSiteProviderVerifier = async input => {
   return { capability: input.capability, providerKey: input.providerKey, configurationFingerprint: input.configurationFingerprint, capabilityIdentity: `stripe-balance:${balance.livemode ? 'live' : 'test'}`, providerEventId: requestId, payloadHash, exactResponseIdentity: `stripe-verification:${stableFingerprint({ providerKey: input.providerKey, path: '/v1/balance', requestId, payloadHash })}`, observedAt }
 }
 
+/** Read-only Porkbun credential probe. It only returns the caller's observed IP address. */
+export const porkbunPingVerifier: ManagedSiteProviderVerifier = async input => {
+  const endpointOrigin = typeof input.transportConfiguration.endpointOrigin === 'string' ? input.transportConfiguration.endpointOrigin : ''
+  const origin = assertAllowedManagedSiteProviderOrigin(endpointOrigin)
+  const credential = await input.resolveCredential(input.credentialReference)
+  if (!credential.ok) throw createError({ statusCode: 409, statusMessage: 'Porkbun credential reference is unresolved.' })
+  let parsedCredential: { apiKey: string; secretApiKey: string }
+  try { parsedCredential = JSON.parse(credential.value) } catch { throw createError({ statusCode: 409, statusMessage: 'Porkbun credential reference is invalid.' }) }
+  if (!parsedCredential || typeof parsedCredential !== 'object' || Array.isArray(parsedCredential) || Object.getPrototypeOf(parsedCredential) !== Object.prototype || Object.keys(parsedCredential).length !== 2 || !Object.hasOwn(parsedCredential, 'apiKey') || !Object.hasOwn(parsedCredential, 'secretApiKey') || typeof parsedCredential.apiKey !== 'string' || parsedCredential.apiKey.length < 1 || parsedCredential.apiKey.length > 512 || typeof parsedCredential.secretApiKey !== 'string' || parsedCredential.secretApiKey.length < 1 || parsedCredential.secretApiKey.length > 512) throw createError({ statusCode: 409, statusMessage: 'Porkbun credential reference is invalid.' })
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 10_000)
+  let response: Response
+  try {
+    response = await (input.fetchImpl || fetch)(`${origin}/api/json/v3/ping`, { method: 'POST', redirect: 'error', signal: controller.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ apikey: parsedCredential.apiKey, secretapikey: parsedCredential.secretApiKey }) })
+  } catch { throw createError({ statusCode: 409, statusMessage: controller.signal.aborted ? 'Porkbun capability probe timed out.' : 'Porkbun capability probe transport failed.' }) } finally { clearTimeout(timer) }
+  if (!response.ok) throw createError({ statusCode: 409, statusMessage: 'Porkbun capability probe was rejected.' })
+  const raw = await readBoundedManagedSiteResponse(response, 16_000)
+  let value: unknown
+  try { value = JSON.parse(raw) } catch { throw createError({ statusCode: 409, statusMessage: 'Porkbun capability probe response is malformed.' }) }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw createError({ statusCode: 409, statusMessage: 'Porkbun capability probe response identity is incomplete or mismatched.' })
+  const ping = value as Record<string, unknown>
+  if (Object.keys(ping).length !== 2 || !Object.hasOwn(ping, 'status') || !Object.hasOwn(ping, 'yourIp') || ping.status !== 'SUCCESS' || typeof ping.yourIp !== 'string' || !ping.yourIp.trim()) throw createError({ statusCode: 409, statusMessage: 'Porkbun capability probe response identity is incomplete or mismatched.' })
+  const payloadHash = createHash('sha256').update(raw).digest('hex'); const observedAt = input.clock().toISOString()
+  return { capability: input.capability, providerKey: input.providerKey, configurationFingerprint: input.configurationFingerprint, capabilityIdentity: `porkbun:${porkbunEnvironment(parsedCredential.apiKey)}`, providerEventId: `porkbun-ping:${stableFingerprint({ configurationFingerprint: input.configurationFingerprint, payloadHash }).slice(0, 48)}`, payloadHash, exactResponseIdentity: `porkbun-verification:${stableFingerprint({ providerKey: input.providerKey, path: '/api/json/v3/ping', configurationFingerprint: input.configurationFingerprint, payloadHash })}`, observedAt }
+}
+
 export const MANAGED_SITE_PROVIDER_VERIFIERS: ManagedSiteProviderVerifierRegistry = new Map([
   ['bailian-qwen', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['website_generator', bailianCapabilityProbe]])],
   ['internal-deployment-bearer-v1', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['deployment', internalDeploymentVerifier]])],
   ['internal_hmac_v1', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['payment', hmacCapabilityVerifier]])],
   ['stripe', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['payment', stripeBalanceVerifier]])],
+  ['porkbun', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['domain_registration', porkbunPingVerifier]])],
   ['internal-domain-broker-hmac-v1', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['domain_registration', hmacCapabilityVerifier]])],
   ['internal-dns-tls-broker-hmac-v1', new Map<ManagedSiteConnectorCapability, ManagedSiteProviderVerifier>([['dns_tls', hmacCapabilityVerifier]])],
 ])

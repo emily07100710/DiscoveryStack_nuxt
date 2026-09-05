@@ -21,7 +21,7 @@ describe('managed-site reachable server-only provider transports', () => {
     const input = { ownerUserId: 1, projectId: 2, releaseId: 3, canonicalDomain: 'authority.acme.taipei', providerAuthority, requestFingerprint: 'd'.repeat(64), timeoutMs: 5000 }
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
       const requestNonce = new Headers(init.headers).get('x-discoverystack-nonce')!; const providerRequestId = 'domain-authority-event-001'
-      const body = JSON.stringify({ schemaVersion: 'managed-site-domain-quote-response-v1', providerKey: 'internal-domain-broker-hmac-v1', providerEventId: providerRequestId, quoteId: 'domain-quote-001', ownerUserId: 1, projectId: 2, releaseId: 3, canonicalDomain: input.canonicalDomain, amountMinor: 1200, currency: 'USD', expiresAt: new Date(now.getTime() + 60_000).toISOString(), requestFingerprint: input.requestFingerprint, providerAuthorityFingerprint: authorityFingerprint })
+      const body = JSON.stringify({ schemaVersion: 'managed-site-domain-quote-response-v1', providerKey: 'internal-domain-broker-hmac-v1', providerEventId: providerRequestId, quoteId: 'domain-quote-001', ownerUserId: 1, projectId: 2, releaseId: 3, canonicalDomain: input.canonicalDomain, amountMinor: 1200, currency: 'TWD', expiresAt: new Date(now.getTime() + 60_000).toISOString(), requestFingerprint: input.requestFingerprint, providerAuthorityFingerprint: authorityFingerprint })
       const bodyHash = createHash('sha256').update(body).digest('hex'); const timestamp = now.toISOString(); const nonce = 'domain-authority-response-nonce'
       const signature = managedSiteBrokerSignature({ method: 'POST', path: '/v1/managed-sites/domain/quote', timestamp, nonce, requestNonce, bodyHash }, credential)
       return new Response(body, { status: 200, headers: { 'x-discoverystack-timestamp': timestamp, 'x-discoverystack-nonce': nonce, 'x-provider-request-id': providerRequestId, 'x-discoverystack-signature': signature } })
@@ -45,11 +45,48 @@ describe('managed-site reachable server-only provider transports', () => {
     expect(JSON.stringify(live.state)).not.toContain('"OK"')
   })
 
+  it('accepts a real vendor chat-completion shape with additive metadata while still rejecting identity drift', async () => {
+    const clock = () => new Date('2026-09-04T00:00:00.000Z')
+    const endpointOrigin = 'https://ws-yythvp4rp02q11he.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions'
+    const model = 'qwen3.8-max-0902'
+    // Captured verbatim from the owner's Bailian workspace: the body id carries a `chatcmpl-` prefix over the
+    // transport request id, the choice carries `logprobs`, the message carries `reasoning_content`, and usage
+    // carries token detail objects. None of that is tampering, so verification must succeed.
+    const transportRequestId = '849240a6-0c33-9001-ac59-c5c9765e817d'
+    const vendorBody = (overrides: Record<string, unknown> = {}) => ({
+      id: `chatcmpl-${transportRequestId}`, object: 'chat.completion', created: 1788506021, model,
+      choices: [{ index: 0, message: { role: 'assistant', reasoning_content: 'We need to respond to user with OK.', content: 'OK' }, finish_reason: 'stop', logprobs: null }],
+      usage: { prompt_tokens: 76, total_tokens: 109, completion_tokens: 33, prompt_tokens_details: { cached_tokens: 0, text_tokens: 76 }, completion_tokens_details: { reasoning_tokens: 29, text_tokens: 33 } },
+      ...overrides,
+    })
+    const probe = async (body: Record<string, unknown>, requestId = transportRequestId) => {
+      const live = createLiveConnectorMemoryRepository()
+      await configureManagedSiteProvider(1, { capability: 'website_generator', providerKey: 'bailian-qwen', readinessStatus: 'configured', credentialReference: 'vault:qwen-real-shape', transportConfiguration: { endpointOrigin, model }, idempotencyKey: 'qwen-real-shape-config' }, live.repository)
+      const fetchImpl = vi.fn(async () => new Response(JSON.stringify(body), { status: 200, headers: { 'x-request-id': requestId } }))
+      const verified = verifyManagedSiteProviderConfiguration(1, 'website_generator', live.repository, async () => ({ ok: true, value: 'runtime-only-qwen-key' }), clock, undefined, fetchImpl as unknown as typeof fetch)
+      return { live, verified }
+    }
+
+    const accepted = await probe(vendorBody())
+    await accepted.verified
+    const stored = await accepted.live.repository.findProviderConfiguration(1, 'website_generator')
+    expect(stored?.readinessStatus).toBe('verified')
+    expect(JSON.stringify(accepted.live.state)).not.toContain('runtime-only-qwen-key')
+    expect(JSON.stringify(accepted.live.state)).not.toContain('reasoning_content')
+
+    // The additive-metadata tolerance must not weaken the anti-tampering checks the probe exists for.
+    await expect((await probe(vendorBody({ model: 'qwen-plus' }))).verified).rejects.toMatchObject({ statusCode: 409 })
+    await expect((await probe(vendorBody(), 'a-different-request-id')).verified).rejects.toMatchObject({ statusCode: 409 })
+    await expect((await probe(vendorBody({ id: `chatcmpl-${transportRequestId}-tail` }))).verified).rejects.toMatchObject({ statusCode: 409 })
+    await expect((await probe(vendorBody({ usage: { prompt_tokens: 76, completion_tokens: 33, total_tokens: 999 } }))).verified).rejects.toMatchObject({ statusCode: 409 })
+    await expect((await probe(vendorBody({ choices: [{ index: 0, message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }, { index: 1, message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }] }))).verified).rejects.toMatchObject({ statusCode: 409 })
+  })
+
   it('signs and validates exact internal_hmac_v1 checkout lineage and rejects response identity drift', async () => {
     process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS = 'https://payments.acme-payments.com'
     process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_CHECKOUT_ORIGINS = 'https://checkout.acme-payments.com'
     const credential = 'runtime-only-hmac-gateway-key'; const now = new Date('2026-08-27T00:00:00.000Z')
-    const input = { ownerUserId: 7, projectId: 11, releaseId: 13, previewId: 17, approvalFingerprint: 'a'.repeat(64), draftOrderId: 19, quoteId: 23, amountMinor: 2400, currency: 'USD', planKey: 'basic', cadenceDays: 7, domainOption: 'new', lineSnapshot: [{ lineKey: 'base', quantity: 1, unitAmountMinor: 2400, lineAmountMinor: 2400 }], taxStatus: 'not_calculated', snapshotFingerprint: 'b'.repeat(64), checkoutReceiptFingerprint: 'e'.repeat(64), configurationFingerprint: 'c'.repeat(64), verificationReceiptFingerprint: 'd'.repeat(64), capabilityIdentity: 'payment-gateway:merchant-007', idempotencyKey: 'checkout-hmac-exact-001', timeoutMs: 5000 }
+    const input = { ownerUserId: 7, projectId: 11, releaseId: 13, previewId: 17, approvalFingerprint: 'a'.repeat(64), draftOrderId: 19, quoteId: 23, amountMinor: 2400, currency: 'TWD', planKey: 'site_geo', cadenceDays: 7, domainOption: 'new', lineSnapshot: [{ lineKey: 'monthly-plan-site_geo', quantity: 1, unitAmountMinor: 2400, lineAmountMinor: 2400 }], taxStatus: 'not_calculated', snapshotFingerprint: 'b'.repeat(64), checkoutReceiptFingerprint: 'e'.repeat(64), configurationFingerprint: 'c'.repeat(64), verificationReceiptFingerprint: 'd'.repeat(64), capabilityIdentity: 'payment-gateway:merchant-007', idempotencyKey: 'checkout-hmac-exact-001', timeoutMs: 5000 }
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       expect(url).toBe('https://payments.acme-payments.com/v1/managed-sites/checkout-sessions'); expect(init.redirect).toBe('error')
       const requestNonce = new Headers(init.headers).get('x-discoverystack-nonce')!; const providerRequestId = 'provider-checkout-001'
@@ -60,7 +97,7 @@ describe('managed-site reachable server-only provider transports', () => {
       return new Response(body, { status: 200, headers: { 'x-discoverystack-timestamp': timestamp, 'x-discoverystack-nonce': nonce, 'x-provider-request-id': providerRequestId, 'x-discoverystack-signature': signature } })
     })
     const adapter = createInternalHmacV1CheckoutAdapter({ endpointOrigin: 'https://payments.acme-payments.com', checkoutOrigin: 'https://checkout.acme-payments.com', providerKey: 'internal_hmac_v1', credentialReference: 'vault:payments', resolveCredential: async () => ({ ok: true, value: credential }), fetchImpl: fetchImpl as typeof fetch, clock: () => now })
-    const result = await adapter.createSession(input); expect(result).toMatchObject({ providerKey: 'internal_hmac_v1', draftOrderId: 19, amountMinor: 2400, currency: 'USD' }); expect(fetchImpl).toHaveBeenCalledOnce()
+    const result = await adapter.createSession(input); expect(result).toMatchObject({ providerKey: 'internal_hmac_v1', draftOrderId: 19, amountMinor: 2400, currency: 'TWD' }); expect(fetchImpl).toHaveBeenCalledOnce()
     expect(() => createInternalHmacV1CheckoutAdapter({ endpointOrigin: 'https://127.0.0.1', providerKey: 'internal_hmac_v1', credentialReference: 'vault:payments', resolveCredential: async () => ({ ok: true, value: credential }) })).toThrow()
   })
 
@@ -76,7 +113,7 @@ describe('managed-site reachable server-only provider transports', () => {
     process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS = 'https://payments.acme-payments.com'
     process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_CHECKOUT_ORIGINS = 'https://checkout.acme-payments.com'
     const credential = 'runtime-only-hmac-gateway-key'; const now = new Date('2026-08-27T00:00:00.000Z')
-    const input = { ownerUserId: 7, projectId: 11, releaseId: 13, previewId: 17, approvalFingerprint: 'a'.repeat(64), draftOrderId: 19, quoteId: 23, amountMinor: 2400, currency: 'USD', planKey: 'basic', cadenceDays: 7, domainOption: 'new', lineSnapshot: [{ lineKey: 'base', quantity: 1, unitAmountMinor: 2400, lineAmountMinor: 2400 }], taxStatus: 'not_calculated', snapshotFingerprint: 'b'.repeat(64), checkoutReceiptFingerprint: 'e'.repeat(64), configurationFingerprint: 'c'.repeat(64), verificationReceiptFingerprint: 'd'.repeat(64), capabilityIdentity: 'payment-gateway:merchant-007', idempotencyKey: `checkout-malicious-${_label.replace(/ /gu, '-')}`, timeoutMs: 5000 }
+    const input = { ownerUserId: 7, projectId: 11, releaseId: 13, previewId: 17, approvalFingerprint: 'a'.repeat(64), draftOrderId: 19, quoteId: 23, amountMinor: 2400, currency: 'TWD', planKey: 'site_geo', cadenceDays: 7, domainOption: 'new', lineSnapshot: [{ lineKey: 'monthly-plan-site_geo', quantity: 1, unitAmountMinor: 2400, lineAmountMinor: 2400 }], taxStatus: 'not_calculated', snapshotFingerprint: 'b'.repeat(64), checkoutReceiptFingerprint: 'e'.repeat(64), configurationFingerprint: 'c'.repeat(64), verificationReceiptFingerprint: 'd'.repeat(64), capabilityIdentity: 'payment-gateway:merchant-007', idempotencyKey: `checkout-malicious-${_label.replace(/ /gu, '-')}`, timeoutMs: 5000 }
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
       const requestNonce = new Headers(init.headers).get('x-discoverystack-nonce')!; const providerRequestId = `provider-${input.idempotencyKey}`
       const requestPayloadHash = stableFingerprint({ ownerUserId: input.ownerUserId, projectId: input.projectId, releaseId: input.releaseId, previewId: input.previewId, quoteId: input.quoteId, draftOrderId: input.draftOrderId, approvalFingerprint: input.approvalFingerprint, configurationFingerprint: input.configurationFingerprint, verificationReceiptFingerprint: input.verificationReceiptFingerprint, capabilityIdentity: input.capabilityIdentity, snapshotFingerprint: input.snapshotFingerprint, idempotencyKey: input.idempotencyKey })

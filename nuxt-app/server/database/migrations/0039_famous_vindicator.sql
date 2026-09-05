@@ -1,0 +1,22 @@
+CREATE TABLE `managedSiteFunnelSessions` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`sessionTokenHash` varchar(128) NOT NULL,
+	`status` enum('active','building','checkout_pending','converted','expired','abandoned') NOT NULL DEFAULT 'active',
+	`currentStep` int NOT NULL DEFAULT 1,
+	`answers` json NOT NULL,
+	`consentSnapshot` json,
+	`previewId` int,
+	`previewAccessTokenHash` varchar(128),
+	`quoteId` int,
+	`leadIntentId` int,
+	`draftOrderId` int,
+	`projectId` int,
+	`releaseId` int,
+	`builtPreviewUrl` varchar(512),
+	`checkoutUrl` varchar(2048),
+	`expiresAt` timestamp NOT NULL,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+	CONSTRAINT `managedSiteFunnelSessions_id` PRIMARY KEY(`id`),
+	CONSTRAINT `managed_site_funnel_sessions_token_hash_unique` UNIQUE(`sessionTokenHash`)
+);

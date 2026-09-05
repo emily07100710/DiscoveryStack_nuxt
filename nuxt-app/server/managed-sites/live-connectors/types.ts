@@ -9,9 +9,11 @@ import type {
   ManagedSitePaymentWebhookInbox,
   ManagedSiteReleaseProjection,
 } from '../../database/schema'
+import type { ManagedSiteModuleFulfilmentRepository } from '../funnel/module-fulfilment'
 
 export const MANAGED_SITE_CONNECTOR_CAPABILITIES = ['website_generator', 'payment', 'domain_registration', 'dns_tls', 'deployment'] as const
 export type ManagedSiteConnectorCapability = typeof MANAGED_SITE_CONNECTOR_CAPABILITIES[number]
+export type ManagedSiteProviderCapability = ManagedSiteConnectorCapability
 export type ManagedSiteProviderReadinessStatus = 'disabled' | 'mock' | 'configured' | 'verified' | 'blocked'
 export type ManagedSiteConnectorExecutionMode = 'dry_run' | 'mocked' | 'live'
 
@@ -78,6 +80,7 @@ export type ManagedSiteGenerationRequest = {
   brandContent: unknown
   locale: string
   selectedModules: string[]
+  formEndpoint: string | null
   templateIntent: 'astro' | 'nuxt'
   geoBrief: unknown
   evidenceConstraints: {
@@ -99,12 +102,13 @@ export type ManagedSiteGeneratedFile = {
 
 export type ManagedSiteBlueprintSectionV1 = {
   sectionId: string
-  kind: 'hero' | 'summary' | 'services' | 'about' | 'contact' | 'blog_index' | 'shop_index' | 'faq' | 'module_slot'
+  kind: 'hero' | 'summary' | 'services' | 'about' | 'contact' | 'contact_form' | 'blog_index' | 'shop_index' | 'faq' | 'module_slot'
   heading: string
   body: string
   ctaLabel: string | null
   ctaHref: string | null
   moduleKey: string | null
+  formEndpoint: string | null
 }
 
 export type ManagedSiteBlueprintV1 = {
@@ -311,7 +315,7 @@ export type ManagedSiteExistingSiteOwnershipAdapter = {
   verify(input: { projectId: number; canonicalDomain: string; challengeReference: string; providerAuthority: ManagedSiteProviderAuthoritySnapshot; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteExistingSiteOwnershipReceipt>
 }
 
-export type ManagedSiteLiveConnectorRepository = {
+export type ManagedSiteLiveConnectorRepository = ManagedSiteModuleFulfilmentRepository & {
   transaction<T>(work: (repository: ManagedSiteLiveConnectorRepository) => Promise<T>): Promise<T>
   findProviderConfiguration(ownerUserId: number, capability: ManagedSiteConnectorCapability): Promise<ManagedSiteProviderConfiguration | null>
   listProviderConfigurations(ownerUserId: number): Promise<ManagedSiteProviderConfiguration[]>
