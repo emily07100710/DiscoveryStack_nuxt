@@ -151,8 +151,8 @@ describe('managed-site authoritative mocked application path', () => {
     let deploymentCalls = 0
     const concurrentAdapter = { ...line.deploymentAdapter, deployProduction: async (...args: Parameters<typeof line.deploymentAdapter.deployProduction>) => { deploymentCalls++; return line.deploymentAdapter.deployProduction(...args) } }
     const concurrent = await Promise.allSettled([
-      deployManagedSiteProduction(line.ownerUserId, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'fixture-deploy-001' }, concurrentAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => managedSiteFixedNow }),
-      deployManagedSiteProduction(line.ownerUserId, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'fixture-deploy-duplicate' }, concurrentAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => managedSiteFixedNow }),
+      deployManagedSiteProduction(line.ownerUserId, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'fixture-deploy-001' }, concurrentAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, orderingRepository: line.ordering.repository, productionTransaction: line.productionTransaction, clock: () => managedSiteFixedNow }),
+      deployManagedSiteProduction(line.ownerUserId, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'fixture-deploy-duplicate' }, concurrentAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, orderingRepository: line.ordering.repository, productionTransaction: line.productionTransaction, clock: () => managedSiteFixedNow }),
     ])
     expect(concurrent.filter(result => result.status === 'fulfilled')).toHaveLength(1)
     expect(concurrent.filter(result => result.status === 'rejected')).toHaveLength(1)

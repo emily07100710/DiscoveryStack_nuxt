@@ -6,12 +6,13 @@ import { isOpaqueReference } from '../../first-party-publishing/normalization'
 import { getManagedSiteRepository } from '../repository'
 import { getPreviewRepository } from '../ordering-repository'
 import type { PreviewRepository } from '../ordering-types'
-import { managedSiteCommerceSnapshotFingerprint } from '../prepurchase-service'
+import { getManagedSitePrePurchaseRepositories, managedSiteCommerceSnapshotFingerprint } from '../prepurchase-service'
 import { linkManagedSiteContentOperations } from '../modules-service'
 import type { ManagedSiteRepository } from '../types'
 import { canonicalizeManagedDomain } from './domain-connectors'
 import { inspectManagedSitePreviewGates, runManagedSitePreviewGates } from './gates'
 import { getManagedSiteLiveConnectorRepository } from './repository'
+import { assertManagedSiteProductionPayment } from './production-payment-authority'
 import { assertManagedSiteProviderAuthorityFingerprint, managedSiteProviderAuthorityMetadata, resolveManagedSiteCredential, resolveManagedSiteProviderAuthority } from './provider-registry'
 import type {
   ManagedSiteConnectorExecutionMode,
@@ -221,29 +222,37 @@ export async function bindManagedSiteReleasePayment(ownerUserId: number, input: 
   })
 }
 
-export async function deployManagedSiteProduction(ownerUserId: number, input: { releaseId: number; executionMode: 'mocked' | 'live'; idempotencyKey: string }, adapter: ManagedSiteDeploymentAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; managedRepository?: ManagedSiteRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
+export type ManagedSiteProductionRepositories = { repository: ManagedSiteLiveConnectorRepository; orderingRepository: PreviewRepository; managedRepository: ManagedSiteRepository }
+export type ManagedSiteProductionTransaction = <T>(work: (repositories: ManagedSiteProductionRepositories) => Promise<T>) => Promise<T>
+
+export async function deployManagedSiteProduction(ownerUserId: number, input: { releaseId: number; executionMode: 'mocked' | 'live'; idempotencyKey: string }, adapter: ManagedSiteDeploymentAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; managedRepository?: ManagedSiteRepository; orderingRepository?: PreviewRepository; productionTransaction?: ManagedSiteProductionTransaction; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
   assertExecutionMode(input.executionMode)
   const repository = dependencies.repository || getManagedSiteLiveConnectorRepository()
   const managedRepository = dependencies.managedRepository || getManagedSiteRepository()
+  const orderingRepository = dependencies.orderingRepository || getPreviewRepository()
+  const productionTransaction: ManagedSiteProductionTransaction = dependencies.productionTransaction || (work => getManagedSitePrePurchaseRepositories().withTransaction!(scoped => work({ repository: scoped.live, orderingRepository: scoped.ordering, managedRepository: scoped.managed })))
   const resolver = dependencies.credentialResolver || resolveManagedSiteCredential
   const clock = dependencies.clock || (() => new Date())
   const providerAuthority = await deploymentProvider(ownerUserId, input.executionMode, repository, resolver)
   const release = await repository.findRelease(ownerUserId, input.releaseId)
-  if (!release || !['provisioning', 'retry_wait', 'live_verified', 'geo_active'].includes(release.status) || !release.approvalFingerprint || !release.generationCandidateId) conflict('Production deployment requires generated candidate, owner approval, verified payment, domain, and DNS/TLS authority.')
+  if (!release || !['provisioning', 'retry_wait', 'deployment_pending', 'live_verified', 'geo_active'].includes(release.status) || !release.approvalFingerprint || !release.generationCandidateId) conflict('Production deployment requires generated candidate, owner approval, verified payment, domain, and DNS/TLS authority.')
+  await assertManagedSiteProductionPayment(ownerUserId, release, repository, orderingRepository, managedRepository)
   const candidate = await repository.findGenerationCandidate(ownerUserId, release.generationCandidateId)
   const receipts = await repository.listReceipts(ownerUserId, release.projectId)
-  if (receipts.some(receipt => receipt.releaseId === release.id && receipt.receiptType === 'payment_refunded' && receipt.receiptStatus === 'verified' && (receipt.metadata as any)?.effective === true)) conflict('Verified refund authority blocks production deployment for this release.')
   const preview = receipts.find(receipt => receipt.releaseId === release.id && receipt.receiptType === 'preview_build_verified' && receipt.contentHash === release.contentHash && receipt.receiptStatus === 'verified')
   const approval = receipts.find(receipt => receipt.releaseId === release.id && receipt.receiptType === 'owner_preview_approved' && receipt.requestFingerprint === release.approvalFingerprint && receipt.receiptStatus === 'verified')
   const payment = receipts.find(receipt => receipt.releaseId === release.id && receipt.receiptType === 'release_payment_bound' && receipt.receiptStatus === 'verified')
   const domainClaim = await repository.findDomainClaim(release.canonicalDomain)
   const domain = domainClaim?.authorityReceiptFingerprint ? await repository.findReceiptByFingerprint(ownerUserId, domainClaim.authorityReceiptFingerprint) : null
-  const dnsTls = receipts.find(receipt => receipt.releaseId === release.id && receipt.receiptType === 'dns_tls_verified' && receipt.contentHash === release.contentHash && receipt.receiptStatus === 'verified')
-  if (!candidate || !preview || !approval || !payment || !domainClaim || domainClaim.status !== 'verified' || domainClaim.releaseId !== release.id || !domain || domain.projectId !== release.projectId || domain.releaseId !== release.id || !dnsTls) conflict('Production deployment lineage is missing preview, approval, payment, atomic domain claim, or DNS/TLS verified authority.')
+  const dnsTls = receipts.find(receipt => receipt.releaseId === release.id && receipt.canonicalDomain === release.canonicalDomain && receipt.receiptType === 'dns_tls_verified' && receipt.contentHash === release.contentHash && receipt.receiptStatus === 'verified')
+  if (!candidate || candidate.ownerUserId !== ownerUserId || candidate.projectId !== release.projectId || candidate.sourceVersionId !== release.versionId || candidate.contentHash !== release.contentHash || !preview || !approval || !payment || !domainClaim || domainClaim.ownerUserId !== ownerUserId || domainClaim.projectId !== release.projectId || domainClaim.status !== 'verified' || domainClaim.releaseId !== release.id || !domain || domain.projectId !== release.projectId || domain.releaseId !== release.id || domain.canonicalDomain !== release.canonicalDomain || domain.receiptStatus !== 'verified' || !['domain_registered', 'existing_site_ownership_verified'].includes(domain.receiptType) || !dnsTls) conflict('Production deployment lineage is missing preview, approval, payment, atomic domain claim, or DNS/TLS verified authority.')
   const previewAuthority = preview.metadata as Record<string, unknown>
   if (previewAuthority.providerAuthorityFingerprint !== providerAuthority.authorityFingerprint || previewAuthority.configurationFingerprint !== providerAuthority.configurationFingerprint || previewAuthority.verificationReceiptFingerprint !== providerAuthority.verificationReceiptFingerprint || previewAuthority.capabilityIdentity !== providerAuthority.capabilityIdentity) conflict('Deployment provider configuration changed after preview; create a new governed preview and approval lineage.')
+  const dnsAuthority = await resolveManagedSiteProviderAuthority(ownerUserId, 'dns_tls', input.executionMode, repository, resolver)
+  if ((dnsTls.metadata as any)?.providerAuthorityFingerprint !== dnsAuthority.authorityFingerprint) conflict('DNS/TLS provider configuration changed after verification.')
   const requestFingerprint = stableFingerprint({ operation: 'production_deploy', releaseId: release.id, projectId: release.projectId, versionId: release.versionId, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, previewReceiptFingerprint: preview.receiptFingerprint, approvalFingerprint: release.approvalFingerprint, providerAuthorityFingerprint: providerAuthority.authorityFingerprint })
   const attempt = await createDeploymentAttempt(ownerUserId, { projectId: release.projectId, releaseId: release.id, operation: 'production_deploy', executionMode: input.executionMode, requestFingerprint, idempotencyKey: input.idempotencyKey }, repository)
+  if (release.status === 'deployment_pending' && (attempt.operation !== 'production_deploy' || attempt.releaseId !== release.id || attempt.status !== 'processing' || !attempt.leaseExpiresAt || attempt.leaseExpiresAt.getTime() > clock().getTime())) conflict('Pending production deployment requires its exact expired attempt lease before recovery.')
   if (attempt.status === 'succeeded' && ['live_verified', 'geo_active'].includes(release.status)) {
     const receipt = receipts.find(item => item.attemptId === attempt.id && item.receiptType === 'production_deployment_verified')
     if (receipt) return { release, receipt, replayed: true }
@@ -263,15 +272,26 @@ export async function deployManagedSiteProduction(ownerUserId: number, input: { 
     const result = await adapter.deployProduction({ projectId: release.projectId, versionId: release.versionId, releaseId: release.id, vaultReference: candidate.vaultReference, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, previewReceiptFingerprint: preview.receiptFingerprint, approvalFingerprint: release.approvalFingerprint, providerAuthority, requestFingerprint, timeoutMs: DEPLOYMENT_TIMEOUT_MS })
     validateDeploymentReceipt(result, { providerKey: providerAuthority.providerKey, providerAuthorityFingerprint: providerAuthority.authorityFingerprint, projectId: release.projectId, versionId: release.versionId, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, status: 'production_verified' })
     const receiptFingerprint = stableFingerprint({ ownerUserId, releaseId: release.id, requestFingerprint, result })
-    const { receipt, updated } = await repository.transaction(async transaction => {
+    const { receipt, updated } = await productionTransaction(async scoped => {
+      const transaction = scoped.repository
+      // Settlement writes the order first. Holding this row lock through project activation
+      // ensures a later refund/dispute wins after this transaction commits.
+      await scoped.orderingRepository.findDraftOrderByIdForUpdate(release.draftOrderId!)
+      await assertManagedSiteProductionPayment(ownerUserId, release, transaction, scoped.orderingRepository, scoped.managedRepository)
+      const currentProvider = await deploymentProvider(ownerUserId, input.executionMode, transaction, resolver)
+      if (currentProvider.authorityFingerprint !== providerAuthority.authorityFingerprint) conflict('Deployment provider authority changed before production receipt acceptance.')
+      const currentDnsProvider = await resolveManagedSiteProviderAuthority(ownerUserId, 'dns_tls', input.executionMode, transaction, resolver)
+      const currentDomainClaim = await transaction.findDomainClaim(release.canonicalDomain)
+      if (currentDnsProvider.authorityFingerprint !== dnsAuthority.authorityFingerprint || currentDomainClaim?.status !== 'verified' || currentDomainClaim.ownerUserId !== ownerUserId || currentDomainClaim.projectId !== release.projectId || currentDomainClaim.releaseId !== release.id || currentDomainClaim.authorityReceiptFingerprint !== domain.receiptFingerprint) conflict('Domain or DNS/TLS authority changed before production receipt acceptance.')
       const receipt = await transaction.insertReceipt({ ownerUserId, projectId: release.projectId, draftOrderId: payment.draftOrderId, releaseId: release.id, attemptId: leased.id, capability: 'deployment', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: 'production_deployment_verified', receiptStatus: 'verified', externalReference: result.providerDeploymentId, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { deploymentUrl: result.deploymentUrl, providerDeploymentId: result.providerDeploymentId, previewReceiptFingerprint: preview.receiptFingerprint, approvalFingerprint: release.approvalFingerprint, ...managedSiteProviderAuthorityMetadata(providerAuthority) }, receiptFingerprint, verifiedAt: clock() } as any)
       const updated = await transaction.transitionRelease(ownerUserId, release.id, 'deployment_pending', pendingProjectionFingerprint, { status: 'live_verified', activeDeploymentReceiptFingerprint: receiptFingerprint, blockedReasonCode: null, nextSafeAction: 'activate_geo', projectionFingerprint: releaseFingerprint({ previous: pendingProjectionFingerprint, deploymentReceiptFingerprint: receiptFingerprint }) })
       if (!updated) conflict('Release changed concurrently before production deployment acceptance.')
       const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
       if (!completed) conflict('Production deployment attempt lease changed before receipt commit.')
+      const activeProject = await scoped.managedRepository.updateProject(ownerUserId, release.projectId, { status: 'active' } as any)
+      if (!activeProject) conflict('Production project authority disappeared before activation.')
       return { receipt, updated }
     })
-    await managedRepository.updateProject(ownerUserId, release.projectId, { status: 'active' } as any)
     return { release: updated, receipt }
   } catch (error) {
     const retryEligibleAt = await failAttempt(ownerUserId, { ...leased, attemptNumber: leasedAttemptNumber }, leaseOwner, repository, clock())

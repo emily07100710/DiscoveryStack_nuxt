@@ -5,7 +5,9 @@ import { parse as parseDomain } from 'tldts'
 import { stableFingerprint } from '../../seo-geo-core/repository'
 import { isOpaqueReference } from '../../first-party-publishing/normalization'
 import { getManagedSiteRepository } from '../repository'
+import { getManagedSitePrePurchaseRepositories } from '../prepurchase-service'
 import type { ManagedSiteRepository } from '../types'
+import type { ManagedSiteProductionRepositories, ManagedSiteProductionTransaction } from './deployment-orchestrator'
 import { getManagedSiteLiveConnectorRepository } from './repository'
 import { assertManagedSiteProviderAuthorityFingerprint, managedSiteProviderAuthorityMetadata, resolveManagedSiteCredential, resolveManagedSiteProviderAuthority } from './provider-registry'
 import type {
@@ -16,11 +18,13 @@ import type {
   ManagedSiteDomainAdapter,
   ManagedSiteDomainQuote,
   ManagedSiteDomainReceipt,
+  ManagedSiteCustomerDomainPurchaseAuthority,
   ManagedSiteLiveConnectorRepository,
 } from './types'
 
 const DOMAIN_TIMEOUT_MS = 15_000
 const DOMAIN_LEASE_MS = 25_000
+export const MANAGED_SITE_DNS_PROPAGATION_WINDOW_MS = 48 * 60 * 60_000
 
 function invalid(message: string): never { throw createError({ statusCode: 422, statusMessage: message }) }
 function conflict(message: string): never { throw createError({ statusCode: 409, statusMessage: message }) }
@@ -57,14 +61,14 @@ async function providerFor(ownerUserId: number, capability: 'domain_registration
   return resolveManagedSiteProviderAuthority(ownerUserId, capability, mode, repository, resolver)
 }
 
-function validateQuote(quote: ManagedSiteDomainQuote, expected: { providerKey: string; canonicalDomain: string; providerAuthorityFingerprint: string }, clock: () => Date): void {
+function validateQuote(quote: ManagedSiteDomainQuote, expected: { providerKey: string; canonicalDomain: string; providerAuthorityFingerprint: string }, clock: () => Date, allowExpired = false): void {
   if (quote.providerKey !== expected.providerKey || quote.canonicalDomain !== expected.canonicalDomain || !isOpaqueReference(quote.quoteId, 160) || !isOpaqueReference(quote.exactResponseIdentity, 256)) conflict('Domain quote response identity is incomplete or mismatched.')
   if (quote.providerAuthorityFingerprint !== expected.providerAuthorityFingerprint) conflict('Domain quote provider configuration authority is mismatched.')
-  if (!Number.isSafeInteger(quote.amountMinor) || quote.amountMinor < 0 || !/^[A-Z]{3}$/u.test(quote.currency) || !Number.isFinite(Date.parse(quote.expiresAt)) || Date.parse(quote.expiresAt) <= clock().getTime()) conflict('Domain quote commercial snapshot is invalid or expired.')
+  if (!Number.isSafeInteger(quote.amountMinor) || quote.amountMinor < 0 || !/^[A-Z]{3}$/u.test(quote.currency) || !Number.isFinite(Date.parse(quote.expiresAt)) || !allowExpired && Date.parse(quote.expiresAt) <= clock().getTime()) conflict('Domain quote commercial snapshot is invalid or expired.')
 }
 
 async function assertNoEffectiveRefund(ownerUserId: number, projectId: number, releaseId: number, repository: ManagedSiteLiveConnectorRepository): Promise<void> {
-  const refunded = (await repository.listReceipts(ownerUserId, projectId)).some(receipt => receipt.releaseId === releaseId && receipt.receiptType === 'payment_refunded' && receipt.receiptStatus === 'verified' && (receipt.metadata as any)?.effective === true)
+  const refunded = (await repository.listReceipts(ownerUserId, projectId)).some(receipt => receipt.releaseId === releaseId && ['payment_refunded', 'payment_disputed'].includes(receipt.receiptType) && receipt.receiptStatus === 'verified' && (receipt.metadata as any)?.effective === true)
   if (refunded) conflict('Verified refund authority blocks domain and DNS/TLS mutations for this release.')
 }
 
@@ -121,11 +125,23 @@ export function managedSiteDomainConfirmationFingerprint(input: { ownerUserId: n
   return stableFingerprint({ ...input, authority: 'owner_explicit_confirmation_v1' })
 }
 
-export async function createManagedSiteDomainPurchaseIntent(ownerUserId: number, input: { projectId: number; releaseId: number; draftOrderId: number; quoteReceiptFingerprint: string; paymentReceiptFingerprint: string; ownerConfirmationFingerprint: string; executionMode: Exclude<ManagedSiteConnectorExecutionMode, 'dry_run'>; idempotencyKey: string }, adapter: ManagedSiteDomainAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
+export type ManagedSiteDelegatedDomainPurchaseAuthority = ManagedSiteCustomerDomainPurchaseAuthority & { sessionId: number; procurementPolicyFingerprint: string }
+
+export async function createManagedSiteDomainPurchaseIntent(ownerUserId: number, input: { projectId: number; releaseId: number; draftOrderId: number; quoteReceiptFingerprint: string; paymentReceiptFingerprint: string; ownerConfirmationFingerprint: string; executionMode: Exclude<ManagedSiteConnectorExecutionMode, 'dry_run'>; idempotencyKey: string }, adapter: ManagedSiteDomainAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date; authorizeDelegatedPurchase?: (scoped?: ManagedSiteProductionRepositories) => Promise<ManagedSiteDelegatedDomainPurchaseAuthority>; productionTransaction?: ManagedSiteProductionTransaction } = {}) {
   assertMode(input.executionMode)
   const repository = dependencies.repository || getManagedSiteLiveConnectorRepository()
   const resolver = dependencies.credentialResolver || resolveManagedSiteCredential
   const clock = dependencies.clock || (() => new Date())
+  const delegated = dependencies.authorizeDelegatedPurchase ? await dependencies.authorizeDelegatedPurchase() : null
+  if (delegated && (delegated.kind !== 'customer_domain_delegation_v1' || !Number.isSafeInteger(delegated.sessionId) || delegated.sessionId < 1 || !/^[a-f0-9]{64}$/u.test(delegated.fingerprint) || !/^[a-f0-9]{64}$/u.test(delegated.procurementPolicyFingerprint))) conflict('Customer domain delegation authority is invalid.')
+  const purchaseAuthority = delegated ? { kind: delegated.kind, sessionId: delegated.sessionId, delegationFingerprint: delegated.fingerprint, procurementPolicyFingerprint: delegated.procurementPolicyFingerprint } : null
+  const beforeMutation = async () => {
+    await assertNoEffectiveRefund(ownerUserId, input.projectId, input.releaseId, repository)
+    if (delegated) {
+      const current = await dependencies.authorizeDelegatedPurchase!()
+      if (current.fingerprint !== delegated.fingerprint || current.procurementPolicyFingerprint !== delegated.procurementPolicyFingerprint) conflict('Customer domain delegation changed before registrar mutation.')
+    }
+  }
   const providerAuthority = await providerFor(ownerUserId, 'domain_registration', input.executionMode, repository, resolver)
   const quoteReceipt = await repository.findReceiptByFingerprint(ownerUserId, input.quoteReceiptFingerprint)
   const paymentReceipt = await repository.findReceiptByFingerprint(ownerUserId, input.paymentReceiptFingerprint)
@@ -135,13 +151,15 @@ export async function createManagedSiteDomainPurchaseIntent(ownerUserId: number,
   if (!quoteReceipt || quoteReceipt.projectId !== input.projectId || quoteReceipt.releaseId !== release.id || quoteReceipt.draftOrderId !== release.draftOrderId || quoteReceipt.receiptType !== 'domain_quote_verified' || quoteReceipt.receiptStatus !== 'verified' || quoteReceipt.contentHash !== release.contentHash || (quoteReceipt.metadata as any).commerceSnapshotFingerprint !== release.commerceSnapshotFingerprint) conflict('Domain purchase requires an exact server-verified quote receipt.')
   if (!paymentReceipt || paymentReceipt.releaseId !== release.id || paymentReceipt.draftOrderId !== input.draftOrderId || paymentReceipt.projectId !== input.projectId || paymentReceipt.receiptType !== 'release_payment_bound' || paymentReceipt.receiptStatus !== 'verified' || paymentReceipt.contentHash !== release.contentHash) conflict('Domain purchase requires exact release-bound payment authority for this project and order.')
   const expectedConfirmation = managedSiteDomainConfirmationFingerprint({ ownerUserId, projectId: input.projectId, releaseId: release.id, commerceSnapshotFingerprint: release.commerceSnapshotFingerprint, quoteReceiptFingerprint: input.quoteReceiptFingerprint, draftOrderId: input.draftOrderId, paymentReceiptFingerprint: input.paymentReceiptFingerprint })
-  if (input.ownerConfirmationFingerprint !== expectedConfirmation) conflict('Domain purchase requires exact owner confirmation of the quote and payment snapshot.')
+  if (!delegated && input.ownerConfirmationFingerprint !== expectedConfirmation) conflict('Domain purchase requires exact owner confirmation of the quote and payment snapshot.')
   const quote = quoteReceipt.metadata as unknown as ManagedSiteDomainQuote
   if (quote.canonicalDomain !== release.canonicalDomain) conflict('Domain quote does not match the immutable release canonical domain.')
-  validateQuote(quote, { providerKey: providerAuthority.providerKey, canonicalDomain: quoteReceipt.canonicalDomain || '', providerAuthorityFingerprint: providerAuthority.authorityFingerprint }, clock)
+  const priorPurchaseAttempt = delegated ? await repository.findAttemptByIdempotency(ownerUserId, input.idempotencyKey) : null
+  const reconcileOnly = Boolean(delegated && priorPurchaseAttempt && (priorPurchaseAttempt.attemptNumber > 0 || priorPurchaseAttempt.status === 'processing'))
+  validateQuote(quote, { providerKey: providerAuthority.providerKey, canonicalDomain: quoteReceipt.canonicalDomain || '', providerAuthorityFingerprint: providerAuthority.authorityFingerprint }, clock, reconcileOnly)
   const quoteMetadata = quoteReceipt.metadata as Record<string, unknown>
   if (quoteMetadata.providerAuthorityFingerprint !== providerAuthority.authorityFingerprint || quoteMetadata.configurationFingerprint !== providerAuthority.configurationFingerprint || quoteMetadata.verificationReceiptFingerprint !== providerAuthority.verificationReceiptFingerprint || quoteMetadata.capabilityIdentity !== providerAuthority.capabilityIdentity) conflict('Domain provider configuration changed after quote; obtain a new quote before purchase.')
-  const requestFingerprint = stableFingerprint({ ownerUserId, projectId: input.projectId, releaseId: release.id, commerceSnapshotFingerprint: release.commerceSnapshotFingerprint, draftOrderId: input.draftOrderId, quoteReceiptFingerprint: input.quoteReceiptFingerprint, paymentReceiptFingerprint: input.paymentReceiptFingerprint, ownerConfirmationFingerprint: input.ownerConfirmationFingerprint, providerAuthorityFingerprint: providerAuthority.authorityFingerprint })
+  const requestFingerprint = stableFingerprint({ ownerUserId, projectId: input.projectId, releaseId: release.id, commerceSnapshotFingerprint: release.commerceSnapshotFingerprint, draftOrderId: input.draftOrderId, quoteReceiptFingerprint: input.quoteReceiptFingerprint, paymentReceiptFingerprint: input.paymentReceiptFingerprint, ...(purchaseAuthority ? { purchaseAuthority } : { ownerConfirmationFingerprint: input.ownerConfirmationFingerprint }), providerAuthorityFingerprint: providerAuthority.authorityFingerprint })
   const claimFingerprint = stableFingerprint({ status: 'pending', requestFingerprint })
   const claim = await repository.insertDomainClaim({ canonicalDomain: quote.canonicalDomain, ownerUserId, projectId: input.projectId, releaseId: release.id, claimKind: 'generated', status: 'pending', authorityReceiptFingerprint: null, requestFingerprint, idempotencyKey: input.idempotencyKey, projectionFingerprint: claimFingerprint } as any)
   if (claim.ownerUserId !== ownerUserId || claim.projectId !== input.projectId || claim.releaseId !== release.id || claim.requestFingerprint !== requestFingerprint) conflict('Atomic domain claim replay does not match the release authority.')
@@ -157,19 +175,32 @@ export async function createManagedSiteDomainPurchaseIntent(ownerUserId: number,
   const leased = await repository.acquireAttemptLease(ownerUserId, attempt.id, leaseOwner, clock(), DOMAIN_LEASE_MS)
   if (!leased) conflict('Domain purchase intent is already leased, terminal, or waiting for retry.')
   try {
-    const result = await adapter.createPurchaseIntent({ ownerUserId, projectId: input.projectId, releaseId: release.id, draftOrderId: input.draftOrderId, commerceSnapshotFingerprint: release.commerceSnapshotFingerprint, quote, providerAuthority, ownerConfirmationFingerprint: input.ownerConfirmationFingerprint, paymentReceiptFingerprint: input.paymentReceiptFingerprint, idempotencyKey: input.idempotencyKey, timeoutMs: DOMAIN_TIMEOUT_MS })
+    await beforeMutation()
+    const staged = delegated ? (await repository.listReceiptsByDraftOrder(ownerUserId, input.draftOrderId)).find(receipt => receipt.attemptId === leased.id && receipt.receiptType === 'domain_registration_submitted' && receipt.receiptStatus === 'verified' && receipt.requestFingerprint === requestFingerprint) : null
+    const onRegistrationCreated = delegated ? async (registration: ManagedSiteDomainReceipt) => {
+      if (registration.status !== 'purchase_intent_created' || registration.providerKey !== providerAuthority.providerKey || registration.canonicalDomain !== quote.canonicalDomain || registration.providerAuthorityFingerprint !== providerAuthority.authorityFingerprint || !isOpaqueReference(registration.providerReference, 160) || !isOpaqueReference(registration.providerEventId, 160) || !isOpaqueReference(registration.exactResponseIdentity, 256)) conflict('Registrar creation receipt is incomplete.')
+      await repository.insertReceipt({ ownerUserId, projectId: input.projectId, draftOrderId: input.draftOrderId, releaseId: release.id, attemptId: leased.id, capability: 'domain_registration', providerKey: registration.providerKey, providerEventId: `registration-submitted-${stableFingerprint({ requestFingerprint, registration }).slice(0, 64)}`, receiptType: 'domain_registration_submitted', receiptStatus: 'verified', externalReference: registration.providerReference, exactResponseIdentity: registration.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: registration.canonicalDomain, metadata: { registration, purchaseAuthority, commerceSnapshotFingerprint: release.commerceSnapshotFingerprint, ...managedSiteProviderAuthorityMetadata(providerAuthority) }, receiptFingerprint: stableFingerprint({ scope: 'domain-registration-submitted-v1', requestFingerprint, registration }), verifiedAt: clock() })
+    } : undefined
+    const result = await adapter.createPurchaseIntent({ ownerUserId, projectId: input.projectId, releaseId: release.id, draftOrderId: input.draftOrderId, commerceSnapshotFingerprint: release.commerceSnapshotFingerprint, quote, providerAuthority, ownerConfirmationFingerprint: input.ownerConfirmationFingerprint, paymentReceiptFingerprint: input.paymentReceiptFingerprint, idempotencyKey: input.idempotencyKey, timeoutMs: DOMAIN_TIMEOUT_MS, ...(delegated ? { purchaseAuthority: delegated, beforeMutation, reconcileOnly, onRegistrationCreated, ...(staged ? { registrationReceipt: (staged.metadata as any).registration as ManagedSiteDomainReceipt } : {}) } : {}) })
     assertManagedSiteProviderAuthorityFingerprint(result.providerAuthorityFingerprint, providerAuthority)
     if (result.providerKey !== quote.providerKey || result.canonicalDomain !== quote.canonicalDomain || !['purchase_intent_created', 'registered'].includes(result.status) || !isOpaqueReference(result.providerEventId, 160) || !isOpaqueReference(result.providerReference, 160) || !isOpaqueReference(result.exactResponseIdentity, 256)) conflict('Domain provider receipt identity is incomplete or mismatched.')
     const receiptFingerprint = stableFingerprint({ ownerUserId, projectId: input.projectId, requestFingerprint, result })
     const claimStatus = result.status === 'registered' ? 'verified' : 'pending'
-    const { receipt, claimUpdated } = await repository.transaction(async transaction => {
-      const receipt = await transaction.insertReceipt({ ownerUserId, projectId: input.projectId, draftOrderId: input.draftOrderId, releaseId: release.id, attemptId: leased.id, capability: 'domain_registration', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: result.status === 'registered' ? 'domain_registered' : 'domain_purchase_intent_created', receiptStatus: 'verified', externalReference: result.providerReference, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: result.canonicalDomain, metadata: { commerceSnapshotFingerprint: release.commerceSnapshotFingerprint, quoteReceiptFingerprint: input.quoteReceiptFingerprint, paymentReceiptFingerprint: input.paymentReceiptFingerprint, ownerConfirmationFingerprint: input.ownerConfirmationFingerprint, ...managedSiteProviderAuthorityMetadata(providerAuthority) }, receiptFingerprint, verifiedAt: clock() } as any)
+    const accept = async (transaction: ManagedSiteLiveConnectorRepository) => {
+      const receipt = await transaction.insertReceipt({ ownerUserId, projectId: input.projectId, draftOrderId: input.draftOrderId, releaseId: release.id, attemptId: leased.id, capability: 'domain_registration', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: result.status === 'registered' ? 'domain_registered' : 'domain_purchase_intent_created', receiptStatus: 'verified', externalReference: result.providerReference, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: result.canonicalDomain, metadata: { commerceSnapshotFingerprint: release.commerceSnapshotFingerprint, quoteReceiptFingerprint: input.quoteReceiptFingerprint, paymentReceiptFingerprint: input.paymentReceiptFingerprint, ...(purchaseAuthority ? { purchaseAuthority } : { ownerConfirmationFingerprint: input.ownerConfirmationFingerprint }), ...managedSiteProviderAuthorityMetadata(providerAuthority) }, receiptFingerprint, verifiedAt: clock() } as any)
       const claimUpdated = claimStatus === claim.status ? claim : await transaction.transitionDomainClaim(ownerUserId, claim.id, claim.status, claim.projectionFingerprint, { status: claimStatus, authorityReceiptFingerprint: receiptFingerprint, projectionFingerprint: stableFingerprint({ previous: claim.projectionFingerprint, status: claimStatus, receiptFingerprint }) })
       if (!claimUpdated) conflict('Domain claim changed concurrently before provider receipt acceptance.')
       const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'succeeded', attemptNumber: leased.attemptNumber + 1, exactResponseIdentity: result.exactResponseIdentity, errorCode: null, errorSummary: null })
       if (!completed) conflict('Domain purchase attempt lease changed before receipt commit.')
       return { receipt, claimUpdated }
-    })
+    }
+    const joint: ManagedSiteProductionTransaction = dependencies.productionTransaction || (work => getManagedSitePrePurchaseRepositories().withTransaction!(scoped => work({ repository: scoped.live, orderingRepository: scoped.ordering, managedRepository: scoped.managed })))
+    const { receipt, claimUpdated } = delegated ? await joint(async scoped => {
+      await scoped.orderingRepository.findDraftOrderByIdForUpdate(input.draftOrderId)
+      const current = await dependencies.authorizeDelegatedPurchase!(scoped)
+      if (current.fingerprint !== delegated.fingerprint || current.procurementPolicyFingerprint !== delegated.procurementPolicyFingerprint) conflict('Customer domain delegation changed before receipt acceptance.')
+      return accept(scoped.repository)
+    }) : await repository.transaction(accept)
     return { receipt, result, claim: claimUpdated }
   } catch (error) {
     await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'retry_wait', attemptNumber: leased.attemptNumber + 1, retryEligibleAt: new Date(clock().getTime() + 30_000), errorCode: 'DOMAIN_PURCHASE_RECONCILE_REQUIRED', errorSummary: 'Provider result was not locally committed; retry will reuse the exact idempotency key.' }).catch(() => null)
@@ -193,7 +224,12 @@ export async function executeManagedSiteDnsTls(ownerUserId: number, input: { pro
   const requestFingerprint = stableFingerprint({ ownerUserId, projectId: input.projectId, releaseId: release.id, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, providerAuthorityFingerprint: providerAuthority.authorityFingerprint })
   let attempt = await repository.findAttemptByIdempotency(ownerUserId, input.idempotencyKey)
   if (attempt && attempt.requestFingerprint !== requestFingerprint) conflict('DNS/TLS idempotency key collides with another request.')
-  if (!attempt) attempt = await repository.insertAttempt({ ownerUserId, projectId: input.projectId, draftOrderId: domainReceipt.draftOrderId, releaseId: release.id, capability: 'dns_tls', operation: 'dns_tls_configure_verify', executionMode: input.executionMode, status: 'queued', attemptNumber: 0, maxAttempts: 3, timeoutMs: DOMAIN_TIMEOUT_MS, requestFingerprint, idempotencyKey: input.idempotencyKey, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, exactResponseIdentity: null, errorCode: null, errorSummary: null } as any)
+  if (!attempt) attempt = await repository.insertAttempt({ ownerUserId, projectId: input.projectId, draftOrderId: domainReceipt.draftOrderId, releaseId: release.id, capability: 'dns_tls', operation: 'dns_tls_configure_verify', executionMode: input.executionMode, status: 'queued', attemptNumber: 0, maxAttempts: 3, timeoutMs: DOMAIN_TIMEOUT_MS, requestFingerprint, idempotencyKey: input.idempotencyKey, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, exactResponseIdentity: null, errorCode: null, errorSummary: null, createdAt: clock() } as any)
+  if (attempt.status === 'retry_wait' && attempt.errorCode === 'DNS_TLS_PENDING' && attempt.createdAt.getTime() + MANAGED_SITE_DNS_PROPAGATION_WINDOW_MS <= clock().getTime()) {
+    await repository.updateAttempt(ownerUserId, attempt.id, { status: 'blocked', errorCode: 'DNS_PROPAGATION_TIMEOUT', errorSummary: 'DNS/TLS was not verified within the bounded 48-hour observation window.' })
+    await repository.transitionRelease(ownerUserId, release.id, release.status, release.projectionFingerprint, { status: 'blocked', blockedReasonCode: 'DNS_PROPAGATION_TIMEOUT', nextSafeAction: 'review_domain_connection', projectionFingerprint: stableFingerprint({ previous: release.projectionFingerprint, reason: 'DNS_PROPAGATION_TIMEOUT' }) })
+    conflict('DNS/TLS propagation requires review after the bounded observation window.')
+  }
   if (attempt.status === 'succeeded' && release.status === 'provisioning') {
     const receipt = (await repository.listReceipts(ownerUserId, release.projectId)).find(item => item.attemptId === attempt!.id && item.receiptType === 'dns_tls_verified')
     if (receipt?.externalReference) return { receipt, ready: true, result: { providerKey: receipt.providerKey, providerEventId: receipt.providerEventId, providerReference: receipt.externalReference, canonicalDomain: release.canonicalDomain, dnsStatus: 'verified' as const, tlsStatus: 'verified' as const, providerAuthorityFingerprint: String((receipt.metadata as any).providerAuthorityFingerprint), exactResponseIdentity: receipt.exactResponseIdentity }, replayed: true }
@@ -207,18 +243,26 @@ export async function executeManagedSiteDnsTls(ownerUserId: number, input: { pro
     assertManagedSiteProviderAuthorityFingerprint(result.providerAuthorityFingerprint, providerAuthority)
     if (result.providerKey !== providerAuthority.providerKey || result.canonicalDomain !== release.canonicalDomain || !isOpaqueReference(result.providerEventId, 160) || !isOpaqueReference(result.providerReference, 160) || !isOpaqueReference(result.exactResponseIdentity, 256)) conflict('DNS/TLS receipt identity is incomplete or mismatched.')
     const ready = result.dnsStatus === 'verified' && result.tlsStatus === 'verified'
+    const propagationPending = !ready && result.dnsStatus !== 'partial_failure' && result.tlsStatus !== 'failed'
+    const completedAttemptNumber = leased.attemptNumber + (propagationPending ? 0 : 1)
+    const exhausted = !ready && !propagationPending && completedAttemptNumber >= leased.maxAttempts
     const receiptFingerprint = stableFingerprint({ ownerUserId, projectId: release.projectId, releaseId: release.id, requestFingerprint, result })
     const { receipt } = await repository.transaction(async transaction => {
       const receipt = await transaction.insertReceipt({ ownerUserId, projectId: release.projectId, draftOrderId: domainReceipt.draftOrderId, releaseId: release.id, attemptId: leased.id, capability: 'dns_tls', providerKey: result.providerKey, providerEventId: result.providerEventId, receiptType: ready ? 'dns_tls_verified' : result.dnsStatus === 'partial_failure' || result.tlsStatus === 'failed' ? 'dns_tls_partial_failure' : 'dns_tls_propagation_pending', receiptStatus: 'verified', externalReference: result.providerReference, exactResponseIdentity: result.exactResponseIdentity, requestFingerprint, contentHash: release.contentHash, canonicalDomain: release.canonicalDomain, metadata: { dnsStatus: result.dnsStatus, tlsStatus: result.tlsStatus, rollbackIntent: ready ? null : 'restore_last_verified_dns_snapshot', ...managedSiteProviderAuthorityMetadata(providerAuthority) }, receiptFingerprint, verifiedAt: clock() } as any)
-      const transitioned = await transaction.transitionRelease(ownerUserId, release.id, release.status, release.projectionFingerprint, { status: ready ? 'provisioning' : 'retry_wait', blockedReasonCode: ready ? null : 'DNS_TLS_PENDING', nextSafeAction: ready ? 'deploy_production' : 'retry_dns_tls_after_eligibility', projectionFingerprint: stableFingerprint({ releaseId: release.id, previous: release.projectionFingerprint, dnsTlsReceipt: receiptFingerprint }) })
+      const transitioned = await transaction.transitionRelease(ownerUserId, release.id, release.status, release.projectionFingerprint, { status: ready ? 'provisioning' : exhausted ? 'blocked' : 'retry_wait', blockedReasonCode: ready ? null : exhausted ? 'DNS_TLS_FAILED' : 'DNS_TLS_PENDING', nextSafeAction: ready ? 'deploy_production' : exhausted ? 'review_domain_connection' : 'retry_dns_tls_after_eligibility', projectionFingerprint: stableFingerprint({ releaseId: release.id, previous: release.projectionFingerprint, dnsTlsReceipt: receiptFingerprint }) })
       if (!transitioned) conflict('Release changed concurrently before DNS/TLS state acceptance.')
-      const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: ready ? 'succeeded' : 'retry_wait', attemptNumber: leased.attemptNumber + 1, retryEligibleAt: ready ? null : new Date(clock().getTime() + 5 * 60_000), exactResponseIdentity: result.exactResponseIdentity, errorCode: ready ? null : 'DNS_TLS_PENDING', errorSummary: ready ? null : 'DNS/TLS is pending propagation or requires bounded retry.' })
+      const completed = await transaction.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: ready ? 'succeeded' : exhausted ? 'failed' : 'retry_wait', attemptNumber: completedAttemptNumber, retryEligibleAt: ready || exhausted ? null : new Date(clock().getTime() + 5 * 60_000), exactResponseIdentity: result.exactResponseIdentity, errorCode: ready ? null : propagationPending ? 'DNS_TLS_PENDING' : 'DNS_TLS_FAILED', errorSummary: ready ? null : 'DNS/TLS is pending propagation or requires bounded retry.' })
       if (!completed) conflict('DNS/TLS attempt lease changed before receipt commit.')
       return { receipt }
     })
     return { receipt, ready, result }
   } catch (error) {
-    await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: 'retry_wait', attemptNumber: leased.attemptNumber + 1, retryEligibleAt: new Date(clock().getTime() + 30_000), errorCode: 'DNS_TLS_RECONCILE_REQUIRED', errorSummary: 'Provider result was not locally committed; retry will reuse the exact idempotency key.' }).catch(() => null)
+    const exhausted = leased.attemptNumber + 1 >= leased.maxAttempts
+    const completed = await repository.releaseAttemptLease(ownerUserId, leased.id, leaseOwner, { status: exhausted ? 'failed' : 'retry_wait', attemptNumber: leased.attemptNumber + 1, retryEligibleAt: exhausted ? null : new Date(clock().getTime() + 30_000), errorCode: 'DNS_TLS_RECONCILE_REQUIRED', errorSummary: 'Provider result was not locally committed; retry will reuse the exact idempotency key.' }).catch(() => null)
+    if (completed && exhausted) {
+      const current = await repository.findRelease(ownerUserId, release.id).catch(() => null)
+      if (current && ['approved', 'payment_verified', 'provisioning', 'retry_wait'].includes(current.status)) await repository.transitionRelease(ownerUserId, current.id, current.status, current.projectionFingerprint, { status: 'blocked', blockedReasonCode: 'DNS_TLS_FAILED', nextSafeAction: 'review_domain_connection', projectionFingerprint: stableFingerprint({ previous: current.projectionFingerprint, reason: 'DNS_TLS_FAILED', attemptId: leased.id }) }).catch(() => null)
+    }
     throw error
   }
 }

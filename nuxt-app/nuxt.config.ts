@@ -6,6 +6,17 @@ const managedSiteProvisioningCron = process.env.MANAGED_SITE_PROVISIONING_CRON |
 const systemFactoryCron = process.env.SYSTEM_FACTORY_CRON || '*/5 * * * *'
 const contentOperationsMeasurementCron = process.env.CONTENT_OPERATIONS_MEASUREMENT_CRON || '*/30 * * * *'
 
+// Several jobs intentionally share a cadence. Accumulate them instead of overwriting cron keys.
+const scheduledTasks: Record<string, string[]> = {}
+for (const [cron, tasks] of [
+  [modelImprovementCron, ['model-improvement:collect']],
+  [geoModelOpsCron, ['content-operations:geo-modelops-tick']],
+  [managedSiteEditorCron, ['managed-sites:editor-tick']],
+  [managedSiteProvisioningCron, ['managed-sites:provisioning-tick']],
+  [systemFactoryCron, ['system-factory:provisioning-tick']],
+  [contentOperationsMeasurementCron, ['content-operations:measurement-tick']],
+] as const) (scheduledTasks[cron] ||= []).push(...tasks)
+
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-16',
   buildDir: process.env.NUXT_BUILD_DIR || '.nuxt',
@@ -30,7 +41,7 @@ export default defineNuxtConfig({
   },
   nitro: {
     experimental: { tasks: true },
-    scheduledTasks: { [modelImprovementCron]: ['model-improvement:collect'], [geoModelOpsCron]: ['content-operations:geo-modelops-tick'], [managedSiteEditorCron]: ['managed-sites:editor-tick'], [managedSiteProvisioningCron]: ['managed-sites:provisioning-tick'], [systemFactoryCron]: ['system-factory:provisioning-tick'], [contentOperationsMeasurementCron]: ['content-operations:measurement-tick'] },
+    scheduledTasks,
   },
   routeRules: {
     '/': { redirect: { to: '/audit-lab', statusCode: 302 } },

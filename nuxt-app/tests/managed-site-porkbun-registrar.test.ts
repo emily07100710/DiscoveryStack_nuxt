@@ -67,23 +67,24 @@ describe('managed-site Porkbun registrar', () => {
 
   it('replays a purchase once per idempotency key and only reports registration when Porkbun confirms it', async () => {
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
-      expect(url).toBe(`${PORKBUN_ORIGIN}/api/json/v3/domain/create/example.com`); expect(new Headers(init.headers).get('x-idempotency-key')).toBe('porkbun-domain-purchase-001')
-      return new Response(JSON.stringify({ status: 'SUCCESS' }), { status: 200 })
+      expect(url).toBe(`${PORKBUN_ORIGIN}/api/json/v3/domain/create/example.com`); expect(new Headers(init.headers).get('Idempotency-Key')).toBe('porkbun-domain-purchase-001')
+      expect(JSON.parse(String(init.body))).toMatchObject({ cost: 1299, agreeToTerms: 'yes' })
+      return new Response(JSON.stringify({ status: 'SUCCESS', domain: 'example.com', cost: 1299, orderId: 123456789 }), { status: 200 })
     })
     const domainAdapter = adapter(fetchImpl as typeof fetch); const input = purchaseInput()
-    await expect(domainAdapter.createPurchaseIntent(input)).resolves.toMatchObject({ status: 'purchase_intent_created' })
-    await expect(domainAdapter.createPurchaseIntent(input)).resolves.toMatchObject({ status: 'purchase_intent_created' })
+    await expect(domainAdapter.createPurchaseIntent(input)).resolves.toMatchObject({ status: 'registered', providerReference: '123456789' })
+    await expect(domainAdapter.createPurchaseIntent(input)).resolves.toMatchObject({ status: 'registered', providerReference: '123456789' })
     expect(fetchImpl).toHaveBeenCalledOnce()
 
-    const registered = adapter(vi.fn(async () => new Response(JSON.stringify({ status: 'SUCCESS', id: '123456789' }), { status: 200 })) as typeof fetch)
-    await expect(registered.createPurchaseIntent({ ...input, idempotencyKey: 'porkbun-domain-purchase-002' })).resolves.toMatchObject({ status: 'registered', providerReference: '123456789' })
+    const ambiguous = adapter(vi.fn(async () => new Response(JSON.stringify({ status: 'SUCCESS' }), { status: 200 })) as typeof fetch)
+    await expect(ambiguous.createPurchaseIntent({ ...input, idempotencyKey: 'porkbun-domain-purchase-002' })).rejects.toMatchObject({ statusCode: 409 })
   })
 
   it('quotes Porkbun availability in USD without changing the separate TWD catalog amount', async () => {
     const catalogAmountMinor = 360000
     const fetchImpl = vi.fn(async (url: string) => {
       expect(url).toBe(`${PORKBUN_ORIGIN}/api/json/v3/domain/checkDomain/example.com`)
-      return new Response(JSON.stringify({ status: 'SUCCESS', avail: 'yes', price: '12.99' }), { status: 200 })
+      return new Response(JSON.stringify({ status: 'SUCCESS', response: { avail: 'yes', price: '12.99', premium: 'no', minDuration: 1 } }), { status: 200 })
     })
     const result = await adapter(fetchImpl as typeof fetch).quote(quoteInput())
     expect(result).toMatchObject({ currency: 'USD', amountMinor: 1299, canonicalDomain: 'example.com' })

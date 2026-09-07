@@ -20,7 +20,11 @@ import {
   type FunnelAnswersView,
 } from '../../../utils/managedSiteFunnel'
 
-useHead({ meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
+useHead({
+  title: '建立你的品牌網站｜DiscoveryStack',
+  htmlAttrs: { lang: 'zh-Hant' },
+  meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }],
+})
 
 type PriceCatalog = {
   version: string
@@ -35,11 +39,18 @@ type PriceCatalog = {
   assistedDomainSetupMinor: number
 }
 
+type DomainAvailability = { available: true; canonicalDomain: string; quoteFingerprint: string; expiresAt: string; customerPrice: { amountMinor: number; currency: 'TWD' } }
+type DomainRegistrant = { firstName: string; lastName: string; organization: string; address1: string; city: string; state: string; postalCode: string; country: string; phoneCountryCode: string; phone: string; email: string }
+
 type SessionProjection = {
   status: string
   currentStep: number
   answers: FunnelAnswersView
   consentSnapshot: null | { policyVersion: string; acceptedAt: string; scrolledToBottom: true }
+  domainAvailability: DomainAvailability | null
+  domainRegistration: null | { delegated: true; canonicalDomain: string; registrant: DomainRegistrant; termsVersion: string }
+  domainDelegationTerms: string
+  domainDelegationVersion: string
   consentVersion: string
   previewUrl: string | null
   checkoutUrl: string | null
@@ -121,7 +132,12 @@ const consentScrolledToBottom = ref(false)
 const consentChecked = ref(false)
 const consentAccepted = ref(false)
 const agreementPane = ref<HTMLElement | null>(null)
+const stepHeading = ref<HTMLElement | null>(null)
 const domainAvailabilityMessage = ref('')
+const domainAvailability = ref<DomainAvailability | null>(null)
+const domainChecking = ref(false)
+const domainDelegated = ref(false)
+const domainRegistrant = ref<DomainRegistrant>({ firstName: '', lastName: '', organization: '', address1: '', city: '', state: '', postalCode: '', country: 'TW', phoneCountryCode: '886', phone: '', email: '' })
 const contactInbox = ref<ContactInboxProjection>({ status: 'unbound', maskedEmail: null, resendAvailableAt: null, transportConfigured: false })
 const inboxEmail = ref('')
 const inboxVerificationCode = ref('')
@@ -145,8 +161,30 @@ const progressWidths = ['11.111%', '22.222%', '33.333%', '44.444%', '55.556%', '
 const currentStepMeta = computed(() => FUNNEL_STEPS[currentStep.value - 1]!)
 const consentGate = computed(() => consentGateState({ scrolledToBottom: consentScrolledToBottom.value, checked: consentChecked.value }))
 const firstIncomplete = computed(() => firstIncompleteStep(answers.value, { accepted: consentAccepted.value }))
-const currentMissing = computed(() => stepCompletion(currentStep.value, answers.value, { accepted: currentStep.value === 7 ? consentGate.value.canSubmit : consentAccepted.value }).missing)
-const nextDisabled = computed(() => saveStatus.value === 'saving' || !canAdvance(currentStep.value, answers.value, { accepted: currentStep.value === 7 ? consentGate.value.canSubmit : consentAccepted.value }))
+const domainRegistrantValid = computed(() => ['firstName', 'address1', 'city', 'postalCode', 'country', 'phoneCountryCode', 'phone', 'email'].every(key => domainRegistrant.value[key as keyof DomainRegistrant].trim()) && /^[A-Z]{2}$/.test(domainRegistrant.value.country) && /^\d{1,4}$/.test(domainRegistrant.value.phoneCountryCode) && /^\d{4,15}$/.test(domainRegistrant.value.phone) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(domainRegistrant.value.email))
+const domainAvailabilityCurrent = computed(() => Boolean(domainAvailability.value?.canonicalDomain === `${domainName.value}.${domainTld.value}` && Date.parse(domainAvailability.value.expiresAt) > countdownNow.value))
+const domainReady = computed(() => answers.value.domain?.option !== 'new' || Boolean(domainAvailabilityCurrent.value && domainDelegated.value && domainRegistrantValid.value))
+const currentMissing = computed(() => {
+  const missing = [...stepCompletion(currentStep.value, answers.value, { accepted: currentStep.value === 7 ? consentGate.value.canSubmit : consentAccepted.value }).missing]
+  if (currentStep.value === 7 && answers.value.domain?.option === 'new') {
+    if (!domainAvailabilityCurrent.value) missing.push('確認可註冊的網域')
+    if (!domainRegistrantValid.value) missing.push('完整的網域持有人資料')
+    if (!domainDelegated.value) missing.push('網域代註冊授權')
+  }
+  return [...new Set(missing)]
+})
+const COMPANY_COMPLETION_ITEMS = [
+  { missingLabel: '品牌名稱', label: '品牌名稱' },
+  { missingLabel: '你在做什麼', label: '公司介紹' },
+  { missingLabel: '主要賣什麼', label: '商品或服務' },
+  { missingLabel: '希望怎麼成交', label: '成交目標' },
+  { missingLabel: '聯絡人姓名', label: '聯絡人' },
+  { missingLabel: '聯絡 Email', label: '有效 Email' },
+] as const
+const companyMissing = computed(() => stepCompletion(2, answers.value, { accepted: consentAccepted.value }).missing)
+const companyCompleteCount = computed(() => COMPANY_COMPLETION_ITEMS.filter(item => !companyMissing.value.includes(item.missingLabel)).length)
+const nextDisabled = computed(() => saveStatus.value === 'saving' || (currentStep.value === 7 && (!domainReady.value || domainChecking.value)) || !canAdvance(currentStep.value, answers.value, { accepted: currentStep.value === 7 ? consentGate.value.canSubmit : consentAccepted.value }))
+const navigationBusy = computed(() => saveStatus.value === 'saving' || buildStatus.value === 'loading' || checkoutStatus.value === 'loading')
 const designerTier = computed(() => catalog.value?.designTiers.find(item => item.key === 'designer'))
 const hasManualSetupModules = computed(() => Boolean(quote.value?.manualSetupModules.length))
 const contactModuleSelected = computed(() => (answers.value.modules || []).includes('contact_lead_capture'))
@@ -173,7 +211,7 @@ const recommendationCopy: Record<string, string> = {
 }
 const domainOptionCopy: Record<'existing' | 'new' | 'assisted', { label: string; help: string }> = {
   existing: { label: '我有自己的網域', help: '結帳後協助把你現有的網址連到新網站。' },
-  new: { label: '幫我註冊新網域', help: '先選想要的名稱與結尾，結帳後由我們代為註冊。' },
+  new: { label: '幫我註冊新網域', help: '先選想要的名稱與結尾，結帳後由我們代為註冊，並自動連接到建好的網站。' },
   assisted: { label: '請你們代辦', help: '由我們代為註冊與設定，另收設定費。' },
 }
 
@@ -220,6 +258,10 @@ function restoreProjection(projection: SessionProjection) {
   }
   answers.value.modules = normalizedModulesForSiteType(answers.value.siteType, answers.value.modules)
   sessionProjection.value = projection
+  domainAvailability.value = projection.domainAvailability
+  domainDelegated.value = Boolean(projection.domainRegistration?.delegated)
+  if (projection.domainRegistration) domainRegistrant.value = { ...projection.domainRegistration.registrant }
+  else { domainRegistrant.value.firstName = answers.value.contact.contactName; domainRegistrant.value.email = answers.value.contact.email }
   contactInbox.value = projection.contactInbox
   inboxAwaitingConfirmation.value = projection.contactInbox.status === 'pending'
   inboxRebinding.value = false
@@ -228,6 +270,7 @@ function restoreProjection(projection: SessionProjection) {
   consentChecked.value = consentAccepted.value
   builtPreviewUrl.value = projection.previewUrl || ''
   currentStep.value = Math.min(Math.max(projection.currentStep || 1, 1), firstIncompleteStep(answers.value, { accepted: consentAccepted.value }))
+  if (projection.status === 'active' && currentStep.value > 7 && !domainReady.value) currentStep.value = 7
   prepareStep(currentStep.value)
 }
 
@@ -328,7 +371,16 @@ function prepareStep(step: number) {
 }
 
 function isStepClickable(step: number): boolean {
+  if (navigationBusy.value) return false
   return step < firstIncomplete.value || step === currentStep.value
+}
+
+function presentCurrentStep() {
+  setTimeout(() => {
+    if (typeof window === 'undefined' || !stepHeading.value) return
+    stepHeading.value.focus({ preventScroll: true })
+    stepHeading.value.scrollIntoView({ block: 'start', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+  }, 0)
 }
 
 function goToStep(step: number) {
@@ -337,6 +389,7 @@ function goToStep(step: number) {
   saveStatus.value = 'idle'
   saveMessage.value = ''
   prepareStep(step)
+  presentCurrentStep()
 }
 
 function goPrevious() {
@@ -368,6 +421,10 @@ async function saveCurrentAndAdvance() {
     if (savingStep === 7) {
       if (!projection.consentVersion) throw new Error('伺服器未提供目前的授權版本，暫時無法送出同意。')
       projection = await funnelFetch<SessionProjection>('/consent', { method: 'POST', body: { policyVersion: projection.consentVersion, scrolledToBottom: true } })
+      if (answers.value.domain?.option === 'new') {
+        if (!domainReady.value || !domainAvailability.value) throw new Error('請重新查詢網域並確認代註冊授權。')
+        projection = await funnelFetch<SessionProjection>('/domain-delegation', { method: 'POST', body: { delegated: true, registrant: domainRegistrant.value, quoteFingerprint: domainAvailability.value.quoteFingerprint, termsVersion: projection.domainDelegationVersion } })
+      }
       consentAccepted.value = true
     }
     sessionProjection.value = projection
@@ -375,6 +432,7 @@ async function saveCurrentAndAdvance() {
     saveMessage.value = '進度已儲存'
     currentStep.value = Math.min(savingStep + 1, 9)
     prepareStep(currentStep.value)
+    presentCurrentStep()
     if (currentStep.value === 9) await loadQuote()
   } catch (error) {
     saveStatus.value = 'error'
@@ -392,6 +450,7 @@ const existingSiteUrl = computed({
 })
 
 function selectHasSite(hasSite: boolean) {
+  if (answers.value.existingSite?.hasSite === hasSite) return
   answers.value.existingSite = hasSite ? { hasSite: true, url: '' } : { hasSite: false }
   analysisResult.value = null
   analysisStatus.value = 'idle'
@@ -541,15 +600,24 @@ function updateShortAgreementState() {
 }
 
 function selectDomainOption(option: 'existing' | 'new' | 'assisted') {
+  if (answers.value.domain?.option === option) return
   answers.value.domain = option === 'new' ? { option, name: '', tld: catalog.value?.domainTlds[0]?.tld } : { option }
+  resetDomainAvailability()
+  if (!domainRegistrant.value.firstName) domainRegistrant.value.firstName = answers.value.contact.contactName
+  if (!domainRegistrant.value.email) domainRegistrant.value.email = answers.value.contact.email
+}
+
+function resetDomainAvailability() {
   domainAvailabilityMessage.value = ''
+  domainAvailability.value = null
+  domainDelegated.value = false
 }
 
 const domainName = computed({
   get: () => answers.value.domain?.name || '',
   set: (name: string) => {
     if (answers.value.domain?.option === 'new') answers.value.domain = { ...answers.value.domain, name: name.toLowerCase() }
-    domainAvailabilityMessage.value = ''
+    resetDomainAvailability()
   },
 })
 
@@ -557,19 +625,33 @@ const domainTld = computed({
   get: () => answers.value.domain?.tld || '',
   set: (tld: string) => {
     if (answers.value.domain?.option === 'new') answers.value.domain = { ...answers.value.domain, tld }
-    domainAvailabilityMessage.value = ''
+    resetDomainAvailability()
   },
 })
 
-function checkDomainAvailability() {
+async function checkDomainAvailability() {
+  if (domainChecking.value) return
   if (!domainName.value || !domainTld.value) {
     domainAvailabilityMessage.value = '請先填寫網域名稱並選擇結尾。'
     return
   }
-  domainAvailabilityMessage.value = '可註冊狀態將於結帳後由我們代為確認與註冊'
+  const queriedDomain = `${domainName.value}.${domainTld.value}`
+  resetDomainAvailability()
+  domainChecking.value = true
+  try {
+    const result = await funnelFetch<DomainAvailability | { available: false; messageZh: string }>('/domain-availability', { method: 'POST', body: { name: domainName.value, tld: domainTld.value } })
+    if (queriedDomain !== `${domainName.value}.${domainTld.value}` || answers.value.domain?.option !== 'new') return
+    if (result.available) {
+      domainAvailability.value = result
+      domainAvailabilityMessage.value = `${result.canonicalDomain} 目前可以註冊，第一年 ${formatTwd(result.customerPrice.amountMinor)}。此查詢不會保留網域，付款後會再次確認並自動註冊。`
+    } else domainAvailabilityMessage.value = result.messageZh
+  } catch (error) {
+    if (queriedDomain === `${domainName.value}.${domainTld.value}`) domainAvailabilityMessage.value = requestFailureMessage(error, '目前無法查詢網域，請稍後再試。')
+  } finally { domainChecking.value = false }
 }
 
 function selectPlan(key: 'site_only' | 'site_geo' | 'site_geo_autopost') {
+  if (answers.value.plan?.planKey === key) return
   answers.value.plan = key === 'site_geo_autopost' ? { planKey: key } : { planKey: key }
 }
 
@@ -640,13 +722,19 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
 
 <template>
   <main class="wizard" aria-labelledby="wizard-title">
-    <header class="wizard__header">
-      <div>
-        <p class="eyebrow">網站訂購流程</p>
-        <h1 id="wizard-title">一步一步建立你的網站</h1>
-        <p class="lede">不用準備技術資料，照著問題回答即可；每一步都會儲存，重整後可以接著完成。</p>
+    <header class="wizard__header" :class="{ 'wizard__header--compact': currentStep > 1 }">
+      <div class="brand-mark" aria-hidden="true"><strong>DS</strong><small>WEB ATELIER</small></div>
+      <div class="wizard__intro">
+        <p class="eyebrow">DISCOVERYSTACK · 網站訂購禮賓</p>
+        <h1 id="wizard-title">讓你的品牌，<br>優雅地上線。</h1>
+        <p class="lede">從內容、設計、網域到付款，我們把複雜的建站過程整理成幾個簡單問題。每完成一步，進度就會為你保存。</p>
+        <ul class="hero-promises" aria-label="流程特色">
+          <li>一步一存</li>
+          <li>付款前看清費用</li>
+          <li>網域與網站一起完成</li>
+        </ul>
       </div>
-      <button type="button" class="text-button" @click="restart">重新開始</button>
+      <button type="button" class="text-button" :disabled="navigationBusy" @click="restart">重新開始</button>
     </header>
 
     <p v-if="loading" class="state" role="status">載入中…</p>
@@ -657,35 +745,49 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
     </section>
 
     <template v-else-if="catalog && sessionProjection">
+      <div class="wizard__workspace">
       <nav class="progress" aria-label="訂購進度">
+        <div class="progress__intro" aria-hidden="true">
+          <p>YOUR WEBSITE</p>
+          <strong>建站進度</strong>
+          <span>跟著九個步驟，完成你的品牌網站。</span>
+        </div>
         <div class="progress__mobile">
           <p>第 {{ currentStep }} 步，共 9 步 · {{ currentStepMeta.title }}</p>
-          <div class="progress__bar" role="progressbar" :aria-valuenow="currentStep" aria-valuemin="1" aria-valuemax="9">
+          <div class="progress__bar" role="progressbar" aria-label="網站建立進度" :aria-valuenow="currentStep" :aria-valuetext="`第 ${currentStep} 步，共 9 步：${currentStepMeta.title}`" aria-valuemin="1" aria-valuemax="9">
             <span :style="{ width: progressWidths[currentStep - 1] }"></span>
           </div>
         </div>
         <ol class="progress__steps">
           <li v-for="item in FUNNEL_STEPS" :key="item.key" :class="{ 'is-current': item.step === currentStep, 'is-complete': item.step < firstIncomplete }">
             <button type="button" :disabled="!isStepClickable(item.step)" :aria-current="item.step === currentStep ? 'step' : undefined" @click="goToStep(item.step)">
-              <span>{{ item.step }}</span><small>{{ item.title }}</small>
+              <span aria-hidden="true">0{{ item.step }}</span><small>{{ item.title }}</small>
             </button>
           </li>
         </ol>
       </nav>
 
-      <section class="step-card" :aria-labelledby="`step-title-${currentStep}`">
+      <div class="wizard__stage">
+      <section :key="currentStep" class="step-card" :class="{ 'step-card--company': currentStep === 2 }" :aria-labelledby="`step-title-${currentStep}`">
         <header class="step-card__header">
-          <p class="eyebrow">第 {{ currentStep }} 步</p>
-          <h2 :id="`step-title-${currentStep}`">{{ currentStepMeta.title }}</h2>
-          <p>{{ currentStepMeta.help }}</p>
+          <div class="step-card__number" aria-hidden="true">0{{ currentStep }}</div>
+          <div>
+            <p class="eyebrow">第 {{ currentStep }} 步 · 共 9 步</p>
+            <h2 :id="`step-title-${currentStep}`" ref="stepHeading" tabindex="-1">{{ currentStepMeta.title }}</h2>
+            <p>{{ currentStepMeta.help }}</p>
+          </div>
         </header>
 
         <div v-if="currentStep === 1" class="step-body">
           <fieldset>
             <legend>你目前有網站嗎？</legend>
-            <div class="choice-row">
-              <button type="button" role="radio" :aria-checked="answers.existingSite?.hasSite === true" :class="{ selected: answers.existingSite?.hasSite === true }" @click="selectHasSite(true)">有，我想先看看現況</button>
-              <button type="button" role="radio" :aria-checked="answers.existingSite?.hasSite === false" :class="{ selected: answers.existingSite?.hasSite === false }" @click="selectHasSite(false)">沒有，從新網站開始</button>
+            <div class="choice-row" role="radiogroup" aria-label="目前是否有網站">
+              <button type="button" role="radio" :aria-checked="answers.existingSite?.hasSite === true" :class="{ selected: answers.existingSite?.hasSite === true }" @keydown.left.prevent="selectHasSite(true)" @keydown.up.prevent="selectHasSite(true)" @keydown.right.prevent="selectHasSite(false)" @keydown.down.prevent="selectHasSite(false)" @click="selectHasSite(true)">
+                <span class="choice-card__mark" aria-hidden="true">↗</span><strong>有，我想先看看現況</strong><small>先分析舊網站，再決定要保留與更新的內容</small>
+              </button>
+              <button type="button" role="radio" :aria-checked="answers.existingSite?.hasSite === false" :class="{ selected: answers.existingSite?.hasSite === false }" @keydown.left.prevent="selectHasSite(true)" @keydown.up.prevent="selectHasSite(true)" @keydown.right.prevent="selectHasSite(false)" @keydown.down.prevent="selectHasSite(false)" @click="selectHasSite(false)">
+                <span class="choice-card__mark" aria-hidden="true">＋</span><strong>沒有，從新網站開始</strong><small>從品牌內容、視覺風格到網址一起完成</small>
+              </button>
             </div>
           </fieldset>
           <div v-if="answers.existingSite?.hasSite" class="field-group">
@@ -706,53 +808,110 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
           </section>
         </div>
 
-        <div v-else-if="currentStep === 2" class="step-body">
-          <div class="field-group">
-            <label for="brand-name">品牌名稱</label>
-            <input id="brand-name" v-model.trim="answers.company.brandName" maxlength="160" autocomplete="organization">
-            <small>{{ answers.company.brandName.length }} / 160</small>
+        <div v-else-if="currentStep === 2" class="step-body step-body--company">
+          <div class="company-form-layout">
+            <div class="company-form-column">
+              <section class="company-section" aria-labelledby="company-profile-title">
+                <header class="company-section__heading">
+                  <span aria-hidden="true">01</span>
+                  <h3 id="company-profile-title">品牌輪廓</h3>
+                </header>
+                <div class="company-section__body">
+                  <div class="field-group">
+                    <div class="field-group__topline">
+                      <label for="brand-name">品牌名稱 <span class="required-mark">必填</span></label>
+                      <small>{{ answers.company.brandName.length }} ／ 160</small>
+                    </div>
+                    <input id="brand-name" v-model.trim="answers.company.brandName" maxlength="160" autocomplete="organization" aria-required="true">
+                  </div>
+                  <div class="field-group">
+                    <div class="field-group__topline">
+                      <label for="what-we-do">你在做什麼 <span class="required-mark">必填</span></label>
+                      <small>{{ answers.company.whatWeDo.length }} ／ 2000</small>
+                    </div>
+                    <textarea id="what-we-do" v-model.trim="answers.company.whatWeDo" rows="5" maxlength="2000" placeholder="用平常向客人介紹的方式說明即可" aria-required="true"></textarea>
+                  </div>
+                </div>
+              </section>
+
+              <section class="company-section" aria-labelledby="company-feeling-title">
+                <header class="company-section__heading">
+                  <span aria-hidden="true">02</span>
+                  <h3 id="company-feeling-title">品牌給人的感覺</h3>
+                </header>
+                <fieldset class="company-section__body">
+                  <legend>想給人什麼感覺（可複選）</legend>
+                  <p class="field-hint">選擇最接近你的詞，之後仍可調整。</p>
+                  <div class="chip-grid">
+                    <button v-for="option in FEELING_OPTIONS" :key="option.key" type="button" role="checkbox" :aria-checked="answers.company.feelings.includes(option.key)" :class="{ selected: answers.company.feelings.includes(option.key) }" @click="toggleList(answers.company.feelings, option.key)">
+                      <span class="chip-grid__check" aria-hidden="true"></span><span>{{ option.label }}</span>
+                    </button>
+                  </div>
+                </fieldset>
+              </section>
+
+              <section class="company-section" aria-labelledby="company-offer-title">
+                <header class="company-section__heading">
+                  <span aria-hidden="true">03</span>
+                  <h3 id="company-offer-title">商品與成交方式</h3>
+                </header>
+                <div class="company-section__body">
+                  <div class="field-group">
+                    <div class="field-group__topline">
+                      <label for="main-offer">主要賣什麼 <span class="required-mark">必填</span></label>
+                      <small>{{ answers.company.mainOffer.length }} ／ 1000</small>
+                    </div>
+                    <textarea id="main-offer" v-model.trim="answers.company.mainOffer" rows="4" maxlength="1000" aria-required="true"></textarea>
+                  </div>
+                  <fieldset aria-describedby="conversion-goals-help">
+                    <legend>希望怎麼成交（可複選） <span class="required-mark">至少一項</span></legend>
+                    <p id="conversion-goals-help" class="field-hint">我們會依照你的目標安排網站動線。</p>
+                    <div class="chip-grid">
+                      <button v-for="option in CONVERSION_GOAL_OPTIONS" :key="option.key" type="button" role="checkbox" :aria-checked="answers.company.conversionGoals.includes(option.key)" :class="{ selected: answers.company.conversionGoals.includes(option.key) }" @click="toggleList(answers.company.conversionGoals, option.key)">
+                        <span class="chip-grid__check" aria-hidden="true"></span><span>{{ option.label }}</span>
+                      </button>
+                    </div>
+                  </fieldset>
+                </div>
+              </section>
+
+              <section class="company-section" aria-labelledby="contact-title">
+                <header class="company-section__heading">
+                  <span aria-hidden="true">04</span>
+                  <h3 id="contact-title">聯絡資料</h3>
+                </header>
+                <div class="company-section__body contact-grid">
+                  <div class="field-group">
+                    <div class="field-group__topline">
+                      <label for="contact-name">聯絡人姓名 <span class="required-mark">必填</span></label>
+                      <small>{{ answers.contact.contactName.length }} ／ 120</small>
+                    </div>
+                    <input id="contact-name" v-model.trim="answers.contact.contactName" maxlength="120" autocomplete="name" aria-required="true">
+                  </div>
+                  <div class="field-group">
+                    <label for="contact-phone">聯絡電話 <span class="optional-mark">選填</span></label>
+                    <input id="contact-phone" v-model.trim="answers.contact.phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="40" :aria-invalid="Boolean(answers.contact.phone && !/^[0-9+() -]+$/.test(answers.contact.phone))" aria-describedby="contact-phone-error">
+                    <p v-if="answers.contact.phone && !/^[0-9+() -]+$/.test(answers.contact.phone)" id="contact-phone-error" class="inline-error">電話只能使用數字、空格、括號、加號或連字號。</p>
+                  </div>
+                  <div class="field-group contact-grid__wide">
+                    <label for="contact-email">聯絡 Email <span class="required-mark">必填</span></label>
+                    <small id="contact-email-help" class="field-hint">付款與開站進度會寄到這個信箱</small>
+                    <input id="contact-email" v-model.trim="answers.contact.email" type="email" inputmode="email" autocomplete="email" maxlength="320" aria-required="true" :aria-invalid="Boolean(answers.contact.email && companyMissing.includes('聯絡 Email'))" aria-describedby="contact-email-help contact-email-error">
+                    <p v-if="answers.contact.email && companyMissing.includes('聯絡 Email')" id="contact-email-error" class="inline-error">請輸入完整且有效的 Email。</p>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <aside class="company-completion" aria-label="本步完成度">
+              <p>本步完成度</p>
+              <div><strong>{{ companyCompleteCount }}</strong><span>／ {{ COMPANY_COMPLETION_ITEMS.length }} 項必填</span></div>
+              <ol>
+                <li v-for="item in COMPANY_COMPLETION_ITEMS" :key="item.missingLabel" :class="{ 'is-complete': !companyMissing.includes(item.missingLabel) }">{{ item.label }}</li>
+              </ol>
+              <small>不必一次寫得完美。先用你平常會說的話，之後每一步都能回來修改。</small>
+            </aside>
           </div>
-          <div class="field-group">
-            <label for="what-we-do">你在做什麼</label>
-            <textarea id="what-we-do" v-model.trim="answers.company.whatWeDo" rows="5" maxlength="2000" placeholder="用平常向客人介紹的方式說明即可"></textarea>
-            <small>{{ answers.company.whatWeDo.length }} / 2000</small>
-          </div>
-          <fieldset>
-            <legend>想給人什麼感覺（可複選）</legend>
-            <div class="chip-grid">
-              <button v-for="option in FEELING_OPTIONS" :key="option.key" type="button" role="checkbox" :aria-checked="answers.company.feelings.includes(option.key)" :class="{ selected: answers.company.feelings.includes(option.key) }" @click="toggleList(answers.company.feelings, option.key)">{{ option.label }}</button>
-            </div>
-          </fieldset>
-          <div class="field-group">
-            <label for="main-offer">主要賣什麼</label>
-            <textarea id="main-offer" v-model.trim="answers.company.mainOffer" rows="4" maxlength="1000"></textarea>
-            <small>已輸入 {{ answers.company.mainOffer.length }} 字，上限 1000 字</small>
-          </div>
-          <fieldset>
-            <legend>希望怎麼成交（可複選）</legend>
-            <div class="chip-grid">
-              <button v-for="option in CONVERSION_GOAL_OPTIONS" :key="option.key" type="button" role="checkbox" :aria-checked="answers.company.conversionGoals.includes(option.key)" :class="{ selected: answers.company.conversionGoals.includes(option.key) }" @click="toggleList(answers.company.conversionGoals, option.key)">{{ option.label }}</button>
-            </div>
-          </fieldset>
-          <section class="contact-block" aria-labelledby="contact-title">
-            <h3 id="contact-title">聯絡資料</h3>
-            <div class="field-group">
-              <label for="contact-name">聯絡人姓名</label>
-              <input id="contact-name" v-model.trim="answers.contact.contactName" maxlength="120" autocomplete="name">
-              <small>{{ answers.contact.contactName.length }} / 120</small>
-            </div>
-            <div class="field-group">
-              <label for="contact-email">聯絡 Email</label>
-              <input id="contact-email" v-model.trim="answers.contact.email" type="email" inputmode="email" autocomplete="email" maxlength="320" aria-describedby="contact-email-help">
-              <small id="contact-email-help">付款與開站進度會寄到這個信箱</small>
-              <p v-if="answers.contact.email && stepCompletion(2, answers, { accepted: consentAccepted }).missing.includes('聯絡 Email')" class="inline-error">請輸入完整且有效的 Email。</p>
-            </div>
-            <div class="field-group">
-              <label for="contact-phone">聯絡電話（選填）</label>
-              <input id="contact-phone" v-model.trim="answers.contact.phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="40">
-              <p v-if="answers.contact.phone && !/^[0-9+() -]+$/.test(answers.contact.phone)" class="inline-error">電話只能使用數字、空格、括號、加號或連字號。</p>
-            </div>
-          </section>
         </div>
 
         <div v-else-if="currentStep === 3" class="step-body">
@@ -873,8 +1032,27 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
               <div class="field-group"><label for="domain-name">網域名稱</label><input id="domain-name" v-model.trim="domainName" inputmode="url" autocomplete="off" maxlength="63" placeholder="my-brand"><small>只輸入英文字母、數字或連字號。</small></div>
               <div class="field-group"><label for="domain-tld">網域結尾</label><select id="domain-tld" v-model="domainTld"><option v-for="item in catalog.domainTlds" :key="item.tld" :value="item.tld">.{{ item.tld }} · {{ formatTwd(item.annualMinor) }}／年</option></select></div>
             </div>
-            <button type="button" class="button button--secondary" @click="checkDomainAvailability">查詢是否可註冊</button>
+            <button type="button" class="button button--secondary" :disabled="domainChecking" @click="checkDomainAvailability">{{ domainChecking ? '正在查詢…' : '查詢是否可註冊' }}</button>
             <p v-if="domainAvailabilityMessage" class="notice" role="status">{{ domainAvailabilityMessage }}</p>
+            <p v-if="domainAvailability && Date.parse(domainAvailability.expiresAt) <= countdownNow" class="inline-error">查詢報價已過期，請重新查詢後再確認。</p>
+            <fieldset v-if="domainAvailability" class="domain-registrant">
+              <legend>網域持有人的註冊資料</legend>
+              <p class="hint">網域會透過平台帳戶管理，持有人資料登記為你提供的聯絡人。請提供真實完整資料，並留意註冊商寄送的驗證信。</p>
+              <div class="domain-fields">
+                <div class="field-group"><label for="registrant-first">姓名／名</label><input id="registrant-first" v-model.trim="domainRegistrant.firstName" autocomplete="given-name" maxlength="100"></div>
+                <div class="field-group"><label for="registrant-last">姓（可留空）</label><input id="registrant-last" v-model.trim="domainRegistrant.lastName" autocomplete="family-name" maxlength="100"></div>
+                <div class="field-group"><label for="registrant-org">公司名稱（選填）</label><input id="registrant-org" v-model.trim="domainRegistrant.organization" autocomplete="organization" maxlength="200"></div>
+                <div class="field-group"><label for="registrant-email">註冊 Email</label><input id="registrant-email" v-model.trim="domainRegistrant.email" type="email" autocomplete="email" maxlength="254"></div>
+                <div class="field-group"><label for="registrant-country">國家代碼</label><input id="registrant-country" v-model.trim="domainRegistrant.country" autocomplete="country" maxlength="2" placeholder="TW"><small>兩碼英文，例如 TW、US。</small></div>
+                <div class="field-group"><label for="registrant-state">縣市／州（選填）</label><input id="registrant-state" v-model.trim="domainRegistrant.state" autocomplete="address-level1" maxlength="100"></div>
+                <div class="field-group"><label for="registrant-city">城市</label><input id="registrant-city" v-model.trim="domainRegistrant.city" autocomplete="address-level2" maxlength="100"></div>
+                <div class="field-group"><label for="registrant-postal">郵遞區號</label><input id="registrant-postal" v-model.trim="domainRegistrant.postalCode" autocomplete="postal-code" maxlength="32"></div>
+                <div class="field-group"><label for="registrant-address">完整街道地址</label><input id="registrant-address" v-model.trim="domainRegistrant.address1" autocomplete="address-line1" maxlength="255"></div>
+                <div class="field-group"><label for="registrant-phone-country">電話國碼</label><input id="registrant-phone-country" v-model.trim="domainRegistrant.phoneCountryCode" inputmode="numeric" maxlength="4" placeholder="886"></div>
+                <div class="field-group"><label for="registrant-phone">電話號碼</label><input id="registrant-phone" v-model.trim="domainRegistrant.phone" inputmode="tel" maxlength="15"><small>只填數字，不含國碼。</small></div>
+              </div>
+              <label class="consent-check"><input v-model="domainDelegated" type="checkbox"><span>{{ sessionProjection.domainDelegationTerms }}</span></label>
+            </fieldset>
           </section>
           <section class="agreement" aria-labelledby="agreement-title">
             <h3 id="agreement-title">網站建置授權同意書</h3>
@@ -883,7 +1061,7 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
               <p>我確認自己有權提供本流程中的品牌名稱、文字、圖片、網址、聯絡資料及其他內容，並授權網站建置團隊為製作示意預覽、建立網站、提供報價與安排付款而處理這些資料。</p>
               <p>我了解示意預覽只是討論方向的草稿，不代表最終交付內容；正式網站會依已確認的方案、功能與素材製作。若我提供第三方素材，我會先取得必要的使用權。</p>
               <p>我了解網站分析只檢查可公開讀取的首頁線索，不是完整稽核，也不保證搜尋排名、流量、詢問、成交或營收結果。</p>
-              <p>我了解標示「付款後由我們為你設定開通」的人工設定模組會依報價收費，付款後由團隊安排設定，完成前不會顯示為已開通；標示「即將推出」的模組只登記需求，本次不開通也不收費。新網域會在結帳後由團隊確認可註冊狀態並代為註冊，不代表此刻已取得網域。</p>
+              <p>我了解標示「付款後由我們為你設定開通」的人工設定模組會依報價收費，付款後由團隊安排設定，完成前不會顯示為已開通；標示「即將推出」的模組只登記需求，本次不開通也不收費。新網域會在付款確認後再次確認可註冊狀態，自動代為註冊、連接網站並設定 HTTPS；付款前的查詢不代表已取得網域。若網域已被他人註冊或價格超出同意範圍，會停止採購並顯示待處理狀態，不會替換名稱或自行加價。</p>
               <p>我同意團隊可使用我提供的聯絡 Email 傳送付款、網站建置進度及必要的服務通知。未經另行同意，不會把這項授權解讀為接收其他行銷訊息的同意。</p>
               <p>我會在付款前再次確認伺服器提供的費用明細、每月費用、網域年費與後續收費方式。如資料或需求有變，我會在確認付款前提出。</p>
               <p><strong>閱讀完畢後，請捲到這一段的最底部，再勾選下方同意框。</strong></p>
@@ -950,134 +1128,536 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
           </template>
         </div>
 
-        <p v-if="currentMissing.length && currentStep !== 6 && currentStep !== 9" class="missing" role="status">還需要：{{ currentMissing.join('、') }}</p>
+        <p v-if="currentMissing.length && currentStep !== 6 && currentStep !== 9" id="step-missing" class="missing" role="status">還需要：{{ currentMissing.join('、') }}</p>
       </section>
 
-      <footer v-if="currentStep < 9" class="step-footer">
+      <footer class="step-footer">
         <button type="button" class="button button--secondary" :disabled="currentStep === 1 || saveStatus === 'saving'" @click="goPrevious">上一步</button>
-        <div class="save-state" :class="`save-state--${saveStatus}`" role="status">{{ saveMessage }}</div>
-        <button type="button" class="button" :disabled="nextDisabled" @click="saveCurrentAndAdvance">{{ saveStatus === 'saving' ? '儲存中…' : '下一步' }}</button>
+        <div class="step-footer__status">
+          <div class="save-state" :class="`save-state--${saveStatus}`" role="status">{{ saveMessage || (currentMissing.length ? `尚有 ${currentMissing.length} 項必填內容` : '變更會自動保存') }}</div>
+        </div>
+        <button v-if="currentStep < 9" type="button" class="button" :disabled="nextDisabled" :aria-describedby="currentMissing.length && currentStep !== 6 ? 'step-missing' : undefined" @click="saveCurrentAndAdvance">{{ saveStatus === 'saving' ? '儲存中…' : '下一步' }}</button>
+        <span v-else class="step-footer__end">最後確認</span>
       </footer>
+      </div>
+      </div>
     </template>
   </main>
 </template>
 
 <style scoped>
-.wizard { min-height: 100vh; padding: 1.25rem 1rem 7rem; background: #f7f5ef; color: #1b2236; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.wizard__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; max-width: 72rem; margin: 0 auto 1.2rem; }
-.eyebrow { margin: 0 0 .55rem; color: #4d5dad; font: 700 .72rem/1.2 ui-monospace, SFMono-Regular, monospace; letter-spacing: .12em; }
-h1 { margin: 0; font: 900 clamp(2rem, 10vw, 3.2rem)/1.02 Georgia, serif; }
-h2 { margin: 0; font: 800 1.8rem/1.1 Georgia, serif; }
-h3 { margin: 0 0 .75rem; font: 700 1.2rem/1.25 Georgia, serif; }
-h4 { margin: 0 0 .4rem; }
-.lede, .step-card__header p { color: #5e6575; line-height: 1.65; }
-.text-button { min-height: 44px; border: 0; padding: .55rem; background: transparent; color: #4d5dad; cursor: pointer; font-weight: 700; text-decoration: underline; text-underline-offset: .2rem; }
-.state { max-width: 72rem; margin: 0 auto; padding: 1rem; border: 1px solid #e7e2d8; border-radius: .75rem; background: white; }
-.state--error { color: #8a2b24; border-color: #edb3ab; background: #fff8f6; }
-.progress { max-width: 72rem; margin: 0 auto 1rem; }
-.progress__mobile p { margin: 0 0 .55rem; font-weight: 800; }
-.progress__bar { height: .42rem; overflow: hidden; border-radius: 999px; background: #e7e2d8; }
-.progress__bar span { display: block; height: 100%; border-radius: inherit; background: #4d5dad; }
-.progress__steps { display: none; list-style: none; padding: 0; margin: 0; }
-.step-card { max-width: 52rem; margin: 0 auto; border: 1px solid #e7e2d8; border-radius: .9rem; background: white; box-shadow: 0 1rem 2.5rem rgba(45, 51, 72, .06); }
-.step-card__header { padding: 1.25rem; border-bottom: 1px solid #e7e2d8; }
-.step-card__header p:last-child { margin-bottom: 0; }
-.step-body { display: grid; gap: 1.35rem; padding: 1.25rem; }
-/* Grid items default to min-width:auto, so a wide child (the comparison table) stretches the whole card and makes the page scroll sideways on phones. */
+:global(body) { margin: 0; background: #f7f5ef; }
+.wizard,
+.wizard * { box-sizing: border-box; }
+.wizard {
+  --accent: #4d5dad;
+  --ink-strong: #17233b;
+  --accent-mid: #6876bd;
+  --accent-soft: #e4e7f6;
+  --accent-deep: #39488c;
+  --cream: #f7f5ef;
+  --paper: #fffdf8;
+  --blush: #f7f5ef;
+  --ink: #1b2236;
+  --muted: #5e6575;
+  --line: #d9d5cc;
+  --motion-fast: .16s;
+  --motion-normal: .2s;
+  --motion-ease: cubic-bezier(.22, .8, .24, 1);
+  position: relative;
+  min-height: 100vh;
+  overflow-x: clip;
+  overflow-y: visible;
+  padding: clamp(1rem, 3vw, 2.75rem) clamp(1rem, 4vw, 3rem) 7.5rem;
+  background: var(--cream);
+  color: var(--ink);
+  font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+}
+.wizard::before {
+  display: none;
+}
+.wizard > * { position: relative; z-index: 1; }
+.wizard__header {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1.25rem;
+  max-width: 78rem;
+  min-height: 14rem;
+  overflow: hidden;
+  margin: 0 auto 1rem;
+  padding: clamp(1.5rem, 5vw, 4rem);
+  border: 1px solid var(--line);
+  border-radius: .12rem;
+  background: var(--paper);
+  box-shadow: 0 .75rem 2.4rem rgba(23, 35, 59, .055);
+  animation: cover-reveal .22s var(--motion-ease) both;
+}
+.wizard__header::after {
+  position: absolute;
+  right: clamp(1.5rem, 5vw, 4rem);
+  bottom: 0;
+  width: clamp(4rem, 10vw, 7rem);
+  height: 2px;
+  background: var(--accent);
+  content: "";
+}
+.brand-mark {
+  position: relative;
+  display: grid;
+  width: 4.6rem;
+  height: 4.6rem;
+  align-content: center;
+  justify-items: center;
+  border: 1px solid var(--ink-strong);
+  background: var(--ink-strong);
+  color: white;
+  box-shadow: inset 0 0 0 .3rem rgba(255, 255, 255, .06), 0 .55rem 1.25rem rgba(23, 35, 59, .14);
+}
+.brand-mark::after { position: absolute; inset: .27rem; border: 1px solid rgba(255, 255, 255, .2); content: ""; }
+.brand-mark strong {
+  color: #f7f5ef;
+  font: 500 1.65rem/1 "Noto Serif TC", "Songti TC", serif;
+  letter-spacing: .08em;
+}
+.brand-mark small { margin-top: .35rem; font: 650 .42rem/1.2 "DM Mono", monospace; letter-spacing: .12em; }
+.wizard__intro { max-width: 45rem; }
+.wizard__header--compact {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 0;
+  padding: .9rem 1rem;
+  box-shadow: none;
+}
+.wizard__header--compact::after { display: none; }
+.wizard__header--compact .brand-mark { width: 3.15rem; height: 3.15rem; box-shadow: none; }
+.wizard__header--compact .brand-mark strong { font-size: 1.15rem; }
+.wizard__header--compact .brand-mark small { display: none; }
+.wizard__header--compact .eyebrow { margin: 0 0 .2rem; font-size: .62rem; }
+.wizard__header--compact h1 { max-width: none; font-size: clamp(1.12rem, 2.4vw, 1.55rem); line-height: 1.35; letter-spacing: -.015em; }
+.wizard__header--compact h1 br { display: none; }
+.wizard__header--compact .lede,
+.wizard__header--compact .hero-promises { display: none; }
+.wizard__header--compact > .text-button { grid-column: auto; align-self: center; justify-self: end; min-width: auto; border: 0; padding: .7rem .4rem; text-decoration: underline; }
+.eyebrow {
+  margin: 0 0 .65rem;
+  color: var(--accent);
+  font: 750 .72rem/1.4 "DM Mono", "Noto Sans TC", monospace;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.wizard__header .eyebrow { color: var(--accent); }
+h1, h2, h3, .quote-total strong { font-family: "Noto Serif TC", "Songti TC", serif; }
+h1 {
+  max-width: 10em;
+  margin: 0;
+  color: var(--ink-strong);
+  font-size: clamp(2.25rem, 7vw, 4.75rem);
+  font-weight: 600;
+  line-height: 1.18;
+  letter-spacing: -.045em;
+}
+h2 { margin: 0; font-size: clamp(1.75rem, 4vw, 2.6rem); font-weight: 650; line-height: 1.26; letter-spacing: -.025em; }
+h3 { margin: 0 0 .8rem; font-size: 1.25rem; font-weight: 650; line-height: 1.4; }
+h4 { margin: 0 0 .5rem; font-weight: 750; }
+.lede {
+  max-width: 39rem;
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: .96rem;
+  line-height: 1.8;
+}
+.hero-promises {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .55rem 1rem;
+  padding: 0;
+  margin: 1.4rem 0 0;
+  color: var(--muted);
+  font-size: .78rem;
+  list-style: none;
+}
+.hero-promises li { display: flex; align-items: center; gap: .45rem; }
+.hero-promises li::before { width: 1.15rem; height: 1px; background: #8993cd; content: ""; }
+.text-button {
+  min-height: 44px;
+  border: 0;
+  padding: .55rem;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: .25rem;
+}
+.wizard__header > .text-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  align-self: end;
+  min-width: 7rem;
+  border: 1px solid #cfc9bd;
+  padding: .7rem 1rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+.wizard__header button:focus-visible { outline-color: var(--accent); box-shadow: 0 0 0 4px rgba(77, 93, 173, .14); }
+.progress button:focus-visible { outline-color: #f7f5ef; box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px #c8cdec; }
+.state {
+  max-width: 78rem;
+  margin: 1rem auto;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: .12rem;
+  background: var(--paper);
+  box-shadow: 0 .75rem 2rem rgba(23, 35, 59, .055);
+}
+.state--error { border-color: #c98579; background: #fff2ed; color: #812e27; }
+.wizard__workspace { display: grid; gap: 1rem; max-width: 78rem; margin: 0 auto; }
+.wizard__stage { min-width: 0; }
+.progress {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: .12rem;
+  background: var(--paper);
+  box-shadow: 0 .5rem 1.5rem rgba(23, 35, 59, .045);
+}
+.progress__intro { display: none; }
+.progress__mobile p { margin: 0 0 .65rem; color: var(--ink); font-size: .86rem; font-weight: 750; }
+.progress__bar { height: .3rem; overflow: hidden; background: var(--accent-soft); }
+.progress__bar span { display: block; height: 100%; background: var(--accent); transition: width var(--motion-normal) var(--motion-ease); }
+.progress__steps { display: none; padding: 0; margin: 0; list-style: none; }
+.step-card {
+  position: relative;
+  overflow: clip;
+  border: 1px solid #e1ddd4;
+  border-radius: .12rem;
+  background: var(--paper);
+  box-shadow: 0 .9rem 2.8rem rgba(23, 35, 59, .065);
+  animation: paper-arrive .22s var(--motion-ease) both;
+}
+.step-card::after {
+  display: none;
+}
+.step-card > * { position: relative; z-index: 1; }
+.step-card__header {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1rem;
+  padding: clamp(1.4rem, 4vw, 2.6rem);
+  border-bottom: 1px solid #dfe1ed;
+  background: #f1f2f7;
+  color: var(--ink);
+}
+.step-card__number {
+  min-width: 2.8rem;
+  padding-top: .1rem;
+  border-right: 1px solid rgba(77, 93, 173, .3);
+  color: var(--ink-strong);
+  font: 500 1.55rem/1 "DM Mono", monospace;
+  letter-spacing: -.08em;
+}
+.step-card__header .eyebrow { margin-bottom: .45rem; color: var(--accent); }
+.step-card__header h2:focus { outline: none; }
+.step-card__header p:last-child { max-width: 42rem; margin: .7rem 0 0; color: var(--muted); line-height: 1.65; }
+.step-body { display: grid; gap: 1.5rem; padding: clamp(1.35rem, 4vw, 2.6rem); }
 .step-body > *, .preview-result > * { min-width: 0; }
 fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
-legend, label { font-weight: 750; }
-legend { margin-bottom: .65rem; }
+legend, label { color: var(--ink); font-weight: 750; }
+legend { margin-bottom: .8rem; font-size: 1rem; }
 button, input, textarea, select { font: inherit; }
 button { touch-action: manipulation; }
-input:not([type="checkbox"]):not([type="radio"]), textarea, select { width: 100%; min-height: 44px; box-sizing: border-box; border: 1px solid #cfc9bd; border-radius: .55rem; padding: .72rem .8rem; background: white; color: #1b2236; }
-textarea { min-height: 7rem; resize: vertical; }
-input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible, .agreement__pane:focus-visible { outline: 3px solid rgba(77, 93, 173, .3); outline-offset: 2px; }
-.field-group { display: grid; gap: .42rem; min-width: 0; }
-.field-group small, .hint, .muted { color: #777d8b; }
+input:not([type="checkbox"]):not([type="radio"]), textarea, select {
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-bottom: 1px solid #aeb3c3;
+  border-radius: 0;
+  padding: .8rem .35rem;
+  background: transparent;
+  color: var(--ink);
+  box-shadow: none;
+  transition: color var(--motion-fast) ease, border-color var(--motion-fast) ease, background var(--motion-fast) ease;
+}
+textarea { min-height: 7.5rem; border: 1px solid #aeb3c3; padding: .9rem; resize: vertical; line-height: 1.7; }
+input::placeholder, textarea::placeholder { color: #7d8492; opacity: .72; }
+input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible, .agreement__pane:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:focus { border-color: var(--accent); background: rgba(228, 231, 246, .24); box-shadow: none; }
+.field-group { display: grid; gap: .48rem; min-width: 0; }
+.field-group label { transition: color var(--motion-fast) ease; }
+.field-group:focus-within label { color: var(--accent-deep); }
+.field-group small, .hint, .muted { color: var(--muted); }
 .field-group > small { justify-self: end; }
-.choice-row, .chip-grid { display: grid; grid-template-columns: 1fr; gap: .65rem; }
-.choice-row button, .chip-grid button, .preset-grid button, .option-card, .module-card { min-height: 44px; border: 1px solid #e7e2d8; border-radius: .7rem; padding: .85rem; background: #fbfaf7; color: #1b2236; cursor: pointer; text-align: left; }
-.choice-row button.selected, .chip-grid button.selected, .preset-grid button.selected, .option-card.selected, .module-card.selected, .plan-card.selected { border-color: #4d5dad; background: #eef0fb; box-shadow: inset 0 0 0 1px #4d5dad; }
-.button { min-height: 44px; border: 0; border-radius: .6rem; padding: .8rem 1.1rem; background: #4d5dad; color: white; cursor: pointer; font-weight: 800; }
-.button:disabled, button:disabled { cursor: not-allowed; opacity: .55; }
-.button--secondary { border: 1px solid #d5d0c5; background: white; color: #17233b; }
+.field-group__topline { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.field-group__topline small { flex: 0 0 auto; font-size: .72rem; font-variant-numeric: tabular-nums; }
+.required-mark { margin-left: .25rem; color: var(--accent-deep); font-size: .68rem; font-weight: 800; letter-spacing: .05em; }
+.optional-mark { margin-left: .25rem; color: var(--muted); font-size: .75rem; font-weight: 500; }
+.field-hint { margin: -.2rem 0 .7rem; color: var(--muted); font-size: .8rem; line-height: 1.6; }
+.choice-row { display: grid; grid-template-columns: 1fr; gap: .8rem; }
+.chip-grid { display: flex; flex-wrap: wrap; gap: .55rem; }
+.choice-row button, .chip-grid button, .preset-grid button, .option-card, .module-card {
+  position: relative;
+  min-height: 50px;
+  border: 1px solid var(--line);
+  border-radius: .12rem;
+  padding: 1rem;
+  background: #fbfaf7;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--motion-fast) ease, background var(--motion-fast) ease, border-color var(--motion-fast) ease, transform var(--motion-fast) var(--motion-ease);
+}
+.choice-row button { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: .2rem .8rem; align-items: center; min-height: 9rem; padding: 1.2rem; }
+.choice-row button strong { grid-column: 2; font: 650 1.15rem/1.4 "Noto Serif TC", "Songti TC", serif; }
+.choice-row button small { grid-column: 2; color: var(--muted); line-height: 1.55; }
+.choice-card__mark { grid-row: 1 / 3; align-self: stretch; display: grid; place-items: center; border-right: 1px solid var(--line); color: var(--accent); font: 400 1.45rem/1 "DM Mono", monospace; }
+.choice-row button.selected, .chip-grid button.selected, .preset-grid button.selected, .option-card.selected, .module-card.selected, .plan-card.selected {
+  border-color: var(--accent);
+  background: #eef0fb;
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--accent), 0 .45rem 1.1rem rgba(77, 93, 173, .1);
+}
+.choice-row button.selected::after, .preset-grid button.selected::after, .option-card.selected::after, .module-card.selected::after, .plan-card.selected::after {
+  position: absolute;
+  top: .65rem;
+  right: .65rem;
+  width: .28rem;
+  height: 1.65rem;
+  background: var(--accent);
+  content: "";
+}
+.choice-row button.selected small, .preset-grid button.selected span, .option-card.selected span, .option-card.selected small, .module-card.selected > span, .plan-card.selected button > span { color: #51596f; }
+.choice-row button.selected .choice-card__mark { border-color: rgba(77, 93, 173, .35); color: var(--accent); }
+.chip-grid button {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: .5rem;
+  min-height: 42px;
+  border: 1px solid #aeb3c3;
+  border-radius: .12rem;
+  padding: .58rem .85rem;
+  background: var(--paper);
+  box-shadow: none;
+}
+.chip-grid__check { display: grid; flex: 0 0 auto; width: .95rem; height: .95rem; place-items: center; border: 1px solid var(--accent-mid); color: var(--paper); font-size: .62rem; line-height: 1; transition: color var(--motion-fast) ease, background var(--motion-fast) ease, border-color var(--motion-fast) ease, transform var(--motion-fast) var(--motion-ease); }
+.chip-grid__check::after { content: ""; }
+.chip-grid button.selected {
+  border-color: var(--accent-deep);
+  background: var(--accent-soft);
+  color: var(--ink-strong);
+  box-shadow: none;
+}
+.chip-grid button.selected .chip-grid__check { border-color: var(--accent-deep); background: var(--accent-deep); transform: scale(1.04); }
+.chip-grid button.selected .chip-grid__check::after { content: "✓"; }
+.button {
+  position: relative;
+  min-height: 48px;
+  border: 1px solid var(--accent);
+  border-radius: .08rem;
+  padding: .82rem 1.25rem;
+  background: var(--accent);
+  color: var(--cream);
+  cursor: pointer;
+  font-weight: 800;
+  letter-spacing: .02em;
+  box-shadow: 0 .45rem 1.15rem rgba(23, 35, 59, .12);
+  transition: color var(--motion-fast) ease, background var(--motion-fast) ease, border-color var(--motion-fast) ease, transform var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) ease;
+}
+.button::before {
+  display: none;
+}
+.button:active:not(:disabled) { transform: translateY(1px) scale(.992); box-shadow: 0 .25rem .7rem rgba(77, 93, 173, .14); }
+.button:disabled, button:disabled { cursor: not-allowed; opacity: .52; transform: none; box-shadow: none; }
+.button--secondary { border-color: var(--accent-mid); background: transparent; color: var(--ink); box-shadow: none; }
 .button--wide { width: 100%; }
-.inline-error, .missing { margin: 0; color: #9b3128; line-height: 1.5; }
-.fulfilment-panel { padding: 1rem; border: 1px solid #d9d2c3; border-radius: .7rem; background: #fffdf7; }
-.fulfilment-panel ul { display: grid; gap: .6rem; padding: 0; margin: 0; list-style: none; }
+.checkout-action > .button--wide { border-color: var(--accent-deep); background: var(--accent-deep); color: white; box-shadow: 0 .65rem 1.5rem rgba(57, 72, 140, .18); }
+.inline-error, .missing { margin: 0; color: #8c3028; line-height: 1.6; }
+.missing { padding: 0 clamp(1.35rem, 4vw, 2.6rem) clamp(1.4rem, 4vw, 2.4rem); font-weight: 700; }
+.fulfilment-panel, .analysis, .contact-block, .domain-builder, .agreement, .quote, .inbox-binding {
+  padding: clamp(1rem, 3vw, 1.4rem);
+  border: 1px solid var(--line);
+  border-radius: .08rem;
+  background: #fbfaf7;
+}
+.fulfilment-panel ul { display: grid; gap: .7rem; padding: 0; margin: 0; list-style: none; }
 .fulfilment-panel li { display: flex; justify-content: space-between; gap: 1rem; }
-.analysis, .contact-block, .domain-builder, .agreement, .quote { padding: 1rem; border: 1px solid #e7e2d8; border-radius: .7rem; background: #fbfaf7; }
-.score-row { display: grid; gap: .3rem; margin-bottom: .9rem; }
+.score-row { display: grid; gap: .35rem; margin-bottom: 1rem; }
 .score-row > div:first-child { display: flex; justify-content: space-between; gap: 1rem; }
-.score-row p { margin: 0; color: #777d8b; font-size: .88rem; }
-.score-bar { height: .55rem; overflow: hidden; border-radius: 999px; background: #e7e2d8; }
-.score-bar span { display: block; height: 100%; background: #4d5dad; }
-.contact-block { display: grid; gap: 1rem; }
-.preset-grid, .card-grid, .module-grid { display: grid; grid-template-columns: 1fr; gap: .75rem; }
-.preset-grid button { display: grid; gap: .35rem; }
-.preset-grid span, .option-card span, .module-card > span, .plan-card button > span { color: #5e6575; line-height: 1.5; }
-.divider { display: flex; align-items: center; gap: .7rem; color: #777d8b; }
-.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #e7e2d8; }
-.reference-list, .reference-row { display: grid; gap: .75rem; }
-.reference-row { padding-bottom: .8rem; border-bottom: 1px solid #eeeae2; }
+.score-row p { margin: 0; color: var(--muted); font-size: .88rem; }
+.score-bar { height: .48rem; overflow: hidden; background: var(--accent-soft); }
+.score-bar span { display: block; height: 100%; background: var(--accent); }
+.contact-block { display: grid; gap: 1rem; padding-inline: 0; border-width: 1px 0; background: transparent; }
+.contact-block h3 { display: flex; align-items: baseline; gap: 1rem; }
+.step-body--company { display: block; padding-block: 0; }
+.company-form-layout,
+.company-form-column { min-width: 0; }
+.company-section { padding: clamp(2rem, 4vw, 2.85rem) 0; border-bottom: 1px solid var(--line); }
+.company-section:last-child { border-bottom: 0; }
+.company-section__heading { display: grid; grid-template-columns: 2.15rem minmax(0, 1fr); gap: .7rem; align-items: baseline; margin-bottom: 1.65rem; }
+.company-section__heading > span { color: var(--accent-mid); font: 500 .92rem/1 "Noto Serif TC", "Songti TC", serif; font-variant-numeric: tabular-nums; }
+.company-section__heading h3 { margin: 0; color: var(--ink-strong); font-size: clamp(1.25rem, 2.4vw, 1.5rem); }
+.company-section__body { display: grid; gap: 1.8rem; min-width: 0; }
+.contact-grid { display: grid; grid-template-columns: 1fr; gap: 1.65rem 1.9rem; }
+.contact-grid__wide { grid-column: 1 / -1; }
+.company-completion { display: none; }
+.preset-grid, .card-grid, .module-grid { display: grid; grid-template-columns: 1fr; gap: .85rem; }
+.preset-grid button { display: grid; gap: .4rem; }
+.preset-grid span, .option-card span, .module-card > span, .plan-card button > span { color: var(--muted); line-height: 1.55; }
+.divider { display: flex; align-items: center; gap: .8rem; color: var(--muted); font-size: .84rem; }
+.divider::before, .divider::after { flex: 1; height: 1px; background: var(--line); content: ""; }
+.reference-list, .reference-row { display: grid; gap: .8rem; }
+.reference-row { padding-bottom: .9rem; border-bottom: 1px solid var(--line); }
 .reference-row .text-button { justify-self: start; }
-.upsell { padding: 1rem; border: 1px solid #e7e2d8; border-radius: .7rem; }
-.toggle-line { display: grid; grid-template-columns: auto 1fr; gap: .7rem; align-items: start; cursor: pointer; }
-.toggle-line input, .consent-check input { width: 1.35rem; height: 1.35rem; margin: .12rem 0 0; }
-.toggle-line span { display: grid; gap: .3rem; }
-.toggle-line small { color: #777d8b; font-weight: 400; line-height: 1.5; }
-.toggle-line b { grid-column: 2; color: #4d5dad; }
-.option-card { display: grid; gap: .55rem; width: 100%; }
+.upsell { padding: 1.1rem 0; border: 1px solid var(--line); border-width: 1px 0; background: transparent; }
+.toggle-line { display: grid; grid-template-columns: auto 1fr; gap: .75rem; align-items: start; cursor: pointer; }
+.toggle-line input, .consent-check input { width: 1.35rem; height: 1.35rem; margin: .12rem 0 0; accent-color: var(--accent); }
+.toggle-line span { display: grid; gap: .35rem; }
+.toggle-line small { color: var(--muted); font-weight: 400; line-height: 1.55; }
+.toggle-line b { grid-column: 2; color: var(--accent); }
+.option-card { display: grid; gap: .6rem; width: 100%; }
 .option-card__top, .module-card__heading, .module-card__prices { display: flex; justify-content: space-between; gap: .8rem; }
-.option-card b, .module-card__prices, .plan-card b { color: #4d5dad; }
-.module-option { display: grid; align-content: start; gap: .75rem; }
-.module-card { display: grid; gap: .65rem; width: 100%; }
-.inbox-binding { display: grid; gap: .8rem; padding: 1rem; border: 1px solid #cfc9bd; border-radius: .7rem; background: #fffdf7; }
-.inbox-binding p { margin: 0; line-height: 1.55; }
-.inbox-binding__row { display: grid; gap: .7rem; }
-.module-card em { color: #286845; font-size: .83rem; font-style: normal; font-weight: 750; }
-.module-card em.manual { color: #875215; }
-.coming-soon-badge { justify-self: start; border: 2px solid #9b3128; border-radius: 999px; padding: .3rem .6rem; background: #fff1ee; color: #8a2b24; font-size: .85rem; }
-.manual-setup-badge { justify-self: start; border: 2px solid #9a671e; border-radius: 999px; padding: .3rem .6rem; background: #fff8e8; color: #875215; font-size: .85rem; }
-.checkout-zero { color: #8a2b24; }
+.option-card b, .module-card__prices, .plan-card b { color: var(--accent); }
+.selected .option-card__top b, .module-card.selected .module-card__prices, .plan-card.selected b { color: var(--accent); }
+.module-option { display: grid; align-content: start; gap: .8rem; }
+.module-card { display: grid; gap: .7rem; width: 100%; }
+.inbox-binding { display: grid; gap: .85rem; }
+.inbox-binding p { margin: 0; line-height: 1.6; }
+.inbox-binding__row { display: grid; gap: .75rem; }
+.module-card em { color: #246448; font-size: .83rem; font-style: normal; font-weight: 800; }
+.module-card em.manual { color: #805019; }
+.coming-soon-badge, .manual-setup-badge { justify-self: start; padding: .35rem .65rem; font-size: .82rem; font-weight: 750; }
+.coming-soon-badge { border: 1px solid #a14e42; background: #fff0e9; color: #842f29; }
+.manual-setup-badge { border: 1px solid #a9792b; background: #fff4d9; color: #724613; }
+.checkout-zero { color: #842f29; }
 .preview-result { display: grid; gap: 1rem; }
-.preview-result iframe { width: 100%; height: 32rem; box-sizing: border-box; border: 1px solid #e7e2d8; border-radius: .7rem; background: white; }
-.notice, .success-panel { margin: 0; padding: .8rem; border-radius: .55rem; background: #f0f1f8; color: #384268; line-height: 1.55; }
-.preview-sections { display: grid; gap: .7rem; }
-.preview-sections article { padding: .8rem; border: 1px solid #eeeae2; border-radius: .55rem; }
-.preview-sections p { margin: 0; color: #5e6575; }
+.preview-result iframe { width: 100%; height: clamp(23rem, 58vh, 36rem); border: 1px solid var(--line); border-radius: .12rem; background: white; box-shadow: 0 .6rem 1.5rem rgba(23, 35, 59, .07); }
+.notice, .success-panel { margin: 0; padding: .9rem 1rem; border-left: .24rem solid var(--accent); background: #f0f1f8; color: #384268; line-height: 1.6; }
+.preview-sections { display: grid; gap: .75rem; }
+.preview-sections article { padding: .9rem; border: 1px solid var(--line); background: #fffdf8; }
+.preview-sections p { margin: 0; color: var(--muted); }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; min-width: 30rem; border-collapse: collapse; }
-th, td { padding: .65rem; border-bottom: 1px solid #e7e2d8; text-align: left; }
+th, td { padding: .72rem; border-bottom: 1px solid var(--line); text-align: left; }
 .domain-builder { display: grid; gap: 1rem; }
-.domain-fields { display: grid; gap: .8rem; }
-.agreement { display: grid; gap: .8rem; }
-.agreement__pane { max-height: 18rem; overflow-y: auto; padding: 1rem; border: 1px solid #cfc9bd; border-radius: .55rem; background: white; line-height: 1.7; }
+.domain-fields { display: grid; gap: .85rem; }
+.domain-builder strong, .domain-builder p, .success-panel a { overflow-wrap: anywhere; }
+.agreement { display: grid; gap: .85rem; }
+.agreement__pane { max-height: 18rem; overflow-y: auto; padding: 1rem; border: 1px solid #aeb3c3; background: #fffdf8; line-height: 1.75; }
 .agreement__pane p:first-child { margin-top: 0; }
 .agreement__pane p:last-child { margin-bottom: 0; padding-bottom: 1rem; }
-.scroll-status { margin: 0; color: #875215; font-weight: 750; }
-.scroll-status.done { color: #286845; }
-.consent-check { display: flex; min-height: 44px; align-items: center; gap: .65rem; cursor: pointer; }
-.plan-card { overflow: hidden; border: 1px solid #e7e2d8; border-radius: .7rem; background: #fbfaf7; }
-.plan-card > button { display: grid; gap: .55rem; width: 100%; min-height: 44px; border: 0; padding: 1rem; background: transparent; color: #1b2236; cursor: pointer; text-align: left; }
-.plan-card fieldset { display: grid; gap: .45rem; padding: 0 1rem 1rem; }
-.plan-card fieldset label { display: flex; min-height: 44px; align-items: center; gap: .55rem; }
-.plan-card fieldset input { width: 1.2rem; height: 1.2rem; }
-.quote { display: grid; gap: 1rem; }
-.quote-group { padding-bottom: .7rem; border-bottom: 1px solid #e7e2d8; }
-.quote-group dl, .future-charges { display: grid; gap: .55rem; margin: 0; }
+.scroll-status { margin: 0; color: #744715; font-weight: 800; }
+.scroll-status.done { color: #246448; }
+.consent-check { display: flex; min-height: 44px; align-items: flex-start; gap: .7rem; cursor: pointer; line-height: 1.55; }
+.plan-card { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: .08rem; background: #fbfaf7; transition: border-color .2s ease, background .2s ease, box-shadow .2s ease; }
+.plan-card > button { display: grid; gap: .6rem; width: 100%; min-height: 50px; border: 0; padding: 1.1rem; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.plan-card fieldset { display: grid; gap: .5rem; padding: 0 1.1rem 1.1rem; color: inherit; }
+.plan-card fieldset label { display: flex; min-height: 44px; align-items: center; gap: .6rem; color: inherit; }
+.plan-card fieldset input { width: 1.2rem; height: 1.2rem; accent-color: var(--accent); }
+.quote { display: grid; gap: 1.1rem; background: #fbfaf7; }
+.quote h3 { padding-bottom: .75rem; border-bottom: 2px solid var(--ink); }
+.quote-group { padding-bottom: .8rem; border-bottom: 1px solid var(--line); }
+.quote-group dl, .future-charges { display: grid; gap: .6rem; margin: 0; }
 .quote-group dl div, .future-charges div { display: flex; justify-content: space-between; gap: 1rem; }
-.quote-group dd, .future-charges dd { margin: 0; font-weight: 750; text-align: right; }
-.quote-total { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding-top: .4rem; }
-.quote-total strong { color: #17233b; font: 800 1.7rem/1 Georgia, serif; }
-.future-charges { padding: .8rem; border-radius: .55rem; background: white; }
-.checkout-action { display: grid; gap: .8rem; }
-.success-panel { background: #edf6ef; color: #236241; }
-.missing { padding: 0 1.25rem 1.25rem; }
-.step-footer { position: fixed; z-index: 10; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .55rem; padding: .7rem max(1rem, env(safe-area-inset-right)) max(.7rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); border-top: 1px solid #e7e2d8; background: rgba(247, 245, 239, .97); }
-.save-state { min-width: 0; color: #777d8b; font-size: .75rem; text-align: center; }
-.save-state--success { color: #286845; }
-.save-state--error { color: #9b3128; }
-@media (min-width: 48rem) { .wizard { padding: 3rem 2rem 5rem; } .wizard__header { align-items: flex-end; margin-bottom: 2rem; } .progress { margin-bottom: 1.5rem; } .progress__mobile { display: none; } .progress__steps { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: .4rem; } .progress__steps li { min-width: 0; } .progress__steps button { display: grid; justify-items: center; gap: .35rem; width: 100%; min-height: 62px; border: 0; border-top: .3rem solid #d9d5cc; padding: .55rem .15rem; background: transparent; color: #777d8b; cursor: pointer; } .progress__steps .is-complete button { border-color: #4d5dad; color: #4d5dad; } .progress__steps .is-current button { border-color: #17233b; color: #17233b; } .progress__steps small { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; } .step-card__header, .step-body { padding: 2rem; } .choice-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .chip-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .preset-grid, .card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .reference-row { grid-template-columns: 1fr auto; align-items: end; } .domain-fields { grid-template-columns: minmax(0, 1fr) minmax(12rem, .55fr); } .step-footer { position: static; max-width: 52rem; margin: 1rem auto 0; padding: 0; border: 0; background: transparent; } .missing { padding: 0 2rem 2rem; } }
+.quote-group dd, .future-charges dd { margin: 0; font-weight: 800; text-align: right; white-space: nowrap; }
+.quote-total { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: 1rem 0 .2rem; }
+.quote-total strong { color: var(--accent); font-size: clamp(1.8rem, 5vw, 2.55rem); font-weight: 650; line-height: 1; white-space: nowrap; }
+.future-charges { padding: .9rem; background: var(--cream); }
+.checkout-action { display: grid; gap: .85rem; }
+.success-panel { border-color: #39775a; background: #e4efe5; color: #295a40; }
+.step-footer {
+  position: fixed;
+  z-index: 10;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .6rem;
+  padding: .75rem max(1rem, env(safe-area-inset-right)) max(.75rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  border-top: 1px solid #d9d5cc;
+  background: rgba(247, 245, 239, .96);
+  box-shadow: 0 -.8rem 2rem rgba(23, 35, 59, .07);
+}
+.step-footer__status { min-width: 0; }
+.save-state { min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: .76rem; text-align: center; }
+.save-state--success { color: #246448; }
+.save-state--error { color: #8c3028; }
+.step-footer__end { color: var(--accent); font-size: .78rem; font-weight: 800; letter-spacing: .06em; }
+@media (hover: hover) and (pointer: fine) {
+  .choice-row button:not(:disabled):hover, .preset-grid button:not(:disabled):hover, .option-card:not(:disabled):hover, .module-card:not(:disabled):hover, .plan-card:hover { transform: none; border-color: var(--accent); box-shadow: inset .22rem 0 0 var(--accent), 0 .35rem .9rem rgba(23, 35, 59, .07); }
+  .chip-grid button:not(:disabled):hover { transform: translateY(-1px); border-color: var(--accent); color: var(--accent-deep); box-shadow: none; }
+  .button:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 .55rem 1.25rem rgba(77, 93, 173, .18); }
+  .text-button:not(:disabled):hover { color: var(--ink-strong); text-decoration-thickness: 2px; }
+}
+@media (min-width: 48rem) {
+  .wizard { padding-bottom: 4rem; }
+  .wizard__header { grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; }
+  .wizard__header > .text-button { grid-column: auto; justify-self: end; }
+  .choice-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .preset-grid, .card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .contact-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reference-row { grid-template-columns: 1fr auto; align-items: end; }
+  .domain-fields { grid-template-columns: minmax(0, 1fr) minmax(12rem, .55fr); }
+  .inbox-binding__row { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+  .step-footer { position: sticky; right: auto; bottom: .75rem; left: auto; z-index: 8; margin: 1rem 0 0; padding: .65rem; border: 1px solid var(--line); background: rgba(255, 253, 248, .97); box-shadow: 0 .7rem 2rem rgba(23, 35, 59, .09); }
+}
+@media (min-width: 64rem) {
+  .wizard__workspace { grid-template-columns: 15rem minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+  .progress { position: sticky; top: 1.5rem; padding: 1.35rem 1.15rem 1.45rem; border-color: var(--line); background: var(--paper); color: var(--ink); box-shadow: 0 .75rem 2.25rem rgba(23, 35, 59, .055); }
+  .progress__intro { display: grid; gap: .4rem; padding: .2rem .55rem 1.15rem; border-bottom: 1px solid var(--line); }
+  .progress__intro p { margin: 0; color: var(--accent); font: 700 .62rem/1.4 "DM Mono", monospace; letter-spacing: .13em; }
+  .progress__intro strong { color: var(--ink-strong); font: 600 1.4rem/1.3 "Noto Serif TC", "Songti TC", serif; }
+  .progress__intro span { color: var(--muted); font-size: .76rem; line-height: 1.6; }
+  .progress__mobile { display: none; }
+  .progress__steps { position: relative; display: grid; gap: .1rem; margin-top: .7rem; }
+  .progress__steps::before { position: absolute; top: 1.35rem; bottom: 1.35rem; left: 1.08rem; width: 1px; background: var(--line); content: ""; }
+  .progress__steps button { position: relative; z-index: 1; display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: .65rem; align-items: center; width: 100%; min-height: 44px; border: 0; padding: .48rem .35rem; background: transparent; color: #858b98; cursor: pointer; text-align: left; transition: color var(--motion-fast) ease; }
+  .progress__steps button span { display: grid; width: 1.55rem; height: 1.55rem; place-items: center; border: 1px solid #bfc3cd; border-radius: 50%; background: var(--paper); color: #737a89; font: 600 .62rem/1 "DM Mono", monospace; letter-spacing: -.02em; transition: color var(--motion-fast) ease, background var(--motion-fast) ease, border-color var(--motion-fast) ease; }
+  .progress__steps button small { min-width: 0; overflow: hidden; font-size: .78rem; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+  .progress__steps .is-complete button { color: #51596f; }
+  .progress__steps .is-complete button span { border-color: var(--accent-mid); color: var(--accent); }
+  .progress__steps .is-current button { color: var(--ink-strong); }
+  .progress__steps .is-current button span { border-color: var(--ink-strong); background: var(--ink-strong); color: var(--paper); }
+  .progress__steps button:disabled { cursor: default; opacity: 1; }
+  .module-card:disabled.selected { opacity: 1; }
+}
+@media (min-width: 76rem) {
+  .company-form-layout { display: grid; grid-template-columns: minmax(0, 1fr) 12.5rem; gap: clamp(2rem, 3.5vw, 3.25rem); align-items: start; }
+  .company-completion { position: sticky; top: 1.5rem; display: block; align-self: start; margin-top: 2.7rem; padding-left: 1.35rem; border-left: 1px solid var(--line); }
+  .company-completion > p { margin: 0 0 .5rem; color: var(--accent); font-size: .68rem; font-weight: 800; letter-spacing: .09em; }
+  .company-completion > div { display: flex; align-items: baseline; gap: .35rem; padding-bottom: 1rem; border-bottom: 1px solid var(--line); }
+  .company-completion > div strong { color: var(--ink-strong); font: 600 2rem/1 "Noto Serif TC", "Songti TC", serif; }
+  .company-completion > div span { color: var(--muted); font-size: .7rem; }
+  .company-completion ol { display: grid; gap: .72rem; padding: 1rem 0; margin: 0; border-bottom: 1px solid var(--line); list-style: none; }
+  .company-completion li { position: relative; padding-left: 1.35rem; color: #858b98; font-size: .75rem; line-height: 1.35; transition: color var(--motion-fast) ease; }
+  .company-completion li::before { position: absolute; top: .08rem; left: 0; display: grid; width: .86rem; height: .86rem; place-items: center; border: 1px solid #bfc3cd; color: transparent; content: "✓"; font-size: .58rem; line-height: 1; transition: color var(--motion-fast) ease, background var(--motion-fast) ease, border-color var(--motion-fast) ease; }
+  .company-completion li.is-complete { color: var(--ink); }
+  .company-completion li.is-complete::before { border-color: var(--accent); background: var(--accent); color: white; }
+  .company-completion > small { display: block; margin-top: 1rem; color: var(--muted); font-size: .7rem; line-height: 1.65; }
+}
+@media (max-width: 30rem) {
+  .wizard__header:not(.wizard__header--compact) { min-height: 16rem; }
+  .wizard__header--compact { grid-template-columns: auto minmax(0, 1fr); padding: .72rem; }
+  .wizard__header--compact > .text-button { display: none; }
+  .brand-mark { width: 3.8rem; height: 3.8rem; }
+  .wizard__header--compact .brand-mark { width: 2.7rem; height: 2.7rem; }
+  .brand-mark small { display: none; }
+  .hero-promises { display: grid; }
+  .step-card__header { grid-template-columns: 1fr; padding-block: 1.15rem; }
+  .step-card__number { display: none; }
+  .step-footer .button { min-width: 5.2rem; padding-inline: .85rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wizard__header, .step-card { animation: none; }
+  .progress__bar span, .progress__steps button, .progress__steps button span, .choice-row button, .chip-grid button, .chip-grid__check, .preset-grid button, .option-card, .module-card, .plan-card, .button, .company-completion li, .company-completion li::before, input, textarea, select { transition: none; transform: none; }
+}
+@keyframes cover-reveal { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes paper-arrive { from { opacity: 0; transform: translateY(14px) scale(.992); } to { opacity: 1; transform: translateY(0) scale(1); } }
 </style>

@@ -51,7 +51,7 @@ onMounted(loadCustomerSite)
         <h1 id="managed-site-title">你的 Managed Site</h1>
         <p class="lede">這裡只顯示你所屬網站專案的內容、版本、素材與訂閱狀態。平台原始碼與其他客戶資料不在此入口提供。</p>
       </div>
-      <button v-if="projection" type="button" class="button" @click="exportData">匯出我的資料</button>
+      <button v-if="projection?.capabilities.customerDataExport" type="button" class="button" @click="exportData">匯出我的資料</button>
       <NuxtLink v-if="projection && ['owner', 'administrator', 'editor'].includes(projection.membership.role)" class="button button--editor" to="/customer/managed-sites/editor">開啟網站編輯器</NuxtLink>
     </header>
 
@@ -61,8 +61,10 @@ onMounted(loadCustomerSite)
       <article class="card card--wide">
         <p class="card__label">PROJECT</p>
         <h2>{{ projection.project.canonicalClientIdentity }}</h2>
+        <p v-if="projection.launch?.attention" class="state state--error" role="alert">{{ projection.launch.attention }}</p>
+        <p v-else-if="projection.launch?.order?.status === 'payment_verified' && !projection.launch?.release?.liveUrl" class="muted">正在自動完成網域與網站上線。網域及 HTTPS 生效需要一些時間，請稍後重新整理查看進度。</p>
         <dl>
-          <div><dt>網站</dt><dd>{{ projection.project.canonicalWebsiteIdentity }}</dd></div>
+          <div><dt>網站</dt><dd><a v-if="projection.launch?.release?.liveUrl" :href="projection.launch.release.liveUrl" rel="noopener noreferrer">查看已上線網站</a><span v-else>{{ projection.project.canonicalWebsiteIdentity }}</span></dd></div>
           <div><dt>類型</dt><dd>{{ projection.project.siteType }}</dd></div>
           <div><dt>狀態</dt><dd>{{ projection.project.status }}</dd></div>
           <div><dt>我的角色</dt><dd>{{ projection.membership.role }}</dd></div>

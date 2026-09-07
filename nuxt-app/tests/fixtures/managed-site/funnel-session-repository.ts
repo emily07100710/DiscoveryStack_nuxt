@@ -1,7 +1,11 @@
 import type { ManagedSiteFunnelSession } from '../../../server/database/schema'
-import type { FunnelSessionRepository } from '../../../server/managed-sites/funnel/session-repository'
+import { MANAGED_SITE_FUNNEL_BUILD_RESERVATION_ACTION, type FunnelFulfilmentCandidate, type FunnelSessionRepository } from '../../../server/managed-sites/funnel/session-repository'
 
-export function createFunnelSessionMemoryRepository() {
+export function createFunnelSessionMemoryRepository(options?: {
+  projects?: () => ReadonlyArray<{ id: number; ownerUserId: number; createdAt: Date }>
+  audits?: () => ReadonlyArray<{ projectId: number; ownerUserId: number; action: string; occurredAt: Date }>
+  fulfilmentCandidates?: () => ReadonlyArray<FunnelFulfilmentCandidate>
+}) {
   const state: { sessions: ManagedSiteFunnelSession[]; nextId: number } = { sessions: [], nextId: 1 }
   const repository: FunnelSessionRepository = {
     async findSession(sessionId) {
@@ -27,6 +31,12 @@ export function createFunnelSessionMemoryRepository() {
       if (!session) return null
       Object.assign(session, structuredClone(patch), { updatedAt: new Date() })
       return session
+    },
+    async countBuildReservationsSince(since) {
+      return (options?.projects?.() ?? []).filter(row => row.createdAt.getTime() >= since.getTime() || (options?.audits?.() ?? []).some(event => event.projectId === row.id && event.ownerUserId === row.ownerUserId && event.action === MANAGED_SITE_FUNNEL_BUILD_RESERVATION_ACTION && event.occurredAt.getTime() >= since.getTime())).length
+    },
+    async listPaidBuildsForFulfilment(afterId, limit) {
+      return [...(options?.fulfilmentCandidates?.() ?? [])].filter(row => row.id > afterId).sort((left, right) => left.id - right.id).slice(0, Math.min(Math.max(limit, 1), 50))
     },
   }
   return { repository, state }

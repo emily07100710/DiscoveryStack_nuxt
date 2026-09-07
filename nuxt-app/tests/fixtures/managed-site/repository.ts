@@ -113,7 +113,7 @@ export function createManagedSiteMemoryRepository() {
     async insertAsset(input) { return create(state.assets, input as Omit<ManagedSiteAsset, 'id'>) },
     async listAssets(ownerUserId, projectId) { return dateDesc(state.assets.filter(row => row.ownerUserId === ownerUserId && row.projectId === projectId)) },
     async findAuditEventByFingerprint(ownerUserId, fingerprint) { return state.audits.find(row => row.ownerUserId === ownerUserId && row.eventFingerprint === fingerprint) || null },
-    async insertAuditEvent(input) { return state.audits.find(row => row.ownerUserId === input.ownerUserId && row.eventFingerprint === input.eventFingerprint) || create(state.audits, { ...input, occurredAt: new Date() } as Omit<ManagedSiteAuditEvent, 'id'>) },
+    async insertAuditEvent(input) { return state.audits.find(row => row.ownerUserId === input.ownerUserId && row.eventFingerprint === input.eventFingerprint) || create(state.audits, { ...input, occurredAt: input.occurredAt || new Date() } as Omit<ManagedSiteAuditEvent, 'id'>) },
     async listAuditEvents(ownerUserId, projectId) { return [...state.audits.filter(row => row.ownerUserId === ownerUserId && row.projectId === projectId)].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime()) },
     async findSubscription(ownerUserId, projectId) { return state.subscriptions.find(row => row.ownerUserId === ownerUserId && row.projectId === projectId) || null },
     async insertSubscription(input) { return create(state.subscriptions, input as Omit<ManagedSiteSubscription, 'id'>) },

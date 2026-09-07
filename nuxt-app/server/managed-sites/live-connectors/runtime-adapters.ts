@@ -6,6 +6,7 @@ import { createInternalDnsTlsBrokerHmacV1Adapter, createInternalDomainBrokerHmac
 import { createStripeCheckoutSessionAdapter } from './stripe-adapters'
 import { createPorkbunDomainAdapter } from './porkbun-adapters'
 import type { ManagedSiteCheckoutSessionAdapter, ManagedSiteDomainAdapter, ManagedSiteLiveConnectorRepository } from './types'
+import { assertFunnelStripeVerifiedCredentialMode, guardedManagedSiteCredentialResolver } from '../funnel/stripe-mode-guard'
 import { resolveManagedSiteBrokerFetchImpl } from './internal-broker/broker-fetch'
 
 export async function managedSiteLiveDeploymentAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) {
@@ -30,7 +31,7 @@ async function verifiedBroker(ownerUserId: number, capability: 'payment' | 'doma
   const transport = configuration?.transportConfiguration && typeof configuration.transportConfiguration === 'object' && !Array.isArray(configuration.transportConfiguration) ? configuration.transportConfiguration as Record<string, unknown> : {}
   if (!configuration || configuration.readinessStatus !== 'verified' || configuration.providerKey !== providerKey || !configuration.credentialReference || typeof transport.endpointOrigin !== 'string') throw createError({ statusCode: 503, statusMessage: `Verified ${providerKey} transport is not configured.` })
   if (configuration.configurationFingerprint !== authority.configurationFingerprint || configuration.providerKey !== authority.providerKey) throw createError({ statusCode: 409, statusMessage: `Provider ${capability} configuration changed during adapter resolution.` })
-  return { endpointOrigin: transport.endpointOrigin, ...(capability === 'payment' && typeof transport.checkoutOrigin === 'string' ? { checkoutOrigin: transport.checkoutOrigin } : {}), ...(capability === 'payment' && typeof transport.returnOrigin === 'string' ? { returnOrigin: transport.returnOrigin } : {}), providerKey, credentialReference: configuration.credentialReference, resolveCredential: resolveManagedSiteCredential, providerAuthorityFingerprint: authority.authorityFingerprint, fetchImpl: resolveManagedSiteBrokerFetchImpl(transport.endpointOrigin) }
+  return { endpointOrigin: transport.endpointOrigin, ...(capability === 'payment' && typeof transport.checkoutOrigin === 'string' ? { checkoutOrigin: transport.checkoutOrigin } : {}), ...(capability === 'payment' && typeof transport.returnOrigin === 'string' ? { returnOrigin: transport.returnOrigin } : {}), providerKey, credentialReference: configuration.credentialReference, resolveCredential: resolveManagedSiteCredential, providerAuthorityFingerprint: authority.authorityFingerprint, capabilityIdentity: authority.capabilityIdentity, fetchImpl: resolveManagedSiteBrokerFetchImpl(transport.endpointOrigin) }
 }
 
 type PaymentCheckoutAdapterFactory = (options: Awaited<ReturnType<typeof verifiedBroker>>) => ManagedSiteCheckoutSessionAdapter
@@ -42,11 +43,20 @@ const PAYMENT_CHECKOUT_ADAPTERS: ReadonlyMap<string, PaymentCheckoutAdapterFacto
   }],
 ])
 
-export async function managedSiteLiveCheckoutAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) {
+export async function managedSiteLiveCheckoutAdapter(ownerUserId: number, repository: ManagedSiteLiveConnectorRepository, options?: { credentialGuard?: (value: string) => void }) {
   const configuration = await repository.findProviderConfiguration(ownerUserId, 'payment')
   const factory = configuration ? PAYMENT_CHECKOUT_ADAPTERS.get(configuration.providerKey) : null
   if (!configuration || !factory) throw createError({ statusCode: 503, statusMessage: 'Verified payment provider adapter is not registered.' })
-  return factory(await verifiedBroker(ownerUserId, 'payment', configuration.providerKey, repository))
+  const broker = await verifiedBroker(ownerUserId, 'payment', configuration.providerKey, repository)
+  if (options?.credentialGuard && configuration.providerKey === 'stripe') {
+    const resolveCredential = guardedManagedSiteCredentialResolver(broker.resolveCredential, value => {
+      options.credentialGuard!(value)
+      assertFunnelStripeVerifiedCredentialMode(value, broker.capabilityIdentity)
+    })
+    await resolveCredential(broker.credentialReference)
+    return factory({ ...broker, resolveCredential })
+  }
+  return factory(broker)
 }
 type DomainAdapterFactory = (options: Awaited<ReturnType<typeof verifiedBroker>>) => ManagedSiteDomainAdapter
 const DOMAIN_ADAPTERS: ReadonlyMap<string, DomainAdapterFactory> = new Map([

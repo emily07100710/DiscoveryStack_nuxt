@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 const page = readFileSync(new URL('../pages/customer/managed-sites/start.vue', import.meta.url), 'utf8')
 const utility = readFileSync(new URL('../utils/managedSiteFunnel.ts', import.meta.url), 'utf8')
+const checkoutSuccess = readFileSync(new URL('../pages/managed-sites/checkout/success.vue', import.meta.url), 'utf8')
 
 describe('managed-site funnel wizard UI contract', () => {
   it('wires the read-to-bottom consent gate into the real controls', () => {
@@ -72,6 +73,13 @@ describe('managed-site funnel wizard UI contract', () => {
 
   it('keeps the page out of search indexes', () => {
     expect(page).toContain("'noindex, nofollow, noarchive'")
+  })
+
+  it('clears the stored funnel token only after a settled payment status', () => {
+    expect(checkoutSuccess.match(/localStorage\.removeItem\(STORAGE_KEY\)/gu)).toHaveLength(1)
+    expect(checkoutSuccess).toContain("['payment_verified', 'refunded', 'disputed'].includes(status.value.order?.status || '')")
+    expect(checkoutSuccess).toContain("status.value.order?.status !== 'payment_verified' || customerAccessReady.value")
+    expect(checkoutSuccess).toContain('stored?.sessionId === session.sessionId && stored.sessionToken === session.sessionToken')
   })
 
   it('preserves a saved token after retryable restore failures but clears expired sessions', () => {

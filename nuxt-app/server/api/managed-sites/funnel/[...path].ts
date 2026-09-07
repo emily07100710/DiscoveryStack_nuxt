@@ -2,6 +2,10 @@ import { getHeader, getMethod, getRequestIP, getRequestURL, readBody, setRespons
 import { resolveControlledOwnerDatabaseUserId } from '../../../audit/repository'
 import { confirmManagedSiteContactInboxBinding, managedSiteContactInboxProjection, startManagedSiteContactInboxBinding } from '../../../managed-sites/contact-inbox/binding-service'
 import { runFunnelBuild, runFunnelCheckout } from '../../../managed-sites/funnel/checkout-orchestrator'
+import { checkAndStoreFunnelDomain, projectFunnelDomainSelection, recordFunnelDomainDelegation } from '../../../managed-sites/funnel/domain-selection'
+import { projectManagedSiteLaunchStatus } from '../../../managed-sites/funnel/launch-status'
+import { claimFunnelCustomerAccess } from '../../../managed-sites/funnel/customer-access'
+import { setManagedSiteSessionCookie } from '../../../managed-sites/auth'
 import { projectFunnelQuote } from '../../../managed-sites/funnel/quote-projection'
 import { generateFunnelPreviewDraft, type FunnelPreviewDraft } from '../../../managed-sites/funnel/preview-draft-service'
 import { getFunnelSessionRepository } from '../../../managed-sites/funnel/session-repository'
@@ -119,13 +123,16 @@ async function strictFunnelBody(event: H3Event, allowedFields: readonly string[]
 }
 
 async function sessionProjection(session: Awaited<ReturnType<typeof loadFunnelSession>>) {
+  const consent = session.consentSnapshot as Record<string, unknown> | null
   return {
     status: session.status,
     currentStep: session.currentStep,
     answers: session.answers,
-    consentSnapshot: session.consentSnapshot,
+    consentSnapshot: consent?.scrolledToBottom === true ? { policyVersion: consent.policyVersion, acceptedAt: consent.acceptedAt, scrolledToBottom: true } : null,
+    ...projectFunnelDomainSelection(consent),
     previewUrl: session.builtPreviewUrl,
-    checkoutUrl: session.checkoutUrl,
+    // Only POST /checkout may hand off a URL after checking current funnel payment policy.
+    checkoutUrl: null,
     consentVersion: MANAGED_SITE_FUNNEL_CONSENT_VERSION,
     expiresAt: session.expiresAt,
     totalSteps: MANAGED_SITE_FUNNEL_TOTAL_STEPS,
@@ -176,6 +183,21 @@ export default defineEventHandler(async event => {
     assertSameOriginManagedSiteMutation(event); checkRateLimit(event, sessionId)
     const body = await strictFunnelBody(event, ['policyVersion', 'scrolledToBottom'])
     const session = await recordFunnelConsent(sessionId, sessionToken, { policyVersion: String(body.policyVersion || ''), scrolledToBottom: body.scrolledToBottom as true }, repository)
+    return await sessionProjection(session)
+  }
+
+  if (segments.length === 3 && segments[2] === 'domain-availability') {
+    if (method !== 'POST') throw createError({ statusCode: 405, statusMessage: 'Managed-site funnel route method is not allowed.' })
+    assertSameOriginManagedSiteMutation(event); checkRateLimit(event, sessionId)
+    const body = await strictFunnelBody(event, ['name', 'tld'])
+    return checkAndStoreFunnelDomain(await resolvePlatformOwnerUserId(), sessionId, sessionToken, { name: body.name, tld: body.tld }, { repository })
+  }
+
+  if (segments.length === 3 && segments[2] === 'domain-delegation') {
+    if (method !== 'POST') throw createError({ statusCode: 405, statusMessage: 'Managed-site funnel route method is not allowed.' })
+    assertSameOriginManagedSiteMutation(event); checkRateLimit(event, sessionId)
+    const body = await strictFunnelBody(event, ['delegated', 'registrant', 'quoteFingerprint', 'termsVersion'])
+    const session = await recordFunnelDomainDelegation(sessionId, sessionToken, { delegated: body.delegated, registrant: body.registrant, quoteFingerprint: body.quoteFingerprint, termsVersion: body.termsVersion }, repository)
     return await sessionProjection(session)
   }
 
@@ -267,21 +289,27 @@ export default defineEventHandler(async event => {
   if (segments.length === 3 && segments[2] === 'status') {
     if (method !== 'GET') throw createError({ statusCode: 405, statusMessage: 'Managed-site funnel route method is not allowed.' })
     const session = authenticatedSession
-    if (!session.draftOrderId && !session.releaseId) return { status: session.status, order: null, release: null, fulfilments: [], checkoutUrl: session.checkoutUrl }
+    if (!session.draftOrderId && !session.releaseId) return { status: session.status, order: null, release: null, fulfilments: [], checkoutUrl: null }
     const ownerUserId = await resolvePlatformOwnerUserId()
     const ordering = getPreviewRepository()
-    const [order, release, fulfilments] = await Promise.all([
+    const [order, release] = await Promise.all([
       session.draftOrderId ? ordering.findDraftOrderById(session.draftOrderId) : null,
       session.releaseId ? getManagedSiteLiveConnectorRepository().findRelease(ownerUserId, session.releaseId) : null,
-      session.draftOrderId ? ordering.listModuleFulfilmentsByDraftOrder(ownerUserId, session.draftOrderId) : [],
     ])
-    return {
-      status: session.status,
-      order: order && order.ownerUserId === ownerUserId ? { status: order.status } : null,
-      release: release ? { status: release.status, previewUrl: release.previewUrl } : null,
-      fulfilments: order && order.ownerUserId === ownerUserId ? fulfilments.map(row => ({ draftOrderId: row.draftOrderId, moduleKey: row.moduleKey, mode: row.mode, status: row.status, billedMinor: row.billedMinor, customerVisibleStatus: row.customerVisibleStatus, ownerActionRequired: row.ownerActionRequired })) : [],
-      checkoutUrl: session.checkoutUrl,
+    if (release) {
+      const launch = await projectManagedSiteLaunchStatus(ownerUserId, release, getManagedSiteLiveConnectorRepository(), ordering)
+      if (launch) return { ...launch, status: session.status }
     }
+    return { status: session.status, order: order && order.ownerUserId === ownerUserId && order.id === session.draftOrderId && order.projectId === session.projectId ? { status: order.status } : null, release: null, fulfilments: [], checkoutUrl: null }
+  }
+
+  if (segments.length === 3 && segments[2] === 'customer-access') {
+    if (method !== 'POST') throw createError({ statusCode: 405, statusMessage: 'Managed-site funnel route method is not allowed.' })
+    assertSameOriginManagedSiteMutation(event); checkRateLimit(event, sessionId)
+    await strictFunnelBody(event, [])
+    const result = await claimFunnelCustomerAccess(await resolvePlatformOwnerUserId(), sessionId, sessionToken, { funnelRepository: repository })
+    setManagedSiteSessionCookie(event, result.sessionToken)
+    return { granted: true, projectId: result.projectId, expiresAt: result.session.expiresAt }
   }
 
   throw createError({ statusCode: 404, statusMessage: 'Managed-site funnel route was not found.' })

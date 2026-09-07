@@ -266,9 +266,10 @@ export type ManagedSiteDnsTlsReceipt = {
   exactResponseIdentity: string
 }
 
+export type ManagedSiteCustomerDomainPurchaseAuthority = { kind: 'customer_domain_delegation_v1'; fingerprint: string; registrant: import('./porkbun-adapters').PorkbunRegistrantContact }
 export type ManagedSiteDomainAdapter = {
-  quote(input: { ownerUserId: number; projectId: number; releaseId: number; canonicalDomain: string; providerAuthority: ManagedSiteProviderAuthoritySnapshot; requestFingerprint: string; timeoutMs: number }): Promise<ManagedSiteDomainQuote>
-  createPurchaseIntent(input: { ownerUserId: number; projectId: number; releaseId: number; draftOrderId: number; commerceSnapshotFingerprint: string; quote: ManagedSiteDomainQuote; providerAuthority: ManagedSiteProviderAuthoritySnapshot; ownerConfirmationFingerprint: string; paymentReceiptFingerprint: string; idempotencyKey: string; timeoutMs: number }): Promise<ManagedSiteDomainReceipt>
+  quote(input: { ownerUserId: number; projectId: number; releaseId: number; canonicalDomain: string; providerAuthority: ManagedSiteProviderAuthoritySnapshot; requestFingerprint: string; timeoutMs: number; requireAutomaticEligibility?: boolean }): Promise<ManagedSiteDomainQuote>
+  createPurchaseIntent(input: { ownerUserId: number; projectId: number; releaseId: number; draftOrderId: number; commerceSnapshotFingerprint: string; quote: ManagedSiteDomainQuote; providerAuthority: ManagedSiteProviderAuthoritySnapshot; ownerConfirmationFingerprint: string; paymentReceiptFingerprint: string; idempotencyKey: string; timeoutMs: number; purchaseAuthority?: ManagedSiteCustomerDomainPurchaseAuthority; beforeMutation?: () => Promise<void>; reconcileOnly?: boolean; onRegistrationCreated?: (receipt: ManagedSiteDomainReceipt) => Promise<void>; registrationReceipt?: ManagedSiteDomainReceipt }): Promise<ManagedSiteDomainReceipt>
 }
 
 export type ManagedSiteDnsTlsAdapter = {

@@ -17,9 +17,11 @@ import { createS3ManagedSiteArtifactVault } from '../live-connectors/s3-vault'
 import { createManagedSiteCheckoutSession } from '../live-connectors/checkout-session'
 import type { ManagedSiteCheckoutSessionAdapter, ManagedSiteDeploymentAdapter, ManagedSiteGenerationAdapter, ManagedSiteLiveConnectorRepository } from '../live-connectors/types'
 import { tokenHash } from '../normalization'
-import { getFunnelSessionRepository, type FunnelSessionRepository } from './session-repository'
+import { getFunnelSessionRepository, MANAGED_SITE_FUNNEL_BUILD_RESERVATION_ACTION, type FunnelSessionRepository } from './session-repository'
+import { assertFunnelStripeCheckoutMode, assertFunnelStripeCredentialMode } from './stripe-mode-guard'
 import { loadFunnelSession, type FunnelAnswers, type FunnelConsentSnapshot } from './session-service'
 import { funnelCatalogQuoteInput, funnelPreviewInput, projectFunnelQuote } from './quote-projection'
+import { assertFunnelDomainReadyForCheckout } from './domain-registration'
 
 export type ManagedSiteFunnelOrchestratorDependencies = {
   funnelRepository?: FunnelSessionRepository
@@ -38,6 +40,30 @@ export type ManagedSiteFunnelOrchestratorDependencies = {
 
 export const MANAGED_SITE_FUNNEL_BUILD_STALE_MS = 30 * 60_000
 export const MANAGED_SITE_FUNNEL_CHECKOUT_SESSION_TTL_MS = 24 * 60 * 60_000
+export const MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT = 20
+export const MANAGED_SITE_FUNNEL_DAILY_BUILD_WINDOW_MS = 24 * 60 * 60_000
+export const MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE = '今日的網站建置名額已滿，請明天再試。'
+
+export function managedSiteFunnelDailyBuildLimit(raw = process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT): number {
+  if (raw === undefined || raw === '') return MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT
+  if (typeof raw !== 'string' || !/^\d+$/u.test(raw)) {
+    console.warn('[managed-site-funnel] ignoring invalid MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT; using the default', { limit: MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT })
+    return MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT
+  }
+  const parsed = Number(raw)
+  if (Number.isSafeInteger(parsed)) return parsed
+  console.warn('[managed-site-funnel] ignoring invalid MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT; using the default', { limit: MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT })
+  return MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT
+}
+
+function dailyCapReached(stage: 'before_reservation' | 'after_reservation', count: number, limit: number): never {
+  console.warn('[managed-site-funnel] daily build cap reached', { stage, count, limit })
+  throw createError({ statusCode: 429, statusMessage: MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE })
+}
+
+function isDailyCapError(error: unknown): boolean {
+  return (error as any)?.statusCode === 429 && (error as any)?.statusMessage === MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE
+}
 
 function conflict(message: string): never {
   throw createError({ statusCode: 409, statusMessage: message })
@@ -140,8 +166,17 @@ export async function runFunnelBuild(sessionId: number, sessionToken: string, de
   }
   assertBuildAnswers(answers)
   if (!consentFor(session)) conflict('Consent is required before building the website.')
+  const admissionNow = clock()
+  if (session.status === 'building' && !isStaleBuild(session, admissionNow)) conflict('網站正在建置中，請稍候再試。')
+  const since = new Date(admissionNow.getTime() - MANAGED_SITE_FUNNEL_DAILY_BUILD_WINDOW_MS)
+  const limit = managedSiteFunnelDailyBuildLimit()
+  if (!session.releaseId && !session.projectId) {
+    const count = await funnelRepository.countBuildReservationsSince(since)
+    if (count >= limit) dailyCapReached('before_reservation', count, limit)
+  }
   const ownerUserId = await platformOwnerUserId(dependencies)
   const executionMode = dependencies.executionMode || 'live'
+  if (executionMode === 'live' && answers.domain?.option === 'new') await assertFunnelDomainReadyForCheckout(ownerUserId, session, { repository: live, clock })
   let generationAdapter: ManagedSiteGenerationAdapter | undefined
   let artifactVault: ManagedSiteArtifactVault | undefined
   let deploymentAdapter: ManagedSiteDeploymentAdapter | undefined
@@ -192,6 +227,19 @@ export async function runFunnelBuild(sessionId: number, sessionToken: string, de
       : getManagedSitePrePurchaseRepositories()
     const prePurchase = await convertClaimedManagedSitePrePurchase(ownerUserId, { previewId: preview.preview.id, quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, draftOrderId: order.order.id, idempotencyKey: key(session.id, 'prepurchase') }, prePurchaseRepositories, clock)
     await funnelRepository.updateSession(session.id, { projectId: prePurchase.project.id })
+    // Persist aged retry occupancy before rechecking so concurrent and later requests see it too.
+    // The existing append-only audit ledger avoids rewriting project creation time or session consent.
+    if (new Date(prePurchase.project.createdAt).getTime() < since.getTime()) {
+      const reservation = {
+        ownerUserId, projectId: prePurchase.project.id, actorUserId: null, authority: 'funnel_build',
+        action: MANAGED_SITE_FUNNEL_BUILD_RESERVATION_ACTION, beforeFingerprint: null, afterFingerprint: null,
+        eventFingerprint: stableFingerprint({ scope: MANAGED_SITE_FUNNEL_BUILD_RESERVATION_ACTION, sessionId: session.id, projectId: prePurchase.project.id, reservedAt: admissionNow.toISOString() }),
+        metadata: { sessionId: session.id }, occurredAt: admissionNow,
+      }
+      await managed.insertAuditEvent(reservation)
+    }
+    const occupied = await funnelRepository.countBuildReservationsSince(since)
+    if (occupied > limit) dailyCapReached('after_reservation', occupied, limit)
     const generation = await generateManagedSiteCandidate(ownerUserId, { projectId: prePurchase.project.id, sourceVersionId: prePurchase.version.id, templateIntent: 'astro', executionMode, idempotencyKey: key(session.id, 'generation') }, { adapter: generationAdapter, vault: artifactVault, repository: live, managedRepository: managed, clock })
     if (!generation.candidate) conflict('Website generation did not produce a governed candidate.')
     const release = await createGeneratedManagedSiteRelease(ownerUserId, { projectId: prePurchase.project.id, generationCandidateId: generation.candidate.id, canonicalDomain: domain, targetKey: 'production-primary', idempotencyKey: key(session.id, 'release') }, { repository: live, managedRepository: managed })
@@ -204,6 +252,7 @@ export async function runFunnelBuild(sessionId: number, sessionToken: string, de
     return { previewUrl, releaseId: release.release.id, quote: projectFunnelQuote(answers, session.id) }
   } catch (error) {
     await restoreRetryableBuild(session.id, funnelRepository)
+    if (isDailyCapError(error)) throw error
     providerError(error)
   }
 }
@@ -214,6 +263,7 @@ export async function runFunnelCheckout(sessionId: number, sessionToken: string,
   const ordering = dependencies.orderingRepository || getPreviewRepository()
   const live = dependencies.connectorRepository || getManagedSiteLiveConnectorRepository()
   const session = await loadFunnelSession(sessionId, sessionToken, funnelRepository, clock)
+  const executionMode = dependencies.executionMode || 'live'
   if (!consentFor(session)) conflict('Consent is required before checkout can start.')
   if (session.status !== 'checkout_pending' || !session.releaseId || !session.builtPreviewUrl || !session.draftOrderId || !session.previewId || !session.previewAccessTokenHash) conflict('A verified built preview is required before checkout can start.')
   const order = await ordering.findDraftOrderById(session.draftOrderId)
@@ -224,6 +274,7 @@ export async function runFunnelCheckout(sessionId: number, sessionToken: string,
   if (!preview || preview.accessTokenHash !== session.previewAccessTokenHash) conflict('The funnel preview authority no longer matches the built release.')
   const ownerUserId = await platformOwnerUserId(dependencies)
   if (order.ownerUserId !== ownerUserId) conflict('付款資料暫時無法讀取，請稍後再試。')
+  if (executionMode === 'live' && (session.answers as FunnelAnswers).domain?.option === 'new') await assertFunnelDomainReadyForCheckout(ownerUserId, session, { repository: live, clock })
   const receipts = await live.listReceiptsByDraftOrder(ownerUserId, order.id)
   if (receipts.some(receipt => receipt.receiptType === 'checkout_succeeded' && receipt.receiptStatus === 'verified')) conflict('這筆訂單已完成付款，無需再次結帳。')
   const checkoutReceipts = receipts
@@ -233,11 +284,11 @@ export async function runFunnelCheckout(sessionId: number, sessionToken: string,
   const latestUrl = latestCheckout ? String((latestCheckout.metadata as any).checkoutUrl) : null
   const staleStripeCheckout = latestCheckout?.providerKey === 'stripe' && latestCheckout.verifiedAt.getTime() + MANAGED_SITE_FUNNEL_CHECKOUT_SESSION_TTL_MS <= clock().getTime()
   if (latestCheckout && latestUrl && !staleStripeCheckout) {
+    if (executionMode === 'live') assertFunnelStripeCheckoutMode(latestCheckout)
     if (session.checkoutUrl !== latestUrl) await funnelRepository.updateSession(session.id, { checkoutUrl: latestUrl })
     return { checkoutUrl: latestUrl }
   }
-  const executionMode = dependencies.executionMode || 'live'
-  const checkoutAdapter = dependencies.checkoutAdapter || (executionMode === 'live' ? await managedSiteLiveCheckoutAdapter(ownerUserId, live) : undefined)
+  const checkoutAdapter = dependencies.checkoutAdapter || (executionMode === 'live' ? await managedSiteLiveCheckoutAdapter(ownerUserId, live, { credentialGuard: assertFunnelStripeCredentialMode }) : undefined)
   if (!checkoutAdapter) throw createError({ statusCode: 503, statusMessage: 'Managed-site checkout provider is not configured.' })
   let release = await live.findRelease(ownerUserId, session.releaseId)
   if (!release) conflict('付款資料暫時無法讀取，請稍後再試。')
@@ -276,6 +327,7 @@ export async function runFunnelCheckout(sessionId: number, sessionToken: string,
     conflict('付款資料不完整，請稍後再試。')
   }
   const checkout = await createManagedSiteCheckoutSession(ownerUserId, { releaseId: release.id, draftOrderId: session.draftOrderId, executionMode, idempotencyKey: checkoutKey }, checkoutAdapter, { connectorRepository: live, orderingRepository: ordering, clock })
+  if (executionMode === 'live') assertFunnelStripeCheckoutMode(checkout.receipt)
   const checkoutUrl = checkout.checkout.url
   const updated = await funnelRepository.updateSession(session.id, { checkoutUrl })
   if (!updated) conflict('The checkout session URL could not be recorded.')

@@ -8,8 +8,9 @@ type Fulfilment = { moduleKey: string; status: string; customerVisibleStatus: st
 type CheckoutStatus = {
   status: string
   order: null | { status: string }
-  release: null | { status: string; previewUrl: string | null }
+  release: null | { status: string; previewUrl: string | null; liveUrl?: string | null }
   fulfilments: Fulfilment[]
+  attention?: string | null
   checkoutUrl: string | null
 }
 
@@ -18,6 +19,10 @@ const status = ref<CheckoutStatus | null>(null)
 const available = ref(false)
 const checking = ref(false)
 const timedOut = ref(false)
+const customerAccessReady = ref(false)
+const customerAccessError = ref('')
+const claimingAccess = ref(false)
+let activeSession: FunnelStorage | null = null
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let attempts = 0
 
@@ -35,7 +40,7 @@ const orderStatusText = computed(() => {
 const releaseStatusText = computed(() => {
   const value = status.value?.release?.status
   if (value === 'live_verified' || value === 'geo_active' || value === 'active') return '網站已上線'
-  if (value === 'payment_verified') return '付款已確認，準備建置中'
+  if (value === 'payment_verified') return '付款已確認，正在準備網域與網站'
   if (value === 'provisioning' || value === 'deployment_pending' || value === 'health_checking') return '網站建置中'
   if (value === 'failed' || value === 'blocked') return '網站建置需要進一步確認'
   return value ? '網站建置處理中' : '尚未開始建置'
@@ -43,6 +48,7 @@ const releaseStatusText = computed(() => {
 
 function shouldPoll(): boolean {
   return ['payment_pending', 'pending', 'unpaid'].includes(status.value?.order?.status || '')
+    || status.value?.order?.status === 'payment_verified' && ['payment_verified', 'provisioning', 'deployment_pending', 'retry_wait'].includes(status.value?.release?.status || '')
 }
 
 function stopPolling() {
@@ -71,6 +77,9 @@ async function loadStatus(session: FunnelStorage): Promise<void> {
     })
     status.value = result
     available.value = true
+    activeSession = session
+    if (result.order?.status === 'payment_verified' && !customerAccessReady.value) await claimCustomerAccess()
+    clearSettledFunnelToken(session)
     if (!shouldPoll()) stopPolling()
   } catch {
     available.value = false
@@ -80,9 +89,42 @@ async function loadStatus(session: FunnelStorage): Promise<void> {
   }
 }
 
+function clearSettledFunnelToken(session: FunnelStorage) {
+  if (!status.value) return
+  if (['payment_verified', 'refunded', 'disputed'].includes(status.value.order?.status || '') && (status.value.order?.status !== 'payment_verified' || customerAccessReady.value)) {
+      try {
+        const stored = storedSession()
+        if (stored?.sessionId === session.sessionId && stored.sessionToken === session.sessionToken) {
+          localStorage.removeItem(STORAGE_KEY)
+        }
+      } catch {
+        // Browser storage may be unavailable even though the status response is valid.
+      }
+    }
+}
+
+async function claimCustomerAccess(): Promise<void> {
+  if (!activeSession || claimingAccess.value || status.value?.order?.status !== 'payment_verified') return
+  claimingAccess.value = true
+  customerAccessError.value = ''
+  try {
+    const result = await $fetch<{ granted: boolean }>(`/api/managed-sites/funnel/sessions/${activeSession.sessionId}/customer-access`, {
+      method: 'POST', credentials: 'same-origin', body: {},
+      headers: { 'x-managed-site-funnel-token': activeSession.sessionToken },
+    })
+    customerAccessReady.value = result.granted === true
+    if (!customerAccessReady.value) throw new Error('access unavailable')
+    clearSettledFunnelToken(activeSession)
+  } catch {
+    customerAccessError.value = '付款已確認，但管理入口暫時無法開啟。請在此頁重試或聯絡客服。'
+  } finally {
+    claimingAccess.value = false
+  }
+}
+
 async function pollStatus(session: FunnelStorage): Promise<void> {
   if (checking.value) return
-  if (attempts >= 20) {
+  if (attempts >= (status.value?.order?.status === 'payment_verified' ? 120 : 20)) {
     timedOut.value = true
     stopPolling()
     return
@@ -91,9 +133,28 @@ async function pollStatus(session: FunnelStorage): Promise<void> {
   await loadStatus(session)
 }
 
+async function pollCustomerStatus(): Promise<void> {
+  if (checking.value) return
+  if (attempts >= 120) { timedOut.value = true; stopPolling(); return }
+  attempts += 1
+  checking.value = true
+  try {
+    const result = await $fetch<{ launch: CheckoutStatus | null }>('/api/managed-sites/customer/session', { credentials: 'same-origin' })
+    customerAccessReady.value = true
+    if (result.launch) { status.value = result.launch; available.value = true }
+    if (!shouldPoll()) stopPolling()
+  } catch { stopPolling() } finally { checking.value = false }
+}
+
 onMounted(() => {
   const session = storedSession()
-  if (!session) return
+  if (!session) {
+    void (async () => {
+      await pollCustomerStatus()
+      if (shouldPoll()) pollTimer = setInterval(() => { void pollCustomerStatus() }, 3_000)
+    })()
+    return
+  }
   void (async () => {
     await pollStatus(session)
     if (!shouldPoll()) return
@@ -111,7 +172,7 @@ onUnmounted(stopPolling)
   <main class="checkout" aria-labelledby="checkout-title">
     <section class="card">
       <p class="eyebrow">網站訂購流程</p>
-      <h1 id="checkout-title">付款完成</h1>
+      <h1 id="checkout-title">{{ status?.order?.status === 'payment_verified' ? '已確認付款' : '付款與建站進度' }}</h1>
 
       <template v-if="available && status">
         <p class="lede">我們已收到你從付款頁面返回的訊息，以下是目前由系統確認到的進度。</p>
@@ -119,7 +180,9 @@ onUnmounted(stopPolling)
           <div><dt>訂單狀態</dt><dd>{{ orderStatusText }}</dd></div>
           <div><dt>建置狀態</dt><dd>{{ releaseStatusText }}</dd></div>
         </dl>
-        <p v-if="status.release?.previewUrl" class="preview"><a :href="status.release.previewUrl" rel="noopener noreferrer">{{ status.release.previewUrl }}</a></p>
+        <p v-if="status.attention" class="notice" role="alert">{{ status.attention }}</p>
+        <p v-if="status.release?.liveUrl" class="preview"><a :href="status.release.liveUrl" rel="noopener noreferrer">查看已上線網站</a></p>
+        <p v-else-if="status.release?.previewUrl" class="preview"><a :href="status.release.previewUrl" rel="noopener noreferrer">查看網站預覽</a></p>
 
         <section v-if="status.fulfilments.length" class="fulfilments" aria-labelledby="fulfilments-title">
           <h2 id="fulfilments-title">功能開通進度</h2>
@@ -130,10 +193,12 @@ onUnmounted(stopPolling)
             </li>
           </ul>
         </section>
-        <p v-if="timedOut" class="notice">款項確認中，我們會用 email 通知你</p>
+        <p v-if="timedOut" class="notice">系統仍在確認進度，請稍後至管理入口查看；若尚未開通入口，請聯絡客服。</p>
       </template>
 
-      <p v-else class="lede">付款完成，我們會用 email 與你聯絡後續進度</p>
+      <p v-else class="lede">此頁尚未取得付款結果。若你已開通管理入口，可在下方查看網站狀態。</p>
+      <p v-if="customerAccessError" class="notice" role="alert">{{ customerAccessError }} <button type="button" :disabled="claimingAccess" @click="claimCustomerAccess">重試開通入口</button></p>
+      <NuxtLink v-if="customerAccessReady" class="button" to="/customer/managed-sites">管理我的網站</NuxtLink>
       <NuxtLink class="button" to="/customer/managed-sites/start">回到網站訂購流程</NuxtLink>
     </section>
   </main>

@@ -1,7 +1,10 @@
-import { and, eq } from 'drizzle-orm'
+import { and, asc, eq, gt, gte, inArray, isNotNull, or, sql } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDatabase } from '../../database'
-import { managedSiteFunnelSessions, type ManagedSiteFunnelSession } from '../../database/schema'
+import { managedSiteAuditEvents, managedSiteDomainClaims, managedSiteDraftOrders, managedSiteFunnelSessions, managedSiteProjects, managedSiteReleaseProjections, type ManagedSiteFunnelSession } from '../../database/schema'
+
+export const MANAGED_SITE_FUNNEL_BUILD_RESERVATION_ACTION = 'funnel_build_quota_reserved'
+export type FunnelFulfilmentCandidate = Pick<ManagedSiteFunnelSession, 'id' | 'projectId' | 'releaseId' | 'draftOrderId' | 'previewId' | 'quoteId'> & { ownerUserId: number }
 
 export type FunnelSessionRepository = {
   findSession(sessionId: number): Promise<ManagedSiteFunnelSession | null>
@@ -9,6 +12,8 @@ export type FunnelSessionRepository = {
   insertSession(input: Omit<ManagedSiteFunnelSession, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteFunnelSession>
   updateSession(sessionId: number, patch: Partial<Omit<ManagedSiteFunnelSession, 'id' | 'sessionTokenHash' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteFunnelSession | null>
   transitionSession(sessionId: number, expectedStatus: ManagedSiteFunnelSession['status'], patch: Partial<Omit<ManagedSiteFunnelSession, 'id' | 'sessionTokenHash' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteFunnelSession | null>
+  countBuildReservationsSince(since: Date): Promise<number>
+  listPaidBuildsForFulfilment(afterId: number, limit: number): Promise<FunnelFulfilmentCandidate[]>
 }
 
 function requireDatabase() {
@@ -47,6 +52,26 @@ export function makeFunnelSessionRepository(database: any): FunnelSessionReposit
       const result = await database.update(managedSiteFunnelSessions).set(patch as any).where(and(eq(managedSiteFunnelSessions.id, sessionId), eq(managedSiteFunnelSessions.status, expectedStatus)))
       const affectedRows = Number((result as any)?.[0]?.affectedRows ?? (result as any)?.affectedRows ?? 0)
       return affectedRows === 1 ? repository.findSession(sessionId) : null
+    },
+    async countBuildReservationsSince(since) {
+      // EXISTS counts a project once even when it has several retry reservations.
+      const renewedReservation = sql`exists (select 1 from ${managedSiteAuditEvents} where ${managedSiteAuditEvents.projectId} = ${managedSiteProjects.id} and ${managedSiteAuditEvents.ownerUserId} = ${managedSiteProjects.ownerUserId} and ${managedSiteAuditEvents.action} = ${MANAGED_SITE_FUNNEL_BUILD_RESERVATION_ACTION} and ${gte(managedSiteAuditEvents.occurredAt, since)})`
+      const [row] = await database.select({ count: sql<number>`count(*)` }).from(managedSiteProjects).where(or(gte(managedSiteProjects.createdAt, since), renewedReservation))
+      const count = Number(row?.count)
+      if (!Number.isSafeInteger(count) || count < 0) throw createError({ statusCode: 503, statusMessage: 'Managed site funnel is temporarily unavailable.' })
+      return count
+    },
+    async listPaidBuildsForFulfilment(afterId, requestedLimit) {
+      if (!Number.isSafeInteger(afterId) || afterId < 0) throw createError({ statusCode: 422, statusMessage: 'Funnel fulfilment cursor is invalid.' })
+      const limit = Math.min(Math.max(Number.isSafeInteger(requestedLimit) ? requestedLimit : 20, 1), 50)
+      // No token/answer projection, and paid obligations remain eligible after browser-token expiry.
+      return database.select({ id: managedSiteFunnelSessions.id, projectId: managedSiteFunnelSessions.projectId, releaseId: managedSiteFunnelSessions.releaseId, draftOrderId: managedSiteFunnelSessions.draftOrderId, previewId: managedSiteFunnelSessions.previewId, quoteId: managedSiteFunnelSessions.quoteId, ownerUserId: managedSiteDraftOrders.ownerUserId })
+        .from(managedSiteFunnelSessions)
+        .innerJoin(managedSiteDraftOrders, and(eq(managedSiteDraftOrders.id, managedSiteFunnelSessions.draftOrderId), eq(managedSiteDraftOrders.projectId, managedSiteFunnelSessions.projectId), eq(managedSiteDraftOrders.previewId, managedSiteFunnelSessions.previewId), eq(managedSiteDraftOrders.quoteId, managedSiteFunnelSessions.quoteId)))
+        .innerJoin(managedSiteReleaseProjections, and(eq(managedSiteReleaseProjections.id, managedSiteFunnelSessions.releaseId), eq(managedSiteReleaseProjections.ownerUserId, managedSiteDraftOrders.ownerUserId), eq(managedSiteReleaseProjections.projectId, managedSiteFunnelSessions.projectId), eq(managedSiteReleaseProjections.draftOrderId, managedSiteDraftOrders.id)))
+        .leftJoin(managedSiteDomainClaims, and(eq(managedSiteDomainClaims.releaseId, managedSiteReleaseProjections.id), eq(managedSiteDomainClaims.ownerUserId, managedSiteDraftOrders.ownerUserId), eq(managedSiteDomainClaims.projectId, managedSiteFunnelSessions.projectId), eq(managedSiteDomainClaims.canonicalDomain, managedSiteReleaseProjections.canonicalDomain), eq(managedSiteDomainClaims.status, 'verified')))
+        .where(and(gt(managedSiteFunnelSessions.id, afterId), inArray(managedSiteFunnelSessions.status, ['checkout_pending', 'converted']), eq(managedSiteDraftOrders.status, 'payment_verified'), eq(managedSiteReleaseProjections.releaseKind, 'generated_site'), inArray(managedSiteReleaseProjections.status, ['payment_verified', 'provisioning', 'retry_wait', 'deployment_pending']), or(isNotNull(managedSiteDomainClaims.id), sql`(json_unquote(json_extract(${managedSiteFunnelSessions.answers}, '$.domain.option')) = 'new' and json_unquote(json_extract(${managedSiteFunnelSessions.consentSnapshot}, '$.domainRegistration.delegated')) = 'true')`)))
+        .orderBy(asc(managedSiteFunnelSessions.id)).limit(limit)
     },
   }
   return repository

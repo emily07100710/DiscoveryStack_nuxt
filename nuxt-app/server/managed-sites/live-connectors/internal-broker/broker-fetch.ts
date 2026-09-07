@@ -9,10 +9,15 @@ import { getManagedSiteLiveConnectorRepository } from '../repository'
 import { resolveManagedSiteCredential } from '../provider-registry'
 import type { ManagedSiteArtifactVault, ManagedSiteArtifactVaultBundle } from '../generation-service'
 import type { ManagedSiteCredentialResolver, ManagedSiteDeploymentReceipt, ManagedSiteProviderAuthoritySnapshot } from '../types'
-import { deployCloudflarePagesPreview, verifyCloudflarePagesAccess } from './cloudflare-pages'
+import { deployCloudflarePagesPreview, deployCloudflarePagesProduction, verifyCloudflarePagesAccess } from './cloudflare-pages'
+import type { ManagedSiteProductionProbe } from './production-probe'
 import { parseManagedSiteInternalBrokerConfiguration, type ManagedSiteInternalBrokerConfiguration } from './config'
 import { MANAGED_SITE_INTERNAL_BROKER_ORIGIN } from './constants'
 import { createManagedSiteHmacServer, type ManagedSiteHmacServerContext } from './hmac-server'
+import { verifyCloudflareManagedSiteDnsTls } from './dns-tls'
+import { setupCloudflareManagedSiteDnsTls } from './dns-setup'
+import { resolveManagedSiteDnsMutationAuthority, type ManagedSiteDnsMutationAuthorityResolver } from './dns-mutation-authority'
+import { updatePorkbunDomainNameservers } from '../porkbun-adapters'
 import { resolveManagedSiteOwnershipTxt, securelyFetchManagedSiteWellKnown, verifyManagedSiteWellKnown, type OwnershipAddressLookup, type OwnershipDnsTxtResolver, type OwnershipWellKnownFetcher } from './ownership-dns'
 import { renderManagedSiteStaticAssets, STATIC_RENDERER_FINGERPRINT } from './static-renderer'
 
@@ -25,6 +30,9 @@ export type ManagedSiteInternalBrokerDependencies = {
   clock?: () => Date
   nonceFactory?: () => string
   cloudflareFetch?: typeof fetch
+  porkbunFetch?: typeof fetch
+  dnsMutationAuthorityResolver?: ManagedSiteDnsMutationAuthorityResolver
+  productionProbe?: ManagedSiteProductionProbe
   dnsTxtResolver?: OwnershipDnsTxtResolver
   addressLookup?: OwnershipAddressLookup
   wellKnownFileFetcher?: OwnershipWellKnownFetcher
@@ -102,6 +110,7 @@ export function createManagedSiteInternalBrokerFetch(dependencies: ManagedSiteIn
   const credentialResolver = dependencies.credentialResolver || resolveManagedSiteCredential
   const configurationResolver = dependencies.configurationResolver || parseManagedSiteInternalBrokerConfiguration
   const vaultFactory = dependencies.vaultFactory || createS3ManagedSiteArtifactVault
+  const dnsMutationAuthorityResolver = dependencies.dnsMutationAuthorityResolver || (identity => resolveManagedSiteDnsMutationAuthority(identity, { credentialResolver }))
   const ownershipIdentityResolver = dependencies.ownershipIdentityResolver || (process.env.NODE_ENV === 'test' ? async () => null : async input => {
     const receipt = await getManagedSiteLiveConnectorRepository().findOwnershipChallengeByReference(input.projectId, input.canonicalDomain, input.challengeReference)
     const verificationMethod = plain(receipt?.metadata) ? receipt.metadata.verificationMethod : null
@@ -128,7 +137,7 @@ export function createManagedSiteInternalBrokerFetch(dependencies: ManagedSiteIn
         let body: unknown
         try { body = JSON.parse(raw) } catch { fail(422, 'Internal deployment broker body is malformed.') }
         if (!plain(body)) fail(422, 'Internal deployment broker body is malformed.')
-        if (pathname === '/v1/managed-sites/production' || pathname === '/v1/managed-sites/rollback') return json(503, 'Internal broker segment 1 does not execute production/rollback; payment and domain chains are not yet live.')
+        if (pathname === '/v1/managed-sites/rollback') return json(503, 'Internal broker rollback is not implemented.')
         const cloudflareToken = await resolveSecret(credentialResolver, configuration.cloudflare.apiTokenReference)
         if (pathname === '/v1/managed-sites/verify') {
           const keys = ['schemaVersion', 'challenge', 'configurationFingerprint']
@@ -138,20 +147,33 @@ export function createManagedSiteInternalBrokerFetch(dependencies: ManagedSiteIn
           const payloadHash = stableFingerprint({ challengeHash, capabilityIdentity, providerEventId, observedAt, configurationFingerprint: body.configurationFingerprint })
           return new Response(JSON.stringify({ schemaVersion: 'managed-site-provider-verification-v1', challengeHash, capabilityIdentity, providerEventId, observedAt, payloadHash, exactResponseIdentity: `cf-pages-probe:${stableFingerprint({ providerEventId, payloadHash })}` }), { status: 200, headers: { 'content-type': 'application/json' } })
         }
-        if (pathname !== '/v1/managed-sites/preview') fail(404, 'Internal deployment broker path is not implemented.')
+        const production = pathname === '/v1/managed-sites/production'
+        if (pathname !== '/v1/managed-sites/preview' && !production) fail(404, 'Internal deployment broker path is not implemented.')
         const previewKeys = ['schemaVersion', 'providerKey', 'operation', 'projectId', 'versionId', 'releaseId', 'vaultReference', 'contentHash', 'canonicalDomain', 'providerAuthority', 'requestFingerprint', 'timeoutMs']
-        if (!exact(body, previewKeys) || body.schemaVersion !== 'discoverystack-managed-deployment-command-v1' || body.providerKey !== 'internal-deployment-bearer-v1' || body.operation !== 'preview' || !positive(body.projectId) || !positive(body.versionId) || !positive(body.releaseId) || typeof body.contentHash !== 'string' || !FINGERPRINT.test(body.contentHash) || typeof body.requestFingerprint !== 'string' || !FINGERPRINT.test(body.requestFingerprint) || typeof body.canonicalDomain !== 'string' || !positive(body.timeoutMs)) fail(422, 'Internal preview deployment command is invalid.')
+        const commandKeys = production ? [...previewKeys, 'previewReceiptFingerprint', 'approvalFingerprint'] : previewKeys
+        if (!exact(body, commandKeys) || body.schemaVersion !== 'discoverystack-managed-deployment-command-v1' || body.providerKey !== 'internal-deployment-bearer-v1' || body.operation !== (production ? 'production' : 'preview') || !positive(body.projectId) || !positive(body.versionId) || !positive(body.releaseId) || typeof body.contentHash !== 'string' || !FINGERPRINT.test(body.contentHash) || typeof body.requestFingerprint !== 'string' || !FINGERPRINT.test(body.requestFingerprint) || typeof body.canonicalDomain !== 'string' || !positive(body.timeoutMs) || production && (typeof body.previewReceiptFingerprint !== 'string' || !FINGERPRINT.test(body.previewReceiptFingerprint) || typeof body.approvalFingerprint !== 'string' || !FINGERPRINT.test(body.approvalFingerprint))) fail(422, 'Internal managed-site deployment command is invalid.')
+        const providerAuthority = authority(body.providerAuthority)
         const canonicalDomain = new URL(assertPublicHttpsUrl(`https://${body.canonicalDomain}`, 'Managed-site canonical domain')).hostname
         if (canonicalDomain !== body.canonicalDomain) fail(422, 'Internal preview canonical domain is not canonical.')
+        if (production) {
+          const projection = { schemaVersion: providerAuthority.schemaVersion, capability: providerAuthority.capability, providerKey: providerAuthority.providerKey, configurationFingerprint: providerAuthority.configurationFingerprint, verificationReceiptFingerprint: providerAuthority.verificationReceiptFingerprint, capabilityIdentity: providerAuthority.capabilityIdentity, readinessStatus: providerAuthority.readinessStatus, executionMode: providerAuthority.executionMode, verifiedAt: providerAuthority.verifiedAt }
+          if (!exact(providerAuthority, [...Object.keys(projection), 'authorityFingerprint']) || projection.schemaVersion !== 'managed-site-provider-authority-v1' || projection.capability !== 'deployment' || projection.providerKey !== body.providerKey || projection.executionMode !== 'live' || projection.readinessStatus !== 'verified' || !FINGERPRINT.test(projection.configurationFingerprint) || !FINGERPRINT.test(projection.verificationReceiptFingerprint) || !isOpaqueReference(projection.capabilityIdentity, 160) || typeof projection.verifiedAt !== 'string' || !Number.isFinite(Date.parse(projection.verifiedAt)) || providerAuthority.authorityFingerprint !== stableFingerprint(projection)) fail(409, 'Internal production provider authority is mismatched.')
+          const requestFingerprint = stableFingerprint({ operation: 'production_deploy', releaseId: body.releaseId, projectId: body.projectId, versionId: body.versionId, contentHash: body.contentHash, canonicalDomain, previewReceiptFingerprint: body.previewReceiptFingerprint, approvalFingerprint: body.approvalFingerprint, providerAuthorityFingerprint: providerAuthority.authorityFingerprint })
+          if (body.requestFingerprint !== requestFingerprint) fail(409, 'Internal production request lineage is mismatched.')
+        }
         const vaultIdentity = parseVaultReference(body.vaultReference)
         if (vaultIdentity.projectId !== body.projectId) fail(409, 'Internal preview vault project identity is mismatched.')
         const stored = await vaultFactory().lookupImmutableCandidate(vaultIdentity)
         if (!stored || stored.vaultReference !== body.vaultReference) fail(409, 'Internal preview vault candidate was not found.')
         const bundle = validateBundle(stored.bundle, { ...vaultIdentity, contentHash: body.contentHash })
         const assets = renderManagedSiteStaticAssets(bundle.blueprint, bundle.files)
-        const deployed = await deployCloudflarePagesPreview({ ownerUserId: vaultIdentity.ownerUserId, projectId: body.projectId, releaseId: body.releaseId, assets, timeoutMs: body.timeoutMs }, { fetchImpl: dependencies.cloudflareFetch || fetch, accountId: configuration.cloudflare.accountId, apiToken: cloudflareToken, projectPrefix: configuration.cloudflare.projectPrefix, now: () => clock().getTime(), sleep: dependencies.sleep })
-        const providerAuthority = authority(body.providerAuthority); const providerEventId = `cf-preview-${nonceFactory()}`.slice(0, 160); const observedAt = clock().toISOString()
-        const core = { providerKey: String(body.providerKey), providerEventId, providerDeploymentId: deployed.deploymentId, projectId: body.projectId, versionId: body.versionId, contentHash: body.contentHash, canonicalDomain: body.canonicalDomain, deploymentUrl: deployed.deploymentUrl, status: 'preview_ready' as const, observedAt, providerAuthorityFingerprint: providerAuthority.authorityFingerprint }
+        const deployOptions = { fetchImpl: dependencies.cloudflareFetch || fetch, accountId: configuration.cloudflare.accountId, apiToken: cloudflareToken, projectPrefix: configuration.cloudflare.projectPrefix, now: () => clock().getTime(), sleep: dependencies.sleep }
+        const deployInput = { ownerUserId: vaultIdentity.ownerUserId, projectId: body.projectId, releaseId: body.releaseId, assets, timeoutMs: body.timeoutMs }
+        const deployed = production
+          ? await deployCloudflarePagesProduction({ ...deployInput, canonicalDomain, requestFingerprint: body.requestFingerprint }, { ...deployOptions, productionProbe: dependencies.productionProbe })
+          : await deployCloudflarePagesPreview(deployInput, deployOptions)
+        const providerEventId = `cf-${production ? 'production' : 'preview'}-${nonceFactory()}`.slice(0, 160); const observedAt = clock().toISOString()
+        const core = { providerKey: String(body.providerKey), providerEventId, providerDeploymentId: deployed.deploymentId, projectId: body.projectId, versionId: body.versionId, contentHash: body.contentHash, canonicalDomain: body.canonicalDomain, deploymentUrl: deployed.deploymentUrl, status: production ? 'production_verified' as const : 'preview_ready' as const, observedAt, providerAuthorityFingerprint: providerAuthority.authorityFingerprint }
         return new Response(JSON.stringify(receipt(core, `cf-pages:${stableFingerprint({ deploymentId: deployed.deploymentId, rendererFingerprint: STATIC_RENDERER_FINGERPRINT, blueprintHash: bundle.blueprintHash })}`)), { status: 200, headers: { 'content-type': 'application/json' } })
       } catch (error) { return errorResponse(error) }
     }
@@ -159,11 +181,37 @@ export function createManagedSiteInternalBrokerFetch(dependencies: ManagedSiteIn
     try { dnsCredential = await resolveSecret(credentialResolver, configuration.dnsTlsCredentialReference) } catch (error) { return errorResponse(error) }
     const credentialHash = sha256(dnsCredential)
     if (!hmacServer || credentialHash !== hmacCredentialHash) { hmacServer = createManagedSiteHmacServer({ credential: dnsCredential, clock, nonceFactory }); hmacCredentialHash = credentialHash }
-    return hmacServer.handle(pathname, request.headers, raw, async context => handleHmac(context, dnsCredential))
+    return hmacServer.handle(pathname, request.headers, raw, async context => handleHmac(context, dnsCredential, configuration))
   }
 
-  const handleHmac = async (context: ManagedSiteHmacServerContext, credential: string): Promise<Record<string, unknown>> => {
+  const handleHmac = async (context: ManagedSiteHmacServerContext, credential: string, configuration: ManagedSiteInternalBrokerConfiguration): Promise<Record<string, unknown>> => {
     const body = context.body
+    if (context.path === '/v1/managed-sites/dns-tls/apply') {
+      const keys = ['schemaVersion', 'providerKey', 'ownerUserId', 'projectId', 'releaseId', 'canonicalDomain', 'contentHash', 'providerAuthority', 'requestFingerprint', 'idempotencyKey', 'timeoutMs']
+      if (!exact(body, keys) || body.schemaVersion !== 'managed-site-dns-tls-request-v1' || body.providerKey !== 'internal-dns-tls-broker-hmac-v1' || !positive(body.ownerUserId) || !positive(body.projectId) || !positive(body.releaseId) || typeof body.contentHash !== 'string' || !FINGERPRINT.test(body.contentHash) || typeof body.requestFingerprint !== 'string' || !FINGERPRINT.test(body.requestFingerprint) || !isOpaqueReference(body.idempotencyKey, 128) || !positive(body.timeoutMs)) fail(422, 'Internal DNS/TLS readiness command is invalid.')
+      const canonicalDomain = canonicalOwnershipDomain(body.canonicalDomain)
+      const providerAuthority = authority(body.providerAuthority)
+      const projection = { schemaVersion: providerAuthority.schemaVersion, capability: providerAuthority.capability, providerKey: providerAuthority.providerKey, configurationFingerprint: providerAuthority.configurationFingerprint, verificationReceiptFingerprint: providerAuthority.verificationReceiptFingerprint, capabilityIdentity: providerAuthority.capabilityIdentity, readinessStatus: providerAuthority.readinessStatus, executionMode: providerAuthority.executionMode, verifiedAt: providerAuthority.verifiedAt }
+      if (!exact(providerAuthority, [...Object.keys(projection), 'authorityFingerprint']) || projection.schemaVersion !== 'managed-site-provider-authority-v1' || projection.capability !== 'dns_tls' || projection.providerKey !== body.providerKey || projection.readinessStatus !== 'verified' || projection.executionMode !== 'live' || !FINGERPRINT.test(projection.configurationFingerprint) || !FINGERPRINT.test(projection.verificationReceiptFingerprint) || !isOpaqueReference(projection.capabilityIdentity, 160) || typeof projection.verifiedAt !== 'string' || !Number.isFinite(Date.parse(projection.verifiedAt)) || providerAuthority.authorityFingerprint !== stableFingerprint(projection)) fail(409, 'Internal DNS/TLS provider authority is mismatched.')
+      const requestFingerprint = stableFingerprint({ ownerUserId: body.ownerUserId, projectId: body.projectId, releaseId: body.releaseId, contentHash: body.contentHash, canonicalDomain, providerAuthorityFingerprint: providerAuthority.authorityFingerprint })
+      if (body.requestFingerprint !== requestFingerprint) fail(409, 'Internal DNS/TLS request lineage is mismatched.')
+      const mutationIdentity = { ownerUserId: body.ownerUserId, projectId: body.projectId, releaseId: body.releaseId, canonicalDomain, contentHash: body.contentHash, providerAuthorityFingerprint: providerAuthority.authorityFingerprint }
+      const mutationAuthority = await dnsMutationAuthorityResolver(mutationIdentity)
+      const apiToken = await resolveSecret(credentialResolver, configuration.cloudflare.apiTokenReference)
+      const cloudflareOptions = { fetchImpl: dependencies.cloudflareFetch || fetch, accountId: configuration.cloudflare.accountId, apiToken, projectPrefix: configuration.cloudflare.projectPrefix }
+      const configurationFingerprint = stableFingerprint(configuration)
+      const beforeMutation = async () => {
+        const current = await dnsMutationAuthorityResolver(mutationIdentity)
+        if (!mutationAuthority || !current || current.fingerprint !== mutationAuthority.fingerprint || stableFingerprint(configurationResolver()) !== configurationFingerprint || !sameSecret(await resolveSecret(credentialResolver, configuration.cloudflare.apiTokenReference), apiToken) || !sameSecret(await resolveSecret(credentialResolver, configuration.dnsTlsCredentialReference), credential)) fail(409, 'DNS setup authority or provider configuration changed before mutation.')
+      }
+      const result = mutationAuthority
+        ? await setupCloudflareManagedSiteDnsTls({ ...mutationIdentity, timeoutMs: body.timeoutMs }, {
+          ...cloudflareOptions, beforeMutation, sleep: dependencies.sleep,
+          setRegistrarNameservers: (nameservers, timeoutMs) => updatePorkbunDomainNameservers({ canonicalDomain, nameservers, timeoutMs, idempotencyKey: stableFingerprint({ scope: 'funnel-domain-nameservers-v1', requestFingerprint, registrationReceiptFingerprint: mutationAuthority.registrationReceiptFingerprint, nameservers }) }, { ...mutationAuthority.registrar, providerKey: 'porkbun', resolveCredential: credentialResolver, fetchImpl: dependencies.porkbunFetch || fetch, beforeMutation }),
+        })
+        : await verifyCloudflareManagedSiteDnsTls({ ownerUserId: body.ownerUserId, projectId: body.projectId, canonicalDomain, timeoutMs: body.timeoutMs }, cloudflareOptions)
+      return { schemaVersion: 'managed-site-dns-tls-response-v1', providerKey: body.providerKey, providerEventId: context.providerEventId, providerReference: result.providerReference, ownerUserId: body.ownerUserId, projectId: body.projectId, releaseId: body.releaseId, canonicalDomain, contentHash: body.contentHash, requestFingerprint, dnsStatus: result.dnsStatus, tlsStatus: result.tlsStatus, providerAuthorityFingerprint: providerAuthority.authorityFingerprint }
+    }
     if (context.path === '/v1/managed-sites/verify') {
       const keys = ['schemaVersion', 'capability', 'providerKey', 'configurationFingerprint', 'challengeHash']
       if (!exact(body, keys) || body.schemaVersion !== 'managed-site-broker-verification-v1' || body.capability !== 'dns_tls' || body.providerKey !== 'internal-dns-tls-broker-hmac-v1' || typeof body.configurationFingerprint !== 'string' || !FINGERPRINT.test(body.configurationFingerprint) || typeof body.challengeHash !== 'string' || !FINGERPRINT.test(body.challengeHash)) fail(422, 'Internal ownership capability challenge is invalid.')

@@ -99,7 +99,7 @@ export type ManagedSiteRepository = {
   insertAsset(input: Omit<ManagedSiteAsset, 'id' | 'createdAt'>): Promise<ManagedSiteAsset>
   listAssets(ownerUserId: number, projectId: number): Promise<ManagedSiteAsset[]>
   findAuditEventByFingerprint(ownerUserId: number, eventFingerprint: string): Promise<ManagedSiteAuditEvent | null>
-  insertAuditEvent(input: Omit<ManagedSiteAuditEvent, 'id' | 'occurredAt'>): Promise<ManagedSiteAuditEvent>
+  insertAuditEvent(input: Omit<ManagedSiteAuditEvent, 'id' | 'occurredAt'> & { occurredAt?: Date }): Promise<ManagedSiteAuditEvent>
   listAuditEvents(ownerUserId: number, projectId: number): Promise<ManagedSiteAuditEvent[]>
   findSubscription(ownerUserId: number, projectId: number): Promise<ManagedSiteSubscription | null>
   insertSubscription(input: Omit<ManagedSiteSubscription, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteSubscription>

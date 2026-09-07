@@ -40,6 +40,8 @@ export type FunnelConsentSnapshot = {
   policyVersion: string
   acceptedAt: string
   scrolledToBottom: true
+  domainAvailability?: unknown
+  domainRegistration?: unknown
 }
 
 type ConsentInput = { policyVersion: string; scrolledToBottom: true }
@@ -210,6 +212,7 @@ function mergeAnswers(existing: unknown, patch: Partial<FunnelAnswers>): FunnelA
       merged.existingSite = { hasSite: false }
       continue
     }
+    if (key === 'domain') { merged.domain = next as FunnelAnswers['domain']; continue }
     const previous = current[key]
     ;(merged as any)[key] = next && previous && typeof next === 'object' && typeof previous === 'object' && !Array.isArray(next) && !Array.isArray(previous) ? { ...previous, ...next } : next
   }
@@ -238,9 +241,13 @@ export async function saveFunnelStep(sessionId: number, sessionToken: string, in
   if (!Number.isSafeInteger(input?.step) || input.step < 1 || input.step > MANAGED_SITE_FUNNEL_TOTAL_STEPS) invalid('Funnel step must be between 1 and 9.')
   if (session.status !== 'active') throw createError({ statusCode: 409, statusMessage: 'This funnel session can no longer be changed.' })
   const answers = mergeAnswers(session.answers, validateAnswers(input?.answers))
-  const consent = input.consent === undefined ? session.consentSnapshot : consentSnapshot(input.consent, clock)
+  let consent = input.consent === undefined ? session.consentSnapshot : { ...(session.consentSnapshot as object || {}), ...consentSnapshot(input.consent, clock) }
+  if (JSON.stringify((session.answers as FunnelAnswers)?.domain) !== JSON.stringify(answers.domain) && consent) {
+    const { domainRegistration: _previousDelegation, ...retained } = consent as Record<string, unknown>
+    consent = retained
+  }
   const currentStep = Math.min(MANAGED_SITE_FUNNEL_TOTAL_STEPS, Math.max(session.currentStep, input.step + 1))
-  const updated = await repository.updateSession(session.id, { answers, consentSnapshot: consent, currentStep } as any)
+  const updated = await repository.transitionSession(session.id, 'active', { answers, consentSnapshot: consent, currentStep } as any)
   if (!updated) notFound()
   return updated
 }
@@ -248,7 +255,7 @@ export async function saveFunnelStep(sessionId: number, sessionToken: string, in
 export async function recordFunnelConsent(sessionId: number, sessionToken: string, input: ConsentInput, repository: FunnelSessionRepository = getFunnelSessionRepository(), clock: () => Date = () => new Date()) {
   const session = await loadFunnelSession(sessionId, sessionToken, repository, clock)
   if (session.status !== 'active') throw createError({ statusCode: 409, statusMessage: 'This funnel session can no longer be changed.' })
-  const updated = await repository.updateSession(session.id, { consentSnapshot: consentSnapshot(input, clock) } as any)
+  const updated = await repository.transitionSession(session.id, 'active', { consentSnapshot: { ...(session.consentSnapshot as object || {}), ...consentSnapshot(input, clock) } } as any)
   if (!updated) notFound()
   return updated
 }
