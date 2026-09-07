@@ -1,6 +1,6 @@
-import { beforeAll, afterEach, describe, expect, it } from 'vitest'
+import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, createError, createRouter, defineEventHandler, send, setResponseStatus, toWebHandler } from 'h3'
-import { MANAGED_SITE_FUNNEL_BUILD_STALE_MS, MANAGED_SITE_FUNNEL_CHECKOUT_SESSION_TTL_MS, runFunnelBuild, runFunnelCheckout, type ManagedSiteFunnelOrchestratorDependencies } from '../server/managed-sites/funnel/checkout-orchestrator'
+import { MANAGED_SITE_FUNNEL_BUILD_STALE_MS, MANAGED_SITE_FUNNEL_CHECKOUT_SESSION_TTL_MS, MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE, MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT, managedSiteFunnelDailyBuildLimit, runFunnelBuild, runFunnelCheckout, type ManagedSiteFunnelOrchestratorDependencies } from '../server/managed-sites/funnel/checkout-orchestrator'
 import { projectFunnelQuote } from '../server/managed-sites/funnel/quote-projection'
 import { setManagedSiteContactInboxBindingDependenciesForTests } from '../server/managed-sites/contact-inbox/binding-service'
 import { createFunnelSession, loadFunnelSession, MANAGED_SITE_FUNNEL_CONSENT_VERSION, recordFunnelConsent, saveFunnelStep, type FunnelAnswers } from '../server/managed-sites/funnel/session-service'
@@ -19,6 +19,11 @@ import { managedSiteFixedNow } from './fixtures/managed-site/live-connectors-app
 
 const savedPrivateOrigin = process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN
 const savedOwnerOpenId = process.env.OWNER_OPEN_ID
+const savedDailyBuildLimit = process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT
+const savedStripeLiveMode = process.env.MANAGED_SITE_FUNNEL_STRIPE_LIVE_MODE
+const savedAllowedProviderOrigins = process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS
+const savedAllowedCheckoutOrigins = process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_CHECKOUT_ORIGINS
+const savedCredentialsJson = process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON
 
 beforeAll(() => {
   ;(globalThis as any).defineEventHandler = defineEventHandler
@@ -27,12 +32,23 @@ beforeAll(() => {
 })
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   setManagedSiteFunnelRepositoryForTests(null)
   setManagedSiteContactInboxBindingDependenciesForTests(null)
   if (savedPrivateOrigin === undefined) delete process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN
   else process.env.NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN = savedPrivateOrigin
   if (savedOwnerOpenId === undefined) delete process.env.OWNER_OPEN_ID
   else process.env.OWNER_OPEN_ID = savedOwnerOpenId
+  if (savedDailyBuildLimit === undefined) delete process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT
+  else process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT = savedDailyBuildLimit
+  if (savedStripeLiveMode === undefined) delete process.env.MANAGED_SITE_FUNNEL_STRIPE_LIVE_MODE
+  else process.env.MANAGED_SITE_FUNNEL_STRIPE_LIVE_MODE = savedStripeLiveMode
+  if (savedAllowedProviderOrigins === undefined) delete process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS
+  else process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS = savedAllowedProviderOrigins
+  if (savedAllowedCheckoutOrigins === undefined) delete process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_CHECKOUT_ORIGINS
+  else process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_CHECKOUT_ORIGINS = savedAllowedCheckoutOrigins
+  if (savedCredentialsJson === undefined) delete process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON
+  else process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON = savedCredentialsJson
 })
 
 function completeAnswers(label = 'Acme'): FunnelAnswers {
@@ -50,9 +66,9 @@ function completeAnswers(label = 'Acme'): FunnelAnswers {
 }
 
 async function configuredLine(label = 'Acme') {
-  const funnel = createFunnelSessionMemoryRepository()
-  const ordering = createOrderingMemoryRepository()
   const managed = createManagedSiteMemoryRepository()
+  const funnel = createFunnelSessionMemoryRepository({ projects: () => managed.state.projects, audits: () => managed.state.audits })
+  const ordering = createOrderingMemoryRepository()
   const live = createLiveConnectorMemoryRepository()
   for (const [capability, providerKey] of [['website_generator', 'mock-generator'], ['deployment', 'mock-deployment'], ['payment', 'mock-payment']] as const) {
     await configureManagedSiteProvider(1, { capability, providerKey, readinessStatus: 'mock', credentialReference: null, transportConfiguration: {}, idempotencyKey: `funnel-config-${label}-${capability}` }, live.repository, () => managedSiteFixedNow)
@@ -88,6 +104,207 @@ async function routeRequest(repository: ReturnType<typeof createFunnelSessionMem
 }
 
 describe('managed-site self-serve funnel', () => {
+  it('parses only safe integer daily build limits', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    expect(managedSiteFunnelDailyBuildLimit('0')).toBe(0)
+    expect(managedSiteFunnelDailyBuildLimit('21')).toBe(21)
+    for (const value of ['-1', ' 20', '20.0', '1e3']) expect(managedSiteFunnelDailyBuildLimit(value)).toBe(MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT)
+    warn.mockClear()
+    for (const value of ['99999999999999999999', '9007199254740992']) expect(managedSiteFunnelDailyBuildLimit(value)).toBe(MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT)
+    expect(warn).toHaveBeenCalledWith('[managed-site-funnel] ignoring invalid MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT; using the default', { limit: MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT })
+    warn.mockClear()
+    expect(managedSiteFunnelDailyBuildLimit('abc')).toBe(MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT)
+    expect(warn).toHaveBeenCalledWith('[managed-site-funnel] ignoring invalid MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT; using the default', { limit: MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT })
+    warn.mockClear()
+    managedSiteFunnelDailyBuildLimit('')
+    managedSiteFunnelDailyBuildLimit(undefined)
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('fails closed before durable work when the daily build cap is reached', async () => {
+    const line = await configuredLine('DailyCap')
+    process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT = '2'
+    line.managed.state.projects.push({ id: 900_001, ownerUserId: 1, createdAt: new Date(managedSiteFixedNow) } as any, { id: 900_002, ownerUserId: 1, createdAt: new Date(managedSiteFixedNow.getTime() - 1) } as any)
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).rejects.toMatchObject({ statusCode: 429, statusMessage: MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE })
+    expect(line.funnel.state.sessions[0]!.status).toBe('active')
+    expect(line.ordering.state.previews).toHaveLength(0)
+    expect(line.managed.state.projects).toHaveLength(2)
+  })
+
+  it('counts a project at 24h minus 1ms in the daily window', async () => {
+    const line = await configuredLine('DailyWindowEdge')
+    process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT = '1'
+    line.managed.state.projects.push({ id: 900_001, ownerUserId: 1, createdAt: new Date(managedSiteFixedNow.getTime() - 24 * 60 * 60_000 + 1) } as any)
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).rejects.toMatchObject({ statusCode: 429, statusMessage: MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE })
+    expect(line.funnel.state.sessions[0]!.status).toBe('active')
+    expect(line.managed.state.projects).toHaveLength(1)
+  })
+
+  it('excludes a project at 24h plus 1ms and exempts release rebuilds', async () => {
+    const line = await configuredLine('DailyWindow')
+    process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT = '1'
+    line.managed.state.projects.push({ id: 900_001, ownerUserId: 1, createdAt: new Date(managedSiteFixedNow.getTime() - 24 * 60 * 60_000 - 1) } as any)
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).resolves.toMatchObject({ releaseId: expect.any(Number) })
+    line.managed.state.projects.push({ id: 900_002, ownerUserId: 1, createdAt: new Date(managedSiteFixedNow) } as any, { id: 900_003, ownerUserId: 1, createdAt: new Date(managedSiteFixedNow) } as any)
+    line.funnel.state.sessions[0]!.builtPreviewUrl = null
+    line.funnel.state.sessions[0]!.status = 'building'
+    line.funnel.state.sessions[0]!.updatedAt = new Date(managedSiteFixedNow.getTime() - MANAGED_SITE_FUNNEL_BUILD_STALE_MS - 1)
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).resolves.toMatchObject({ releaseId: expect.any(Number) })
+    expect(line.managed.state.projects).toHaveLength(4)
+  })
+
+  it('reports an in-flight build before the daily cap', async () => {
+    const line = await configuredLine('BuildingFirst')
+    process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT = '1'
+    line.managed.state.projects.push({ id: 900_001, ownerUserId: 1, createdAt: new Date(managedSiteFixedNow) } as any)
+    line.funnel.state.sessions[0]!.status = 'building'
+    line.funnel.state.sessions[0]!.updatedAt = new Date(managedSiteFixedNow)
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).rejects.toMatchObject({ statusCode: 409, statusMessage: '網站正在建置中，請稍候再試。' })
+    expect(line.managed.state.projects).toHaveLength(1)
+  })
+
+  it("fails closed when a retry's own reservation has aged out of the window", async () => {
+    const line = await configuredLine('CapAgedRetry')
+    let now = new Date()
+    let generationCalls = 0
+    const successfulGeneration = createMockManagedSiteGenerationAdapter()
+    line.dependencies.clock = () => now
+    line.dependencies.deploymentAdapter = createMockManagedSiteDeploymentAdapter({ now: () => now })
+    line.dependencies.generationAdapter = {
+      async generate(request, context) {
+        generationCalls += 1
+        if (generationCalls === 1) throw Object.assign(new Error('provider timeout'), { code: 'TIMEOUT', retryable: true })
+        return successfulGeneration.generate(request, context)
+      },
+    }
+
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).rejects.toMatchObject({ statusCode: 503, statusMessage: '網站建置暫時未完成，請稍後再試。' })
+    const session = line.funnel.state.sessions[0]!
+    expect(session.status).toBe('active')
+    expect(session.projectId).toEqual(expect.any(Number))
+    expect(session.releaseId).toBeNull()
+    expect(line.managed.state.projects).toHaveLength(1)
+    expect(line.live.state.releases).toHaveLength(0)
+
+    now = new Date(now.getTime() + 25 * 60 * 60_000)
+    process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT = '0'
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).rejects.toMatchObject({ statusCode: 429, statusMessage: MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE })
+    expect(line.live.state.releases).toHaveLength(0)
+    expect(line.managed.state.projects).toHaveLength(1)
+    expect(session.status).toBe('active')
+
+    process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT = '1'
+    line.managed.state.projects.push({ id: 900_001, ownerUserId: 1, createdAt: new Date(now) } as any)
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).rejects.toMatchObject({ statusCode: 429, statusMessage: MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE })
+    expect(line.managed.state.projects).toHaveLength(2)
+
+    process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT = '2'
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).resolves.toMatchObject({ releaseId: expect.any(Number) })
+    expect(line.managed.state.projects).toHaveLength(2)
+    expect(line.live.state.releases).toHaveLength(1)
+    expect(session.status).toBe('checkout_pending')
+  })
+
+  it('keeps an admitted aged retry in the daily count for other old and new sessions', async () => {
+    const line = await configuredLine('AgedRetryFirst')
+    const second = await createFunnelSession(line.funnel.repository, () => managedSiteFixedNow)
+    await saveFunnelStep(second.sessionId, second.sessionToken, { step: 9, answers: completeAnswers('AgedRetrySecond') }, line.funnel.repository, () => managedSiteFixedNow)
+    await recordFunnelConsent(second.sessionId, second.sessionToken, { policyVersion: MANAGED_SITE_FUNNEL_CONSENT_VERSION, scrolledToBottom: true }, line.funnel.repository, () => managedSiteFixedNow)
+    let now = new Date(managedSiteFixedNow)
+    const attemptedProjects = new Set<number>()
+    const successfulGeneration = createMockManagedSiteGenerationAdapter()
+    const generate = vi.fn(async (request, context) => {
+      if (!attemptedProjects.has(request.projectId)) {
+        attemptedProjects.add(request.projectId)
+        throw Object.assign(new Error('provider timeout'), { code: 'TIMEOUT', retryable: true })
+      }
+      return successfulGeneration.generate(request, context)
+    })
+    line.dependencies.clock = () => now
+    line.dependencies.generationAdapter = { generate }
+    line.dependencies.deploymentAdapter = createMockManagedSiteDeploymentAdapter({ now: () => now })
+    for (const created of [line.created, second]) {
+      await expect(runFunnelBuild(created.sessionId, created.sessionToken, line.dependencies)).rejects.toMatchObject({ statusCode: 503 })
+    }
+    expect(generate).toHaveBeenCalledTimes(2)
+
+    now = new Date(now.getTime() + 25 * 60 * 60_000)
+    process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT = '1'
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).resolves.toMatchObject({ releaseId: expect.any(Number) })
+    await expect(runFunnelBuild(second.sessionId, second.sessionToken, line.dependencies)).rejects.toMatchObject({ statusCode: 429, statusMessage: MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE })
+    expect(generate).toHaveBeenCalledTimes(3)
+
+    const fresh = await createFunnelSession(line.funnel.repository, () => now)
+    await saveFunnelStep(fresh.sessionId, fresh.sessionToken, { step: 9, answers: completeAnswers('FreshAfterAgedRetry') }, line.funnel.repository, () => now)
+    await recordFunnelConsent(fresh.sessionId, fresh.sessionToken, { policyVersion: MANAGED_SITE_FUNNEL_CONSENT_VERSION, scrolledToBottom: true }, line.funnel.repository, () => now)
+    await expect(runFunnelBuild(fresh.sessionId, fresh.sessionToken, line.dependencies)).rejects.toMatchObject({ statusCode: 429, statusMessage: MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE })
+    expect(line.managed.state.projects).toHaveLength(2)
+    expect(line.live.state.releases).toHaveLength(1)
+  })
+
+  it('fails closed after project reservation when concurrent builds overshoot the cap, then admits the idempotent retry once the window frees', async () => {
+    const line = await configuredLine('CapRace')
+    const current = new Date()
+    process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT = '1'
+    line.dependencies.clock = () => current
+    line.dependencies.deploymentAdapter = createMockManagedSiteDeploymentAdapter({ now: () => current })
+    const ordering = line.ordering.repository
+    let injected = false
+    line.dependencies.orderingRepository = {
+      ...ordering,
+      async updatePreview(...args) {
+        if (!injected) {
+          injected = true
+          line.managed.state.projects.push({ id: 900_001, ownerUserId: 1, createdAt: new Date(current) } as any)
+        }
+        return ordering.updatePreview(...args)
+      },
+    }
+
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).rejects.toMatchObject({ statusCode: 429, statusMessage: MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE })
+    const session = line.funnel.state.sessions[0]!
+    const realProject = line.managed.state.projects.find(project => project.id !== 900_001 && project.creationIdempotencyKey !== undefined)!
+    expect(session.status).toBe('active')
+    expect(session.projectId).toBe(realProject.id)
+    expect(session.releaseId).toBeNull()
+    expect(line.managed.state.projects).toHaveLength(2)
+    expect(line.live.state.candidates).toHaveLength(0)
+    expect(line.live.state.releases).toHaveLength(0)
+
+    line.managed.state.projects.find(project => project.id === 900_001)!.createdAt = new Date(current.getTime() - 24 * 60 * 60_000 - 1)
+    await expect(runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)).resolves.toMatchObject({ releaseId: expect.any(Number) })
+    expect(line.managed.state.projects).toHaveLength(2)
+    expect(line.live.state.releases).toHaveLength(1)
+    expect(session.status).toBe('checkout_pending')
+  })
+
+  it('applies the Stripe test-mode guard on the live funnel checkout path before any durable checkout write', async () => {
+    const line = await configuredLine('LiveGuard')
+    // This regression isolates payment policy; domain procurement has its own live authorization tests.
+    await saveFunnelStep(line.created.sessionId, line.created.sessionToken, { step: 7, answers: { domain: { option: 'existing', name: 'liveguard.example.com' } } }, line.funnel.repository, () => managedSiteFixedNow)
+    await runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)
+    delete process.env.MANAGED_SITE_FUNNEL_STRIPE_LIVE_MODE
+    process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS = 'https://api.stripe.com'
+    process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_CHECKOUT_ORIGINS = 'https://checkout.stripe.com'
+    process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON = JSON.stringify({ 'vault:stripe-funnel-live-guard': 'sk_live_placeholder' })
+    await configureManagedSiteProvider(1, { capability: 'payment', providerKey: 'stripe', readinessStatus: 'configured', credentialReference: 'vault:stripe-funnel-live-guard', transportConfiguration: { endpointOrigin: 'https://api.stripe.com', checkoutOrigin: 'https://checkout.stripe.com', returnOrigin: 'https://merchant.example.com' }, idempotencyKey: 'funnel-config-LiveGuard-payment-stripe' }, line.live.repository, () => managedSiteFixedNow)
+    const configuration = await line.live.repository.findProviderConfiguration(1, 'payment')
+    Object.assign(configuration!, { readinessStatus: 'verified', verificationReceiptFingerprint: 'b'.repeat(64), capabilityIdentity: 'stripe-balance:test', verifiedAt: managedSiteFixedNow })
+    const spy = vi.fn(async () => { throw new Error('network must not be reached') })
+    vi.stubGlobal('fetch', spy)
+    const { checkoutAdapter: _mocked, ...liveDependencies } = line.dependencies
+    await expect(runFunnelCheckout(line.created.sessionId, line.created.sessionToken, { ...liveDependencies, executionMode: 'live' })).rejects.toMatchObject({ statusCode: 503, statusMessage: '自助下單目前僅開放 Stripe 測試模式，請聯絡客服。' })
+    expect(spy).not.toHaveBeenCalled()
+    expect(line.live.state.releases[0]!.status).toBe('preview_ready')
+    expect(line.live.state.attempts.filter(attempt => attempt.operation === 'checkout_session_create')).toHaveLength(0)
+    expect(line.funnel.state.sessions[0]!.checkoutUrl).toBeFalsy()
+
+    process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON = JSON.stringify({ 'vault:stripe-funnel-live-guard': 'sk_test_placeholder' })
+    await expect(runFunnelCheckout(line.created.sessionId, line.created.sessionToken, { ...liveDependencies, executionMode: 'live' })).rejects.toMatchObject({ statusCode: 503, statusMessage: 'Stripe checkout transport failed.' })
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps all nine saved steps refreshable and hides missing, wrong-token, and expired distinctions', async () => {
     const memory = createFunnelSessionMemoryRepository()
     const created = await createFunnelSession(memory.repository, () => managedSiteFixedNow)

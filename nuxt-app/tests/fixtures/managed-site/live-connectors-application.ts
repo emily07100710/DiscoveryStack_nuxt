@@ -4,7 +4,7 @@ import { convertClaimedManagedSitePrePurchase } from '../../../server/managed-si
 import { configureManagedSiteProvider } from '../../../server/managed-sites/live-connectors/provider-registry'
 import { createMemoryManagedSiteArtifactVault, createMockManagedSiteGenerationAdapter } from '../../../server/managed-sites/live-connectors/adapters'
 import { generateManagedSiteCandidate } from '../../../server/managed-sites/live-connectors/generation-service'
-import { approveManagedSitePreview, buildManagedSitePreview, createGeneratedManagedSiteRelease, createMockManagedSiteDeploymentAdapter } from '../../../server/managed-sites/live-connectors/deployment-orchestrator'
+import { approveManagedSitePreview, buildManagedSitePreview, createGeneratedManagedSiteRelease, createMockManagedSiteDeploymentAdapter, type ManagedSiteProductionTransaction } from '../../../server/managed-sites/live-connectors/deployment-orchestrator'
 import { createManagedSiteCheckoutSession, createMockManagedSiteCheckoutSessionAdapter } from '../../../server/managed-sites/live-connectors/checkout-session'
 import { createManagedSiteMemoryRepository } from './repository'
 import { createOrderingMemoryRepository } from './ordering-repository'
@@ -60,5 +60,6 @@ export async function createAuthoritativeManagedSiteReleaseFixture(options: { ow
     const snapshots = { managed: structuredClone(managed.state), ordering: structuredClone(ordering.state), live: structuredClone(live.state) }
     try { return await work({ connector: live.repository, ordering: ordering.repository, managed: managed.repository }) } catch (error) { Object.assign(managed.state, snapshots.managed); Object.assign(ordering.state, snapshots.ordering); Object.assign(live.state, snapshots.live); throw error } finally { releaseQueue() }
   }
-  return { ownerUserId, managed, ordering, live, preview, quote, lead, order, prePurchase, vault, generation, release, deploymentAdapter, checkout, jointTransaction }
+  const productionTransaction: ManagedSiteProductionTransaction = work => jointTransaction(scoped => work({ repository: scoped.connector, orderingRepository: scoped.ordering, managedRepository: scoped.managed }))
+  return { ownerUserId, managed, ordering, live, preview, quote, lead, order, prePurchase, vault, generation, release, deploymentAdapter, checkout, jointTransaction, productionTransaction }
 }

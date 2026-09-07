@@ -124,6 +124,10 @@ export function makeOrderingRepository(database: any): PreviewRepository {
       const [row] = await database.select().from(managedSiteDraftOrders).where(eq(managedSiteDraftOrders.id, orderId)).limit(1)
       return row || null
     },
+    async findDraftOrderByIdForUpdate(orderId) {
+      const [row] = await database.select().from(managedSiteDraftOrders).where(eq(managedSiteDraftOrders.id, orderId)).limit(1).for('update')
+      return row || null
+    },
     async listDraftOrders(ownerUserId, options = {}) {
       const limit = Math.min(Math.max(Number.isSafeInteger(options.limit) ? Number(options.limit) : 100, 1), 100)
       const predicate = options.status ? and(eq(managedSiteDraftOrders.ownerUserId, ownerUserId), eq(managedSiteDraftOrders.status, options.status)) : eq(managedSiteDraftOrders.ownerUserId, ownerUserId)

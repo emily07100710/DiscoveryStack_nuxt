@@ -57,7 +57,7 @@ describe('managed-site exact provider authority lineage', () => {
     await executeManagedSiteDnsTls(1, { projectId: line.prePurchase.project.id, releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'authority-deploy-dns' }, createMockManagedSiteDnsTlsAdapter(), { repository: line.live.repository, clock: () => managedSiteFixedNow })
     await rotateMock(line, 'deployment', 'mock-deployment', 'deployment-rotated-workspace')
     let calls = 0; const base = createMockManagedSiteDeploymentAdapter(); const adapter = { ...base, deployProduction: async (input: any) => { calls++; return base.deployProduction(input) } }
-    await expect(deployManagedSiteProduction(1, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'authority-deploy-production' }, adapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => managedSiteFixedNow })).rejects.toMatchObject({ statusCode: 409 })
+    await expect(deployManagedSiteProduction(1, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'authority-deploy-production' }, adapter, { repository: line.live.repository, managedRepository: line.managed.repository, orderingRepository: line.ordering.repository, productionTransaction: line.productionTransaction, clock: () => managedSiteFixedNow })).rejects.toMatchObject({ statusCode: 409 })
     expect(calls).toBe(0)
   })
 

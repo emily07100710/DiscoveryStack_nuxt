@@ -60,6 +60,7 @@ export function createOrderingMemoryRepository() {
     async findLeadIntentByFingerprint(fingerprint) { return state.leadIntents.find(row => row.requestFingerprint === fingerprint) || null },
     async insertLeadIntent(input) { return insert(state.leadIntents, input as Omit<ManagedSiteLeadIntent, 'id'>) },
     async findDraftOrderById(id) { return state.orders.find(row => row.id === id) || null },
+    async findDraftOrderByIdForUpdate(id) { return state.orders.find(row => row.id === id) || null },
     async listDraftOrders(ownerUserId, options = {}) { const limit = Math.min(Math.max(Number.isSafeInteger(options.limit) ? Number(options.limit) : 100, 1), 100); return state.orders.filter(row => row.ownerUserId === ownerUserId && (!options.status || row.status === options.status)).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id - a.id).slice(0, limit) },
     async findDraftOrderByIdempotency(previewId, key) { return state.orders.find(row => row.previewId === previewId && row.idempotencyKey === key) || null },
     async findDraftOrderByFingerprint(fingerprint) { return state.orders.find(row => row.requestFingerprint === fingerprint) || null },

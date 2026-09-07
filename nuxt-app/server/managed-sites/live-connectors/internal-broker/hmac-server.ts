@@ -4,7 +4,7 @@ import { managedSiteBrokerSignature, type ManagedSiteBrokerPath } from '../hmac-
 const MAX_BODY_BYTES = 128 * 1024
 const MAX_CLOCK_SKEW_MS = 5 * 60_000
 const NONCE = /^[A-Za-z0-9._:-]{8,160}$/u
-const HMAC_PATHS = new Set(['/v1/managed-sites/verify', '/v1/managed-sites/ownership/challenge', '/v1/managed-sites/ownership/verify'])
+const HMAC_PATHS = new Set(['/v1/managed-sites/verify', '/v1/managed-sites/ownership/challenge', '/v1/managed-sites/ownership/verify', '/v1/managed-sites/dns-tls/apply'])
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
 const sameHex = (left: string, right: string): boolean => {
