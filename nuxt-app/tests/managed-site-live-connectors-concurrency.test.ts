@@ -45,7 +45,7 @@ describe('managed-site connector CAS, provider race, and atomic domain claim bou
 
   it('rejects stale gate receipts after the release content projection changes', async () => {
     const line = await createAuthoritativeManagedSiteReleaseFixture({ buildPreview: false })
-    const built = await buildManagedSitePreview(1, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'stale-gate-preview' }, line.deploymentAdapter, { repository: line.live.repository, clock: () => managedSiteFixedNow })
+    const built = await buildManagedSitePreview(1, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'stale-gate-preview' }, line.deploymentAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => managedSiteFixedNow })
     const changed = await line.live.repository.transitionRelease(1, built.release.id, 'preview_ready', built.release.projectionFingerprint, { status: 'preview_ready', contentHash: 'f'.repeat(64), projectionFingerprint: stableFingerprint({ staleGateAttack: true }) })
     expect(changed).not.toBeNull()
     await expect(approveManagedSitePreview(1, { releaseId: built.release.id, idempotencyKey: 'stale-gate-approval' }, line.live.repository, () => managedSiteFixedNow)).rejects.toMatchObject({ statusCode: 409 })

@@ -7,6 +7,7 @@ import { isOpaqueReference } from '../../first-party-publishing/normalization'
 import { getManagedSiteRepository } from '../repository'
 import { getManagedSitePrePurchaseRepositories } from '../prepurchase-service'
 import type { ManagedSiteRepository } from '../types'
+import { assertManagedSiteProjectNotSuspended } from '../project-status'
 import type { ManagedSiteProductionRepositories, ManagedSiteProductionTransaction } from './deployment-orchestrator'
 import { getManagedSiteLiveConnectorRepository } from './repository'
 import { assertManagedSiteProviderAuthorityFingerprint, managedSiteProviderAuthorityMetadata, resolveManagedSiteCredential, resolveManagedSiteProviderAuthority } from './provider-registry'
@@ -127,15 +128,18 @@ export function managedSiteDomainConfirmationFingerprint(input: { ownerUserId: n
 
 export type ManagedSiteDelegatedDomainPurchaseAuthority = ManagedSiteCustomerDomainPurchaseAuthority & { sessionId: number; procurementPolicyFingerprint: string }
 
-export async function createManagedSiteDomainPurchaseIntent(ownerUserId: number, input: { projectId: number; releaseId: number; draftOrderId: number; quoteReceiptFingerprint: string; paymentReceiptFingerprint: string; ownerConfirmationFingerprint: string; executionMode: Exclude<ManagedSiteConnectorExecutionMode, 'dry_run'>; idempotencyKey: string }, adapter: ManagedSiteDomainAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date; authorizeDelegatedPurchase?: (scoped?: ManagedSiteProductionRepositories) => Promise<ManagedSiteDelegatedDomainPurchaseAuthority>; productionTransaction?: ManagedSiteProductionTransaction } = {}) {
+export async function createManagedSiteDomainPurchaseIntent(ownerUserId: number, input: { projectId: number; releaseId: number; draftOrderId: number; quoteReceiptFingerprint: string; paymentReceiptFingerprint: string; ownerConfirmationFingerprint: string; executionMode: Exclude<ManagedSiteConnectorExecutionMode, 'dry_run'>; idempotencyKey: string }, adapter: ManagedSiteDomainAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; managedRepository?: ManagedSiteRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date; authorizeDelegatedPurchase?: (scoped?: ManagedSiteProductionRepositories) => Promise<ManagedSiteDelegatedDomainPurchaseAuthority>; productionTransaction?: ManagedSiteProductionTransaction } = {}) {
   assertMode(input.executionMode)
   const repository = dependencies.repository || getManagedSiteLiveConnectorRepository()
+  const managedRepository = dependencies.managedRepository || getManagedSiteRepository()
   const resolver = dependencies.credentialResolver || resolveManagedSiteCredential
   const clock = dependencies.clock || (() => new Date())
+  await assertManagedSiteProjectNotSuspended(ownerUserId, input.projectId, managedRepository)
   const delegated = dependencies.authorizeDelegatedPurchase ? await dependencies.authorizeDelegatedPurchase() : null
   if (delegated && (delegated.kind !== 'customer_domain_delegation_v1' || !Number.isSafeInteger(delegated.sessionId) || delegated.sessionId < 1 || !/^[a-f0-9]{64}$/u.test(delegated.fingerprint) || !/^[a-f0-9]{64}$/u.test(delegated.procurementPolicyFingerprint))) conflict('Customer domain delegation authority is invalid.')
   const purchaseAuthority = delegated ? { kind: delegated.kind, sessionId: delegated.sessionId, delegationFingerprint: delegated.fingerprint, procurementPolicyFingerprint: delegated.procurementPolicyFingerprint } : null
   const beforeMutation = async () => {
+    await assertManagedSiteProjectNotSuspended(ownerUserId, input.projectId, managedRepository)
     await assertNoEffectiveRefund(ownerUserId, input.projectId, input.releaseId, repository)
     if (delegated) {
       const current = await dependencies.authorizeDelegatedPurchase!()
@@ -208,11 +212,13 @@ export async function createManagedSiteDomainPurchaseIntent(ownerUserId: number,
   }
 }
 
-export async function executeManagedSiteDnsTls(ownerUserId: number, input: { projectId: number; releaseId: number; executionMode: Exclude<ManagedSiteConnectorExecutionMode, 'dry_run'>; idempotencyKey: string }, adapter: ManagedSiteDnsTlsAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
+export async function executeManagedSiteDnsTls(ownerUserId: number, input: { projectId: number; releaseId: number; executionMode: Exclude<ManagedSiteConnectorExecutionMode, 'dry_run'>; idempotencyKey: string }, adapter: ManagedSiteDnsTlsAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; managedRepository?: ManagedSiteRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
   assertMode(input.executionMode)
   const repository = dependencies.repository || getManagedSiteLiveConnectorRepository()
+  const managedRepository = dependencies.managedRepository || getManagedSiteRepository()
   const resolver = dependencies.credentialResolver || resolveManagedSiteCredential
   const clock = dependencies.clock || (() => new Date())
+  await assertManagedSiteProjectNotSuspended(ownerUserId, input.projectId, managedRepository)
   const providerAuthority = await providerFor(ownerUserId, 'dns_tls', input.executionMode, repository, resolver)
   const release = await repository.findRelease(ownerUserId, input.releaseId)
   if (!release || release.projectId !== input.projectId || !['approved', 'payment_verified', 'provisioning', 'retry_wait'].includes(release.status)) conflict('DNS/TLS requires an approved owner-scoped release projection.')

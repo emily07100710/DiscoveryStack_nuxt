@@ -80,6 +80,7 @@ describe('managed-site contact inbox binding', () => {
       async listModuleFulfilmentsByDraftOrder() { return rows },
       async listPendingManualModuleFulfilments() { return [] },
       async closePendingManualModuleFulfilment() { return null },
+      async resolvePendingManualModuleFulfilment() { return null },
     }
     const fulfilments = await createPaidManagedSiteModuleFulfilments(1, 2, { id: 3, moduleSnapshot: ['contact_lead_capture'] } as any, quote.lines, repository)
     expect(fulfilments).toEqual([expect.objectContaining({ moduleKey: 'contact_lead_capture', mode: 'automatic', status: 'automatic', billedMinor: 0 })])

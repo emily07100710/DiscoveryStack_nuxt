@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { createError } from 'h3'
 import { stableFingerprint } from '../../seo-geo-core/repository'
 import { managedSiteQuoteLineBilling } from '../quote-line-billing'
-import { assertManagedSiteCheckoutOrigin } from './canonical'
+import { assertManagedSiteCheckoutOrigin, exactManagedSiteReturnOrigin } from './canonical'
 import { readBoundedManagedSiteResponse } from './hmac-broker-transport'
 import { assertAllowedManagedSiteProviderOrigin } from './provider-verifiers'
 import type { ManagedSiteCheckoutSessionAdapter, ManagedSiteCredentialResolver, ManagedSitePaymentEventType, ManagedSitePaymentWebhookAdapter, ManagedSiteSignatureVerifiedPaymentWebhook } from './types'
@@ -63,10 +63,9 @@ function exactStripeCheckoutOrigin(value: string): string {
 }
 
 function exactStripeReturnOrigin(value: string): string {
-  let parsed: URL
-  try { parsed = new URL(value) } catch { throw createError({ statusCode: 503, statusMessage: 'Verified Stripe return origin is not configured as an exact HTTPS origin.' }) }
-  if (parsed.protocol !== 'https:' || parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) throw createError({ statusCode: 503, statusMessage: 'Verified Stripe return origin is not configured as an exact HTTPS origin.' })
-  return parsed.origin
+  const origin = exactManagedSiteReturnOrigin(value)
+  if (!origin) throw createError({ statusCode: 503, statusMessage: 'Verified Stripe return origin is not configured as an exact HTTPS origin.' })
+  return origin
 }
 
 function metadataFor(input: Parameters<ManagedSiteCheckoutSessionAdapter['createSession']>[0]): StripeMetadata {

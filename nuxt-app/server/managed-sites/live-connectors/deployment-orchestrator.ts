@@ -9,6 +9,7 @@ import type { PreviewRepository } from '../ordering-types'
 import { getManagedSitePrePurchaseRepositories, managedSiteCommerceSnapshotFingerprint } from '../prepurchase-service'
 import { linkManagedSiteContentOperations } from '../modules-service'
 import type { ManagedSiteRepository } from '../types'
+import { assertManagedSiteProjectNotSuspended } from '../project-status'
 import { canonicalizeManagedDomain } from './domain-connectors'
 import { inspectManagedSitePreviewGates, runManagedSitePreviewGates } from './gates'
 import { getManagedSiteLiveConnectorRepository } from './repository'
@@ -51,6 +52,7 @@ export async function createGeneratedManagedSiteRelease(ownerUserId: number, inp
   const candidate = await repository.findGenerationCandidate(ownerUserId, input.generationCandidateId)
   const commerce = project ? await repository.findPrePurchaseBinding(ownerUserId, project.id) : null
   if (!project || !candidate || candidate.projectId !== project.id || !commerce || commerce.sourceVersionId !== candidate.sourceVersionId) throw createError({ statusCode: 404, statusMessage: 'Generated release pre-purchase lineage was not found.' })
+  await assertManagedSiteProjectNotSuspended(ownerUserId, project.id, managedRepository)
   const version = await managedRepository.findVersion(ownerUserId, candidate.sourceVersionId)
   if (!version || version.projectId !== project.id) conflict('Generated release source version does not match its project.')
   const domain = canonicalizeManagedDomain(input.canonicalDomain)
@@ -73,6 +75,7 @@ export async function createExistingSiteRelease(ownerUserId: number, input: { pr
   const prePurchaseBinding = project ? await repository.findPrePurchaseBinding(ownerUserId, project.id) : null
   const sourceVersionId = project?.activeVersionId || prePurchaseBinding?.sourceVersionId || null
   if (!project || !sourceVersionId) throw createError({ statusCode: 404, statusMessage: 'Existing managed-site project and exact source version were not found.' })
+  await assertManagedSiteProjectNotSuspended(ownerUserId, project.id, managedRepository)
   const version = await managedRepository.findVersion(ownerUserId, sourceVersionId)
   if (!version || version.projectId !== project.id) conflict('Existing-site active version lineage is invalid.')
   const domain = canonicalizeManagedDomain(input.canonicalDomain)
@@ -115,14 +118,16 @@ async function failAttempt(ownerUserId: number, attempt: Awaited<ReturnType<type
   return retryEligibleAt
 }
 
-export async function buildManagedSitePreview(ownerUserId: number, input: { releaseId: number; executionMode: 'mocked' | 'live'; idempotencyKey: string }, adapter: ManagedSiteDeploymentAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
+export async function buildManagedSitePreview(ownerUserId: number, input: { releaseId: number; executionMode: 'mocked' | 'live'; idempotencyKey: string }, adapter: ManagedSiteDeploymentAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; managedRepository?: ManagedSiteRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
   assertExecutionMode(input.executionMode)
   const repository = dependencies.repository || getManagedSiteLiveConnectorRepository()
+  const managedRepository = dependencies.managedRepository || getManagedSiteRepository()
   const resolver = dependencies.credentialResolver || resolveManagedSiteCredential
   const clock = dependencies.clock || (() => new Date())
-  const providerAuthority = await deploymentProvider(ownerUserId, input.executionMode, repository, resolver)
   const release = await repository.findRelease(ownerUserId, input.releaseId)
   if (!release || release.releaseKind !== 'generated_site' || !release.generationCandidateId || !['candidate', 'retry_wait', 'preview_ready'].includes(release.status)) conflict('Preview build requires a generated immutable candidate release.')
+  await assertManagedSiteProjectNotSuspended(ownerUserId, release.projectId, managedRepository)
+  const providerAuthority = await deploymentProvider(ownerUserId, input.executionMode, repository, resolver)
   const candidate = await repository.findGenerationCandidate(ownerUserId, release.generationCandidateId)
   if (!candidate || candidate.projectId !== release.projectId || candidate.contentHash !== release.contentHash) conflict('Preview build candidate identity is incomplete or mismatched.')
   const requestFingerprint = stableFingerprint({ operation: 'preview_build', releaseId: release.id, projectId: release.projectId, versionId: release.versionId, contentHash: release.contentHash, vaultReference: candidate.vaultReference, providerAuthorityFingerprint: providerAuthority.authorityFingerprint })
@@ -233,10 +238,10 @@ export async function deployManagedSiteProduction(ownerUserId: number, input: { 
   const productionTransaction: ManagedSiteProductionTransaction = dependencies.productionTransaction || (work => getManagedSitePrePurchaseRepositories().withTransaction!(scoped => work({ repository: scoped.live, orderingRepository: scoped.ordering, managedRepository: scoped.managed })))
   const resolver = dependencies.credentialResolver || resolveManagedSiteCredential
   const clock = dependencies.clock || (() => new Date())
-  const providerAuthority = await deploymentProvider(ownerUserId, input.executionMode, repository, resolver)
   const release = await repository.findRelease(ownerUserId, input.releaseId)
   if (!release || !['provisioning', 'retry_wait', 'deployment_pending', 'live_verified', 'geo_active'].includes(release.status) || !release.approvalFingerprint || !release.generationCandidateId) conflict('Production deployment requires generated candidate, owner approval, verified payment, domain, and DNS/TLS authority.')
   await assertManagedSiteProductionPayment(ownerUserId, release, repository, orderingRepository, managedRepository)
+  const providerAuthority = await deploymentProvider(ownerUserId, input.executionMode, repository, resolver)
   const candidate = await repository.findGenerationCandidate(ownerUserId, release.generationCandidateId)
   const receipts = await repository.listReceipts(ownerUserId, release.projectId)
   const preview = receipts.find(receipt => receipt.releaseId === release.id && receipt.receiptType === 'preview_build_verified' && receipt.contentHash === release.contentHash && receipt.receiptStatus === 'verified')
@@ -300,13 +305,14 @@ export async function deployManagedSiteProduction(ownerUserId: number, input: { 
   }
 }
 
-export async function createExistingSiteOwnershipChallenge(ownerUserId: number, input: { releaseId: number; idempotencyKey: string; executionMode?: 'mocked' | 'live' }, repository: ManagedSiteLiveConnectorRepository = getManagedSiteLiveConnectorRepository(), clock: () => Date = () => new Date(), adapter?: ManagedSiteExistingSiteOwnershipAdapter) {
+export async function createExistingSiteOwnershipChallenge(ownerUserId: number, input: { releaseId: number; idempotencyKey: string; executionMode?: 'mocked' | 'live' }, repository: ManagedSiteLiveConnectorRepository = getManagedSiteLiveConnectorRepository(), clock: () => Date = () => new Date(), adapter?: ManagedSiteExistingSiteOwnershipAdapter, managedRepository: ManagedSiteRepository = getManagedSiteRepository()) {
   if (!isOpaqueReference(input.idempotencyKey, 128)) invalid('Existing-site challenge idempotency key is invalid.')
   const executionMode = input.executionMode || 'mocked'
   assertExecutionMode(executionMode)
-  const providerAuthority = await resolveManagedSiteProviderAuthority(ownerUserId, 'dns_tls', executionMode, repository, resolveManagedSiteCredential)
   const release = await repository.findRelease(ownerUserId, input.releaseId)
   if (!release || release.releaseKind !== 'existing_site' || release.status !== 'candidate') conflict('Ownership challenge requires an existing-site release candidate.')
+  await assertManagedSiteProjectNotSuspended(ownerUserId, release.projectId, managedRepository)
+  const providerAuthority = await resolveManagedSiteProviderAuthority(ownerUserId, 'dns_tls', executionMode, repository, resolveManagedSiteCredential)
   const requestFingerprint = stableFingerprint({ ownerUserId, projectId: release.projectId, releaseId: release.id, canonicalDomain: release.canonicalDomain, contentHash: release.contentHash, operation: 'existing_site_challenge_create', providerAuthorityFingerprint: providerAuthority.authorityFingerprint })
   const claimProjectionFingerprint = stableFingerprint({ requestFingerprint, status: 'pending' })
   const claim = await repository.insertDomainClaim({ canonicalDomain: release.canonicalDomain, ownerUserId, projectId: release.projectId, releaseId: release.id, claimKind: 'existing', status: 'pending', authorityReceiptFingerprint: null, requestFingerprint, idempotencyKey: input.idempotencyKey, projectionFingerprint: claimProjectionFingerprint } as any)
@@ -320,14 +326,17 @@ export async function createExistingSiteOwnershipChallenge(ownerUserId: number, 
   return { release, claim, receipt, challengeReference, externalMutation: false }
 }
 
-export async function verifyExistingSiteOwnership(ownerUserId: number, input: { releaseId: number; challengeReceiptFingerprint: string; executionMode: 'mocked' | 'live'; idempotencyKey: string }, adapter: ManagedSiteExistingSiteOwnershipAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
+export async function verifyExistingSiteOwnership(ownerUserId: number, input: { releaseId: number; challengeReceiptFingerprint: string; executionMode: 'mocked' | 'live'; idempotencyKey: string }, adapter: ManagedSiteExistingSiteOwnershipAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; managedRepository?: ManagedSiteRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
   assertExecutionMode(input.executionMode)
   if (!/^[a-f0-9]{64}$/u.test(input.challengeReceiptFingerprint)) invalid('Existing-site ownership challenge receipt is invalid.')
   const repository = dependencies.repository || getManagedSiteLiveConnectorRepository()
+  const managedRepository = dependencies.managedRepository || getManagedSiteRepository()
   const resolver = dependencies.credentialResolver || resolveManagedSiteCredential
   const clock = dependencies.clock || (() => new Date())
-  const providerAuthority = await resolveManagedSiteProviderAuthority(ownerUserId, 'dns_tls', input.executionMode, repository, resolver)
   const release = await repository.findRelease(ownerUserId, input.releaseId)
+  if (!release) conflict('Ownership verification requires an existing-site release candidate.')
+  await assertManagedSiteProjectNotSuspended(ownerUserId, release.projectId, managedRepository)
+  const providerAuthority = await resolveManagedSiteProviderAuthority(ownerUserId, 'dns_tls', input.executionMode, repository, resolver)
   if (release?.releaseKind === 'existing_site' && release.status === 'live_verified') {
     const attempt = await repository.findAttemptByIdempotency(ownerUserId, input.idempotencyKey)
     const receipt = attempt?.status === 'succeeded' ? (await repository.listReceipts(ownerUserId, release.projectId)).find(item => item.attemptId === attempt.id && item.receiptType === 'existing_site_ownership_verified') : null
@@ -376,6 +385,7 @@ export async function activateManagedSiteGeoOperations(ownerUserId: number, inpu
   const release = await repository.findRelease(ownerUserId, input.releaseId)
   const project = release ? await managedRepository.findProject(ownerUserId, release.projectId) : null
   if (!release || !project || !['live_verified', 'geo_active'].includes(release.status) || !release.activeDeploymentReceiptFingerprint) conflict('GEO/content activation requires a provider-verified live site or verified existing-site ownership receipt.')
+  await assertManagedSiteProjectNotSuspended(ownerUserId, project.id, managedRepository)
   const authorityReceipt = await repository.findReceiptByFingerprint(ownerUserId, release.activeDeploymentReceiptFingerprint)
   if (!authorityReceipt || authorityReceipt.projectId !== release.projectId || !['production_deployment_verified', 'existing_site_ownership_verified'].includes(authorityReceipt.receiptType) || authorityReceipt.receiptStatus !== 'verified') conflict('GEO/content activation live-site authority receipt is invalid.')
   const activationRequestFingerprint = stableFingerprint({ ownerUserId, projectId: project.id, releaseId: release.id, liveAuthorityReceipt: authorityReceipt.receiptFingerprint, timeZone: input.timeZone, cadenceDays: input.cadenceDays, monthlyBudgetUnits: input.monthlyBudgetUnits, idempotencyKey: input.idempotencyKey })
@@ -393,16 +403,18 @@ export async function activateManagedSiteGeoOperations(ownerUserId: number, inpu
   return { release: updated, receipt, contentOperations: client, replayed: false }
 }
 
-export async function rollbackManagedSiteRelease(ownerUserId: number, input: { fromReleaseId: number; toReleaseId: number; executionMode: 'mocked' | 'live'; idempotencyKey: string }, adapter: ManagedSiteDeploymentAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
+export async function rollbackManagedSiteRelease(ownerUserId: number, input: { fromReleaseId: number; toReleaseId: number; executionMode: 'mocked' | 'live'; idempotencyKey: string }, adapter: ManagedSiteDeploymentAdapter, dependencies: { repository?: ManagedSiteLiveConnectorRepository; managedRepository?: ManagedSiteRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
   assertExecutionMode(input.executionMode)
   const repository = dependencies.repository || getManagedSiteLiveConnectorRepository()
+  const managedRepository = dependencies.managedRepository || getManagedSiteRepository()
   const resolver = dependencies.credentialResolver || resolveManagedSiteCredential
   const clock = dependencies.clock || (() => new Date())
-  const providerAuthority = await deploymentProvider(ownerUserId, input.executionMode, repository, resolver)
   const from = await repository.findRelease(ownerUserId, input.fromReleaseId)
   const to = await repository.findRelease(ownerUserId, input.toReleaseId)
   const retryingGovernedRollback = from?.status === 'retry_wait' && from.blockedReasonCode === 'ROLLBACK_FAILED' && from.nextSafeAction === 'retry_rollback_after_eligibility'
   if (!from || !to || from.id === to.id || from.projectId !== to.projectId || from.canonicalDomain !== to.canonicalDomain || (!['live_verified', 'geo_active', 'rolled_back'].includes(from.status) && !retryingGovernedRollback) || !to.activeDeploymentReceiptFingerprint) conflict('Rollback requires two owner-scoped releases for the same project/domain and a prior verified deployment receipt.')
+  await assertManagedSiteProjectNotSuspended(ownerUserId, from.projectId, managedRepository)
+  const providerAuthority = await deploymentProvider(ownerUserId, input.executionMode, repository, resolver)
   const replayAttempt = await repository.findAttemptByIdempotency(ownerUserId, input.idempotencyKey)
   if (replayAttempt?.status === 'succeeded' && from.status === 'rolled_back') {
     const receipt = (await repository.listReceipts(ownerUserId, to.projectId)).find(item => item.attemptId === replayAttempt.id && item.receiptType === 'rollback_deployment_verified')

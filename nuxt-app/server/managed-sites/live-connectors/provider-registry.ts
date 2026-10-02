@@ -14,7 +14,7 @@ import {
   type ManagedSiteProviderReadinessItem,
 } from './types'
 import { MANAGED_SITE_PROVIDER_VERIFIERS, resolveManagedSiteProviderVerifier, type ManagedSiteProviderVerifierRegistry } from './provider-verifiers'
-import { assertManagedSiteCheckoutOrigin } from './canonical'
+import { assertManagedSiteCheckoutOrigin, exactManagedSiteReturnOrigin } from './canonical'
 import { evaluateManagedSiteLaunchReadiness, isManagedSiteProductionPaymentIdentity } from './launch-readiness'
 
 const MAX_REGISTRY_BYTES = 64 * 1024
@@ -104,6 +104,11 @@ export async function configureManagedSiteProvider(
   const allowedTransportFields = input.providerKey === 'bailian-qwen' && input.capability === 'website_generator' ? new Set(['endpointOrigin', 'model']) : input.providerKey === 'stripe' && input.capability === 'payment' ? new Set(['endpointOrigin', 'checkoutOrigin', 'returnOrigin']) : paymentTransport ? new Set(['endpointOrigin', 'checkoutOrigin']) : input.providerKey === 'porkbun' && input.capability === 'domain_registration' || input.providerKey === 'internal-deployment-bearer-v1' && input.capability === 'deployment' || hmacBroker ? new Set(['endpointOrigin']) : new Set<string>()
   if (Object.keys(transportConfiguration).some(key => !allowedTransportFields.has(key))) invalid('Transport configuration is not allowlisted for this exact provider and capability.')
   if (paymentTransport && input.readinessStatus === 'configured') transportConfiguration.checkoutOrigin = assertManagedSiteCheckoutOrigin(transportConfiguration.checkoutOrigin)
+  if (input.providerKey === 'stripe' && input.capability === 'payment' && input.readinessStatus === 'configured') {
+    // Stripe checkout cannot be created without a return origin, so a configured row must carry a valid one.
+    if (transportConfiguration.returnOrigin === undefined || transportConfiguration.returnOrigin === null || transportConfiguration.returnOrigin === '') invalid('Stripe return origin is required.')
+    transportConfiguration.returnOrigin = exactManagedSiteReturnOrigin(transportConfiguration.returnOrigin) || invalid('Stripe return origin must be an exact HTTPS origin.')
+  }
   const configurationFingerprint = stableFingerprint({ capability: input.capability, providerKey: input.providerKey, readinessStatus: input.readinessStatus, credentialReference, transportConfiguration })
   const mockCapabilityIdentity = input.readinessStatus === 'mock' ? `mock-capability:${configurationFingerprint.slice(0, 48)}` : null
   const mockVerificationReceiptFingerprint = input.readinessStatus === 'mock' ? stableFingerprint({ authority: 'test-only-mock-provider-configuration', configurationFingerprint }) : null

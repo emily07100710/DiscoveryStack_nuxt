@@ -18,6 +18,7 @@ export async function getManagedSiteOrders(ownerUserId: number, dependencies: { 
       }
       const release = releases?.find(candidate => candidate.draftOrderId === order.id) || null
       const receipts = await repository.listReceiptsByDraftOrder(ownerUserId, order.id)
+      const moduleFulfilments = await ordering.listModuleFulfilmentsByDraftOrder(ownerUserId, order.id)
       return {
         id: order.id,
         status: order.status,
@@ -25,6 +26,7 @@ export async function getManagedSiteOrders(ownerUserId: number, dependencies: { 
         updatedAt: order.updatedAt,
         quote: quote?.ownerUserId === ownerUserId ? { plan: quote.planKey, currency: quote.currency, totalMinor: quote.totalMinor, cadence: quote.cadenceDays } : null,
         release: release ? { id: release.id, status: release.status } : null,
+        moduleFulfilments: moduleFulfilments.map(fulfilment => ({ moduleKey: fulfilment.moduleKey, mode: fulfilment.mode, status: fulfilment.status, billedMinor: fulfilment.billedMinor, customerVisibleStatus: fulfilment.customerVisibleStatus, ownerActionRequired: fulfilment.ownerActionRequired, completedAt: fulfilment.completedAt })),
         payments: receipts.filter(receipt => receipt.capability === 'payment').map(receipt => {
           const metadata = receipt.metadata && typeof receipt.metadata === 'object' && !Array.isArray(receipt.metadata) ? receipt.metadata as Record<string, unknown> : {}
           return {

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { createManagedSiteOperationState, refreshManagedSiteOperationScreen, runManagedSiteOperation } from '../../utils/managedSiteOperation'
+
 type Capability = 'website_generator' | 'payment' | 'domain_registration' | 'dns_tls' | 'deployment'
 type Readiness = { capability: Capability; providerKey: string | null; status: string; configured: boolean; verified: boolean; credentialReferenceConfigured: boolean; credentialResolvable: boolean; liveMutationAllowed: boolean; missing: string[]; blockedReasonCode: string | null; verifiedAt: string | null }
 type Workspace = {
@@ -9,8 +11,10 @@ type Workspace = {
   authority: Record<string, boolean>
   limitations: string[]
 }
-type ManagedSiteOrder = { id: number; status: string; createdAt: string; updatedAt: string; quote: { plan: string; currency: string; totalMinor: number; cadence: number } | null; release: { id: number; status: string } | null; payments: Array<{ receiptType: string; receiptStatus: string; externalReference: string | null; verifiedAt: string; checkoutUrl?: string }> }
+type ManagedSiteModuleFulfilment = { moduleKey: string; mode: string; status: string; billedMinor: number; customerVisibleStatus: string; ownerActionRequired: boolean; completedAt: string | null }
+type ManagedSiteOrder = { id: number; status: string; createdAt: string; updatedAt: string; quote: { plan: string; currency: string; totalMinor: number; cadence: number } | null; release: { id: number; status: string } | null; moduleFulfilments: ManagedSiteModuleFulfilment[]; payments: Array<{ receiptType: string; receiptStatus: string; externalReference: string | null; verifiedAt: string; checkoutUrl?: string }> }
 type OrdersResponse = { orders: ManagedSiteOrder[] }
+type ManagementResponse = { replayed: boolean }
 
 definePageMeta({ i18n: false, layout: 'owner' })
 useHead({ title: 'Managed Sites · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
@@ -26,17 +30,65 @@ const saving = ref(false)
 const notice = ref('')
 const failure = ref('')
 const operationStates = reactive<Record<string, 'idle' | 'loading' | 'success' | 'error' | 'blocked' | 'retry_wait'>>({})
-const form = reactive<{ capability: Capability; providerKey: string; readinessStatus: 'disabled' | 'configured'; credentialReference: string; endpointOrigin: string; checkoutOrigin: string; model: string }>({ capability: 'website_generator', providerKey: '', readinessStatus: 'disabled', credentialReference: '', endpointOrigin: '', checkoutOrigin: '', model: '' })
+const managementOperations = reactive(createManagedSiteOperationState())
+const form = reactive<{ capability: Capability; providerKey: string; readinessStatus: 'disabled' | 'configured'; credentialReference: string; endpointOrigin: string; checkoutOrigin: string; returnOrigin: string; model: string }>({ capability: 'website_generator', providerKey: '', readinessStatus: 'disabled', credentialReference: '', endpointOrigin: '', checkoutOrigin: '', returnOrigin: '', model: '' })
 const conversion = reactive({ previewId: '', quoteId: '', leadIntentId: '', draftOrderId: '' })
 const domains = reactive<Record<number, string>>({})
 const rollbacks = reactive<Record<number, { fromReleaseId: string; toReleaseId: string }>>({})
 const checkoutUrls = reactive<Record<number, string>>({})
 const reconciliationReports = reactive<Record<number, string>>({})
+const moduleReasons = reactive<Record<string, string>>({})
+const moduleConfirmations = reactive<Record<string, { operation: 'complete' | 'cancel'; idempotencyKey: string }>>({})
+const suspensionReasons = reactive<Record<number, string>>({})
+const suspensionConfirmations = reactive<Record<number, { idempotencyKey: string }>>({})
 watchEffect(() => { for (const row of workspace.value.projects) rollbacks[row.project.id] ||= { fromReleaseId: '', toReleaseId: '' } })
 const capabilityLabels: Record<Capability, string> = { website_generator: 'AI 網站生成', payment: '付款', domain_registration: '網域註冊', dns_tls: 'DNS / TLS', deployment: '部署' }
 const paymentStatusLabels: Record<string, string> = { draft: '草稿', payment_pending: '等待付款', payment_verified: '付款已驗證', refunded: '已退款', disputed: '付款爭議中', cancelled: '已取消', expired: '已過期' }
-async function refresh() { await Promise.all([refreshWorkspace(), refreshOrders()]) }
+async function refresh() { await Promise.all([refreshWorkspace(), refreshOrders()]); if (!error.value && !ordersError.value) managementOperations.refreshFailed = false }
+async function refreshScreen(): Promise<boolean> { await refresh(); return !error.value && !ordersError.value }
+async function retryScreenRefresh() { await refreshManagedSiteOperationScreen(managementOperations, refreshScreen) }
 function checkoutUrlFor(order: ManagedSiteOrder): string { return checkoutUrls[order.id] || order.payments.find(payment => payment.receiptType === 'checkout_session_created')?.checkoutUrl || '' }
+function moduleOperationKey(orderId: number, moduleKey: string): string { return `${orderId}:${moduleKey}` }
+function moduleStatus(fulfilment: ManagedSiteModuleFulfilment): string { return fulfilment.status === 'cancelled' ? '已取消・未開通' : fulfilment.customerVisibleStatus }
+
+function prepareModuleResolution(order: ManagedSiteOrder, fulfilment: ManagedSiteModuleFulfilment, operation: 'complete' | 'cancel') {
+  const key = moduleOperationKey(order.id, fulfilment.moduleKey)
+  failure.value = ''
+  if ((moduleReasons[key] || '').trim().length < 8) { failure.value = '請先輸入至少 8 個字元的處理原因。'; return }
+  moduleConfirmations[key] = { operation, idempotencyKey: crypto.randomUUID() }
+}
+
+async function resolveModule(order: ManagedSiteOrder, fulfilment: ManagedSiteModuleFulfilment) {
+  const key = moduleOperationKey(order.id, fulfilment.moduleKey); const confirmation = moduleConfirmations[key]
+  if (!confirmation) return
+  const operationKey = `module-${key}`
+  if (managementOperations.completed[operationKey]) return
+  operationStates[operationKey] = 'loading'; failure.value = ''; notice.value = ''
+  const endpoint: string = `/api/managed-sites/payments/orders/${order.id}/modules/${fulfilment.moduleKey}/${confirmation.operation}`
+  const outcome = await runManagedSiteOperation(managementOperations, operationKey, () => $fetch<ManagementResponse>(endpoint, { method: 'POST', body: { reason: moduleReasons[key]?.trim() || '', idempotencyKey: confirmation.idempotencyKey, confirmation: confirmation.operation === 'complete' ? 'service_delivered' : 'not_activated' } }), refreshScreen)
+  if (outcome.status === 'blocked') { const caught: any = outcome.error; operationStates[operationKey] = 'blocked'; failure.value = caught?.data?.message || '尚未確認操作結果，請重新整理確認。'; return }
+  operationStates[operationKey] = 'success'; delete moduleConfirmations[key]
+  if (outcome.status === 'success') notice.value = outcome.result.replayed ? '這筆處理先前已完成，沒有重複執行。' : confirmation.operation === 'complete' ? '已記錄服務實際完成並結案。' : '已取消未開通項目；訂單與付款紀錄未變更，也未自動退款。'
+}
+
+function prepareSuspension(projectId: number) {
+  failure.value = ''
+  if ((suspensionReasons[projectId] || '').trim().length < 8) { failure.value = '請先輸入至少 8 個字元的停用原因。'; return }
+  suspensionConfirmations[projectId] = { idempotencyKey: crypto.randomUUID() }
+}
+
+async function suspendProject(projectId: number) {
+  const confirmation = suspensionConfirmations[projectId]
+  if (!confirmation) return
+  const key = `suspend-${projectId}`
+  if (managementOperations.completed[key]) return
+  operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
+  const endpoint: string = `/api/managed-sites/payments/projects/${projectId}/suspend`
+  const outcome = await runManagedSiteOperation(managementOperations, key, () => $fetch<ManagementResponse>(endpoint, { method: 'POST', body: { reason: suspensionReasons[projectId]?.trim() || '', idempotencyKey: confirmation.idempotencyKey, confirmation: 'suspend_project' } }), refreshScreen)
+  if (outcome.status === 'blocked') { const caught: any = outcome.error; operationStates[key] = 'blocked'; failure.value = caught?.data?.message || '尚未確認操作結果，請重新整理確認。'; return }
+  operationStates[key] = 'success'; delete suspensionConfirmations[projectId]
+  if (outcome.status === 'success') notice.value = outcome.result.replayed ? '此專案先前已停用，沒有重複執行。' : '專案已停用；未退款、未刪除網域，也未取消 Stripe 訂閱。'
+}
 
 async function configureProvider() {
   saving.value = true; notice.value = ''; failure.value = ''
@@ -44,6 +96,7 @@ async function configureProvider() {
     const transportConfiguration: Record<string, string> = {}
     if (form.endpointOrigin.trim()) transportConfiguration.endpointOrigin = form.endpointOrigin.trim()
     if (form.checkoutOrigin.trim()) transportConfiguration.checkoutOrigin = form.checkoutOrigin.trim()
+    if (form.returnOrigin.trim()) transportConfiguration.returnOrigin = form.returnOrigin.trim()
     if (form.model.trim()) transportConfiguration.model = form.model.trim()
     await $fetch('/api/managed-sites/live-connectors/provider-configurations', { method: 'POST', body: { capability: form.capability, providerKey: form.providerKey.trim(), readinessStatus: form.readinessStatus, credentialReference: form.readinessStatus === 'configured' ? form.credentialReference.trim() : null, transportConfiguration, idempotencyKey: crypto.randomUUID() } })
     notice.value = 'Provider reference 已保存；configured 仍不代表 verified。'
@@ -160,8 +213,9 @@ const statusClass = (status: string) => status === 'verified' || status === 'liv
       <button type="button" :disabled="pending || ordersPending || saving" @click="refresh">重新整理</button>
     </header>
 
-    <p v-if="error" class="alert alert--error">Owner workspace 無法載入；沒有任何外部操作被執行。</p>
-    <p v-if="ordersError" class="alert alert--error">訂單清單無法載入；沒有任何付款狀態被推定。</p>
+    <p v-if="error && !managementOperations.refreshFailed" class="alert alert--error">Owner workspace 無法載入；沒有任何外部操作被執行。</p>
+    <p v-if="ordersError && !managementOperations.refreshFailed" class="alert alert--error">訂單清單無法載入；沒有任何付款狀態被推定。</p>
+    <p v-if="managementOperations.refreshFailed" class="alert alert--warning" role="status">操作已成功並已記錄，但畫面更新失敗；目前畫面可能是舊資料，請不要重複操作。 <button type="button" :disabled="pending || ordersPending" @click="retryScreenRefresh">重新整理畫面</button></p>
     <p v-if="notice" class="alert" role="status">{{ notice }}</p>
     <p v-if="failure" class="alert alert--error" role="alert">{{ failure }}</p>
 
@@ -182,8 +236,8 @@ const statusClass = (status: string) => status === 'verified' || status === 'liv
 
     <section class="panel">
       <div class="section-title"><div><p class="eyebrow">ORDERS</p><h2>Owner-scoped 付款訂單</h2><p class="muted">只顯示 server quote、release 與 reduced Stripe evidence；不顯示 credential 或任意 receipt metadata。</p></div><span class="status">{{ orders.length }} 筆</span></div>
-      <div v-if="orders.length" class="table-wrap"><table><thead><tr><th>Order</th><th>付款狀態</th><th>方案 / 金額</th><th>Release</th><th>Stripe evidence</th><th>Owner action</th></tr></thead><tbody>
-        <tr v-for="order in orders" :key="order.id"><td>#{{ order.id }}<br><span class="muted">{{ order.createdAt }}</span></td><td><span :class="statusClass(order.status)">{{ paymentStatusLabels[order.status] || order.status }}</span></td><td>{{ order.quote ? `${order.quote.plan} · ${order.quote.totalMinor} ${order.quote.currency} · ${order.quote.cadence} 天` : 'quote unavailable' }}</td><td>{{ order.release ? `#${order.release.id} · ${order.release.status}` : '尚未連結' }}</td><td><p v-for="payment in order.payments" :key="`${payment.receiptType}-${payment.externalReference}-${payment.verifiedAt}`" class="evidence-line">{{ payment.receiptType }} · {{ payment.receiptStatus }}<br><span class="selectable">{{ payment.externalReference || '無 object id' }}</span> · {{ payment.verifiedAt }}</p><p v-if="reconciliationReports[order.id]" class="muted">{{ reconciliationReports[order.id] }}</p></td><td><button type="button" :disabled="!order.release || operationStates[`order-checkout-${order.id}`] === 'loading'" @click="createOrderCheckout(order)">{{ operationStates[`order-checkout-${order.id}`] === 'loading' ? '產生中…' : '產生付款連結' }}</button> <button type="button" :disabled="!order.release || !order.payments.some(payment => payment.receiptType === 'checkout_session_created') || operationStates[`order-reconcile-${order.id}`] === 'loading'" @click="reconcileOrder(order)">{{ operationStates[`order-reconcile-${order.id}`] === 'loading' ? '核對中…' : '向 Stripe 核對' }}</button><p v-if="checkoutUrlFor(order)" class="selectable checkout-url">{{ checkoutUrlFor(order) }}</p></td></tr>
+      <div v-if="orders.length" class="table-wrap"><table><thead><tr><th>Order</th><th>付款狀態</th><th>方案 / 金額</th><th>模組履約</th><th>Release</th><th>Stripe evidence</th><th>Owner action</th></tr></thead><tbody>
+        <tr v-for="order in orders" :key="order.id"><td>#{{ order.id }}<br><span class="muted">{{ order.createdAt }}</span></td><td><span :class="statusClass(order.status)">{{ paymentStatusLabels[order.status] || order.status }}</span></td><td>{{ order.quote ? `${order.quote.plan} · ${order.quote.totalMinor} ${order.quote.currency} · ${order.quote.cadence} 天` : 'quote unavailable' }}</td><td><div v-for="fulfilment in order.moduleFulfilments" :key="fulfilment.moduleKey" class="module-fulfilment"><strong>{{ fulfilment.moduleKey }}</strong><span>{{ moduleStatus(fulfilment) }} · {{ fulfilment.billedMinor }}</span><span v-if="fulfilment.status === 'pending_manual_setup' && managementOperations.completed[`module-${moduleOperationKey(order.id, fulfilment.moduleKey)}`]" class="muted">已處理完成，等待畫面更新。</span><template v-else-if="fulfilment.status === 'pending_manual_setup'"><input v-model="moduleReasons[moduleOperationKey(order.id, fulfilment.moduleKey)]" maxlength="500" placeholder="輸入處理原因（至少 8 字元）" /><div v-if="!moduleConfirmations[moduleOperationKey(order.id, fulfilment.moduleKey)]"><button type="button" @click="prepareModuleResolution(order, fulfilment, 'complete')">服務已完成，結案</button> <button type="button" class="button--danger" @click="prepareModuleResolution(order, fulfilment, 'cancel')">取消未開通項目</button></div><div v-else class="confirmation"><p>{{ moduleConfirmations[moduleOperationKey(order.id, fulfilment.moduleKey)]?.operation === 'complete' ? '確認服務已實際開通' : '此項目未開通，取消後不退款、不影響訂單與付款紀錄' }}</p><button type="button" :disabled="operationStates[`module-${moduleOperationKey(order.id, fulfilment.moduleKey)}`] === 'loading'" @click="resolveModule(order, fulfilment)">確認執行</button> <button type="button" @click="delete moduleConfirmations[moduleOperationKey(order.id, fulfilment.moduleKey)]">返回</button></div></template></div><span v-if="!order.moduleFulfilments.length" class="muted">無模組履約資料</span></td><td>{{ order.release ? `#${order.release.id} · ${order.release.status}` : '尚未連結' }}</td><td><p v-for="payment in order.payments" :key="`${payment.receiptType}-${payment.externalReference}-${payment.verifiedAt}`" class="evidence-line">{{ payment.receiptType }} · {{ payment.receiptStatus }}<br><span class="selectable">{{ payment.externalReference || '無 object id' }}</span> · {{ payment.verifiedAt }}</p><p v-if="reconciliationReports[order.id]" class="muted">{{ reconciliationReports[order.id] }}</p></td><td><button type="button" :disabled="!order.release || operationStates[`order-checkout-${order.id}`] === 'loading'" @click="createOrderCheckout(order)">{{ operationStates[`order-checkout-${order.id}`] === 'loading' ? '產生中…' : '產生付款連結' }}</button> <button type="button" :disabled="!order.release || !order.payments.some(payment => payment.receiptType === 'checkout_session_created') || operationStates[`order-reconcile-${order.id}`] === 'loading'" @click="reconcileOrder(order)">{{ operationStates[`order-reconcile-${order.id}`] === 'loading' ? '核對中…' : '向 Stripe 核對' }}</button><p v-if="checkoutUrlFor(order)" class="selectable checkout-url">{{ checkoutUrlFor(order) }}</p></td></tr>
       </tbody></table></div>
       <p v-else class="muted">目前沒有 owner-scoped draft order。</p>
     </section>
@@ -205,13 +259,16 @@ const statusClass = (status: string) => status === 'verified' || status === 'liv
         <label>Opaque credential reference<input v-model="form.credentialReference" :required="form.readinessStatus === 'configured'" maxlength="160" placeholder="vault:managed-qwen-prod" autocomplete="off" /></label>
         <label>HTTPS endpoint（非 secret）<input v-model="form.endpointOrigin" maxlength="2048" placeholder="https://provider.example/v1" /></label>
         <label>Checkout exact origin（payment）<input v-model="form.checkoutOrigin" maxlength="2048" placeholder="https://checkout.provider.example" /></label>
+        <label>付款後返回 exact origin（Stripe payment 必填）<input v-model="form.returnOrigin" maxlength="2048" placeholder="https://ops.example.com" /></label>
         <label>Model（可選）<input v-model="form.model" maxlength="128" placeholder="qwen-plus" /></label>
         <button type="submit" :disabled="saving">{{ saving ? '保存中…' : '保存 reference' }}</button>
       </form>
     </section>
 
     <section v-for="row in workspace.projects" :key="row.project.id" class="panel">
-      <div class="section-title"><div><p class="eyebrow">PROJECT {{ row.project.id }}</p><h2>{{ row.project.canonicalClientIdentity }}</h2><p class="muted">{{ row.project.canonicalWebsiteIdentity }}</p></div><div><button type="button" :disabled="saving || !(row.prePurchaseBinding?.sourceVersionId || row.project.activeVersionId)" @click="generationDryRun(row)">Generation dry-run</button> <button v-if="row.prePurchaseBinding && !row.candidates.length" type="button" :disabled="operationStates[`generation-${row.project.id}`] === 'loading'" @click="generateCandidate(row)">{{ operationStates[`generation-${row.project.id}`] === 'loading' ? '生成中…' : '生成 live candidate' }}</button></div></div>
+      <div class="section-title"><div><p class="eyebrow">PROJECT {{ row.project.id }}</p><h2>{{ row.project.canonicalClientIdentity }}</h2><p class="muted">{{ row.project.canonicalWebsiteIdentity }}</p><span :class="statusClass(row.project.status === 'suspended' ? 'blocked' : row.project.status)">{{ row.project.status === 'suspended' ? '已停用' : row.project.status }}</span></div><div><button type="button" :disabled="saving || row.project.status === 'suspended' || !(row.prePurchaseBinding?.sourceVersionId || row.project.activeVersionId)" @click="generationDryRun(row)">Generation dry-run</button> <button v-if="row.project.status !== 'suspended' && row.prePurchaseBinding && !row.candidates.length" type="button" :disabled="operationStates[`generation-${row.project.id}`] === 'loading'" @click="generateCandidate(row)">{{ operationStates[`generation-${row.project.id}`] === 'loading' ? '生成中…' : '生成 live candidate' }}</button></div></div>
+      <p v-if="row.project.status !== 'suspended' && managementOperations.completed[`suspend-${row.project.id}`]" class="muted">此專案已停用，等待畫面更新。</p>
+      <div v-else-if="row.project.status !== 'suspended'" class="suspension"><label>停用原因<input v-model="suspensionReasons[row.project.id]" maxlength="500" placeholder="輸入停用原因（至少 8 字元）" /></label><button v-if="!suspensionConfirmations[row.project.id]" type="button" class="button--danger" @click="prepareSuspension(row.project.id)">停用此專案</button><div v-else class="confirmation"><p>停用只會停止本系統後續的採購、DNS、部署與編輯；已送出的網域採購無法撤回；不會自動退款、不會刪除網域、不會取消 Stripe 訂閱（Stripe 訂閱需另外在 Stripe 處理）。</p><button type="button" :disabled="operationStates[`suspend-${row.project.id}`] === 'loading'" @click="suspendProject(row.project.id)">確認停用此專案</button> <button type="button" @click="delete suspensionConfirmations[row.project.id]">返回</button></div></div>
       <p v-if="row.prePurchaseBinding" class="muted">pre-purchase lineage: preview #{{ row.prePurchaseBinding.previewId }} · quote #{{ row.prePurchaseBinding.quoteId }} · order #{{ row.prePurchaseBinding.draftOrderId }} · source version #{{ row.prePurchaseBinding.sourceVersionId }} · 未付款</p>
       <div v-if="row.candidates.length && !row.releases.length" class="release-create"><label>Canonical domain<input v-model="domains[row.project.id]" placeholder="client.example.com" /></label><button v-for="candidate in row.candidates" :key="candidate.id" type="button" :disabled="!domains[row.project.id] || operationStates[`release-${candidate.id}`] === 'loading'" @click="createRelease(row, candidate)">建立 candidate #{{ candidate.id }} release</button></div>
       <div v-if="(row.project.activeVersionId || row.prePurchaseBinding?.sourceVersionId) && !row.releases.length" class="release-create"><label>Verified-site domain target<input v-model="domains[row.project.id]" placeholder="existing.example.com" /></label><button type="button" :disabled="!domains[row.project.id] || operationStates[`existing-${row.project.id}`] === 'loading'" @click="createExistingRelease(row)">建立 ownership challenge flow</button></div>
@@ -229,5 +286,5 @@ const statusClass = (status: string) => status === 'verified' || status === 'liv
 </template>
 
 <style scoped>
-.workbench{padding:3rem clamp(1rem,4vw,4rem);display:grid;gap:1.2rem}.hero,.section-title{display:flex;justify-content:space-between;align-items:flex-end;gap:1rem}.hero{padding:2rem;border-radius:1rem;background:#121b2a;color:#fff}.hero p{max-width:55rem;color:#bdc8d7;line-height:1.65}.eyebrow{margin:0 0 .45rem;color:#5572a8;font:800 .68rem/1.2 ui-monospace,monospace;letter-spacing:.12em}.hero .eyebrow{color:#8eb7ec}h1{margin:0;font-size:clamp(2rem,5vw,4rem)}h2,h3{margin:.2rem 0}.panel{padding:1.4rem;border:1px solid #d9e0e8;border-radius:.9rem;background:#fff}.capability-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.75rem;margin-top:1rem}.card{padding:1rem;border:1px solid #e1e6ec;border-radius:.7rem}.status{display:inline-flex;padding:.25rem .5rem;border-radius:999px;background:#edf1f5;color:#46566e;font:800 .65rem/1.2 ui-monospace,monospace}.status--ready{background:#e3f4e9;color:#1f6a3b}.status--blocked{background:#fff0e6;color:#9a4e19}.muted{color:#6e7b8d}.config-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.8rem;margin-top:1rem}.config-form label{display:grid;gap:.35rem;color:#4a586b;font-size:.78rem}.config-form input,.config-form select{width:100%;padding:.7rem;border:1px solid #ccd5df;border-radius:.5rem;background:#fff}.config-form button,.hero button,.section-title button{align-self:end;border:0;border-radius:.55rem;padding:.75rem 1rem;background:#315bd6;color:#fff;font-weight:800}.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem;margin-top:1rem}.summary-grid div{display:grid;padding:.8rem;border-radius:.6rem;background:#f2f5f8}.summary-grid strong{font-size:1.5rem}.summary-grid span{color:#6e7b8d;font-size:.72rem}.table-wrap{overflow:auto;margin-top:1rem}table{width:100%;border-collapse:collapse;font-size:.76rem}th,td{padding:.65rem;text-align:left;border-bottom:1px solid #e4e8ed;white-space:nowrap}.evidence-line{margin:.2rem 0}.selectable{user-select:text;font-family:ui-monospace,monospace}.checkout-url{max-width:28rem;white-space:normal;overflow-wrap:anywhere}.attempts{margin-top:1rem;padding:1rem;border-radius:.6rem;background:#fff5ec;color:#704421}.alert{padding:.8rem 1rem;border-radius:.6rem;background:#e5f1ff}.alert--error{background:#ffebe8;color:#8d3027}.boundary{color:#5d6878;font-size:.78rem;line-height:1.6}@media(max-width:1100px){.capability-grid{grid-template-columns:repeat(2,1fr)}.config-form{grid-template-columns:1fr 1fr}}@media(max-width:700px){.hero,.section-title{display:block}.capability-grid,.config-form,.summary-grid{grid-template-columns:1fr}.hero button,.section-title button{margin-top:1rem}}
+.workbench{padding:3rem clamp(1rem,4vw,4rem);display:grid;gap:1.2rem}.hero,.section-title{display:flex;justify-content:space-between;align-items:flex-end;gap:1rem}.hero{padding:2rem;border-radius:1rem;background:#121b2a;color:#fff}.hero p{max-width:55rem;color:#bdc8d7;line-height:1.65}.eyebrow{margin:0 0 .45rem;color:#5572a8;font:800 .68rem/1.2 ui-monospace,monospace;letter-spacing:.12em}.hero .eyebrow{color:#8eb7ec}h1{margin:0;font-size:clamp(2rem,5vw,4rem)}h2,h3{margin:.2rem 0}.panel{padding:1.4rem;border:1px solid #d9e0e8;border-radius:.9rem;background:#fff}.capability-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.75rem;margin-top:1rem}.card{padding:1rem;border:1px solid #e1e6ec;border-radius:.7rem}.status{display:inline-flex;padding:.25rem .5rem;border-radius:999px;background:#edf1f5;color:#46566e;font:800 .65rem/1.2 ui-monospace,monospace}.status--ready{background:#e3f4e9;color:#1f6a3b}.status--blocked{background:#fff0e6;color:#9a4e19}.muted{color:#6e7b8d}.config-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.8rem;margin-top:1rem}.config-form label,.suspension label{display:grid;gap:.35rem;color:#4a586b;font-size:.78rem}.config-form input,.config-form select,.suspension input,.module-fulfilment input{width:100%;padding:.7rem;border:1px solid #ccd5df;border-radius:.5rem;background:#fff}.config-form button,.hero button,.section-title button{align-self:end;border:0;border-radius:.55rem;padding:.75rem 1rem;background:#315bd6;color:#fff;font-weight:800}.button--danger{background:#a33b32}.module-fulfilment{display:grid;gap:.4rem;padding:.6rem 0;white-space:normal}.module-fulfilment+.module-fulfilment{border-top:1px solid #e4e8ed}.confirmation{max-width:36rem;padding:.7rem;border-radius:.5rem;background:#fff0e6;white-space:normal}.suspension{display:grid;grid-template-columns:minmax(16rem,1fr) auto;align-items:end;gap:.8rem;margin-top:1rem;padding:1rem;border:1px solid #edc8c3;border-radius:.6rem}.suspension .confirmation{grid-column:1/-1}.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem;margin-top:1rem}.summary-grid div{display:grid;padding:.8rem;border-radius:.6rem;background:#f2f5f8}.summary-grid strong{font-size:1.5rem}.summary-grid span{color:#6e7b8d;font-size:.72rem}.table-wrap{overflow:auto;margin-top:1rem}table{width:100%;border-collapse:collapse;font-size:.76rem}th,td{padding:.65rem;text-align:left;border-bottom:1px solid #e4e8ed;white-space:nowrap}.evidence-line{margin:.2rem 0}.selectable{user-select:text;font-family:ui-monospace,monospace}.checkout-url{max-width:28rem;white-space:normal;overflow-wrap:anywhere}.attempts{margin-top:1rem;padding:1rem;border-radius:.6rem;background:#fff5ec;color:#704421}.alert{padding:.8rem 1rem;border-radius:.6rem;background:#e5f1ff}.alert--error{background:#ffebe8;color:#8d3027}.alert--warning{background:#fff5ec;color:#704421}.boundary{color:#5d6878;font-size:.78rem;line-height:1.6}@media(max-width:1100px){.capability-grid{grid-template-columns:repeat(2,1fr)}.config-form{grid-template-columns:1fr 1fr}}@media(max-width:700px){.hero,.section-title{display:block}.capability-grid,.config-form,.summary-grid,.suspension{grid-template-columns:1fr}.hero button,.section-title button{margin-top:1rem}}
 </style>

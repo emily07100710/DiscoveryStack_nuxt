@@ -17,7 +17,7 @@ describe.runIf(process.env.DS_RUN_REAL_MANAGED_DEPLOYMENT_TESTS === '1')('manage
     await configureManagedSiteProvider(1, { capability: 'deployment', providerKey: 'internal-deployment-bearer-v1', readinessStatus: 'configured', credentialReference: configuration!.deploymentCredentialReference, transportConfiguration: { endpointOrigin: MANAGED_SITE_INTERNAL_BROKER_ORIGIN }, idempotencyKey: 'real-deployment-provider-configuration' }, line.live.repository)
     await verifyManagedSiteProviderConfiguration(1, 'deployment', line.live.repository)
     const adapter = await managedSiteLiveDeploymentAdapter(1, line.live.repository)
-    const result = await buildManagedSitePreview(1, { releaseId: line.release.release.id, executionMode: 'live', idempotencyKey: `real-preview-${Date.now()}` }, adapter, { repository: line.live.repository })
+    const result = await buildManagedSitePreview(1, { releaseId: line.release.release.id, executionMode: 'live', idempotencyKey: `real-preview-${Date.now()}` }, adapter, { repository: line.live.repository, managedRepository: line.managed.repository })
     const previewUrl = result.release?.previewUrl || ''; expect(previewUrl).toMatch(/^https:\/\/[^/]+\.pages\.dev\/?$/u)
     console.log(`REAL MANAGED-SITE PREVIEW URL: ${previewUrl}`)
     const deadline = Date.now() + 60_000; let observed = ''

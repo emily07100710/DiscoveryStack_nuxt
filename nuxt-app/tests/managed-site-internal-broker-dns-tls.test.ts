@@ -132,7 +132,7 @@ describe('internal DNS/TLS broker readiness', () => {
     await verifyManagedSiteProviderConfiguration(1, 'dns_tls', line.live.repository, credentialResolver, () => NOW, undefined, broker)
     const adapter = createInternalDnsTlsBrokerHmacV1Adapter({ endpointOrigin: MANAGED_SITE_INTERNAL_BROKER_ORIGIN, providerKey: providerCore.providerKey, credentialReference: configuration.dnsTlsCredentialReference, resolveCredential: credentialResolver, fetchImpl: broker, clock: () => NOW })
     const command = { projectId: line.prePurchase.project.id, releaseId: line.release.release.id, executionMode: 'live' as const, idempotencyKey: 'dns-service-readiness' }
-    const dependencies = { repository: line.live.repository, credentialResolver, clock: () => NOW }
+    const dependencies = { repository: line.live.repository, managedRepository: line.managed.repository, credentialResolver, clock: () => NOW }
     await expect(executeManagedSiteDnsTls(1, command, adapter, dependencies)).rejects.toMatchObject({ statusCode: 409 })
     expect(cloudflareFetch).not.toHaveBeenCalled()
     // Synthetic pre-existing ownership authority; the broker never creates it.

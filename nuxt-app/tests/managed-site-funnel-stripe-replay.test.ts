@@ -33,7 +33,7 @@ async function checkoutLine(mode: 'test' | 'live') {
   const preview = (await line.ordering.repository.findPreviewById(line.preview.preview.id))!
   await funnel.repository.updateSession(created.sessionId, { status: 'checkout_pending', releaseId: release.id, projectId: release.projectId, previewId: preview.id, previewAccessTokenHash: preview.accessTokenHash, draftOrderId: line.order.order.id, builtPreviewUrl: release.previewUrl })
   let now = new Date(managedSiteFixedNow)
-  const dependencies: ManagedSiteFunnelOrchestratorDependencies = { funnelRepository: funnel.repository, orderingRepository: line.ordering.repository, connectorRepository: line.live.repository, executionMode: 'live', clock: () => now, resolveOwnerUserId: async () => line.ownerUserId }
+  const dependencies: ManagedSiteFunnelOrchestratorDependencies = { funnelRepository: funnel.repository, orderingRepository: line.ordering.repository, connectorRepository: line.live.repository, managedRepository: line.managed.repository, executionMode: 'live', clock: () => now, resolveOwnerUserId: async () => line.ownerUserId }
   const fetchSpy = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
     const request = new URLSearchParams(String(init?.body || ''))
     const requestMode = new Headers(init?.headers).get('authorization')?.includes('sk_live_') ? 'live' : 'test'

@@ -100,6 +100,11 @@ export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSi
       if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
       return repository.findModuleFulfilment(ownerUserId, draftOrderId, moduleKey)
     },
+    async resolvePendingManualModuleFulfilment(ownerUserId, draftOrderId, moduleKey, status, changedAt) {
+      const result = await database.update(managedSiteModuleFulfilments).set({ status, customerVisibleStatus: status === 'manual_setup_completed' ? '客服已完成設定' : '已取消・未開通', ownerActionRequired: false, completedAt: status === 'manual_setup_completed' ? changedAt : null, updatedAt: changedAt } as any).where(and(eq(managedSiteModuleFulfilments.ownerUserId, ownerUserId), eq(managedSiteModuleFulfilments.draftOrderId, draftOrderId), eq(managedSiteModuleFulfilments.moduleKey, moduleKey), eq(managedSiteModuleFulfilments.status, 'pending_manual_setup')))
+      if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
+      return repository.findModuleFulfilment(ownerUserId, draftOrderId, moduleKey)
+    },
     async findPrePurchaseBinding(ownerUserId, projectId) {
       const [row] = await database.select().from(managedSitePrePurchaseBindings).where(and(eq(managedSitePrePurchaseBindings.ownerUserId, ownerUserId), eq(managedSitePrePurchaseBindings.projectId, projectId))).limit(1)
       return row || null

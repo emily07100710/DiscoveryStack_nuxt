@@ -4,6 +4,9 @@ import { stableFingerprint } from '../../seo-geo-core/repository'
 import { isOpaqueReference } from '../../first-party-publishing/normalization'
 import { getPreviewRepository } from '../ordering-repository'
 import type { PreviewRepository } from '../ordering-types'
+import { getManagedSiteRepository } from '../repository'
+import { assertManagedSiteProjectNotSuspended } from '../project-status'
+import type { ManagedSiteRepository } from '../types'
 import { getManagedSiteLiveConnectorRepository } from './repository'
 import { requireVerifiedManagedSiteProvider, resolveManagedSiteCredential } from './provider-registry'
 import { managedSiteCommerceSnapshotFingerprint } from '../prepurchase-service'
@@ -16,7 +19,7 @@ function invalid(message: string): never { throw createError({ statusCode: 422, 
 function conflict(message: string): never { throw createError({ statusCode: 409, statusMessage: message }) }
 function unavailable(message: string): never { throw createError({ statusCode: 503, statusMessage: message }) }
 
-export async function createManagedSiteCheckoutSession(ownerUserId: number, input: { releaseId: number; draftOrderId: number; executionMode: 'mocked' | 'live'; idempotencyKey: string }, adapter: ManagedSiteCheckoutSessionAdapter, dependencies: { connectorRepository?: ManagedSiteLiveConnectorRepository; orderingRepository?: PreviewRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
+export async function createManagedSiteCheckoutSession(ownerUserId: number, input: { releaseId: number; draftOrderId: number; executionMode: 'mocked' | 'live'; idempotencyKey: string }, adapter: ManagedSiteCheckoutSessionAdapter, dependencies: { connectorRepository?: ManagedSiteLiveConnectorRepository; orderingRepository?: PreviewRepository; managedRepository?: ManagedSiteRepository; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date } = {}) {
   if (![input.releaseId, input.draftOrderId].every(value => Number.isSafeInteger(value) && value > 0) || !isOpaqueReference(input.idempotencyKey, 128)) invalid('Checkout session request identity is invalid.')
   if (input.executionMode === 'mocked' && process.env.NODE_ENV !== 'test') unavailable('Mock checkout sessions are restricted to tests.')
   const repository = dependencies.connectorRepository || getManagedSiteLiveConnectorRepository()
@@ -25,6 +28,9 @@ export async function createManagedSiteCheckoutSession(ownerUserId: number, inpu
   const clock = dependencies.clock || (() => new Date())
   const order = await ordering.findDraftOrderById(input.draftOrderId)
   if (!order || order.ownerUserId !== ownerUserId) throw createError({ statusCode: 404, statusMessage: 'Owner-scoped draft order was not found.' })
+  // A suspended or unavailable project must stop here: before provider lookup,
+  // attempt rows, the adapter call, and the replay of an existing checkout link.
+  if (order.projectId) await assertManagedSiteProjectNotSuspended(ownerUserId, order.projectId, dependencies.managedRepository || getManagedSiteRepository())
   if (order.status !== 'payment_pending') conflict('Checkout session requires a payment-pending server-owned order.')
   const quote = await ordering.findQuoteById(order.quoteId)
   const lines = quote ? await ordering.listQuoteLines(quote.id) : []

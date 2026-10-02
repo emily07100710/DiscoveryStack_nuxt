@@ -1,8 +1,11 @@
 import { createError } from 'h3'
 import type { ManagedSiteModuleFulfilment, ManagedSiteQuote, ManagedSiteQuoteLine } from '../../database/schema'
+import { stableFingerprint } from '../../seo-geo-core/repository'
+import { eventFingerprint } from '../normalization'
 import { MODULE_CATALOG } from '../ordering-service'
 import { SITE_MODULES, type SiteModule } from '../site-spec'
 import { managedSiteBlueprintModuleMode } from '../live-connectors/blueprint'
+import type { ManagedSiteJointTransaction } from '../live-connectors/payment-webhook'
 
 export type ManagedSiteModuleFulfilmentRepository = {
   findModuleFulfilment(ownerUserId: number, draftOrderId: number, moduleKey: SiteModule): Promise<ManagedSiteModuleFulfilment | null>
@@ -10,6 +13,7 @@ export type ManagedSiteModuleFulfilmentRepository = {
   listModuleFulfilmentsByDraftOrder(ownerUserId: number, draftOrderId: number): Promise<ManagedSiteModuleFulfilment[]>
   listPendingManualModuleFulfilments(ownerUserId: number): Promise<ManagedSiteModuleFulfilment[]>
   closePendingManualModuleFulfilment(ownerUserId: number, draftOrderId: number, moduleKey: SiteModule, completedAt: Date): Promise<ManagedSiteModuleFulfilment | null>
+  resolvePendingManualModuleFulfilment(ownerUserId: number, draftOrderId: number, moduleKey: SiteModule, status: 'manual_setup_completed' | 'cancelled', changedAt: Date): Promise<ManagedSiteModuleFulfilment | null>
 }
 
 /** Catalog activation remains canonical; an inert generated slot can only downgrade to manual service. */
@@ -56,7 +60,7 @@ export async function createPaidManagedSiteModuleFulfilments(
     }
     const existing = await repository.findModuleFulfilment(ownerUserId, draftOrderId, moduleKey)
     if (existing) {
-      if (existing.quoteId !== quote.id || existing.mode !== expected.mode || existing.billedMinor !== expected.billedMinor || existing.status !== expected.status && existing.status !== 'manual_setup_completed') {
+      if (existing.quoteId !== quote.id || existing.mode !== expected.mode || existing.billedMinor !== expected.billedMinor || existing.status !== expected.status && existing.status !== 'manual_setup_completed' && !(expected.status === 'pending_manual_setup' && existing.status === 'cancelled')) {
         throw createError({ statusCode: 409, statusMessage: 'Module fulfilment lineage conflicts with the paid quote.' })
       }
       rows.push(existing)
@@ -65,6 +69,38 @@ export async function createPaidManagedSiteModuleFulfilments(
     rows.push(await repository.insertModuleFulfilment(expected))
   }
   return rows
+}
+
+export async function resolveManagedSiteManualModuleFulfilment(
+  ownerUserId: number,
+  draftOrderId: number,
+  moduleKey: SiteModule,
+  targetStatus: 'manual_setup_completed' | 'cancelled',
+  input: { reason: string; idempotencyKey: string },
+  jointTransaction: ManagedSiteJointTransaction,
+  changedAt: Date = new Date(),
+): Promise<{ fulfilment: ManagedSiteModuleFulfilment; replayed: boolean }> {
+  return jointTransaction(async repositories => {
+    const order = await repositories.ordering.findDraftOrderById(draftOrderId)
+    if (!order || order.ownerUserId !== ownerUserId) throw createError({ statusCode: 404, statusMessage: 'Managed-site order was not found.' })
+    if (!order.projectId) throw createError({ statusCode: 409, statusMessage: 'Managed-site order is not linked to a project, so its module fulfilment cannot be resolved.' })
+    const current = await repositories.ordering.findModuleFulfilment(ownerUserId, draftOrderId, moduleKey)
+    if (!current) throw createError({ statusCode: 404, statusMessage: 'Managed-site module fulfilment was not found.' })
+    if (current.status === targetStatus) return { fulfilment: current, replayed: true }
+    if (current.status !== 'pending_manual_setup') throw createError({ statusCode: 409, statusMessage: 'Managed-site module fulfilment is not pending manual setup and cannot change terminal state.' })
+    const previousStatus = current.status
+    const fulfilment = await repositories.ordering.resolvePendingManualModuleFulfilment(ownerUserId, draftOrderId, moduleKey, targetStatus, changedAt)
+    if (!fulfilment) {
+      const replay = await repositories.ordering.findModuleFulfilment(ownerUserId, draftOrderId, moduleKey)
+      if (replay?.status === targetStatus) return { fulfilment: replay, replayed: true }
+      throw createError({ statusCode: 409, statusMessage: 'Managed-site module fulfilment changed concurrently and was not resolved.' })
+    }
+    const action = targetStatus === 'manual_setup_completed' ? 'managed_site_module_fulfilment_completed' : 'managed_site_module_fulfilment_cancelled'
+    const beforeFingerprint = stableFingerprint({ draftOrderId, moduleKey, status: previousStatus })
+    const afterFingerprint = stableFingerprint({ draftOrderId, moduleKey, status: fulfilment.status })
+    await repositories.managed.insertAuditEvent({ ownerUserId, projectId: order.projectId, actorUserId: ownerUserId, authority: 'owner_session', action, beforeFingerprint, afterFingerprint, eventFingerprint: eventFingerprint(ownerUserId, order.projectId, action, input.idempotencyKey, beforeFingerprint, afterFingerprint), metadata: { draftOrderId, moduleKey, previousStatus, status: fulfilment.status, reason: input.reason, billedMinor: fulfilment.billedMinor, refundIssued: false, providerCallMade: false } })
+    return { fulfilment, replayed: false }
+  })
 }
 
 export async function closeManagedSiteManualModuleFulfilment(

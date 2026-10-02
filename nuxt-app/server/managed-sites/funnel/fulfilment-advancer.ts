@@ -72,7 +72,7 @@ export async function advancePaidManagedSiteFunnel(options: { afterId?: number; 
           const idempotencyKey = funnelFulfilmentKey(session.id, release.id, 'dns_tls')
           if (!eligibleAttempt(await repository.findAttemptByIdempotency(session.ownerUserId, idempotencyKey), clock())) { summary.waiting++; continue }
           const adapter = await (dependencies.dnsTlsAdapter || managedSiteLiveDnsTlsAdapter)(session.ownerUserId, repository)
-          const result = await executeManagedSiteDnsTls(session.ownerUserId, { projectId: release.projectId, releaseId: release.id, executionMode, idempotencyKey }, adapter, { repository, credentialResolver: dependencies.credentialResolver, clock })
+          const result = await executeManagedSiteDnsTls(session.ownerUserId, { projectId: release.projectId, releaseId: release.id, executionMode, idempotencyKey }, adapter, { repository, managedRepository, credentialResolver: dependencies.credentialResolver, clock })
           if (!result.ready) { summary.waiting++; continue }
         }
         // Recheck payment after DNS observation, before production acquires transport authority.

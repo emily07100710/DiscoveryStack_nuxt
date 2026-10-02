@@ -79,7 +79,7 @@ export type ManagedSitePaymentWebhookFaultPoint = 'after_inbox_claim' | 'after_p
 export type ManagedSitePaymentWebhookProcessingDependencies = { connectorRepository?: ManagedSiteLiveConnectorRepository; orderingRepository?: PreviewRepository; managedRepository?: ManagedSiteRepository; jointTransaction?: ManagedSiteJointTransaction; credentialResolver?: ManagedSiteCredentialResolver; clock?: () => Date; faultInjector?: (point: ManagedSitePaymentWebhookFaultPoint) => void | Promise<void> }
 
 function nonNestedOrdering(repository: PreviewRepository): PreviewRepository { return { ...repository, transaction: async work => work(repository) } }
-function productionJointTransaction(): ManagedSiteJointTransaction {
+export function productionManagedSiteJointTransaction(): ManagedSiteJointTransaction {
   const database = getDatabase()
   if (!database) throw createError({ statusCode: 503, statusMessage: 'Managed-site joint transaction storage is unavailable.' })
   return work => database.transaction((transaction: any) => work({ connector: makeManagedSiteLiveConnectorRepository(transaction), ordering: makeOrderingRepository(transaction), managed: makeManagedSiteRepository(transaction) })) as Promise<any>
@@ -87,7 +87,7 @@ function productionJointTransaction(): ManagedSiteJointTransaction {
 function jointBoundary(dependencies: { connectorRepository?: ManagedSiteLiveConnectorRepository; orderingRepository?: PreviewRepository; managedRepository?: ManagedSiteRepository; jointTransaction?: ManagedSiteJointTransaction }): ManagedSiteJointTransaction {
   if (dependencies.jointTransaction) return dependencies.jointTransaction
   if (dependencies.connectorRepository || dependencies.orderingRepository || dependencies.managedRepository) throw createError({ statusCode: 503, statusMessage: 'Injected webhook repositories require one genuine joint transaction boundary.' })
-  return productionJointTransaction()
+  return productionManagedSiteJointTransaction()
 }
 
 export async function processManagedSiteRawPaymentWebhook(

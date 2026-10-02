@@ -11,9 +11,10 @@ describe('managed-site owner orders surface', () => {
     line.ordering.state.orders.push(foreignOrder)
     const checkout = line.live.state.receipts.find(receipt => receipt.receiptType === 'checkout_session_created')!
     checkout.metadata = { ...(checkout.metadata as Record<string, unknown>), internalOnly: 'must-not-leak', credentialReference: 'vault:must-not-leak' }
+    await line.ordering.repository.insertModuleFulfilment({ ownerUserId: 1, draftOrderId: line.order.order.id, quoteId: line.order.order.quoteId, moduleKey: 'stripe_payment', mode: 'manual_service', status: 'cancelled', billedMinor: 3000, customerVisibleStatus: '已取消・未開通', ownerActionRequired: false, completedAt: null })
     const result = await getManagedSiteOrders(1, { orderingRepository: line.ordering.repository, repository: line.live.repository })
     expect(result.orders.map(order => order.id)).toEqual([line.order.order.id])
-    expect(result.orders[0]).toMatchObject({ id: line.order.order.id, quote: { plan: line.quote.quote.planKey, currency: line.quote.quote.currency, totalMinor: line.quote.quote.totalMinor }, release: { id: line.release.release.id }, payments: expect.arrayContaining([expect.objectContaining({ receiptType: 'checkout_session_created', checkoutUrl: (checkout.metadata as any).checkoutUrl })]) })
+    expect(result.orders[0]).toMatchObject({ id: line.order.order.id, quote: { plan: line.quote.quote.planKey, currency: line.quote.quote.currency, totalMinor: line.quote.quote.totalMinor }, release: { id: line.release.release.id }, moduleFulfilments: [{ moduleKey: 'stripe_payment', mode: 'manual_service', status: 'cancelled', billedMinor: 3000, customerVisibleStatus: '已取消・未開通', ownerActionRequired: false, completedAt: null }], payments: expect.arrayContaining([expect.objectContaining({ receiptType: 'checkout_session_created', checkoutUrl: (checkout.metadata as any).checkoutUrl })]) })
     expect(JSON.stringify(result)).not.toMatch(/internalOnly|must-not-leak|credentialReference/u)
   })
 
