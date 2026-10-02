@@ -8,6 +8,7 @@ import { getPreviewRepository } from '../ordering-repository'
 import type { PreviewRepository } from '../ordering-types'
 import { convertClaimedManagedSitePrePurchase, getManagedSitePrePurchaseRepositories } from '../prepurchase-service'
 import { getManagedSiteRepository } from '../repository'
+import { assertManagedSiteProjectNotSuspended } from '../project-status'
 import type { ManagedSiteRepository } from '../types'
 import { createGeneratedManagedSiteRelease, approveManagedSitePreview, buildManagedSitePreview } from '../live-connectors/deployment-orchestrator'
 import { generateManagedSiteCandidate, type ManagedSiteArtifactVault } from '../live-connectors/generation-service'
@@ -175,6 +176,7 @@ export async function runFunnelBuild(sessionId: number, sessionToken: string, de
     if (count >= limit) dailyCapReached('before_reservation', count, limit)
   }
   const ownerUserId = await platformOwnerUserId(dependencies)
+  if (session.projectId) await assertManagedSiteProjectNotSuspended(ownerUserId, session.projectId, managed)
   const executionMode = dependencies.executionMode || 'live'
   if (executionMode === 'live' && answers.domain?.option === 'new') await assertFunnelDomainReadyForCheckout(ownerUserId, session, { repository: live, clock })
   let generationAdapter: ManagedSiteGenerationAdapter | undefined
@@ -197,7 +199,7 @@ export async function runFunnelBuild(sessionId: number, sessionToken: string, de
     if (session.releaseId) {
       const release = await live.findRelease(ownerUserId, session.releaseId)
       if (!release || release.projectId !== session.projectId || release.previewId !== session.previewId || release.quoteId !== session.quoteId || release.draftOrderId !== session.draftOrderId) conflict('先前的網站建置資料不完整，請聯絡客服協助。')
-      const built = await buildManagedSitePreview(ownerUserId, { releaseId: release.id, executionMode, idempotencyKey: key(session.id, 'preview-build') }, deploymentAdapter!, { repository: live, clock })
+      const built = await buildManagedSitePreview(ownerUserId, { releaseId: release.id, executionMode, idempotencyKey: key(session.id, 'preview-build') }, deploymentAdapter!, { repository: live, managedRepository: managed, clock })
       const previewUrl = built.release.previewUrl
       if (!previewUrl) conflict('網站預覽尚未完成，請稍後再試。')
       const updated = await funnelRepository.transitionSession(session.id, 'building', { status: 'checkout_pending', builtPreviewUrl: previewUrl })
@@ -244,7 +246,7 @@ export async function runFunnelBuild(sessionId: number, sessionToken: string, de
     if (!generation.candidate) conflict('Website generation did not produce a governed candidate.')
     const release = await createGeneratedManagedSiteRelease(ownerUserId, { projectId: prePurchase.project.id, generationCandidateId: generation.candidate.id, canonicalDomain: domain, targetKey: 'production-primary', idempotencyKey: key(session.id, 'release') }, { repository: live, managedRepository: managed })
     await funnelRepository.updateSession(session.id, { releaseId: release.release.id })
-    const built = await buildManagedSitePreview(ownerUserId, { releaseId: release.release.id, executionMode, idempotencyKey: key(session.id, 'preview-build') }, deploymentAdapter!, { repository: live, clock })
+    const built = await buildManagedSitePreview(ownerUserId, { releaseId: release.release.id, executionMode, idempotencyKey: key(session.id, 'preview-build') }, deploymentAdapter!, { repository: live, managedRepository: managed, clock })
     const previewUrl = built.release.previewUrl
     if (!previewUrl) conflict('Website preview build completed without a verified preview URL.')
     const updated = await funnelRepository.transitionSession(session.id, 'building', { status: 'checkout_pending', previewId: preview.preview.id, previewAccessTokenHash: tokenHash(accessToken), quoteId: quote.quote.quoteId, leadIntentId: lead.leadIntent.id, draftOrderId: order.order.id, projectId: prePurchase.project.id, releaseId: release.release.id, builtPreviewUrl: previewUrl })
@@ -262,6 +264,7 @@ export async function runFunnelCheckout(sessionId: number, sessionToken: string,
   const funnelRepository = dependencies.funnelRepository || getFunnelSessionRepository()
   const ordering = dependencies.orderingRepository || getPreviewRepository()
   const live = dependencies.connectorRepository || getManagedSiteLiveConnectorRepository()
+  const managed = dependencies.managedRepository || getManagedSiteRepository()
   const session = await loadFunnelSession(sessionId, sessionToken, funnelRepository, clock)
   const executionMode = dependencies.executionMode || 'live'
   if (!consentFor(session)) conflict('Consent is required before checkout can start.')
@@ -274,6 +277,8 @@ export async function runFunnelCheckout(sessionId: number, sessionToken: string,
   if (!preview || preview.accessTokenHash !== session.previewAccessTokenHash) conflict('The funnel preview authority no longer matches the built release.')
   const ownerUserId = await platformOwnerUserId(dependencies)
   if (order.ownerUserId !== ownerUserId) conflict('付款資料暫時無法讀取，請稍後再試。')
+  const guardedProjectId = session.projectId || order.projectId
+  if (guardedProjectId) await assertManagedSiteProjectNotSuspended(ownerUserId, guardedProjectId, managed)
   if (executionMode === 'live' && (session.answers as FunnelAnswers).domain?.option === 'new') await assertFunnelDomainReadyForCheckout(ownerUserId, session, { repository: live, clock })
   const receipts = await live.listReceiptsByDraftOrder(ownerUserId, order.id)
   if (receipts.some(receipt => receipt.receiptType === 'checkout_succeeded' && receipt.receiptStatus === 'verified')) conflict('這筆訂單已完成付款，無需再次結帳。')
@@ -326,7 +331,7 @@ export async function runFunnelCheckout(sessionId: number, sessionToken: string,
   } else if (release.status !== 'approved') {
     conflict('付款資料不完整，請稍後再試。')
   }
-  const checkout = await createManagedSiteCheckoutSession(ownerUserId, { releaseId: release.id, draftOrderId: session.draftOrderId, executionMode, idempotencyKey: checkoutKey }, checkoutAdapter, { connectorRepository: live, orderingRepository: ordering, clock })
+  const checkout = await createManagedSiteCheckoutSession(ownerUserId, { releaseId: release.id, draftOrderId: session.draftOrderId, executionMode, idempotencyKey: checkoutKey }, checkoutAdapter, { connectorRepository: live, orderingRepository: ordering, managedRepository: managed, clock })
   if (executionMode === 'live') assertFunnelStripeCheckoutMode(checkout.receipt)
   const checkoutUrl = checkout.checkout.url
   const updated = await funnelRepository.updateSession(session.id, { checkoutUrl })

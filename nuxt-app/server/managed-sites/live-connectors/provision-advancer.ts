@@ -1,10 +1,14 @@
 import { buildManagedSitePreview, verifyExistingSiteOwnership } from './deployment-orchestrator'
 import { getManagedSiteLiveConnectorRepository } from './repository'
+import { getManagedSiteRepository } from '../repository'
+import { assertManagedSiteProjectNotSuspended } from '../project-status'
+import type { ManagedSiteRepository } from '../types'
 import { managedSiteLiveDeploymentAdapter, managedSiteLiveOwnershipAdapter } from './runtime-adapters'
 import type { ManagedSiteCredentialResolver, ManagedSiteDeploymentAdapter, ManagedSiteExistingSiteOwnershipAdapter, ManagedSiteLiveConnectorRepository } from './types'
 
 type AdvancerDependencies = {
   repository?: ManagedSiteLiveConnectorRepository
+  managedRepository?: ManagedSiteRepository
   clock?: () => Date
   deploymentAdapter?: (ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) => Promise<ManagedSiteDeploymentAdapter>
   ownershipAdapter?: (ownerUserId: number, repository: ManagedSiteLiveConnectorRepository) => Promise<ManagedSiteExistingSiteOwnershipAdapter>
@@ -26,23 +30,25 @@ export function managedSiteOnRequestProvisionAdvancer(): OnRequestAdvancer | fal
 export async function advanceEligibleManagedSiteProvisioning(options: { ownerUserId?: number; limit?: number } = {}, dependencies: AdvancerDependencies = {}): Promise<{ scanned: number; advanced: number; failed: number }> {
   const summary = { scanned: 0, advanced: 0, failed: 0 }
   try {
-    const repository = dependencies.repository || getManagedSiteLiveConnectorRepository(); const clock = dependencies.clock || (() => new Date()); const limit = Math.min(Math.max(options.limit || 10, 1), 50)
+    const repository = dependencies.repository || getManagedSiteLiveConnectorRepository(); const managedRepository = dependencies.managedRepository || getManagedSiteRepository(); const clock = dependencies.clock || (() => new Date()); const limit = Math.min(Math.max(options.limit || 10, 1), 50)
     const attempts = await repository.listEligibleRetryAttempts(clock(), limit, options.ownerUserId)
     summary.scanned = attempts.length
     for (const attempt of attempts) {
       if (!attempt.releaseId || attempt.executionMode !== 'live' || !['preview_build', 'existing_site_ownership_verify'].includes(attempt.operation)) continue
       try {
+        const release = await repository.findRelease(attempt.ownerUserId, attempt.releaseId)
+        if (!release) throw new Error('Managed-site retry release is unavailable.')
+        await assertManagedSiteProjectNotSuspended(attempt.ownerUserId, release.projectId, managedRepository)
         if (attempt.operation === 'preview_build') {
           let adapter: ManagedSiteDeploymentAdapter
           try { adapter = await (dependencies.deploymentAdapter || managedSiteLiveDeploymentAdapter)(attempt.ownerUserId, repository) } catch { continue }
-          await buildManagedSitePreview(attempt.ownerUserId, { releaseId: attempt.releaseId, executionMode: 'live', idempotencyKey: attempt.idempotencyKey }, adapter, { repository, clock, credentialResolver: dependencies.credentialResolver })
+          await buildManagedSitePreview(attempt.ownerUserId, { releaseId: attempt.releaseId, executionMode: 'live', idempotencyKey: attempt.idempotencyKey }, adapter, { repository, managedRepository, clock, credentialResolver: dependencies.credentialResolver })
         } else {
           let adapter: ManagedSiteExistingSiteOwnershipAdapter
           try { adapter = await (dependencies.ownershipAdapter || managedSiteLiveOwnershipAdapter)(attempt.ownerUserId, repository) } catch { continue }
-          const release = await repository.findRelease(attempt.ownerUserId, attempt.releaseId)
           const challenge = release ? (await repository.listReceipts(attempt.ownerUserId, release.projectId)).find(receipt => receipt.releaseId === release.id && receipt.receiptType === 'existing_site_challenge_created' && receipt.receiptStatus === 'verified') : null
           if (!challenge) continue
-          await verifyExistingSiteOwnership(attempt.ownerUserId, { releaseId: attempt.releaseId, challengeReceiptFingerprint: challenge.receiptFingerprint, executionMode: 'live', idempotencyKey: attempt.idempotencyKey }, adapter, { repository, clock, credentialResolver: dependencies.credentialResolver })
+          await verifyExistingSiteOwnership(attempt.ownerUserId, { releaseId: attempt.releaseId, challengeReceiptFingerprint: challenge.receiptFingerprint, executionMode: 'live', idempotencyKey: attempt.idempotencyKey }, adapter, { repository, managedRepository, clock, credentialResolver: dependencies.credentialResolver })
         }
         summary.advanced++
       } catch { summary.failed++ }

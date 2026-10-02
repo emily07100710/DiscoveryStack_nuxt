@@ -6,6 +6,8 @@ import { createMockManagedSiteDeploymentAdapter, deployManagedSiteProduction } f
 import { createManagedSiteDomainPurchaseIntent, createMockManagedSiteDnsTlsAdapter, createMockManagedSiteDomainAdapter, executeManagedSiteDnsTls, managedSiteDomainConfirmationFingerprint, quoteManagedSiteDomain } from '../server/managed-sites/live-connectors/domain-connectors'
 import { processManagedSiteRawPaymentWebhook } from '../server/managed-sites/live-connectors/payment-webhook'
 import { configureManagedSiteProvider } from '../server/managed-sites/live-connectors/provider-registry'
+import { managedSiteCommerceSnapshotFingerprint } from '../server/managed-sites/prepurchase-service'
+import { stableFingerprint } from '../server/seo-geo-core/repository'
 import { createFunnelSessionMemoryRepository } from './fixtures/managed-site/funnel-session-repository'
 import { createAuthoritativeManagedSiteReleaseFixture, managedSiteExactPaymentWebhookPayload, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
 
@@ -25,7 +27,7 @@ async function fixture() {
   const quoted = await quoteManagedSiteDomain(1, { projectId: release.projectId, releaseId: release.id, requestedDomain: release.canonicalDomain, executionMode: 'mocked', idempotencyKey: 'fulfilment-domain-quote' }, domainAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => now })
   const bound = line.live.state.receipts.find(row => row.receiptType === 'release_payment_bound')!
   const ownerConfirmationFingerprint = managedSiteDomainConfirmationFingerprint({ ownerUserId: 1, projectId: release.projectId, releaseId: release.id, commerceSnapshotFingerprint: release.commerceSnapshotFingerprint!, quoteReceiptFingerprint: quoted.receiptFingerprint!, draftOrderId: release.draftOrderId!, paymentReceiptFingerprint: bound.receiptFingerprint })
-  await createManagedSiteDomainPurchaseIntent(1, { projectId: release.projectId, releaseId: release.id, draftOrderId: release.draftOrderId!, quoteReceiptFingerprint: quoted.receiptFingerprint!, paymentReceiptFingerprint: bound.receiptFingerprint, ownerConfirmationFingerprint, executionMode: 'mocked', idempotencyKey: 'fulfilment-existing-domain-purchase' }, domainAdapter, { repository: line.live.repository, clock: () => now })
+  await createManagedSiteDomainPurchaseIntent(1, { projectId: release.projectId, releaseId: release.id, draftOrderId: release.draftOrderId!, quoteReceiptFingerprint: quoted.receiptFingerprint!, paymentReceiptFingerprint: bound.receiptFingerprint, ownerConfirmationFingerprint, executionMode: 'mocked', idempotencyKey: 'fulfilment-existing-domain-purchase' }, domainAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => now })
   const session = { id: 7, ownerUserId: 1, projectId: release.projectId, releaseId: release.id, draftOrderId: release.draftOrderId, quoteId: release.quoteId, previewId: release.previewId }
   const funnel = createFunnelSessionMemoryRepository({ fulfilmentCandidates: () => [session] })
   const deploymentBase = createMockManagedSiteDeploymentAdapter({ now: () => now })
@@ -69,6 +71,26 @@ describe('durable paid funnel fulfilment advancement', () => {
     expect(await advancePaidManagedSiteFunnel({}, f.dependencies)).toMatchObject({ advanced: 0 })
     expect(f.deploy).not.toHaveBeenCalled()
     expect(f.dns).not.toHaveBeenCalled()
+  })
+
+  it('skips one suspended project before adapter acquisition while advancing a second paid project in the same run', async () => {
+    const f = await fixture(); const offset = 10_000; const firstProject = f.line.managed.state.projects[0]!; const firstOrder = f.line.ordering.state.orders[0]!; const firstQuote = f.line.ordering.state.quotes.find(row => row.id === firstOrder.quoteId)!; const firstRelease = f.line.live.state.releases[0]!; const firstCandidate = f.line.live.state.candidates[0]!
+    const project = { ...structuredClone(firstProject), id: firstProject.id + offset, status: 'payment_pending' as const }; f.line.managed.state.projects.push(project as any)
+    const quote = { ...structuredClone(firstQuote), id: firstQuote.id + offset, projectId: project.id }; f.line.ordering.state.quotes.push(quote as any)
+    const lines = f.line.ordering.state.lines.filter(row => row.quoteId === firstQuote.id).map(row => ({ ...structuredClone(row), id: row.id + offset, quoteId: quote.id })); f.line.ordering.state.lines.push(...lines as any)
+    const order = { ...structuredClone(firstOrder), id: firstOrder.id + offset, projectId: project.id, quoteId: quote.id }; f.line.ordering.state.orders.push(order as any)
+    f.line.ordering.state.paymentEvents.push(...f.line.ordering.state.paymentEvents.filter(row => row.draftOrderId === firstOrder.id).map(row => ({ ...structuredClone(row), id: row.id + offset, draftOrderId: order.id } as any)))
+    const commerceSnapshotFingerprint = managedSiteCommerceSnapshotFingerprint({ previewId: order.previewId, quoteId: quote.id, draftOrderId: order.id, quoteVersion: quote.quoteVersion, totalMinor: quote.totalMinor, currency: quote.currency, planKey: quote.planKey, cadenceDays: quote.cadenceDays, domainOption: quote.domainOption, taxStatus: quote.taxStatus, lines: lines.map(line => ({ lineKey: line.lineKey, quantity: line.quantity, unitAmountMinor: line.unitAmountMinor, lineAmountMinor: line.lineAmountMinor, lineFingerprint: line.lineFingerprint })) })
+    const candidate = { ...structuredClone(firstCandidate), id: firstCandidate.id + offset, projectId: project.id }; f.line.live.state.candidates.push(candidate as any)
+    const release = { ...structuredClone(firstRelease), id: firstRelease.id + offset, projectId: project.id, generationCandidateId: candidate.id, quoteId: quote.id, draftOrderId: order.id, canonicalDomain: 'fulfilment-second.acme.taipei', commerceSnapshotFingerprint, idempotencyKey: 'fulfilment-second-release' }; f.line.live.state.releases.push(release as any)
+    const clonedReceipts = f.line.live.state.receipts.filter(row => row.releaseId === firstRelease.id).map(row => ({ ...structuredClone(row), id: row.id + offset, projectId: project.id, draftOrderId: order.id, releaseId: release.id, canonicalDomain: release.canonicalDomain, metadata: { ...(row.metadata as Record<string, unknown>), commerceSnapshotFingerprint } })); const domainReceipt = clonedReceipts.find(row => row.receiptType === 'domain_registered')!; domainReceipt.receiptFingerprint = stableFingerprint({ previous: domainReceipt.receiptFingerprint, projectId: project.id, releaseId: release.id }); f.line.live.state.receipts.push(...clonedReceipts as any)
+    const claim = f.line.live.state.domainClaims[0]!; f.line.live.state.domainClaims.push({ ...structuredClone(claim), id: claim.id + offset, canonicalDomain: release.canonicalDomain, activeCanonicalDomainKey: release.canonicalDomain, projectId: project.id, releaseId: release.id, authorityReceiptFingerprint: domainReceipt.receiptFingerprint, idempotencyKey: 'fulfilment-second-domain' } as any)
+    const subscription = f.line.managed.state.subscriptions[0]; if (subscription) f.line.managed.state.subscriptions.push({ ...structuredClone(subscription), id: subscription.id + offset, projectId: project.id, idempotencyKey: 'fulfilment-second-subscription' } as any)
+    const secondSession = { ...f.session, id: f.session.id + offset, projectId: project.id, releaseId: release.id, draftOrderId: order.id, quoteId: quote.id }; const funnel = createFunnelSessionMemoryRepository({ fulfilmentCandidates: () => [f.session, secondSession] }); firstProject.status = 'suspended'
+    expect(await f.line.live.repository.findDomainClaim(release.canonicalDomain)).toMatchObject({ status: 'verified', ownerUserId: 1, projectId: project.id, releaseId: release.id, authorityReceiptFingerprint: expect.any(String) })
+    const deploymentBase = createMockManagedSiteDeploymentAdapter({ now: f.now }); const deploy = vi.fn(deploymentBase.deployProduction); const dns = vi.fn(createMockManagedSiteDnsTlsAdapter().configureAndVerify); const deploymentFactory = vi.fn(async () => ({ ...deploymentBase, deployProduction: deploy })); const dnsFactory = vi.fn(async () => ({ configureAndVerify: dns }))
+    const result = await advancePaidManagedSiteFunnel({}, { ...f.dependencies, funnelRepository: funnel.repository, deploymentAdapter: deploymentFactory, dnsTlsAdapter: dnsFactory })
+    expect(dnsFactory).toHaveBeenCalledTimes(1); expect(dns).toHaveBeenCalledTimes(1); expect(deploymentFactory).toHaveBeenCalledTimes(1); expect(deploy).toHaveBeenCalledTimes(1); expect(result).toEqual({ scanned: 2, advanced: 1, waiting: 0, failed: 1, nextAfterId: 0 }); expect(firstProject.status).toBe('suspended'); expect(project.status).toBe('active')
   })
 
   it('retries a pending DNS observation only after eligibility with one stable key', async () => {
@@ -159,7 +181,7 @@ describe('durable paid funnel fulfilment advancement', () => {
 
   it('allows only one production transport when two scheduled pages overlap', async () => {
     const f = await fixture()
-    await executeManagedSiteDnsTls(1, { projectId: f.release.projectId, releaseId: f.release.id, executionMode: 'mocked', idempotencyKey: 'pre-existing-dns' }, createMockManagedSiteDnsTlsAdapter(), { repository: f.line.live.repository, clock: f.now })
+    await executeManagedSiteDnsTls(1, { projectId: f.release.projectId, releaseId: f.release.id, executionMode: 'mocked', idempotencyKey: 'pre-existing-dns' }, createMockManagedSiteDnsTlsAdapter(), { repository: f.line.live.repository, managedRepository: f.line.managed.repository, clock: f.now })
     let unblock!: () => void
     const gate = new Promise<void>(resolve => { unblock = resolve })
     const base = createMockManagedSiteDeploymentAdapter({ now: f.now })
@@ -189,7 +211,7 @@ describe('durable paid funnel fulfilment advancement', () => {
 
   it.each(['deployment', 'dns_tls'] as const)('blocks production on %s provider drift', async capability => {
     const f = await fixture()
-    await executeManagedSiteDnsTls(1, { projectId: f.release.projectId, releaseId: f.release.id, executionMode: 'mocked', idempotencyKey: 'pre-existing-dns' }, createMockManagedSiteDnsTlsAdapter(), { repository: f.line.live.repository, clock: f.now })
+    await executeManagedSiteDnsTls(1, { projectId: f.release.projectId, releaseId: f.release.id, executionMode: 'mocked', idempotencyKey: 'pre-existing-dns' }, createMockManagedSiteDnsTlsAdapter(), { repository: f.line.live.repository, managedRepository: f.line.managed.repository, clock: f.now })
     await configureManagedSiteProvider(1, { capability, providerKey: capability === 'deployment' ? 'mock-deployment' : 'mock-dns-tls', readinessStatus: 'mock', credentialReference: 'vault:rotated-fulfilment', transportConfiguration: {}, idempotencyKey: `rotate-fulfilment-${capability}` }, f.line.live.repository, f.now)
     expect(await advancePaidManagedSiteFunnel({}, f.dependencies)).toMatchObject({ advanced: 0, failed: 1 })
     expect(f.deploy).not.toHaveBeenCalled()
@@ -206,7 +228,7 @@ describe('durable paid funnel fulfilment advancement', () => {
 
   it('also protects the owner production service from stale paid status', async () => {
     const f = await fixture()
-    await executeManagedSiteDnsTls(1, { projectId: f.release.projectId, releaseId: f.release.id, executionMode: 'mocked', idempotencyKey: 'pre-existing-dns' }, createMockManagedSiteDnsTlsAdapter(), { repository: f.line.live.repository, clock: f.now })
+    await executeManagedSiteDnsTls(1, { projectId: f.release.projectId, releaseId: f.release.id, executionMode: 'mocked', idempotencyKey: 'pre-existing-dns' }, createMockManagedSiteDnsTlsAdapter(), { repository: f.line.live.repository, managedRepository: f.line.managed.repository, clock: f.now })
     f.line.ordering.state.orders[0]!.status = 'refunded'
     await expect(deployManagedSiteProduction(1, { releaseId: f.release.id, executionMode: 'mocked', idempotencyKey: 'owner-stale-paid-production' }, { ...createMockManagedSiteDeploymentAdapter(), deployProduction: f.deploy }, { repository: f.line.live.repository, orderingRepository: f.line.ordering.repository, managedRepository: f.line.managed.repository, productionTransaction: f.line.productionTransaction, clock: f.now })).rejects.toMatchObject({ statusCode: 409 })
     expect(f.deploy).not.toHaveBeenCalled()

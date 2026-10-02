@@ -51,11 +51,11 @@ describe('managed-site raw-body payment lifecycle', () => {
 
   it('creates checkout only after exact release approval and rejects adapter commercial collision', async () => {
     const line = await createAuthoritativeManagedSiteReleaseFixture({ createCheckout: false })
-    const created = await createManagedSiteCheckoutSession(1, { releaseId: line.release.release.id, draftOrderId: line.order.order.id, executionMode: 'mocked', idempotencyKey: 'checkout-session-001' }, createMockManagedSiteCheckoutSessionAdapter(), { connectorRepository: line.live.repository, orderingRepository: line.ordering.repository, clock: () => now })
+    const created = await createManagedSiteCheckoutSession(1, { releaseId: line.release.release.id, draftOrderId: line.order.order.id, executionMode: 'mocked', idempotencyKey: 'checkout-session-001' }, createMockManagedSiteCheckoutSessionAdapter(), { connectorRepository: line.live.repository, orderingRepository: line.ordering.repository, managedRepository: line.managed.repository, clock: () => now })
     expect(created.checkout).toMatchObject({ amountMinor: line.quote.quote.totalMinor, currency: line.quote.quote.currency, taxStatus: 'not_calculated' })
     const second = await createAuthoritativeManagedSiteReleaseFixture({ createCheckout: false, canonicalDomain: 'collision.acme.taipei' })
     const badAdapter = { createSession: async (input: any) => ({ ...(await createMockManagedSiteCheckoutSessionAdapter().createSession(input)), amountMinor: input.amountMinor + 1 }) }
-    await expect(createManagedSiteCheckoutSession(1, { releaseId: second.release.release.id, draftOrderId: second.order.order.id, executionMode: 'mocked', idempotencyKey: 'checkout-session-collision' }, badAdapter, { connectorRepository: second.live.repository, orderingRepository: second.ordering.repository, clock: () => now })).rejects.toMatchObject({ statusCode: 409 })
+    await expect(createManagedSiteCheckoutSession(1, { releaseId: second.release.release.id, draftOrderId: second.order.order.id, executionMode: 'mocked', idempotencyKey: 'checkout-session-collision' }, badAdapter, { connectorRepository: second.live.repository, orderingRepository: second.ordering.repository, managedRepository: second.managed.repository, clock: () => now })).rejects.toMatchObject({ statusCode: 409 })
   })
 
   it('accepts an exact cancellation and ignores a later out-of-order success without activating payment', async () => {

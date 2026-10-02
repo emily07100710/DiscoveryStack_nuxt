@@ -58,6 +58,15 @@ export function assertManagedSiteCheckoutOrigin(value: unknown, raw?: string): s
   return origin
 }
 
+/** The one rule for a Stripe return origin: an exact HTTPS origin with no path, query, fragment or userinfo. Returns null when the value does not satisfy it. */
+export function exactManagedSiteReturnOrigin(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  let parsed: URL
+  try { parsed = new URL(value) } catch { return null }
+  if (parsed.protocol !== 'https:' || parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) return null
+  return parsed.origin
+}
+
 export function assertManagedSiteCheckoutUrl(value: unknown, configuredOrigin: string, options: { allowFragment?: boolean } = {}): string {
   if (typeof value !== 'string' || value.length > 2048) throw createError({ statusCode: 409, statusMessage: 'Checkout URL is invalid or oversized.' })
   let parsed: URL

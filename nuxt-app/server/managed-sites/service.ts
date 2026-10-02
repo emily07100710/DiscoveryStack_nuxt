@@ -488,6 +488,34 @@ export async function setManagedSiteSubscriptionStatus(ownerUserId: number, proj
   })
 }
 
+export async function suspendManagedSiteProject(ownerUserId: number, projectId: number, actor: ManagedSiteActor, input: { reason: string; idempotencyKey: string }, repository = getManagedSiteRepository()) {
+  ensureActorRole(actor, 'billing:manage')
+  const project = await repository.findProject(ownerUserId, projectId)
+  if (!project) projectNotFound()
+  if (project.status === 'suspended') return { project, subscription: await repository.findSubscription(ownerUserId, projectId), replayed: true }
+  return repository.transaction(async transaction => {
+    const currentProject = await transaction.findProject(ownerUserId, projectId)
+    if (!currentProject) projectNotFound()
+    const currentSubscription = await transaction.findSubscription(ownerUserId, projectId)
+    if (currentProject.status === 'suspended') return { project: currentProject, subscription: currentSubscription, replayed: true }
+    const previousProjectStatus = currentProject.status
+    const previousSubscriptionStatus = currentSubscription?.status || null
+    const changedAt = now()
+    let subscription = currentSubscription
+    if (currentSubscription && ['active', 'past_due', 'grace_period'].includes(currentSubscription.status)) {
+      subscription = await transaction.updateSubscription(ownerUserId, projectId, { status: 'suspended', stateFingerprint: stableFingerprint({ projectId, status: 'suspended', changedAt: changedAt.toISOString() }), updatedAt: changedAt } as any)
+      if (!subscription) throw createError({ statusCode: 404, statusMessage: 'Managed site subscription was not found.' })
+    }
+    const suspended = await transaction.updateProject(ownerUserId, projectId, { status: 'suspended', updatedAt: changedAt } as any)
+    if (!suspended) projectNotFound()
+    await transaction.revokeSessionsForProject(ownerUserId, projectId, changedAt)
+    const beforeFingerprint = stableFingerprint({ projectId, projectStatus: previousProjectStatus, subscriptionStatus: previousSubscriptionStatus })
+    const afterFingerprint = stableFingerprint({ projectId, projectStatus: suspended.status, subscriptionStatus: subscription?.status || null })
+    await appendAudit(transaction, { ownerUserId, projectId, actorUserId: actor.actorUserId ?? null, authority: actor.authority, action: 'managed_site_project_suspended', beforeFingerprint, afterFingerprint, idempotencyKey: input.idempotencyKey, metadata: { previousProjectStatus, previousSubscriptionStatus, subscriptionStatus: subscription?.status || null, reason: input.reason, stripeSubscriptionCancelled: false, refundIssued: false, domainDeleted: false, dataDeletion: false, providerCallMade: false } })
+    return { project: suspended, subscription, replayed: false }
+  })
+}
+
 export async function listManagedSiteAuditEvents(ownerUserId: number, projectId: number, actor: ManagedSiteActor, repository = getManagedSiteRepository()) {
   ensureActorRole(actor, 'project:read')
   const project = await repository.findProject(ownerUserId, projectId)

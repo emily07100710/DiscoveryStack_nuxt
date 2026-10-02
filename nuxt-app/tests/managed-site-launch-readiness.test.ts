@@ -36,11 +36,17 @@ describe('managed-site launch readiness', () => {
     expect(result.blockers).toEqual([expect.objectContaining({ capability: 'domain_registration', providerKey: 'porkbun' })])
   })
 
-  it('blocks an open manual-service fulfilment and clears after the row is closed', async () => {
+  it('counts only pending manual setup and clears distinctly after cancel or complete', async () => {
     const live = createLiveConnectorMemoryRepository()
     await live.repository.insertModuleFulfilment({ ownerUserId: 1, draftOrderId: 10, quoteId: 11, moduleKey: 'stripe_payment', mode: 'manual_service', status: 'pending_manual_setup', billedMinor: 3000, customerVisibleStatus: '已付款・待我們為你設定開通', ownerActionRequired: true, completedAt: null })
     await expect(evaluateManagedSiteLaunchReadiness(1, live.repository)).resolves.toMatchObject({ ready: false, blockers: [expect.objectContaining({ moduleKey: 'stripe_payment' })] })
-    await closeManagedSiteManualModuleFulfilment(1, 10, 'stripe_payment', live.repository, now)
+    await live.repository.resolvePendingManualModuleFulfilment(1, 10, 'stripe_payment', 'cancelled', now)
+    expect(await live.repository.findModuleFulfilment(1, 10, 'stripe_payment')).toMatchObject({ status: 'cancelled', customerVisibleStatus: '已取消・未開通', completedAt: null })
+    await expect(evaluateManagedSiteLaunchReadiness(1, live.repository)).resolves.toEqual({ ready: true, blockers: [] })
+    await live.repository.insertModuleFulfilment({ ownerUserId: 1, draftOrderId: 12, quoteId: 13, moduleKey: 'line_assisted_integration', mode: 'manual_service', status: 'pending_manual_setup', billedMinor: 4000, customerVisibleStatus: '已付款・待我們為你設定開通', ownerActionRequired: true, completedAt: null })
+    await expect(evaluateManagedSiteLaunchReadiness(1, live.repository)).resolves.toMatchObject({ ready: false, blockers: [expect.objectContaining({ moduleKey: 'line_assisted_integration' })] })
+    await closeManagedSiteManualModuleFulfilment(1, 12, 'line_assisted_integration', live.repository, now)
+    expect(await live.repository.findModuleFulfilment(1, 12, 'line_assisted_integration')).toMatchObject({ status: 'manual_setup_completed', customerVisibleStatus: '客服已完成設定', completedAt: now })
     await expect(evaluateManagedSiteLaunchReadiness(1, live.repository)).resolves.toEqual({ ready: true, blockers: [] })
   })
 

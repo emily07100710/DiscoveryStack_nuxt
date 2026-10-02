@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, isNull, lt, lte, or } from 'drizzle-orm'
 import { getDatabase } from '../../database'
 import { managedSiteEditorJobReceipts, managedSiteEditorJobs, managedSiteMediaAssets, managedSiteMediaAssetVersions, managedSiteMediaEvents, managedSiteMediaProcessingRuns, managedSiteMediaUploadSessions, managedSitePagePublicationWorks, managedSitePages, managedSitePageVersions } from '../../database/schema'
 import { stableFingerprint } from '../../seo-geo-core/repository'
+import { makeManagedSiteRepository } from '../repository'
 import { resolveEditorRuntime } from './runtime'
 import { retryMediaProcessing } from '../media-vault/service'
 import { applyPageCommand } from './engine'
@@ -115,5 +116,5 @@ export function createDrizzleEditorHandlers(database: any, now: Date): EditorJob
 
 export async function runDrizzleEditorMaintenance(now = new Date()) {
   const database = getDatabase(); if (!database) return { status: 'blocked', reasonCode: 'DATABASE_UNAVAILABLE', discovered: 0, claimed: 0, processingExecuted: 0, publishRetriesExecuted: 0, externalCalls: false }
-  const discovery = await discoverDrizzleEditorJobs(database, now); const result = await runEditorSchedulerTick(createDrizzleEditorSchedulerPort(database), createDrizzleEditorHandlers(database, now), now); return { status: 'completed', ...discovery, ...result, processingExecuted: result.receipts.filter(item => item.kind === 'media_processing' && item.outcome !== 'media_processing_already_claimed').length, processingSucceeded: result.receipts.filter(item => item.kind === 'media_processing' && item.status === 'succeeded').length, publishRetriesExecuted: result.receipts.filter(item => item.kind === 'publish_retry' && item.externalCalls).length, publishRetriesSucceeded: result.receipts.filter(item => item.kind === 'publish_retry' && item.status === 'succeeded' && item.externalCalls).length }
+  const managed = makeManagedSiteRepository(database); const discovery = await discoverDrizzleEditorJobs(database, now); const result = await runEditorSchedulerTick(createDrizzleEditorSchedulerPort(database), createDrizzleEditorHandlers(database, now), now, async job => { const project = await managed.findProject(job.ownerUserId, job.projectId); return Boolean(project && project.status !== 'suspended') }); return { status: 'completed', ...discovery, ...result, processingExecuted: result.receipts.filter(item => item.kind === 'media_processing' && item.outcome !== 'media_processing_already_claimed').length, processingSucceeded: result.receipts.filter(item => item.kind === 'media_processing' && item.status === 'succeeded').length, publishRetriesExecuted: result.receipts.filter(item => item.kind === 'publish_retry' && item.externalCalls).length, publishRetriesSucceeded: result.receipts.filter(item => item.kind === 'publish_retry' && item.status === 'succeeded' && item.externalCalls).length }
 }

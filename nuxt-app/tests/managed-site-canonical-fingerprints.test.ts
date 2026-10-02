@@ -83,7 +83,7 @@ describe('managed-site blueprint identity after TiDB JSON storage', () => {
     const written = candidate.manifest as { blueprint: ManagedSiteBlueprintV1; blueprintHash: string }
     candidate.manifest = tidbJsonRoundTrip(written)
     expect(stableFingerprint((candidate.manifest as typeof written).blueprint)).not.toBe(stableFingerprint(written.blueprint))
-    const built = await buildManagedSitePreview(line.ownerUserId, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'canonical-hash-gate-preview-001' }, line.deploymentAdapter, { repository: line.live.repository, clock: () => managedSiteFixedNow })
+    const built = await buildManagedSitePreview(line.ownerUserId, { releaseId: line.release.release.id, executionMode: 'mocked', idempotencyKey: 'canonical-hash-gate-preview-001' }, line.deploymentAdapter, { repository: line.live.repository, managedRepository: line.managed.repository, clock: () => managedSiteFixedNow })
     expect(built.release.status).toBe('preview_ready')
     const gates = 'gates' in built ? built.gates : undefined
     if (!gates) throw new Error('Preview build replayed instead of running gates.')

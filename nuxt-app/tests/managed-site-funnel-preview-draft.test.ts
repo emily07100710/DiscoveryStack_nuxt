@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, createError, createRouter, defineEventHandler, send, setResponseStatus, toWebHandler } from 'h3'
 import { managedSiteStableFingerprint } from '../server/managed-sites/live-connectors/canonical'
 import { createDeterministicManagedSiteBlueprint } from '../server/managed-sites/live-connectors/adapters'
@@ -21,7 +21,15 @@ beforeAll(() => {
   ;(globalThis as any).useRuntimeConfig = () => ({})
 })
 
+// The route reads the wall clock, so pin Date to the instant the fixture sessions are created;
+// otherwise the 14-day session TTL turns every route call into a 404 once the calendar passes it.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(now)
+})
+
 afterEach(() => {
+  vi.useRealTimers()
   setManagedSiteFunnelRepositoryForTests(null)
   for (const key of llmEnvironment) {
     if (savedEnvironment[key] === undefined) delete process.env[key]

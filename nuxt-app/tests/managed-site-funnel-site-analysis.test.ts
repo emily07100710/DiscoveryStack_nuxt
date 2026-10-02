@@ -1,6 +1,6 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, createError, createRouter, defineEventHandler, send, setResponseStatus, toWebHandler } from 'h3'
-import { createFunnelSession, loadFunnelSession, type FunnelAnswers } from '../server/managed-sites/funnel/session-service'
+import { createFunnelSession, loadFunnelSession, MANAGED_SITE_FUNNEL_SESSION_TTL_MS, type FunnelAnswers } from '../server/managed-sites/funnel/session-service'
 import { setManagedSiteFunnelRepositoryForTests } from '../server/managed-sites/funnel/session-repository'
 import { setManagedSiteContactInboxBindingDependenciesForTests } from '../server/managed-sites/contact-inbox/binding-service'
 import { createFunnelSessionMemoryRepository } from './fixtures/managed-site/funnel-session-repository'
@@ -33,7 +33,15 @@ beforeAll(async () => {
   funnelHandler = (await import('../server/api/managed-sites/funnel/[...path]')).default
 }, 60_000)
 
+// The route reads the wall clock, so pin Date to the instant the fixture sessions are created;
+// otherwise the 14-day session TTL turns every route call into a 404 once the calendar passes it.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(now)
+})
+
 afterEach(() => {
+  vi.useRealTimers()
   setManagedSiteFunnelRepositoryForTests(null)
   setManagedSiteContactInboxBindingDependenciesForTests(null)
   analysePublicHomepageMock.mockReset()
@@ -130,5 +138,17 @@ describe('managed-site funnel server site analysis', () => {
     expect((await routeRequest(memory.repository, path, { url: 'https://example.test' })).status).toBe(404)
     expect((await routeRequest(memory.repository, path, { url: 'https://example.test' }, { token: 'x'.repeat(43) })).status).toBe(404)
     expect((await routeRequest(memory.repository, path, { url: 'https://example.test' }, { token: created.sessionToken, origin: false })).status).toBe(403)
+  })
+
+  it('keeps the route session expiry on the request clock', async () => {
+    const memory = createFunnelSessionMemoryRepository()
+    const created = await createFunnelSession(memory.repository, () => now)
+    analysePublicHomepageMock.mockResolvedValue(serverAnalysis)
+    const path = `/api/managed-sites/funnel/sessions/${created.sessionId}/site-analysis`
+
+    vi.setSystemTime(new Date(now.getTime() + MANAGED_SITE_FUNNEL_SESSION_TTL_MS - 1))
+    expect((await routeRequest(memory.repository, path, { url: 'https://example.test' }, { token: created.sessionToken })).status).toBe(200)
+    vi.setSystemTime(new Date(now.getTime() + MANAGED_SITE_FUNNEL_SESSION_TTL_MS))
+    expect((await routeRequest(memory.repository, path, { url: 'https://example.test' }, { token: created.sessionToken })).status).toBe(404)
   })
 })
