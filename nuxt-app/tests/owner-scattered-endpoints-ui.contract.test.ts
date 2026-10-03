@@ -48,6 +48,7 @@ describe('owner scattered endpoint UI contract', () => {
     for (const page of scopedPages) {
       const baseline = baselineApiFixture.pages[page]
       expect(Array.isArray(baseline), `missing archived API baseline for ${page}`).toBe(true)
+      if (!Array.isArray(baseline)) throw new Error(`missing archived API baseline for ${page}`)
       for (const literal of baseline) {
         expect(typeof literal).toBe('string')
         expect(literal).toContain('/api/')
@@ -223,6 +224,7 @@ describe('owner scattered endpoint UI contract', () => {
     for (const page of scopedPages) {
       const baseline = baselineApiFixture.pages[page]
       expect(Array.isArray(baseline), `missing archived API baseline for ${page}`).toBe(true)
+      if (!Array.isArray(baseline)) throw new Error(`missing archived API baseline for ${page}`)
       const existing = new Set(baseline)
       const current = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8')
       for (const literal of literals(current)) expect(existing.has(literal) || allowedNewApiLiterals.has(literal), `unexpected introduced runtime API literal in ${page}: ${literal}`).toBe(true)
