@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import ts from 'typescript'
@@ -8,6 +8,9 @@ const llmVisibility = readFileSync(new URL('../pages/audit-lab/llm-visibility.vu
 const knowledge = readFileSync(new URL('../pages/audit-lab/knowledge.vue', import.meta.url), 'utf8')
 const trainingPipeline = readFileSync(new URL('../pages/training-pipeline.vue', import.meta.url), 'utf8')
 const auditLab = readFileSync(new URL('../pages/audit-lab.vue', import.meta.url), 'utf8')
+const baselineApiFixture: { baselineRevision: string; pages: Record<string, string[]> } = JSON.parse(
+  readFileSync(new URL('./fixtures/owner-scattered-api-baseline.a786d76.json', import.meta.url), 'utf8'),
+)
 
 const scopedPages = [
   'pages/audit-lab/seo-geo.vue',
@@ -37,6 +40,21 @@ function assertCommonOwnerContract(page: string) {
 }
 
 describe('owner scattered endpoint UI contract', () => {
+  it('pins the archived API baseline independently of the current pages and Git checkout', () => {
+    expect(baselineApiFixture.baselineRevision).toBe('a786d76d3cbc4df9ecd633c5e83b0d9a318d7fd0')
+    expect(Object.keys(baselineApiFixture.pages).sort()).toEqual([...scopedPages].sort())
+    // Extracted once from the named historical revision, never from current page source.
+    expect(createHash('sha256').update(JSON.stringify(baselineApiFixture)).digest('hex')).toBe('ee285964588076d7bfd6f07bfd2d8e050fddda93331722d80fbc9d12619fa653')
+    for (const page of scopedPages) {
+      const baseline = baselineApiFixture.pages[page]
+      expect(Array.isArray(baseline), `missing archived API baseline for ${page}`).toBe(true)
+      for (const literal of baseline) {
+        expect(typeof literal).toBe('string')
+        expect(literal).toContain('/api/')
+      }
+    }
+  })
+
   it('keeps the established owner-page metadata and safety boundaries', () => {
     for (const page of [seoGeo, llmVisibility, knowledge, trainingPipeline, auditLab]) assertCommonOwnerContract(page)
   })
@@ -203,8 +221,9 @@ describe('owner scattered endpoint UI contract', () => {
       return values
     }
     for (const page of scopedPages) {
-      const baseline = execFileSync('git', ['show', `a786d76:./${page}`], { encoding: 'utf8' })
-      const existing = new Set(literals(baseline))
+      const baseline = baselineApiFixture.pages[page]
+      expect(Array.isArray(baseline), `missing archived API baseline for ${page}`).toBe(true)
+      const existing = new Set(baseline)
       const current = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8')
       for (const literal of literals(current)) expect(existing.has(literal) || allowedNewApiLiterals.has(literal), `unexpected introduced runtime API literal in ${page}: ${literal}`).toBe(true)
     }
