@@ -1,8 +1,9 @@
 import { createError } from 'h3'
 import { AutoGeoConfigurationError, AutoGeoProviderError, AUTOGEO_UPSTREAM, createAutoGeoApiAdapter } from './autogeo-api'
-import { AutoGeoBailianConfigurationError, AutoGeoBailianProviderError, createAutoGeoBailianQwenAdapter } from './autogeo-bailian-qwen'
+import { AutoGeoOpenAiCompatibleProviderError, createAutoGeoOpenAiCompatibleAdapter } from './autogeo-openai-compatible'
 import { GEO_WORKBENCH_VERSION, type GeoDocumentInput, type GeoFallbackReason, type GeoOptimizationResult, type GeoRequestedProvider, type GeoRewriteAdapter, type GeoRewriteCandidate, type GeoRule } from './contracts'
 import { createAutoGeoIsolatedWorkerAdapter, AUTOGEO_WORKER_PROTOCOL_VERSION, AUTOGEO_WORKER_SOURCE_SHA256 } from './isolated-worker'
+import { createOpenAiCompatibleChatClient, OpenAiCompatibleProviderError, resolveOpenAiCompatibleProviderConfiguration } from '../llm-provider/openai-compatible'
 import { evaluateDocument } from './metrics'
 import { assertSourceBoundRewrite, AutoGeoUnsafeOutputError } from './output-safety'
 import { GEO_RULESET_VERSION, geoRules, resolveCanonicalGeoRules } from './rules'
@@ -89,7 +90,7 @@ function applyReferenceRuleTransforms(document: GeoDocumentInput, rules: readonl
   return { title: document.title, body }
 }
 
-function referenceCandidate(document: GeoDocumentInput, rules: readonly GeoRule[], fallbackReason: GeoFallbackReason, requestedProvider: GeoRequestedProvider = 'autogeo-bailian-qwen', model = 'qwen-plus'): GeoRewriteCandidate {
+function referenceCandidate(document: GeoDocumentInput, rules: readonly GeoRule[], fallbackReason: GeoFallbackReason, requestedProvider: GeoRequestedProvider = 'autogeo-openai-compatible', model = 'qwen-plus'): GeoRewriteCandidate {
   const transformed = applyReferenceRuleTransforms(document, rules)
   const optimizedTitle = document.language === 'zh-hant' ? `${transformed.title}｜重點與可驗證說明` : `${transformed.title} | Key points and verification notes`
   const optimizedContent = document.language === 'zh-hant'
@@ -104,7 +105,7 @@ function referenceCandidate(document: GeoDocumentInput, rules: readonly GeoRule[
 
 const isolatedReferenceRulesAdapter = createAutoGeoIsolatedWorkerAdapter()
 
-async function referenceFallback(document: GeoDocumentInput, rules: readonly GeoRule[], fallbackReason: GeoFallbackReason, requestedProvider: GeoRequestedProvider = 'autogeo-bailian-qwen', model: GeoRewriteCandidate['provenance']['model'] = 'qwen-plus'): Promise<GeoRewriteCandidate> {
+async function referenceFallback(document: GeoDocumentInput, rules: readonly GeoRule[], fallbackReason: GeoFallbackReason, requestedProvider: GeoRequestedProvider = 'autogeo-openai-compatible', model: GeoRewriteCandidate['provenance']['model'] = 'qwen-plus'): Promise<GeoRewriteCandidate> {
   const candidate = await isolatedReferenceRulesAdapter.rewrite(document, rules)
   return {
     ...candidate,
@@ -120,25 +121,33 @@ export const referenceRulesAdapter: GeoRewriteAdapter = {
 
 async function safeFallback(document: GeoDocumentInput, rules: readonly GeoRule[]): Promise<GeoRewriteCandidate> {
   const candidate = await referenceFallback(document, rules, 'provider-output-safety-rejected')
-  candidate.safetyNotes.unshift('百鍊／AutoGEO provider 草稿加入原文未支持的商業主張，已由 server-side source-bound guard 拒絕。', '以下為 reference-rules-v1 fallback，供 owner 審閱；它不是 provider 成功產出，也不會自動發布。')
+  candidate.safetyNotes.unshift('AI provider 草稿加入原文未支持的商業主張，已由 server-side source-bound guard 拒絕。', '以下為 reference-rules-v1 fallback，供 owner 審閱；它不是 provider 成功產出，也不會自動發布。')
   return candidate
 }
 
 async function rewriteWithPreferredProvider(document: GeoDocumentInput, rules: readonly GeoRule[]): Promise<GeoRewriteCandidate> {
-  let bailianFallbackReason: GeoFallbackReason
-  try { return await createAutoGeoBailianQwenAdapter().rewrite(document, rules) }
-  catch (error) {
-    if (isUnsafeProviderRewrite(error)) return await safeFallback(document, rules)
-    if (!(error instanceof AutoGeoBailianConfigurationError) && !(error instanceof AutoGeoBailianProviderError)) throw error
-    bailianFallbackReason = error instanceof AutoGeoBailianConfigurationError && error.issue === 'invalid-endpoint' ? 'bailian-invalid-configuration' : error instanceof AutoGeoBailianConfigurationError ? 'bailian-not-configured' : 'bailian-provider-unavailable'
+  const provider = resolveOpenAiCompatibleProviderConfiguration()
+  const openAiCompatibleUnconfiguredReason: GeoFallbackReason = !provider.configured && (provider.reason === 'endpoint-not-allowed' || provider.reason === 'model-invalid') ? 'provider-configuration-invalid' : 'autogeo-not-configured'
+  let openAiCompatibleAttempted = false
+  let openAiCompatibleModel: GeoRewriteCandidate['provenance']['model'] = 'qwen-plus'
+  if (provider.configured) {
+    openAiCompatibleModel = provider.model
+    try {
+      const client = createOpenAiCompatibleChatClient({ endpoint: provider.endpoint, apiKey: provider.apiKey, model: provider.model })
+      return await createAutoGeoOpenAiCompatibleAdapter({ client }).rewrite(document, rules)
+    } catch (error) {
+      if (isUnsafeProviderRewrite(error)) return await safeFallback(document, rules)
+      if (!(error instanceof AutoGeoOpenAiCompatibleProviderError) && !(error instanceof OpenAiCompatibleProviderError)) throw error
+      openAiCompatibleAttempted = true
+    }
   }
   try { return await createAutoGeoApiAdapter().rewrite(document, rules) }
   catch (error) {
     if (isUnsafeProviderRewrite(error)) return await safeFallback(document, rules)
     if (!(error instanceof AutoGeoConfigurationError) && !(error instanceof AutoGeoProviderError)) throw error
-    if (bailianFallbackReason !== 'bailian-not-configured') return referenceFallback(document, rules, bailianFallbackReason, 'autogeo-bailian-qwen')
-    const fallbackReason: GeoFallbackReason = error instanceof AutoGeoConfigurationError ? 'bailian-not-configured' : 'autogeo-provider-unavailable'
-    return referenceFallback(document, rules, fallbackReason, error instanceof AutoGeoConfigurationError ? 'autogeo-bailian-qwen' : 'autogeo-api', error instanceof AutoGeoConfigurationError ? 'qwen-plus' : AUTOGEO_UPSTREAM.model)
+    if (openAiCompatibleAttempted) return referenceFallback(document, rules, 'autogeo-provider-unavailable', 'autogeo-openai-compatible', openAiCompatibleModel)
+    const fallbackReason: GeoFallbackReason = error instanceof AutoGeoConfigurationError ? openAiCompatibleUnconfiguredReason : 'autogeo-provider-unavailable'
+    return referenceFallback(document, rules, fallbackReason, error instanceof AutoGeoConfigurationError ? 'autogeo-openai-compatible' : 'autogeo-api', error instanceof AutoGeoConfigurationError ? openAiCompatibleModel : AUTOGEO_UPSTREAM.model)
   }
 }
 

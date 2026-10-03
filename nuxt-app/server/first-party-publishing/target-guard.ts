@@ -6,7 +6,7 @@ const MAX_HOSTNAME_LENGTH = 253
 const MAX_PAYLOAD_BYTES = 10_000_000
 const BLOCKED_SUFFIXES = ['.local', '.internal', '.localhost', '.onion'] as const
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
-const FRAMEWORKS = new Set(['astro', 'nuxt'])
+const FRAMEWORKS = new Set(['astro', 'nuxt', 'nextjs'])
 const TRANSPORTS = new Set<FirstPartyTransport>(['first_party_git', 'first_party_signed_api'])
 const STATUSES = new Set(['active', 'paused', 'revoked'])
 const TARGET_KEYS = new Set(['targetId', 'ownerScopeKey', 'framework', 'transport', 'targetOrigin', 'contentRoot', 'defaultBranch', 'repositoryOwner', 'repositoryName', 'endpointPath', 'credentialReference', 'status', 'allowedContentTypes', 'allowedLanguages', 'maximumPayloadBytes', 'executionEnabled'])
@@ -169,9 +169,10 @@ export function validateFirstPartyPublishTarget(input: unknown): FirstPartyTarge
     const executionEnabled = readValue(target, 'executionEnabled')
     const maximumPayloadBytes = readValue(target, 'maximumPayloadBytes')
     if (!isOpaqueReference(targetId) || !isOpaqueReference(ownerScopeKey)) return blocked('INVALID_INPUT', 'target identity must be opaque')
-    if (typeof framework !== 'string' || !FRAMEWORKS.has(framework)) return blocked('UNSUPPORTED_FRAMEWORK', 'framework must be astro or nuxt')
+    if (typeof framework !== 'string' || !FRAMEWORKS.has(framework)) return blocked('UNSUPPORTED_FRAMEWORK', 'framework must be astro, nuxt or nextjs')
     if (typeof transport !== 'string' || !TRANSPORTS.has(transport as FirstPartyTransport)) return blocked('UNSUPPORTED_TRANSPORT', 'transport is not supported')
     const typedTransport = transport as FirstPartyTransport
+    if (framework === 'nextjs' && typedTransport !== 'first_party_signed_api') return blocked('UNSUPPORTED_TRANSPORT', 'Next.js requires the signed API receiver')
     if (typeof status !== 'string' || !STATUSES.has(status)) return blocked('INVALID_INPUT', 'target status is invalid')
     if (status !== 'active') return blocked('TARGET_NOT_ACTIVE', 'target status must be active')
     if (!isOpaqueReference(credentialReference)) return blocked('INVALID_CREDENTIAL_REFERENCE', 'credentialReference must be an opaque server-side reference')
@@ -187,12 +188,14 @@ export function validateFirstPartyPublishTarget(input: unknown): FirstPartyTarge
     if (!contentTypes.ok) return blocked('INVALID_INPUT', contentTypes.reason)
     const languages = normalizeLanguageAllowlist(readValue(target, 'allowedLanguages'))
     if (!languages.ok) return blocked('INVALID_INPUT', languages.reason)
+    if (framework === 'nextjs' && (contentTypes.values.length !== 1 || contentTypes.values[0] !== 'article')) return blocked('UNSUPPORTED_CONTENT_TYPE', 'Next.js journal receiver accepts articles only')
+    if (framework === 'nextjs' && (languages.values.length !== 1 || languages.values[0] !== 'zh-hant')) return blocked('UNSUPPORTED_LANGUAGE', 'Next.js journal receiver accepts Traditional Chinese only')
     const transportFields = invalidTransportFields(target, typedTransport)
     if (transportFields) return blocked(typedTransport === 'first_party_git' ? 'INVALID_REPOSITORY' : 'INVALID_ENDPOINT_PATH', transportFields)
     const targetValue: ValidatedFirstPartyTarget = {
       targetId,
       ownerScopeKey,
-      framework: framework as 'astro' | 'nuxt',
+      framework: framework as 'astro' | 'nuxt' | 'nextjs',
       transport: typedTransport,
       targetOrigin: origin.origin,
       contentRoot: root,

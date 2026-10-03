@@ -7,7 +7,7 @@
 | 層級 | Owner | 技術與責任 |
 |---|---|---|
 | Public site | `../public-site` | Astro 7.2.4 static output、Vue islands、Markdown content collection、SEO head、robots、sitemap、llms.txt、公開 forms。 |
-| Public API | Nuxt server | 只有 `POST /api/leads` 與 `POST /api/site-analysis` 提供 public-site 使用；保留既有安全 schema、DNS/IP safety、consent、honeypot、節流與去重。 |
+| Public-site API | Nuxt server | public-site 的跨來源介面限 `POST /api/leads` 與 `POST /api/site-analysis`；保留既有安全 schema、DNS/IP safety、consent、honeypot、節流與去重。其他客戶專用入口使用各自的身分或 token guards，不沿用此 CORS 授權。 |
 | Private operations | Nuxt pages/layout | `/audit-lab`、`/audit-lab/geo`、`/audit-lab/seo-geo`、`/leads`、`/training-pipeline`、`/ml-lab-preview`；owner session、OAuth、noindex、no-store。 |
 | Governed core | Nuxt server | Evidence、Diagnosis、AutoGEO-compatible strategy、GEOFlow production plan、risk gate、human review、preview/export ledger 與 revision lifecycle。 |
 | Data/ML | Nuxt server/tasks | Drizzle/MySQL、Public Intelligence lineage、consent/revoke、BGE-M3 similarity pilot 與 gated training；不自動部署模型或外部內容。 |
@@ -49,7 +49,18 @@ DISCOVERYSTACK_PUBLIC_SITE_ORIGIN=http://localhost:4321 pnpm dev
 
 所有 owner workbench pages 透過 owner layout 與既有 auth guard；`/api/**` 均設定 noindex。`/` 明確導向 `/audit-lab`，不再是公開首頁。`leads`、`training-pipeline`、`ml-lab-preview` 已指定 `owner` layout，避免落入 public shell。
 
-公開瀏覽器只能使用 `POST /api/leads` 與 `POST /api/site-analysis`。`server/middleware/public-cors.ts` 只對這兩條 path 執行 CORS，production 必須 matching `DISCOVERYSTACK_PUBLIC_SITE_ORIGIN`；origin mismatch、缺少 production origin、錯誤 preflight method 都 fail closed。既有 owner GET `/api/leads` 不會取得 cross-origin CORS header，但仍可在同源 authenticated page 使用。
+public-site 的跨來源瀏覽器請求限 `POST /api/leads` 與 `POST /api/site-analysis`。`server/middleware/public-cors.ts` 只對這兩條 path 執行 CORS，production 必須 matching `DISCOVERYSTACK_PUBLIC_SITE_ORIGIN`；origin mismatch、缺少 production origin、錯誤 preflight method 都 fail closed。既有 owner GET `/api/leads` 不會取得 cross-origin CORS header，但仍可在同源 authenticated page 使用。這不是整個 Nuxt runtime 的公開路由清單。
+
+本次每週文章候選另有以下客戶專用路由，全部須其專用配置與 guards；不開放 owner 工作台或客戶目錄：
+
+| 路由 | 權限與隱私邊界 |
+| --- | --- |
+| `GET /weekly-content/connect`、`GET /api/weekly-content/connect/config` | 固定 LIFF 頁面及安全配置投影；旗標／配置缺失回 disabled，不回傳 token key、Login ID token 或客戶資料。 |
+| `POST /api/weekly-content/connect/context`、`POST /api/weekly-content/connect/confirm` | 已配置同一 HTTPS origin、JSON raw body ≤12KiB、官方 ID token 驗證；context 只顯示邀約對應的一家公司或本人有效綁定，confirm 另需公司確認碼與 `consent:true`。前端不能指定 owner/client/LINE user ID。 |
+| `GET /weekly-content/review/:requestId` | 私密 read token 及最新原稿／來源／政策／收稿人／期限驗證，只讀全文；開啟不寫同意。 |
+| `POST /api/weekly-content/webhooks/line` | 官方 raw-body HMAC、destination、一對一 sender 及 durable event 去重；文章同意固定 exact 稿件及綁定人，不由瀏覽器自稱身分。 |
+
+LIFF／全文頁面使用 no-store、noindex、no-referrer；它們不是可被索引的品牌官網。官方 SDK 自身可能管理瀏覽器登入狀態，應用程式不自行持久化邀約／ID token，不能把此邊界宣稱為第三方 SDK 完全不使用儲存。每週掃描與真實平台門檻見 `WEEKLY_CONTENT_CUSTOMER_LINE_APPROVAL_V1.md` 與 `docs/SEARCHKING_LINE_ACCOUNT_SETUP_V1.md`。
 
 ## SEO/GEO core safety
 

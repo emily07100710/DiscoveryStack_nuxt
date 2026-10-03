@@ -12,6 +12,7 @@ export type GeoFallbackReason =
   | 'provider-output-safety-rejected'
   | 'autogeo-not-configured'
   | 'autogeo-provider-unavailable'
+  | 'provider-configuration-invalid'
 
 export type GeoDocumentInput = {
   title: string

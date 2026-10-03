@@ -22,13 +22,14 @@ describe('Owner Content Operations Workbench V1 contract', () => {
     const mockedFetch = vi.fn().mockResolvedValue({ clients: [], calendars: [], entries: [], runs: [], outcomeAssessments: [], capabilities: {}, limitations: [] })
     vi.stubGlobal('$fetch', mockedFetch)
     expect(mockedFetch).not.toHaveBeenCalled()
-    expect(source).toContain('$fetch<Workspace>')
+    expect(source).toContain('const fetchContent = $fetch as unknown as WorkbenchFetch')
+    expect(source).toContain('fetchContent<Workspace>')
     expect(source).not.toMatch(/(?:globalThis\.)?fetch\s*\(/)
     expect(source).not.toMatch(/\baxios\b/i)
   })
 
   it('uses the fixed workspace GET endpoint', () => {
-    expect(page()).toContain("$fetch<Workspace>('/api/content-operations/workspace')")
+    expect(page()).toContain("fetchContent<Workspace>('/api/content-operations/workspace')")
   })
 
   it('uses the fixed clients POST endpoint and complete body contract', () => {
@@ -132,9 +133,15 @@ describe('Owner Content Operations Workbench V1 contract', () => {
 
   it('renders capability state separately from external runtime availability', () => {
     const source = page()
-    for (const message of ['排程器尚未接通', '目前沒有已配置的 provider runtime', '尚無 active publication target', 'Outcome persistence 尚未可用']) expect(source).toContain(message)
+    for (const message of ['排程工作尚未註冊', '排程工作已註冊；自動執行尚未啟用', '自動排程已啟用；主機持續執行仍待驗證', '目前沒有已配置的 provider runtime', '尚無 active publication target', 'Outcome persistence 尚未可用']) expect(source).toContain(message)
     for (const field of ['externalRuntimeAvailability', 'generationProviderConfigured', 'firstPartyTransportConfigured', 'nonFirstPartyTransportConfigured', 'credentialResolverAvailable']) expect(source).toContain(field)
     expect(source).toContain('workspace.capabilities')
+    expect(source).toContain('workspace.value.readiness.schedulerEnabled')
+    expect(source).toContain("workspace.readiness.outcomeCollectionStatus === 'unverified'")
+    expect(source).toContain('workspace.readiness.outcomeCollectionConfigured')
+    for (const message of ['設定尚未確認', '收數設定已備妥', '尚未設定自動收數', '真實收數、供應商權限與主機持續執行仍待驗證', '可保存成效資料不代表已自動收數']) expect(source).toContain(message)
+    expect(source).not.toContain('workspace.capabilities.outcomeCollectionConfigured ?')
+    expect(source).not.toContain('排程器已接通')
   })
 
   it('keeps blocked, failed and retry_wait as independent text statuses', () => {

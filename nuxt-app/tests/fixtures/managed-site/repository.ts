@@ -87,6 +87,7 @@ export function createManagedSiteMemoryRepository() {
     async findMembership(ownerUserId, membershipId) { return state.memberships.find(row => row.ownerUserId === ownerUserId && row.id === membershipId) || null },
     async findMembershipByEmail(ownerUserId, projectId, principalEmail) { return state.memberships.find(row => row.ownerUserId === ownerUserId && row.projectId === projectId && row.principalEmail === principalEmail) || null },
     async listMemberships(ownerUserId, projectId) { return state.memberships.filter(row => row.ownerUserId === ownerUserId && row.projectId === projectId).sort((a, b) => a.id - b.id) },
+    async listActiveMembershipsByEmail(ownerUserId, principalEmail) { return state.memberships.filter(row => row.ownerUserId === ownerUserId && row.principalEmail === principalEmail && row.status === 'active').sort((a, b) => a.id - b.id).slice(0, 25) },
     async insertMembership(input) { return create(state.memberships, input as Omit<ManagedSiteMembership, 'id'>) },
     async updateMembership(ownerUserId, membershipId, patch) {
       const row = state.memberships.find(item => item.ownerUserId === ownerUserId && item.id === membershipId)

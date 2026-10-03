@@ -7,6 +7,7 @@ import { runOwnerProductionDeliverable, runOwnerProductionRepair, type Productio
 import type { CanonicalContext, ContentOperationsRepository, EventInsert, PublicationAttemptFinalization, PublicationAttemptInsert, PublicationAttemptReservation, PublicationTargetInsert, RunInsert } from './repository'
 import { createContentOperationsRepository } from './repository'
 import { buildPublicationIdentity, validatePersistedPublicationIdentity, type PublicationIdentity } from './publication-identity'
+import { resolvePublicationPublicUrl } from './publication-public-url'
 import { materializeOwnerDueContent, getDefaultContentOperationsClock } from './service'
 import { evaluateOwnerAutopilotPolicy, GOVERNED_AUTOPILOT_POLICY_V4_VERSION, type OwnerAutopilotPolicy } from './autopilot-policy'
 import { buildMachineAuthorization, buildRepairContract, decideBalancedAutopilot, type AutopilotPolicySnapshot, type EntityStrategyProfile, type QueryOwnership } from './balanced-autopilot'
@@ -291,6 +292,7 @@ async function reloadExactV4MachineAuthorization(input: {
   repository: ContentOperationsRepository
   now: Date
   allowPublishedReplay?: boolean
+  allowExpiredForRevalidation?: boolean
 }) {
   if (!input.lineage.client || !input.lineage.job) return null
   const policyRow = await input.repository.findAutopilotPolicy(input.ownerUserId, input.lineage.client.id, input.target.id)
@@ -305,7 +307,7 @@ async function reloadExactV4MachineAuthorization(input: {
   if (!profile || !query || !authorization || !authorization.authorizationExpiresAt) return null
   if (profile.status !== 'active' || profile.evidenceSnapshotHash !== input.entry.evidenceSnapshotHash || query.status !== 'active' || query.evidenceSnapshotHash !== input.entry.evidenceSnapshotHash) return null
   const statusValid = authorization.status === 'authorized' || (input.allowPublishedReplay === true && authorization.status === 'published')
-  if (!statusValid || (authorization.authorizationExpiresAt.getTime() <= input.now.getTime() && authorization.status !== 'published')) return null
+  if (!statusValid || (authorization.authorizationExpiresAt.getTime() <= input.now.getTime() && authorization.status !== 'published' && input.allowExpiredForRevalidation !== true)) return null
   const findings = Array.isArray(input.gate.findings) ? input.gate.findings : []
   let riskSnapshot
   try {
@@ -352,6 +354,31 @@ async function reloadExactV4MachineAuthorization(input: {
     && decisionPayload.action === 'publish'
     && stableFingerprint(payloadBase) === authorization.authorizationFingerprint
   return exact ? { authorization, policy, profile, query, riskSnapshot, quality } : null
+}
+
+/** Read-only review admission checks every current V4 gate. Its expired short lease may be renewed later, but is never publication authority. */
+export async function hasExactMachineAuthorizationForReview(input:{ownerUserId:number;entryId:number;targetId:number;now:Date;repository:ContentOperationsRepository}):Promise<boolean> {
+  try {
+    const {repository,ownerUserId,now}=input
+    const lineage=await repository.resolveWorkspaceEntry(ownerUserId,input.entryId)
+    const target=await repository.findPublicationTarget(ownerUserId,input.targetId)
+    if(!lineage?.job || !lineage.draft || !target)return false
+    const policyRow=await repository.findAutopilotPolicy(ownerUserId,lineage.client.id,target.id)
+    if(!policyRow)return false
+    const policy=projectAutopilotPolicy(policyRow,target.targetId)
+    if(policy.policyVersion!==GOVERNED_AUTOPILOT_POLICY_V4_VERSION || policy.status!=='enabled' || policy.requireApprovedForDelivery===true || Date.parse(policy.expiresAt)<=now.getTime())return false
+    const context=await repository.resolveCanonicalContext(ownerUserId,lineage.calendar.productionPlanId,lineage.entry.productionDeliverableId)
+    if(context.plan.id!==lineage.calendar.productionPlanId || context.deliverable.id!==lineage.entry.productionDeliverableId || context.strategy.id!==lineage.entry.strategyRecommendationId || context.evidenceSnapshot.hash!==lineage.entry.evidenceSnapshotHash)return false
+    const authority=canonicalEvidenceForAutopilot(context,lineage.entry.evidenceSnapshotHash,now),age=now.getTime()-Date.parse(authority.evidenceCapturedAt || '')
+    if(!authority.evidenceApproved || !Number.isFinite(age) || age<0 || age>policy.evidenceFreshnessHours*3600000)return false
+    const draft=lineage.draft as typeof lineage.draft & {title:string;body:string;provenance:unknown}
+    const provenance=readRecord(draft.provenance),provider=readRecord(provenance.providerProvenance)
+    const model=safeString(provenance.providerModel)||safeString(provenance.model)||safeString(provider.model)||(safeString(provenance.provider)?`${safeString(provenance.provider)}:${safeString(provenance.providerVersion)||'unknown'}`:null)
+    if(provenance.providerExecution!==true || provider.providerExecution!==true || !model || !policy.allowedProviderModels.map(value=>value.normalize('NFKC').trim().toLowerCase()).includes(model.normalize('NFKC').trim().toLowerCase()))return false
+    const gate=await repository.findRiskGate(ownerUserId,draft.id,lineage.entry.evidenceSnapshotHash)
+    if(!gate)return false
+    return Boolean(await reloadExactV4MachineAuthorization({ownerUserId,entry:lineage.entry,lineage,target,draft,gate,context,repository,now,allowExpiredForRevalidation:true,allowPublishedReplay:true}))
+  } catch {return false}
 }
 
 function canonicalEvidenceForAutopilot(context: CanonicalContext, expectedHash: string, now: Date) {
@@ -711,7 +738,8 @@ async function executeMultiChannelPublicationPath(ownerUserId: number, entry: Co
         const dispatch = dispatchInputs.get(route.routeId) || { idempotencyKey: `ref-replay-${stableFingerprint({ entryId: entry.id, routeId: route.routeId }).slice(0, 64)}`, executorRunId: routeExecutorRunId(route.routeId, result.attempt), attempt: result.attempt }
         const reservation = reservations.get(route.routeId)
         if (requestedMode === 'execute' && reservation) {
-          const patch: PublicationAttemptFinalization = { status: result.status === 'delivered' ? 'delivered' : result.status === 'retry_wait' ? 'retryable_failure' : result.status === 'planned' ? 'dry_run_succeeded' : 'permanent_failure', artifactFingerprint: stableFingerprint({ routeId: route.routeId, receiptFingerprint: result.receiptFingerprint, status: result.status }), remoteState: result.status, receiptLedger: result.receipt ? [result.receipt] : [], remoteRevision: null, receiptFingerprint: result.receiptFingerprint, publicationUrl: null, errorCode: result.status === 'delivered' || result.status === 'planned' ? null : 'MULTI_CHANNEL_DISPATCH_BLOCKED', errorSummary: result.status === 'delivered' || result.status === 'planned' ? null : sanitizeErrorSummary(result.reasons.join('; ')), completedAt: now }
+          const publicPage = result.status === 'delivered' ? resolvePublicationPublicUrl({ ownerUserId, client: lineage.client, entry, target, identity: identityForRoute }) : null
+          const patch: PublicationAttemptFinalization = { status: result.status === 'delivered' ? 'delivered' : result.status === 'retry_wait' ? 'retryable_failure' : result.status === 'planned' ? 'dry_run_succeeded' : 'permanent_failure', artifactFingerprint: stableFingerprint({ routeId: route.routeId, receiptFingerprint: result.receiptFingerprint, status: result.status }), remoteState: result.status, receiptLedger: result.receipt ? [result.receipt] : [], remoteRevision: null, receiptFingerprint: result.receiptFingerprint, publicationUrl: publicPage?.configured ? publicPage.publicationUrl : null, errorCode: result.status === 'delivered' || result.status === 'planned' ? null : 'MULTI_CHANNEL_DISPATCH_BLOCKED', errorSummary: result.status === 'delivered' || result.status === 'planned' ? null : sanitizeErrorSummary(result.reasons.join('; ')), completedAt: now }
           const stored = await transaction.finalizePublicationAttempt(ownerUserId, reservation.attempt.id, patch)
           if (!stored) badRequest('A per-target multi-channel attempt could not be finalized from planned state.')
           const machineAuthorization = claimedMachineAuthorizations.get(route.routeId)
@@ -752,6 +780,12 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
   const legacyTarget = lineage.target || await repository.findActivePublicationTarget(ownerUserId, lineage.client.id)
   const executionTargets = selectedTargets.length ? selectedTargets : legacyTarget ? [legacyTarget] : []
   if (!executionTargets.length) badRequest('An active publication target is required before publication.')
+  if (input.mode==='execute' && lineage.client.requireCustomerApproval===true) {
+    try {
+      if(!repository.assertWeeklyCustomerConsent)throw new Error('Weekly consent storage is not available.')
+      for(const target of executionTargets)await repository.assertWeeklyCustomerConsent({ownerUserId,clientId:lineage.client.id,entryId:entry.id,jobId:lineage.job.id,draftId:lineage.draft.id,targetId:target.id,contentHash:String(lineage.draft.contentHash),evidenceSnapshotHash:entry.evidenceSnapshotHash,startedAt:now})
+    } catch { return {entryId:entry.id,entry,previousStatus:entry.status,resultingStatus:entry.status,runId:0,stage:'publication',outcome:'blocked',retryAt:null,limitations:['WEEKLY_CUSTOMER_APPROVAL_REQUIRED; exact customer consent is not current; no lease, budget or executor was used']} }
+  }
   if (executionTargets.length > 1 || executionTargets.some(target => !isFirstPartyTarget(target))) return executeMultiChannelPublicationPath(ownerUserId, entry, input, repository, dependencies, now, executionTargets, expectedRunId)
   const hasPersistedIdentity = Boolean(entry.publicationSlug || entry.publicationPath || entry.publicationIdentityFingerprint)
   if (hasPersistedIdentity && (!entry.publicationSlug || !entry.publicationPath || !entry.publicationIdentityFingerprint || entry.publicationTargetId === null)) badRequest('Persisted publication identity is incomplete or missing its target binding.')
@@ -866,7 +900,7 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
   const attemptNumber = mode === 'dry_run' ? Math.max(1, attempts.filter(attempt => attempt.mode === 'dry_run').reduce((max, attempt) => Math.max(max, attempt.attemptNumber), 0) + 1) : Math.max(1, stageRun.attemptNumber + 1)
   if (mode !== 'dry_run') {
     try {
-      reservation = await repository.reservePublicationAttempt({ ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, mode, attemptNumber, idempotencyKey: attemptKey, inputFingerprint: requestFingerprint, publicationId: identity.publicationId, publicationSlug: identity.slug, publicationPath: identity.path, contentHash: draft.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, startedAt: now, leaseToken: token, jobId: job.id, draftId: draft.id, reviewId: latestReview?.id || null, riskGateId: gate.id, authorityReference })
+      reservation = await repository.reservePublicationAttempt({ ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, mode, attemptNumber, idempotencyKey: attemptKey, inputFingerprint: requestFingerprint, publicationId: identity.publicationId, publicationSlug: identity.slug, publicationPath: identity.path, contentHash: draft.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, startedAt: now, leaseToken: token, jobId: job.id, draftId: draft.id, reviewId: authorityReference ? null : latestReview?.id || null, riskGateId: gate.id, authorityReference })
     } catch (error) {
       const released = await repository.releaseRunLease(ownerUserId, leased.id, 'blocked', token, now, { code: 'ATTEMPT_RESERVATION_FAILED', summary: sanitizeErrorSummary(error) })
       if (!released) badRequest('Publication reservation failure lease could not be completed.')
@@ -900,8 +934,9 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
   const finalizePatch = (status: PublicationAttemptFinalization['status'], values: Partial<PublicationAttemptFinalization> = {}): PublicationAttemptFinalization => ({ status, artifactFingerprint: values.artifactFingerprint ?? null, remoteState: values.remoteState ?? null, receiptLedger: values.receiptLedger ?? null, remoteRevision: values.remoteRevision ?? null, receiptFingerprint: values.receiptFingerprint ?? null, publicationUrl: values.publicationUrl ?? null, errorCode: values.errorCode ?? null, errorSummary: values.errorSummary ?? null, completedAt: now })
   if (result.status === 'delivered') {
     const receiptFingerprint = stableFingerprint({ publicationId: result.publicationId, contentHash: result.contentHash, artifactFingerprint: result.artifactFingerprint, remoteState: result.remoteState, remoteRevision: result.remoteRevision })
+    const publicPage = resolvePublicationPublicUrl({ ownerUserId, client: lineage.client, entry: persistedEntry, target, identity })
     const delivered = await repository.transaction(async transaction => {
-      const stored = await transaction.finalizePublicationAttempt(ownerUserId, reservation?.attempt.id || existingAttempt?.id || 0, finalizePatch('delivered', { artifactFingerprint: result.artifactFingerprint, remoteState: result.remoteState, remoteRevision: result.remoteRevision, receiptFingerprint }))
+      const stored = await transaction.finalizePublicationAttempt(ownerUserId, reservation?.attempt.id || existingAttempt?.id || 0, finalizePatch('delivered', { artifactFingerprint: result.artifactFingerprint, remoteState: result.remoteState, remoteRevision: result.remoteRevision, receiptFingerprint, publicationUrl: publicPage.configured ? publicPage.publicationUrl : null }))
       if (!stored) {
         const replay = await transaction.findPublicationAttemptByIdempotency(ownerUserId, attemptKey)
         if (replay?.status === 'delivered') {
@@ -921,7 +956,7 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
       await transaction.appendEvent(event(ownerUserId, entry, completed.id, 'publication_delivered', entry.status, updated.status, { attemptId: stored.id, attemptNumber, publicationId: result.publicationId, remoteState: result.remoteState, remoteRevision: result.remoteRevision }, { entryId: entry.id, attemptKey, event: 'publication_delivered' }))
       return { stored, updated, completed }
     })
-    return { entryId: entry.id, entry: delivered.updated, previousStatus: entry.status, resultingStatus: 'delivered', runId: delivered.completed.id, stage: 'publication', outcome: 'delivered', retryAt: null, limitations: ['delivery result was accepted only after formal publisher identity validation'] }
+    return { entryId: entry.id, entry: delivered.updated, previousStatus: entry.status, resultingStatus: 'delivered', runId: delivered.completed.id, stage: 'publication', outcome: 'delivered', retryAt: null, limitations: ['delivery result was accepted only after formal publisher identity validation', ...(publicPage.configured ? [] : [publicPage.code])] }
   }
   const status = result.status === 'retryable_failure' && attemptNumber < MAX_ATTEMPTS ? 'retryable_failure' : result.status === 'retryable_failure' ? 'permanent_failure' : result.status === 'permanent_failure' ? 'permanent_failure' : 'blocked'
   const nextRunState: RunInsert['state'] = status === 'retryable_failure' ? 'retry_wait' : status === 'blocked' ? 'blocked' : 'failed'
@@ -959,7 +994,7 @@ async function executeGeneration(ownerUserId: number, entry: ContentOperationCal
   const token = randomUUID()
   const leased = await repository.acquireRunLease(ownerUserId, run.id, token, now, leaseMsFor(dependencies.leaseMs))
   if (!leased) return { entryId: entry.id, entry, previousStatus: entry.status, resultingStatus: entry.status, runId: run.id, stage: 'generation', outcome: 'replayed', retryAt: run.retryEligibleAt, limitations: ['another worker currently owns the generation lease'] }
-  const generationPolicies = [...new Map(Object.values(dependencies.autopilotPoliciesByTarget || {})
+  const generationPolicies = [...new Map([dependencies.autopilotPolicy,...Object.values(dependencies.autopilotPoliciesByTarget || {})]
     .filter((policy): policy is OwnerAutopilotPolicy => Boolean(policy?.policyVersion === GOVERNED_AUTOPILOT_POLICY_V4_VERSION))
     .map(policy => [policy.policyId, policy])).values()]
   for (const policy of generationPolicies) {
@@ -1265,6 +1300,15 @@ export async function executeContentOperationEntry(input: { ownerUserId: number;
   let entry = await repository.findEntry(input.ownerUserId, input.entryId)
   if (!entry) notFound('Content operation calendar entry was not found.')
   if (entry.status === 'delivered') return { entryId: entry.id, previousStatus: entry.status, resultingStatus: entry.status, runId: (await repository.listRuns(input.ownerUserId, entry.id)).find(run => run.stage === 'publication')?.id || 0, stage: 'publication', outcome: 'replayed', retryAt: null, limitations: ['delivered entries are immutable and replay-safe'] }
+  if (['planned','materialized','awaiting_generation','awaiting_review'].includes(entry.status)) {
+    const calendar=await repository.findCalendar(input.ownerUserId,entry.calendarId)
+    const client=calendar ? await repository.findClient(input.ownerUserId,calendar.clientId) : null
+    if(client?.requireCustomerApproval===true) {
+      if(!repository.assertWeeklyWorkflowActive)badRequest('Weekly review configuration must be active before generation.')
+      await repository.assertWeeklyWorkflowActive(input.ownerUserId,client.id,now)
+      if(!dependencies.autopilotPolicy && !Object.values(dependencies.autopilotPoliciesByTarget || {}).some(Boolean))badRequest('Weekly generation requires the stored owner policy and budget.')
+    }
+  }
   if (entry.status === 'planned') {
     const calendar = await repository.findCalendar(input.ownerUserId, entry.calendarId)
     if (!calendar) notFound('Content operation calendar was not found.')
@@ -1285,7 +1329,7 @@ export async function executeContentOperationEntry(input: { ownerUserId: number;
   return { entryId: entry.id, previousStatus: entry.status, resultingStatus: entry.status, runId: 0, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: ['entry is not executable from its current durable status'] }
 }
 
-async function persistBalancedAutopilotDecision(input: { ownerUserId: number; entry: ContentOperationCalendarEntryRow; lineage: Awaited<ReturnType<ContentOperationsRepository['resolveWorkspaceEntry']>>; policy: OwnerAutopilotPolicy; target: ContentOperationPublicationTargetRow; draft: { id: number; title: string; body: string; contentHash: string; provenance?: unknown }; gate: { status: string; evidenceSnapshotHash?: string; riskLevel?: string; gateVersion?: string; findings?: unknown } | null; evidenceAuthority: { evidenceApproved: boolean; evidenceCapturedAt: string | null }; now: Date; repository: ContentOperationsRepository; providerModel: string; providerProvenanceComplete: true; unsupportedFactualClaim: boolean }): Promise<{ decision: ReturnType<typeof decideBalancedAutopilot>; repairContract?: ReturnType<typeof buildRepairContract> }> {
+async function persistBalancedAutopilotDecision(input: { ownerUserId: number; entry: ContentOperationCalendarEntryRow; lineage: Awaited<ReturnType<ContentOperationsRepository['resolveWorkspaceEntry']>>; policy: OwnerAutopilotPolicy; target: ContentOperationPublicationTargetRow; draft: { id: number; title: string; body: string; contentHash: string; provenance?: unknown }; gate: { status: string; evidenceSnapshotHash?: string; riskLevel?: string; gateVersion?: string; findings?: unknown } | null; evidenceAuthority: { evidenceApproved: boolean; evidenceCapturedAt: string | null }; now: Date; repository: ContentOperationsRepository; providerModel: string; providerProvenanceComplete: true; unsupportedFactualClaim: boolean; authorizationOnly?: boolean }): Promise<{ decision: ReturnType<typeof decideBalancedAutopilot>; repairContract?: ReturnType<typeof buildRepairContract> }> {
   if (!input.lineage?.client || !input.lineage.calendar || !input.lineage.entry) throw new Error('balanced autopilot lineage is incomplete')
   const repairs = await input.repository.listRepairAttempts(input.ownerUserId, input.entry.id)
   const substitutions = await input.repository.listTopicSubstitutions(input.ownerUserId, input.entry.id)
@@ -1345,6 +1389,7 @@ async function persistBalancedAutopilotDecision(input: { ownerUserId: number; en
     primaryQuery: input.entry.topicCluster,
     now: input.now,
   })
+  if (input.authorizationOnly && decision.action !== 'publish') return { decision }
   if (decision.action === 'repair') {
     const qualityMetrics: Record<string, number | string | null> = Object.fromEntries(Object.entries(qualityEvaluation.metrics).map(([key, value]) => [key, typeof value === 'boolean' ? Number(value) : value]))
     const repairContract = buildRepairContract({ originalDraftId: String(input.draft.id), originalContentHash: input.draft.contentHash, repairAttempt: repairs.length + 1, reasonCodes: decision.reasons, failingMetrics: qualityMetrics, evidenceDeficiencies: qualityEvaluation.reasonCodes.filter(code => /EVIDENCE/u.test(code)), entityCoverageDeficiencies: qualityEvaluation.reasonCodes.filter(code => /ENTITY|QUERY/u.test(code)), requestedRepairs: decision.repairInstructions, providerModel: input.providerModel, candidateId: `entry-${input.entry.id}:draft-${input.draft.id}`, evidenceSnapshotHash: input.entry.evidenceSnapshotHash, createdAt: input.now.toISOString() })
@@ -1390,12 +1435,21 @@ export type OwnerContentEntryWorkflowDependencies = ContentOperationOrchestrator
   reviewService?: (input: { ownerUserId: number; entryId: number; jobId: number; draftId: number; decision: 'approved_for_delivery' | 'changes_requested' | 'rejected'; reviewNote?: string }) => Promise<unknown>
 }
 
-export async function runOwnerContentEntryWorkflow(input: { ownerUserId: number; entryId: number; mode?: 'dry_run' | 'execute'; idempotencyKey: string; now?: Date; reviewDecision?: 'approved_for_delivery' | 'changes_requested' | 'rejected'; dependencies?: OwnerContentEntryWorkflowDependencies }): Promise<ExecuteContentOperationResult> {
+export async function runOwnerContentEntryWorkflow(input: { ownerUserId: number; entryId: number; mode?: 'dry_run' | 'execute'; queueOnly?: boolean; exactDraftOnly?: boolean; idempotencyKey: string; now?: Date; reviewDecision?: 'approved_for_delivery' | 'changes_requested' | 'rejected'; dependencies?: OwnerContentEntryWorkflowDependencies }): Promise<ExecuteContentOperationResult> {
   const dependencies = input.dependencies || {}
   const repository = dependencies.repository || createContentOperationsRepository()
   const now = input.now || (dependencies.clock || getDefaultContentOperationsClock()).now()
   const mode = input.mode || 'dry_run'
-  let result = await executeContentOperationEntry({ ownerUserId: input.ownerUserId, entryId: input.entryId, trigger: 'owner_manual', now, value: { idempotencyKey: `${input.idempotencyKey}:generation`.slice(0, 128), mode: 'dry_run' }, dependencies: { ...dependencies, repository } })
+  const startingEntry = input.queueOnly || input.exactDraftOnly ? await repository.findEntry(input.ownerUserId,input.entryId) : null
+  const authorizationOnly = input.exactDraftOnly === true || (input.queueOnly === true && startingEntry?.status === 'ready_to_publish')
+  if (input.exactDraftOnly && (!input.queueOnly || startingEntry?.status !== 'ready_to_publish')) badRequest('Exact draft revalidation requires queueOnly and the same ready-to-publish draft.')
+  let result: ExecuteContentOperationResult
+  if (authorizationOnly && startingEntry) {
+    // Re-evaluate the existing exact candidate. Never dispatch generation, repair, substitution or publication.
+    result = { entryId:startingEntry.id, entry:startingEntry, previousStatus:startingEntry.status, resultingStatus:startingEntry.status, runId:0, stage:'review_wait', outcome:'awaiting_review',retryAt:null,limitations:['existing exact draft revalidation; no provider or executor call'] }
+  } else {
+    result = await executeContentOperationEntry({ ownerUserId: input.ownerUserId, entryId: input.entryId, trigger: 'owner_manual', now, value: { idempotencyKey: `${input.idempotencyKey}:generation`.slice(0, 128), mode: 'dry_run' }, dependencies: { ...dependencies, repository } })
+  }
   if (result.outcome !== 'awaiting_review') return result
   const current = await repository.findEntry(input.ownerUserId, input.entryId)
   if (!current || !current.jobId || !current.draftId) badRequest('Application workflow generation did not persist a complete job/draft lineage.')
@@ -1435,7 +1489,18 @@ export async function runOwnerContentEntryWorkflow(input: { ownerUserId: number;
       const normalizedProviderModel = providerModel?.normalize('NFKC').trim().toLowerCase() || null
       if (!Number.isFinite(evidenceAgeMs) || evidenceAgeMs < 0 || evidenceAgeMs > dependencies.autopilotPolicy.evidenceFreshnessHours * 60 * 60 * 1000) return { ...result, outcome: 'blocked', limitations: ['evidence is outside the owner-authorized freshness window; no machine authorization or executor call was created'] }
       if (providerProvenanceComplete !== true || !normalizedProviderModel || !dependencies.autopilotPolicy.allowedProviderModels.map(value => value.normalize('NFKC').trim().toLowerCase()).includes(normalizedProviderModel)) return { ...result, outcome: 'blocked', limitations: ['provider/model provenance is incomplete or outside the owner allowlist; no machine authorization or executor call was created'] }
-      const balanced = await persistBalancedAutopilotDecision({ ownerUserId: input.ownerUserId, entry: live, lineage, policy: dependencies.autopilotPolicy, target, draft, gate: riskGate, evidenceAuthority, now, repository, providerModel: normalizedProviderModel, providerProvenanceComplete, unsupportedFactualClaim })
+      if(authorizationOnly) {
+        if(dependencies.autopilotPolicy.policyVersion!==GOVERNED_AUTOPILOT_POLICY_V4_VERSION || !riskGate || !repository.renewMachineAuthorizationLease)return {...result,outcome:'blocked',limitations:['exact draft requires current V4 machine authority and bounded lease storage; no provider or executor was called']}
+        const exact=await reloadExactV4MachineAuthorization({ownerUserId:input.ownerUserId,entry:live,lineage,target,draft,gate:riskGate,context,repository,now,allowExpiredForRevalidation:true})
+        if(!exact || !exact.authorization.authorizationExpiresAt)return {...result,outcome:'blocked',limitations:['exact draft failed current policy/evidence/risk/quality bindings; no repair, substitution, provider or executor was called']}
+        const expiresAt=new Date(Math.floor(Math.min(Date.parse(exact.policy.expiresAt),now.getTime()+15*60*1000)/1000)*1000)
+        const renewed=await repository.renewMachineAuthorizationLease({ownerUserId:input.ownerUserId,authorizationFingerprint:exact.authorization.authorizationFingerprint,expectedExpiresAt:exact.authorization.authorizationExpiresAt,now,expiresAt})
+        if(!renewed)return {...result,outcome:'replayed',limitations:['machine authorization changed during exact revalidation; no provider or executor was called']}
+        await repository.appendEvent(event(input.ownerUserId,live,null,'autopilot_authorization_revalidated',live.status,live.status,{authorizationFingerprint:renewed.authorizationFingerprint,authorizationExpiresAt:expiresAt.toISOString(),humanReviewId:null},{entryId:live.id,event:'autopilot_authorization_revalidated',authorizationFingerprint:renewed.authorizationFingerprint,expiresAt:expiresAt.toISOString()}))
+        return {...result,entry:live,resultingStatus:'ready_to_publish',outcome:'ready_to_publish',limitations:['same exact candidate was revalidated with a bounded 15-minute machine lease; no provider, repair or publication executor was called']}
+      }
+      const balanced = await persistBalancedAutopilotDecision({ ownerUserId: input.ownerUserId, entry: live, lineage, policy: dependencies.autopilotPolicy, target, draft, gate: riskGate, evidenceAuthority, now, repository, providerModel: normalizedProviderModel, providerProvenanceComplete, unsupportedFactualClaim, authorizationOnly })
+      if (authorizationOnly && balanced.decision.action !== 'publish') return { ...result,outcome:'blocked',limitations:[...balanced.decision.reasons,'exact draft failed current machine gates; no repair, substitution, provider or executor was called'] }
       if (balanced.decision.action === 'repair' && balanced.repairContract) {
         const repairLeaseOwner = randomUUID()
         const claimedRepair = await repository.claimRepairAttempt(input.ownerUserId, balanced.repairContract.repairFingerprint, repairLeaseOwner, now, new Date(now.getTime() + leaseMsFor(dependencies.leaseMs)))
@@ -1472,17 +1537,19 @@ export async function runOwnerContentEntryWorkflow(input: { ownerUserId: number;
         await transaction.appendEvent(event(input.ownerUserId, live, null, 'autopilot_entry_authorized', live.status, updated.status, { policyId: dependencies.autopilotPolicy?.policyId || null, policyVersion: dependencies.autopilotPolicy?.policyVersion || null, targetCount: targets.length || 1, reviewId: null, authorityReference: 'machine-authorization-record' }, { entryId: live.id, event: 'autopilot_entry_authorized', policyId: dependencies.autopilotPolicy?.policyId || 'missing' }))
         return updated
       })
+      if (input.queueOnly) return { ...result, entry: promoted, resultingStatus: 'ready_to_publish', outcome: 'ready_to_publish', limitations: ['owner policy machine authorization queued publication; no publication executor was called'] }
       result = await executeContentOperationEntry({ ownerUserId: input.ownerUserId, entryId: promoted.id, trigger: 'scheduler', now, value: { idempotencyKey: `${input.idempotencyKey}:publication`.slice(0, 128), mode }, dependencies: { ...dependencies, repository } })
       return result
     }
     return { ...result, outcome: 'blocked', limitations: ['balanced repair budget was exhausted without a publishable candidate; no human review row or external executor call was created'] }
   }
+  if (authorizationOnly) return { ...result,outcome:'blocked',limitations:['exact draft revalidation requires the current stored V4 policy; no provider or executor was called'] }
   if (!input.reviewDecision || !dependencies.reviewService) return result
   const lineage = await repository.resolveWorkspaceEntry(input.ownerUserId, input.entryId)
   if (!lineage?.job || !lineage.draft) badRequest('Application workflow review lineage is incomplete.')
   await dependencies.reviewService({ ownerUserId: input.ownerUserId, entryId: input.entryId, jobId: lineage.job.id, draftId: lineage.draft.id, decision: input.reviewDecision })
   result = await executeContentOperationEntry({ ownerUserId: input.ownerUserId, entryId: input.entryId, trigger: 'owner_manual', now, value: { idempotencyKey: `${input.idempotencyKey}:review`.slice(0, 128), mode: 'dry_run' }, dependencies: { ...dependencies, repository } })
-  if (result.outcome !== 'ready_to_publish') return result
+  if (result.outcome !== 'ready_to_publish' || input.queueOnly) return result
   return executeContentOperationEntry({ ownerUserId: input.ownerUserId, entryId: input.entryId, trigger: 'owner_manual', now, value: { idempotencyKey: `${input.idempotencyKey}:publication`.slice(0, 128), mode }, dependencies: { ...dependencies, repository } })
 }
 
@@ -1511,6 +1578,11 @@ export async function runContentOperationsExecutionTick(input: { ownerUserId?: n
         await blockStaleRun(run.ownerUserId, run, repository, now)
         results.push({ runId: run.id, ownerUserId: run.ownerUserId, status: 'blocked', errorSummary: 'orphan run' })
         continue
+      }
+      if (run.stage !== 'publication') {
+        const calendar=await repository.findCalendar(run.ownerUserId,entry.calendarId)
+        const client=calendar ? await repository.findClient(run.ownerUserId,calendar.clientId) : null
+        if (client?.requireCustomerApproval===true) { results.push({runId:run.id,ownerUserId:run.ownerUserId,status:'weekly_runtime_required',limitations:['weekly runtime owns generation and review; canonical tick did not call AI or mutate this run']}); continue }
       }
       if (!stageCompatible(run.stage, entry.status)) {
         const blocked = await blockStaleRun(run.ownerUserId, run, repository, now)

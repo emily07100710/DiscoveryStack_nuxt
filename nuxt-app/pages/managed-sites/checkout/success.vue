@@ -1,4 +1,7 @@
 <script setup lang="ts">
+type CheckoutStatusFetch = <T = unknown>(path: `/api/managed-sites/${string}`, options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown>; credentials?: 'omit' | 'same-origin'; headers?: Record<string, string> }) => Promise<T>
+// Preserve the original Nuxt fetch and local response DTOs.
+const fetchCheckoutStatus = $fetch as unknown as CheckoutStatusFetch
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 useHead({ meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
@@ -70,7 +73,7 @@ async function loadStatus(session: FunnelStorage): Promise<void> {
   if (checking.value) return
   checking.value = true
   try {
-    const result = await $fetch<CheckoutStatus>(`/api/managed-sites/funnel/sessions/${session.sessionId}/status`, {
+    const result = await fetchCheckoutStatus<CheckoutStatus>(`/api/managed-sites/funnel/sessions/${session.sessionId}/status`, {
       method: 'GET',
       credentials: 'omit',
       headers: { 'x-managed-site-funnel-token': session.sessionToken },
@@ -108,7 +111,7 @@ async function claimCustomerAccess(): Promise<void> {
   claimingAccess.value = true
   customerAccessError.value = ''
   try {
-    const result = await $fetch<{ granted: boolean }>(`/api/managed-sites/funnel/sessions/${activeSession.sessionId}/customer-access`, {
+    const result = await fetchCheckoutStatus<{ granted: boolean }>(`/api/managed-sites/funnel/sessions/${activeSession.sessionId}/customer-access`, {
       method: 'POST', credentials: 'same-origin', body: {},
       headers: { 'x-managed-site-funnel-token': activeSession.sessionToken },
     })
@@ -139,7 +142,7 @@ async function pollCustomerStatus(): Promise<void> {
   attempts += 1
   checking.value = true
   try {
-    const result = await $fetch<{ launch: CheckoutStatus | null }>('/api/managed-sites/customer/session', { credentials: 'same-origin' })
+    const result = await fetchCheckoutStatus<{ launch: CheckoutStatus | null }>('/api/managed-sites/customer/session', { credentials: 'same-origin' })
     customerAccessReady.value = true
     if (result.launch) { status.value = result.launch; available.value = true }
     if (!shouldPoll()) stopPolling()

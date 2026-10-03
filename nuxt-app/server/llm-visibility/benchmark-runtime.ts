@@ -21,6 +21,7 @@ export const BENCHMARK_DEFAULT_MAX_PROBES = 250
 export const BENCHMARK_CONCURRENCY = 5
 export const BENCHMARK_MAX_ATTEMPTS_PER_EXECUTION = 3
 export const BENCHMARK_STALE_AFTER_MS = 10 * 60 * 1000
+export const BENCHMARK_SCHEDULED_MAX_PROBES = 5
 
 export type BenchmarkRuntimeDependencies = {
   repository?: VisibilityBenchmarkRepository
@@ -124,7 +125,7 @@ function targetForSample(benchmark: BenchmarkRow, sample: BenchmarkSampleRow): P
   return target
 }
 
-async function runSample(input: { ownerUserId: number, benchmark: BenchmarkRow, sample: BenchmarkSampleRow, context: BenchmarkContext, repository: VisibilityBenchmarkRepository, adapters: Record<string, VisibilityProbeAdapter>, registry: VisibilityProbeIdempotencyRegistry, now: () => Date, sleep: (ms: number) => Promise<void>, headFetch: CitationHeadFetchOptions }) {
+async function runSample(input: { ownerUserId: number, benchmark: BenchmarkRow, sample: BenchmarkSampleRow, context: BenchmarkContext, repository: VisibilityBenchmarkRepository, adapters: Record<string, VisibilityProbeAdapter>, registry: VisibilityProbeIdempotencyRegistry, now: () => Date, sleep: (ms: number) => Promise<void>, headFetch: CitationHeadFetchOptions, automaticResume?: boolean }) {
   const { sample, repository } = input
   const existing = await repository.findRunByFingerprint(input.ownerUserId, sample.requestFingerprint)
   if (existing) {
@@ -133,12 +134,23 @@ async function runSample(input: { ownerUserId: number, benchmark: BenchmarkRow, 
     await repository.touchProgress(input.ownerUserId, sample.benchmarkRunId, completedAt)
     return
   }
-  await repository.updateSample(input.ownerUserId, sample.id, { status: 'running', startedAt: input.now(), completedAt: null })
+  // A previous outbound attempt may already have been charged. Automatic recovery
+  // can reconcile a durable fingerprint, but cannot send that sample again.
+  if (input.automaticResume && (sample.status === 'failed' || sample.attempts !== 0 || sample.startedAt !== null)) {
+    const completedAt = input.now()
+    await repository.updateSample(input.ownerUserId, sample.id, { status: 'failed', failureKind: 'manual_retry_required', failureCode: 'AUTOMATIC_RESUME_PRIOR_ATTEMPT', completedAt })
+    await repository.touchProgress(input.ownerUserId, sample.benchmarkRunId, completedAt)
+    return
+  }
+  if (input.automaticResume) {
+    if (!await repository.claimSampleForAutomaticAttempt(input.ownerUserId, sample.benchmarkRunId, sample.id, input.now())) return
+  } else await repository.updateSample(input.ownerUserId, sample.id, { status: 'running', startedAt: input.now(), completedAt: null })
   const plan = oneProbePlan({ ownerUserId: input.ownerUserId, benchmarkId: sample.benchmarkRunId, sampleIndex: sample.sampleIndex, context: input.context, measuredIdentity: input.benchmark, queryId: sample.queryId, promptVersionId: sample.promptVersionId, target: targetForSample(input.benchmark, sample) })
   let finalKind = 'failed'
   let finalCode = 'PROBE_EXECUTION_FAILURE'
-  for (let attempt = 1; attempt <= BENCHMARK_MAX_ATTEMPTS_PER_EXECUTION; attempt += 1) {
-    await repository.updateSample(input.ownerUserId, sample.id, { attempts: sample.attempts + attempt })
+  const maximumAttempts = input.automaticResume ? 1 : BENCHMARK_MAX_ATTEMPTS_PER_EXECUTION
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    if (!input.automaticResume) await repository.updateSample(input.ownerUserId, sample.id, { attempts: sample.attempts + attempt })
     const batch = await executeVisibilityProbeBatch({ plan, adapters: input.adapters, idempotencyRegistry: input.registry, concurrency: 1 })
     const result = batch.status === 'completed' ? batch.results[0] : undefined
     if (result?.status === 'completed' && result.candidate) {
@@ -160,7 +172,7 @@ async function runSample(input: { ownerUserId: number, benchmark: BenchmarkRow, 
     }
     finalKind = result?.status || 'blocked'
     finalCode = result?.failure?.reasonCode || (batch.status === 'blocked' ? batch.reasonCodes[0] : undefined) || 'PROBE_EXECUTION_FAILURE'
-    if (!result?.failure?.retryable || attempt === BENCHMARK_MAX_ATTEMPTS_PER_EXECUTION) break
+    if (!result?.failure?.retryable || attempt === maximumAttempts) break
     await input.sleep(retryDelay(result.failure.nextDelayCategory))
   }
   const completedAt = input.now()
@@ -184,19 +196,52 @@ export async function executeBenchmark(ownerUserId: number, benchmarkId: number,
   const started = now()
   const claimed = await repository.claimBenchmarkForExecution(ownerUserId, benchmarkId, started, new Date(started.getTime() - BENCHMARK_STALE_AFTER_MS))
   if (!claimed) return { started: false as const }
+  return executeClaimedBenchmark(ownerUserId, benchmarkId, { ...deps, repository })
+}
+
+/** Scheduled execution is deliberately stricter than owner-requested manual retry. */
+export async function executeScheduledBenchmark(ownerUserId: number, benchmarkId: number, maximumProbes: number, deps: BenchmarkRuntimeDependencies = {}) {
+  if (!Number.isSafeInteger(maximumProbes) || maximumProbes < 1 || maximumProbes > BENCHMARK_SCHEDULED_MAX_PROBES || isBenchmarkExecuting(benchmarkId)) return { started: false as const }
+  const repository = deps.repository || createDrizzleVisibilityBenchmarkRepository()
+  const loaded = await repository.getBenchmark(ownerUserId, benchmarkId)
+  if (!loaded || !scheduledBenchmarkWithinBudget(ownerUserId, loaded, maximumProbes)) return { started: false as const }
+  const now = deps.clock || (() => new Date())
+  const started = now()
+  const claimed = await repository.claimBenchmarkForAutomaticResume(ownerUserId, benchmarkId, started, new Date(started.getTime() - BENCHMARK_STALE_AFTER_MS))
+  if (!claimed) return { started: false as const }
+  try {
+    return await executeClaimedBenchmark(ownerUserId, benchmarkId, { ...deps, repository }, maximumProbes)
+  } catch {
+    const completedAt = now()
+    await repository.finalizeBenchmark(ownerUserId, benchmarkId, { status: 'failed', limitationCodes: ['automatic_resume_failed_manual_retry_required'], aggregateSnapshot: null, aggregateComputedAt: completedAt, completedAt })
+    return { started: true as const, status: 'failed' as const }
+  }
+}
+
+export function scheduledBenchmarkWithinBudget(ownerUserId: number, loaded: { benchmark: BenchmarkRow, samples: BenchmarkSampleRow[] }, maximumProbes: number): boolean {
+  return loaded.benchmark.ownerUserId === ownerUserId && loaded.samples.every(sample => sample.ownerUserId === ownerUserId && sample.benchmarkRunId === loaded.benchmark.id && sample.projectId === loaded.benchmark.projectId) && loaded.samples.length === loaded.benchmark.requestedSamples && loaded.samples.filter(sample => sample.status !== 'succeeded').length <= maximumProbes
+}
+
+async function executeClaimedBenchmark(ownerUserId: number, benchmarkId: number, deps: BenchmarkRuntimeDependencies, automaticProbeBudget?: number) {
+  const repository = deps.repository!
+  const now = deps.clock || (() => new Date())
   let loaded = await repository.getBenchmark(ownerUserId, benchmarkId)
   if (!loaded) throw new VisibilityContractError(404, '找不到此 owner 的 benchmark。')
   const context = await repository.loadProjectContext(ownerUserId, loaded.benchmark.projectId)
   if (!context) throw new VisibilityContractError(404, '找不到此 owner 的 benchmark project。')
+  if (automaticProbeBudget !== undefined && (!scheduledBenchmarkWithinBudget(ownerUserId, loaded, automaticProbeBudget) || context.project.status !== 'active')) throw new VisibilityContractError(409, 'Benchmark 無法安全自動恢復。')
   context.competitors = loaded.benchmark.competitorSnapshot.map(row => ({ ...row, ownerUserId, projectId: loaded!.benchmark.projectId, domain: null, active: true }))
   const adapters = deps.adapters || createConfiguredVisibilityProviderAdapters(loaded.benchmark.providerTargets.map(({ adapterKey, provider, modelLabel }) => ({ adapterKey, provider, modelLabel })), deps.environment)
   const registry = deps.idempotencyRegistry || createEphemeralVisibilityProbeIdempotencyRegistry()
   const sleep = deps.sleep || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)))
-  const headFetch = deps.headFetch || createDefaultCitationHeadFetch(deps.environment)
+  const headFetch = automaticProbeBudget === undefined ? deps.headFetch || createDefaultCitationHeadFetch(deps.environment) : createDefaultCitationHeadFetch({ LLM_VISIBILITY_CITATION_HEAD_FETCH: 'false' })
   const eligible = loaded.samples.filter(row => row.status !== 'succeeded').sort((left, right) => left.sampleIndex - right.sampleIndex || left.id - right.id)
-  for (const sampleIndex of [...new Set(eligible.map(row => row.sampleIndex))].sort((a, b) => a - b)) {
-    await pooled(eligible.filter(row => row.sampleIndex === sampleIndex), BENCHMARK_CONCURRENCY, async sample => {
-      try { await runSample({ ownerUserId, benchmark: loaded!.benchmark, sample, context, repository, adapters, registry, now, sleep, headFetch }) } catch {
+  // At most five automatic samples share one bounded provider-deadline batch.
+  // Manual execution preserves its existing ordered repetition groups.
+  const groups = automaticProbeBudget === undefined ? [...new Set(eligible.map(row => row.sampleIndex))].sort((a, b) => a - b).map(index => eligible.filter(row => row.sampleIndex === index)) : [eligible]
+  for (const samples of groups) {
+    await pooled(samples, BENCHMARK_CONCURRENCY, async sample => {
+      try { await runSample({ ownerUserId, benchmark: loaded!.benchmark, sample, context, repository, adapters, registry, now, sleep, headFetch, automaticResume: automaticProbeBudget !== undefined }) } catch {
         const completedAt = now()
         await repository.updateSample(ownerUserId, sample.id, { status: 'failed', failureKind: 'internal', failureCode: 'SAMPLE_EXECUTION_FAILURE', completedAt })
         await repository.touchProgress(ownerUserId, benchmarkId, completedAt)

@@ -50,7 +50,7 @@ export function projectFirstParty(value: unknown): readonly FirstPartyProjection
   const plan = verifiedPlan(value)
   const intents = plan.routes.filter((route) => capabilityFor(route.framework, route.transport)?.projection === 'first_party').map((route) => {
     const capability = assertCapability(route, 'first_party')
-    if (route.framework !== 'astro' && route.framework !== 'nuxt') throw new Error('non-first-party route entered first-party projection')
+    if (route.framework !== 'astro' && route.framework !== 'nuxt' && route.framework !== 'nextjs') throw new Error('non-first-party route entered first-party projection')
     let transport: FirstPartyProjectionIntent['transport']
     if (route.transport === 'first_party_git' || route.transport === 'first_party_signed_api') transport = route.transport
     else throw new Error('invalid first-party transport')
@@ -77,7 +77,7 @@ export function projectGeoflow(value: unknown): readonly GeoflowProjectionIntent
   const plan = verifiedPlan(value)
   const intents = plan.routes.filter((route) => capabilityFor(route.framework, route.transport)?.projection === 'geoflow').map((route) => {
     const capability = assertCapability(route, 'geoflow')
-    if (route.framework === 'astro' || route.framework === 'nuxt') throw new Error('first-party route entered GEOFlow projection')
+    if (route.framework === 'astro' || route.framework === 'nuxt' || route.framework === 'nextjs') throw new Error('first-party route entered GEOFlow projection')
     let transport: GeoflowProjectionIntent['transport']
     if (route.transport === 'wordpress_rest' || route.transport === 'geoflow_agent' || route.transport === 'generic_http' || route.transport === 'geoflow_local') transport = route.transport
     else throw new Error('invalid GEOFlow transport')

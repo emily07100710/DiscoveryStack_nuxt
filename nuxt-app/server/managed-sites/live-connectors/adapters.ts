@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { createError } from 'h3'
 import { stableFingerprint } from '../../seo-geo-core/repository'
 import { managedSiteStableFingerprint } from './canonical'
-import { isAllowedBailianEndpoint } from '../../geo/autogeo-bailian-qwen'
+import { createOpenAiCompatibleChatClient, isAllowedOpenAiCompatibleEndpoint, OpenAiCompatibleProviderError } from '../../llm-provider/openai-compatible'
 import { SITE_MODULE_LABELS_ZH, type SiteSpec } from '../site-spec'
 import type { ManagedSiteArtifactVault, ManagedSiteArtifactVaultBundle } from './generation-service'
 import type {
@@ -14,7 +14,6 @@ import type {
   ManagedSitePaymentWebhookAdapter,
   ManagedSiteVerifiedPaymentWebhook,
 } from './types'
-import { readBoundedManagedSiteResponse } from './hmac-broker-transport'
 import { ManagedSiteCopyRejectedError, managedSiteCopyPrompt, mergeManagedSiteCopy, parseManagedSiteCopyDocument } from './blueprint-copy'
 
 function sha256(value: string): string { return createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex') }
@@ -98,46 +97,43 @@ export function createBailianQwenManagedSiteGenerationAdapter(options: { endpoin
   return {
     async generate(request, context) {
       if (!context.credentialReference) throw Object.assign(new Error('credential reference missing'), { code: 'CREDENTIAL_MISSING', retryable: false })
-      if (!isAllowedBailianEndpoint(options.endpoint)) throw Object.assign(new Error('Bailian endpoint is not on the canonical official allowlist'), { code: 'ENDPOINT_NOT_ALLOWED', retryable: false })
+      if (!isAllowedOpenAiCompatibleEndpoint(options.endpoint)) throw Object.assign(new Error('OpenAI-compatible endpoint is not on the canonical official allowlist'), { code: 'ENDPOINT_NOT_ALLOWED', retryable: false })
       const credential = await context.resolveCredential(context.credentialReference)
       if (!credential.ok) throw Object.assign(new Error('credential reference unresolved'), { code: 'CREDENTIAL_MISSING', retryable: false })
-      const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), context.timeoutMs)
-      let response: Response
       const providerRequestIdentity = `managed-site-${request.requestFingerprint.slice(0, 48)}`
       const configuredModel = options.model || 'qwen-plus'
       const skeleton = createDeterministicManagedSiteBlueprint(request)
       const prompt = managedSiteCopyPrompt(request, skeleton)
+      let client
       try {
-        response = await (options.fetchImpl || fetch)(options.endpoint, { method: 'POST', redirect: 'error', signal: controller.signal, headers: { 'content-type': 'application/json', authorization: `Bearer ${credential.value}`, 'x-discoverystack-request-id': providerRequestIdentity }, body: JSON.stringify({ model: configuredModel, stream: false, enable_thinking: false, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }] }) })
-      } catch { throw Object.assign(new Error('Qwen blueprint transport failed'), { code: controller.signal.aborted ? 'TIMEOUT' : 'NETWORK_FAILURE', retryable: true }) } finally { clearTimeout(timer) }
-      if (!response.ok) throw Object.assign(new Error('Qwen blueprint provider rejected request'), { code: response.status === 429 ? 'RATE_LIMITED' : 'UPSTREAM_FAILURE', retryable: response.status === 429 || response.status >= 500 })
-      const raw = await readBoundedManagedSiteResponse(response, 320_000)
-      let envelope: any
-      try { envelope = JSON.parse(raw) } catch { throw Object.assign(new Error('Qwen blueprint response is malformed'), { code: 'PROVIDER_OUTPUT_BLOCKED', retryable: false }) }
-      // OpenAI-compatible vendors legitimately append additive metadata (`object`, `created`, `logprobs`,
-      // `reasoning_content`, token detail objects) and prefix the body id over the transport request id, so every
-      // field this adapter actually trusts is pinned exactly while unrecognised extras are only bounded, never enumerated.
-      const requiredEnvelopeKeys = ['id', 'model', 'choices', 'usage']
-      const envelopeIdentifier = envelope && typeof envelope === 'object' && typeof envelope.id === 'string' ? envelope.id : ''
-      const transportRequestId = response.headers.get('x-request-id') || ''
-      const vendorIdPrefix = envelopeIdentifier.length > transportRequestId.length ? envelopeIdentifier.slice(0, envelopeIdentifier.length - transportRequestId.length) : ''
-      const envelopeBoundToTransport = transportRequestId.length >= 3 && (envelopeIdentifier === transportRequestId || (envelopeIdentifier.endsWith(transportRequestId) && /^[A-Za-z0-9._:-]{1,32}-$/u.test(vendorIdPrefix)))
-      if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope) || Object.keys(envelope).length < requiredEnvelopeKeys.length || Object.keys(envelope).length > 12 || !requiredEnvelopeKeys.every(key => Object.hasOwn(envelope, key)) || !/^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/u.test(envelopeIdentifier) || !envelopeBoundToTransport || envelope.model !== configuredModel || !Array.isArray(envelope.choices) || envelope.choices.length !== 1) throw Object.assign(new Error('Qwen blueprint response envelope identity is invalid'), { code: 'PROVIDER_OUTPUT_BLOCKED', retryable: false })
-      const choice = envelope.choices[0]
-      // `finish_reason` stays pinned to `stop` here: a truncated blueprint is unusable, unlike a capability probe.
-      if (!choice || typeof choice !== 'object' || Array.isArray(choice) || Object.keys(choice).length > 8 || !['index', 'message', 'finish_reason'].every(key => Object.hasOwn(choice, key)) || choice.index !== 0 || choice.finish_reason !== 'stop') throw Object.assign(new Error('Qwen blueprint response did not complete normally'), { code: 'PROVIDER_OUTPUT_BLOCKED', retryable: false })
-      const message = choice.message
-      if (!message || typeof message !== 'object' || Array.isArray(message) || Object.keys(message).length > 6 || !['role', 'content'].every(key => Object.hasOwn(message, key)) || message.role !== 'assistant' || typeof message.content !== 'string') throw Object.assign(new Error('Qwen blueprint response message is invalid'), { code: 'PROVIDER_OUTPUT_BLOCKED', retryable: false })
-      const usage = envelope.usage
-      if (!usage || typeof usage !== 'object' || Array.isArray(usage) || Object.keys(usage).length > 8 || !['prompt_tokens', 'completion_tokens', 'total_tokens'].every(key => Object.hasOwn(usage, key) && Number.isSafeInteger(usage[key]) && usage[key] >= 0) || usage.prompt_tokens + usage.completion_tokens !== usage.total_tokens) throw Object.assign(new Error('Qwen blueprint response usage is malformed'), { code: 'PROVIDER_OUTPUT_BLOCKED', retryable: false })
-      const content = message.content
+        client = createOpenAiCompatibleChatClient({ endpoint: options.endpoint, apiKey: credential.value, model: configuredModel, fetchImpl: options.fetchImpl, timeoutMs: context.timeoutMs, maxResponseBytes: 320_000 })
+      } catch (error) {
+        if (error instanceof OpenAiCompatibleProviderError && error.code === 'configuration') throw Object.assign(new Error('OpenAI-compatible endpoint configuration is invalid'), { code: 'ENDPOINT_NOT_ALLOWED', retryable: false })
+        throw error
+      }
+      let completed
+      try {
+        completed = await client.complete({ messages: [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }], responseFormat: 'json_object', reasoning: 'disabled', strictEnvelopeIdentity: true, timeoutMs: context.timeoutMs, requestId: providerRequestIdentity, maxResponseBytes: 320_000 })
+      } catch (error) {
+        if (!(error instanceof OpenAiCompatibleProviderError)) throw error
+        if (error.code === 'timeout') throw Object.assign(new Error('Qwen blueprint transport timed out'), { code: 'TIMEOUT', retryable: true })
+        if (error.code === 'transport') throw Object.assign(new Error('Qwen blueprint transport failed'), { code: 'NETWORK_FAILURE', retryable: true })
+        if (error.code === 'rate_limited') throw Object.assign(new Error('Qwen blueprint provider rate limited request'), { code: 'RATE_LIMITED', retryable: true })
+        if (error.code === 'unauthorized') throw Object.assign(new Error('Qwen blueprint provider rejected request'), { code: 'UPSTREAM_FAILURE', retryable: false })
+        if (error.code === 'upstream') throw Object.assign(new Error('Qwen blueprint provider rejected request'), { code: 'UPSTREAM_FAILURE', retryable: error.retryable })
+        if (error.code === 'empty_content') throw Object.assign(new Error('Qwen blueprint response contained no content'), { code: 'PROVIDER_OUTPUT_BLOCKED', retryable: true })
+        if (error.code === 'malformed_response') throw Object.assign(new Error('Qwen blueprint response is malformed'), { code: 'PROVIDER_OUTPUT_BLOCKED', retryable: false })
+        throw Object.assign(new Error('OpenAI-compatible endpoint configuration is invalid'), { code: 'ENDPOINT_NOT_ALLOWED', retryable: false })
+      }
+      if (!completed.responseId) throw Object.assign(new Error('Qwen blueprint response is missing a provider response id'), { code: 'PROVIDER_OUTPUT_BLOCKED', retryable: false })
+      const content = completed.content
       if (typeof content !== 'string' || content.includes('```')) throw Object.assign(new Error('Qwen did not return strict JSON'), { code: 'PROVIDER_OUTPUT_BLOCKED', retryable: false })
       let blueprint: ManagedSiteBlueprintV1
       try { blueprint = mergeManagedSiteCopy(skeleton, parseManagedSiteCopyDocument(content), content) } catch (error) {
         if (error instanceof ManagedSiteCopyRejectedError) throw Object.assign(new Error('Qwen blueprint copy is unusable'), { code: 'PROVIDER_OUTPUT_BLOCKED', retryable: true })
         throw error
       }
-      return { schemaVersion: 'managed-site-blueprint-provider-response-v1', providerKey, providerModel: configuredModel, providerRequestId: opaquePart(envelope.id), requestFingerprint: request.requestFingerprint, blueprint, blueprintHash: managedSiteStableFingerprint(blueprint) }
+      return { schemaVersion: 'managed-site-blueprint-provider-response-v1', providerKey, providerModel: configuredModel, providerRequestId: opaquePart(completed.responseId), requestFingerprint: request.requestFingerprint, blueprint, blueprintHash: managedSiteStableFingerprint(blueprint) }
     },
   }
 }

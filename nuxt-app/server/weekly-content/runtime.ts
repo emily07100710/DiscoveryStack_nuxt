@@ -1,0 +1,88 @@
+import {createContentOperationsRepository} from '../content-operations/repository'
+import {projectAutopilotPolicy} from '../content-operations/autopilot-service'
+import {bindOwnerEntryPublicationTargets,runOwnerContentEntryWorkflow,executeContentOperationEntry} from '../content-operations/orchestrator'
+import {getContentOperationsRuntimeDependencies} from '../content-operations/runtime-dependencies'
+import {materializeOwnerDueContent,getDefaultContentOperationsClock} from '../content-operations/service'
+import {createReviewRequest,getApprovedReviewForPromotion,type WeeklyContentDependencies} from './service'
+import {weeklyFeatureEnabled,weeklyRuntimeDependencies} from './http'
+import {runWeeklyLineOutbox,isWeeklyLineConfigurationReady} from './runtime-line'
+import {rollApprovedWeeklyCalendar,productionWeeklyPlannerDependencies} from './planner'
+import type {ContentOperationsRepository} from '../content-operations/repository'
+import type {WeeklyConfig} from './types'
+
+export type WeeklyRuntimeDependencies={weekly:WeeklyContentDependencies;operations:ContentOperationsRepository;roll:(owner:number,client:number,now:Date)=>Promise<unknown>;workflow:typeof runOwnerContentEntryWorkflow;publish:typeof executeContentOperationEntry;send:typeof runWeeklyLineOutbox;runtime:ReturnType<typeof getContentOperationsRuntimeDependencies>}
+export type WeeklyTickResult={status:'disabled'|'not_configured'|'completed';processed:number;reviewQueued:number;publicationAttempted:number;failed:number;clients:Array<{clientId:number;status:string}>;notifications?:Awaited<ReturnType<typeof runWeeklyLineOutbox>>}
+function productionDependencies():WeeklyRuntimeDependencies{
+  return {weekly:weeklyRuntimeDependencies(),operations:createContentOperationsRepository(),roll:(owner,client,now)=>rollApprovedWeeklyCalendar(owner,client,now,productionWeeklyPlannerDependencies()),workflow:runOwnerContentEntryWorkflow,publish:executeContentOperationEntry,send:runWeeklyLineOutbox,runtime:getContentOperationsRuntimeDependencies()}
+}
+export async function runWeeklyContentTick(input:{ownerUserId:number;now?:Date;maxClients?:number},options:{featureEnabled?:boolean;schedulerEnabled?:boolean;configurationReady?:boolean;getDependencies?:()=>WeeklyRuntimeDependencies}={}):Promise<WeeklyTickResult>{
+  const result:WeeklyTickResult={status:'disabled',processed:0,reviewQueued:0,publicationAttempted:0,failed:0,clients:[]}
+  // Flags and static credential readiness precede all owner-scoped storage/provider construction.
+  if(!(options.featureEnabled ?? weeklyFeatureEnabled()) || !(options.schedulerEnabled ?? process.env.NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED==='true'))return result
+  if(!(options.configurationReady ?? isWeeklyLineConfigurationReady()))return {...result,status:'not_configured'}
+  const deps=(options.getDependencies || productionDependencies)()
+  const phaseNow=()=>input.now || new Date()
+  const weekly={...deps.weekly,now:input.now}
+  const maximum=Math.max(1,Math.min(10,input.maxClients || 10))
+  const configs=selectWeeklyClientBatch(await weekly.repository.listConfigs(input.ownerUserId,50),input.ownerUserId,maximum,phaseNow())
+  result.status='completed'
+  for(const config of configs){
+    if(config.ownerUserId!==input.ownerUserId || config.status!=='active'){result.clients.push({clientId:config.clientId,status:'paused'});continue}
+    try{
+      const scope=await weekly.repository.getTargetPolicy(input.ownerUserId,config.clientId,config.publicationTargetId,config.policyId)
+      const binding=await weekly.repository.getBinding(input.ownerUserId,config.clientId)
+      if(!binding || binding.status!=='active'){result.clients.push({clientId:config.clientId,status:'line_not_bound'});continue}
+      if(!scope?.policy || scope.policy.configurationFingerprint!==config.policyConfigurationFingerprint || scope.policy.status!=='enabled' || scope.policy.expiresAt.getTime()<=phaseNow().getTime() || scope.target.status!=='active' || !scope.target.executionEnabled){result.clients.push({clientId:config.clientId,status:'policy_not_ready'});continue}
+      const policy=projectAutopilotPolicy(scope.policy,scope.target.targetId)
+      const workflowDependencies={repository:deps.operations,...deps.runtime,autopilotPolicy:policy,autopilotPoliciesByTarget:{[scope.target.id]:policy}}
+      const planning=await deps.roll(input.ownerUserId,config.clientId,phaseNow()) as {status?:string}
+      const calendars=(await deps.operations.listCalendars(input.ownerUserId)).filter(c=>c.clientId===config.clientId&&!['paused','archived'].includes(c.status))
+      const entries=(await Promise.all(calendars.map(c=>deps.operations.listEntries(input.ownerUserId,c.id)))).flat().sort((a,b)=>a.plannedLocalDate.localeCompare(b.plannedLocalDate)||a.id-b.id)
+      let entry=entries.find(e=>!['delivered','completed','cancelled','skipped'].includes(e.status))
+      if(!entry){result.clients.push({clientId:config.clientId,status:planning.status || 'needs_approved_topics'});continue}
+      result.processed++
+      if(entry.status==='blocked'){result.clients.push({clientId:config.clientId,status:'needs_operator_review'});continue}
+      const calendar=calendars.find(c=>c.id===entry!.calendarId)!
+      const clock={...getDefaultContentOperationsClock(),now:phaseNow}
+      if(entry.status==='planned'){
+        if(entry.plannedLocalDate>clock.localDate(phaseNow(),calendar.timeZone)){result.clients.push({clientId:config.clientId,status:'scheduled'});continue}
+        await bindOwnerEntryPublicationTargets(input.ownerUserId,entry.id,{targetRowIds:[config.publicationTargetId]},deps.operations)
+        await materializeOwnerDueContent(input.ownerUserId,{calendarId:calendar.id,expectedPlanFingerprint:calendar.planFingerprint,idempotencyKey:`weekly-materialize:${entry.id}`},deps.operations,{clock,maxEntries:1,eligibleEntryIds:[entry.id]})
+        entry=await deps.operations.findEntry(input.ownerUserId,entry.id) || entry
+      }
+      if(['materialized','awaiting_generation','awaiting_review'].includes(entry.status)){
+        if(['materialized','awaiting_generation'].includes(entry.status))await bindOwnerEntryPublicationTargets(input.ownerUserId,entry.id,{targetRowIds:[config.publicationTargetId]},deps.operations)
+        const prepared=await deps.workflow({ownerUserId:input.ownerUserId,entryId:entry.id,queueOnly:true,now:phaseNow(),idempotencyKey:`weekly-prepare:${entry.id}`,dependencies:workflowDependencies})
+        if(prepared.outcome!=='ready_to_publish'){result.clients.push({clientId:config.clientId,status:'quality_or_generation_pending'});continue}
+        entry=await deps.operations.findEntry(input.ownerUserId,entry.id) || entry
+      }
+      if(entry.status==='ready_to_publish'){
+        const review=await createReviewRequest({ownerUserId:input.ownerUserId,clientId:config.clientId,entryId:entry.id},weekly)
+        if(!review.replayed)result.reviewQueued++
+        if(Date.parse(review.request.expiresAt)<=phaseNow().getTime()){result.clients.push({clientId:config.clientId,status:'review_expired'});continue}
+        if(review.request.status==='approved'){
+          await getApprovedReviewForPromotion({ownerUserId:input.ownerUserId,requestId:review.request.requestId},weekly)
+          const revalidated=await deps.workflow({ownerUserId:input.ownerUserId,entryId:entry.id,queueOnly:true,exactDraftOnly:true,now:phaseNow(),idempotencyKey:`weekly-revalidate:${entry.id}`,dependencies:workflowDependencies})
+          if(revalidated.outcome==='ready_to_publish'){
+            // Policy, consent and TTL may change while local quality checks run.
+            await getApprovedReviewForPromotion({ownerUserId:input.ownerUserId,requestId:review.request.requestId},weekly)
+            result.publicationAttempted++
+            const published=await deps.publish({ownerUserId:input.ownerUserId,entryId:entry.id,trigger:'scheduler',now:phaseNow(),value:{mode:'execute',idempotencyKey:`weekly-publish:${entry.id}`},dependencies:workflowDependencies})
+            result.clients.push({clientId:config.clientId,status:published.outcome})
+          }else result.clients.push({clientId:config.clientId,status:'current_quality_or_policy_blocked'})
+        }else result.clients.push({clientId:config.clientId,status:review.request.status==='changes_requested'?'changes_requested':'awaiting_customer'})
+      }else result.clients.push({clientId:config.clientId,status:entry.status})
+    }catch{result.failed++;result.clients.push({clientId:config.clientId,status:'needs_operator_review'})}
+  }
+  result.notifications=await deps.send({ownerUserId:input.ownerUserId,maxMessages:maximum},weekly)
+  return result
+}
+
+/** Rotate the bounded client batch so the first ten customers cannot monopolize every tick. */
+export function selectWeeklyClientBatch(configs:WeeklyConfig[],owner:number,maximum:number,now:Date):WeeklyConfig[]{
+ const active=configs.filter(c=>c.ownerUserId===owner && c.status==='active').sort((a,b)=>a.clientId-b.clientId)
+ if(!active.length)return []
+ const size=Math.max(1,Math.min(10,maximum))
+ const offset=(Math.floor(now.getTime()/300000)*size)%active.length
+ return [...active.slice(offset),...active.slice(0,offset)].slice(0,size)
+}

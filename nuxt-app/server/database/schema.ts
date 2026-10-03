@@ -657,7 +657,7 @@ export const seoGeoContentJobs = mysqlTable('seoGeoContentJobs', {
   productionDeliverableId: int('productionDeliverableId'),
   requestFingerprint: varchar('requestFingerprint', { length: 128 }).notNull(),
   operation: mysqlEnum('operation', ['autogeo_recommendation', 'content_draft', 'risk_scan', 'delivery_preview', 'delivery_publish']).notNull(),
-  providerMode: mysqlEnum('providerMode', ['reference_rules', 'autogeo_bailian_qwen', 'autogeo_api', 'manual']).notNull(),
+  providerMode: mysqlEnum('providerMode', ['reference_rules', 'autogeo_bailian_qwen', 'autogeo_api', 'manual', 'openai_compatible']).notNull(),
   status: mysqlEnum('status', ['queued', 'processing', 'candidate_ready', 'needs_human_review', 'approved', 'blocked', 'failed', 'delivered']).default('queued').notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
@@ -760,8 +760,10 @@ export const contentOperationClients = mysqlTable('contentOperationClients', {
   id: int('id').autoincrement().primaryKey(),
   ownerUserId: int('ownerUserId').notNull().references(() => users.id),
   displayName: varchar('displayName', { length: 160 }).notNull(),
+  /** Server-owned customer-consent requirement. Pausing review must never clear it. */
+  requireCustomerApproval: boolean('requireCustomerApproval').default(false).notNull(),
   canonicalSiteOrigin: varchar('canonicalSiteOrigin', { length: 512 }).notNull(),
-  framework: mysqlEnum('framework', ['astro', 'nuxt']).notNull(),
+  framework: mysqlEnum('framework', ['astro', 'nuxt', 'nextjs']).notNull(),
   publicationTransport: mysqlEnum('publicationTransport', ['first_party_git', 'first_party_signed_api']).notNull(),
   timeZone: varchar('timeZone', { length: 80 }).notNull(),
   defaultCadenceDays: int('defaultCadenceDays').notNull(),
@@ -786,7 +788,7 @@ export const contentOperationPublicationTargets = mysqlTable('contentOperationPu
   websiteId: varchar('websiteId', { length: 128 }).notNull().default('legacy-website'),
   targetId: varchar('targetId', { length: 128 }).notNull(),
   destinationPublicationIdentity: varchar('destinationPublicationIdentity', { length: 256 }).notNull().default('legacy-destination'),
-  framework: mysqlEnum('framework', ['astro', 'nuxt', 'wordpress', 'php_agent', 'generic_http', 'geoflow_local', 'static_site']).notNull(),
+  framework: mysqlEnum('framework', ['astro', 'nuxt', 'nextjs', 'wordpress', 'php_agent', 'generic_http', 'geoflow_local', 'static_site']).notNull(),
   transport: mysqlEnum('transport', ['first_party_git', 'first_party_signed_api', 'wordpress_rest', 'geoflow_agent', 'generic_http', 'geoflow_local']).notNull(),
   targetOrigin: varchar('targetOrigin', { length: 2048 }).notNull(),
   contentRoot: varchar('contentRoot', { length: 256 }).notNull(),
@@ -4190,3 +4192,64 @@ export const refreshPolicies = mysqlTable('refreshPolicies', {
   foreignKey({ name: 'fk_refresh_policy_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
   uniqueIndex('refresh_policy_owner_uq').on(table.ownerUserId),
 ])
+
+
+/** Weekly review is an opt-in layer over canonical Content Operations, not a second publisher. */
+export const weeklyContentConfigs = mysqlTable('weeklyContentConfigs', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull(), clientId: int('clientId').notNull(),
+  publicationTargetId: int('publicationTargetId').notNull(), policyId: varchar('policyId', { length: 160 }).notNull(),
+  policyConfigurationFingerprint: varchar('policyConfigurationFingerprint', { length: 64 }).notNull(),
+  configurationFingerprint: varchar('configurationFingerprint', { length: 64 }).notNull(),
+  status: mysqlEnum('status', ['active', 'paused', 'revoked']).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  cadenceDays: int('cadenceDays').default(7).notNull(), reviewTtlHours: int('reviewTtlHours').default(72).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, t => [uniqueIndex('weekly_config_owner_client_uq').on(t.ownerUserId,t.clientId)])
+export const weeklyContentInvitations = mysqlTable('weeklyContentInvitations', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull(), clientId: int('clientId').notNull(),
+  tokenHash: varchar('tokenHash', { length: 64 }).notNull(), expiresAt: timestamp('expiresAt').notNull(), consumedAt: timestamp('consumedAt'),
+  bindingFingerprint: varchar('bindingFingerprint', { length: 64 }), eventHash: varchar('eventHash', { length: 64 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, t => [uniqueIndex('weekly_invite_hash_uq').on(t.tokenHash)])
+/** LINE recipient identifiers are private and must never be projected into owner/customer browser DTOs. */
+export const weeklyContentBindings = mysqlTable('weeklyContentBindings', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull(), clientId: int('clientId').notNull(),
+  lineUserId: varchar('lineUserId', { length: 128 }).notNull(), bindingFingerprint: varchar('bindingFingerprint', { length: 64 }).notNull(),
+  status: mysqlEnum('status', ['active','revoked']).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, t => [uniqueIndex('weekly_binding_owner_client_uq').on(t.ownerUserId,t.clientId)])
+export const weeklyContentReviewRequests = mysqlTable('weeklyContentReviewRequests', {
+  id: int('id').autoincrement().primaryKey(), requestId: varchar('requestId', { length: 64 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull(), clientId: int('clientId').notNull(), entryId: int('entryId').notNull(), jobId: int('jobId').notNull(),
+  contentType: varchar('contentType', { length: 40 }).notNull(), language: varchar('language', { length: 32 }).notNull(),
+  draftId: int('draftId').notNull(), draftVersion: int('draftVersion').notNull(), contentHash: varchar('contentHash', { length: 64 }).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 64 }).notNull(), publicationTargetId: int('publicationTargetId').notNull(),
+  targetConfigurationFingerprint: varchar('targetConfigurationFingerprint', { length: 64 }).notNull(), policyId: varchar('policyId', { length: 160 }).notNull(),
+  policyConfigurationFingerprint: varchar('policyConfigurationFingerprint', { length: 64 }).notNull(), configurationFingerprint: varchar('configurationFingerprint', { length: 64 }).notNull(),
+  bindingId: int('bindingId').notNull(), bindingFingerprint: varchar('bindingFingerprint', { length: 64 }).notNull(),
+  readTokenHash: varchar('readTokenHash', { length: 64 }).notNull(), actionTokenHash: varchar('actionTokenHash', { length: 64 }).notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(), status: mysqlEnum('status',['pending','approved','changes_requested','revoked']).notNull(),
+  expiresAt: timestamp('expiresAt').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, t => [uniqueIndex('weekly_review_opaque_uq').on(t.requestId),uniqueIndex('weekly_review_fingerprint_uq').on(t.requestFingerprint),index('weekly_review_owner_status_idx').on(t.ownerUserId,t.status)])
+export const weeklyContentConsents = mysqlTable('weeklyContentConsents', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull(), clientId: int('clientId').notNull(), requestRowId: int('requestRowId').notNull(),
+  decision: mysqlEnum('decision',['approved','changes_requested']).notNull(), eventHash: varchar('eventHash', { length: 64 }).notNull(),
+  actorFingerprint: varchar('actorFingerprint', { length: 64 }).notNull(), consentFingerprint: varchar('consentFingerprint', { length: 64 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, t => [uniqueIndex('weekly_consent_event_uq').on(t.eventHash),index('weekly_consent_request_idx').on(t.requestRowId,t.id)])
+export const weeklyContentOutbox = mysqlTable('weeklyContentOutbox', {
+  id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull(), clientId: int('clientId').notNull(), requestRowId: int('requestRowId').notNull(), bindingId: int('bindingId').notNull(),
+  status: mysqlEnum('status',['queued','processing','retry_wait','sent','failed','cancelled']).notNull(), attemptNumber: int('attemptNumber').default(0).notNull(),
+  leaseToken: varchar('leaseToken', { length: 96 }), leaseExpiresAt: timestamp('leaseExpiresAt'), retryEligibleAt: timestamp('retryEligibleAt'),
+  providerMessageId: varchar('providerMessageId', { length: 128 }), sentAt: timestamp('sentAt'), errorCode: varchar('errorCode', { length: 80 }),
+  payloadFingerprint: varchar('payloadFingerprint', { length: 64 }), firstAttemptAt: timestamp('firstAttemptAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, t => [uniqueIndex('weekly_outbox_request_uq').on(t.requestRowId),index('weekly_outbox_owner_status_idx').on(t.ownerUserId,t.status)])
+
+/** Only verified LINE semantic hashes and safe result codes; never raw webhook bytes. */
+export const weeklyContentWebhookInbox = mysqlTable('weeklyContentWebhookInbox', {
+  id: int('id').autoincrement().primaryKey(), eventHash: varchar('eventHash', { length: 64 }).notNull(),
+  payloadFingerprint: varchar('payloadFingerprint', { length: 64 }).notNull(),
+  status: mysqlEnum('status',['processed']).notNull(), resultCode: varchar('resultCode', { length: 80 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, t => [uniqueIndex('weekly_webhook_event_uq').on(t.eventHash)])

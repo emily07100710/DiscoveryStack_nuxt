@@ -157,7 +157,10 @@ export function createGeoFlowQwenGenerationRuntime(options: GeoFlowQwenGeneratio
         completed = await client.complete({ messages: [{ role: 'user', content: providerPrompt(request) }], responseFormat: 'text', timeoutMs, requestId: request.requestId, maxResponseBytes: GEOFLOW_QWEN_MAX_RESPONSE_BYTES })
       } catch (error) {
         const providerError = error instanceof OpenAiCompatibleProviderError ? error : new OpenAiCompatibleProviderError('transport', true)
-        const runtimeError = new QwenRuntimeError(providerError.code, providerError.retryable, `OpenAI-compatible provider failure: ${providerError.code}.`)
+        const providerCode = providerError.code
+        const geoflowReason = providerCode === 'empty_content' ? 'malformed_response' : providerCode
+        const geoflowRetryable = providerCode === 'empty_content' ? false : providerError.retryable
+        const runtimeError = new QwenRuntimeError(geoflowReason, geoflowRetryable, `OpenAI-compatible provider failure: ${geoflowReason}.`)
         const code: ValidationFailure['reason'] = runtimeError.reason === 'configuration' ? 'PROVIDER_PROVENANCE_MISSING' : runtimeError.reason === 'unauthorized' ? 'IDENTITY_MISMATCH' : 'INVALID_INPUT'
         return failureResponse(request, options, code, runtimeError.retryable, runtimeError.reason === 'timeout' ? 'Qwen provider request timed out; no draft artifact was accepted.' : runtimeError.reason === 'malformed_response' ? 'Qwen provider returned malformed or oversized JSON; no draft artifact was accepted.' : runtimeError.retryable ? 'Qwen provider returned a retryable failure; no draft artifact was accepted.' : 'Qwen provider rejected the request; no draft artifact was accepted.')
       }

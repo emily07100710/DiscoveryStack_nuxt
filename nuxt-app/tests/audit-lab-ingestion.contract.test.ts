@@ -20,7 +20,8 @@ describe('Audit Lab approved ingestion form contract', () => {
 
   it('uses the same eligible-source policy, exposes bounded same-domain collection, and surfaces first-attempt errors in Traditional Chinese', () => {
     expect(auditLab).toContain('v-for="source in eligibleIngestionSources()"')
-    expect(auditLab).toContain("await $fetch<{ message: string }>('/api/intelligence/ingestion-jobs'")
+    expect(auditLab).toContain('const fetchWorkspace = $fetch as unknown as WorkspaceFetch')
+    expect(auditLab).toContain("await fetchWorkspace<{ message: string }>('/api/intelligence/ingestion-jobs'")
     expect(auditLab).toContain('已核准文件無法處理；請檢查來源政策、robots 與公開 URL。')
     expect(auditLab).toContain("mode: 'site' as 'document' | 'site'")
     expect(auditLab).toContain('maxPages: 10')

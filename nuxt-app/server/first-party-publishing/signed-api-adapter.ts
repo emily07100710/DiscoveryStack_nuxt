@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto'
+import { buildSignedApiV2Body, buildSignedApiV2Signature, SIGNED_API_V2_VERSION } from './signed-api-v2'
 import { isOpaqueReference, isValidSha256, strictTimestamp } from './normalization'
 import { SIGNED_API_ENDPOINT_PATH } from './target-guard'
 import { type FirstPartyAdapterInput, type FirstPartyAdapterResult, type FirstPartyDecisionCode, type SignedApiAdapterDependencies, type SignedApiResponsePayload } from './types'
@@ -71,6 +72,12 @@ export async function executeSignedApiPublish(input: FirstPartyAdapterInput, dep
     if (input.target.transport !== 'first_party_signed_api') return blocked('UNSUPPORTED_ROUTE', 'signed API adapter requires first_party_signed_api')
     if (input.target.endpointPath !== SIGNED_API_ENDPOINT_PATH || input.command.transport !== 'first_party_signed_api') return blocked('UNSUPPORTED_ROUTE', 'signed API endpoint is not the fixed approved path')
     if (!isValidSha256(input.command.idempotencyKey) || !isValidSha256(input.publication.contentHash) || !isValidSha256(input.publication.evidenceSnapshotHash) || !isValidSha256(input.artifact.artifactFingerprint)) return blocked('IDEMPOTENCY_INVALID', 'signed API identity hashes are invalid')
+    const v2 = input.target.framework === 'nextjs'
+    if (v2 && input.publication.contentType !== 'article') return blocked('UNSUPPORTED_CONTENT_TYPE', 'Next.js journal receiver accepts articles only')
+    if (v2 && input.publication.language !== 'zh-hant') return blocked('UNSUPPORTED_LANGUAGE', 'Next.js journal receiver accepts Traditional Chinese only')
+    if (v2 && (!input.publication.title.trim() || input.publication.title.length > 160)) return blocked('INVALID_INPUT', 'Next.js article title exceeds the receiver limit')
+    if (v2 && (input.publication.slug.length < 3 || input.publication.slug.length > 100 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(input.publication.slug) || input.publication.slug === 'media')) return blocked('INVALID_SLUG', 'Next.js article slug is outside the receiver contract')
+    if (v2 && input.publication.body.length > 24_000) return blocked('CONTENT_TOO_LARGE', 'Next.js article body exceeds the receiver limit')
     if (typeof dependencies.fetchImpl !== 'function') return blocked('EXECUTOR_NOT_CONFIGURED', 'fetch implementation is required')
     if (typeof dependencies.serverCredentialResolver !== 'function') return blocked('CREDENTIAL_MISSING', 'server credential resolver is required')
     if (typeof dependencies.nonceProvider !== 'function') return blocked('NONCE_INVALID', 'nonce provider is required')
@@ -80,6 +87,7 @@ export async function executeSignedApiPublish(input: FirstPartyAdapterInput, dep
     if (!Number.isSafeInteger(tolerance) || tolerance < 1 || tolerance > 3_600) return blocked('INVALID_INPUT', 'timestamp tolerance is outside the bounded policy')
     const resolved = await dependencies.serverCredentialResolver(input.target.credentialReference)
     if (!resolved.ok || typeof resolved.value !== 'string' || resolved.value.length < 1 || resolved.value.length > 1_024) return blocked('CREDENTIAL_MISSING', 'server credential could not be resolved')
+    if (v2 && (resolved.value.length < 32 || /[\u0000-\u0020\u007f]/u.test(resolved.value))) return blocked('CREDENTIAL_MISSING', 'Next.js receiver credential does not meet the server key contract')
     const secret = resolved.value
     const nonce = dependencies.nonceProvider()
     if (typeof nonce !== 'string' || !NONCE_PATTERN.test(nonce)) return blocked('NONCE_INVALID', 'nonce is invalid or not opaque')
@@ -87,9 +95,8 @@ export async function executeSignedApiPublish(input: FirstPartyAdapterInput, dep
     const serverNow = strictTimestamp(dependencies.serverNowProvider?.() ?? input.now)
     if (!serverNow.ok) return blocked('INVALID_TIMESTAMP', serverNow.reason)
     if (Math.abs(serverNow.milliseconds - current.milliseconds) > tolerance * 1000) return blocked('INVALID_TIMESTAMP', 'signed request timestamp exceeds the fixed tolerance')
-    const signature = buildSignedApiSignature(input, secret, timestamp, nonce)
     const artifactBytes = input.artifact.frontmatter ? `${input.artifact.frontmatter}\n${input.artifact.body}` : input.artifact.body
-    const body = JSON.stringify({
+    const body = v2 ? buildSignedApiV2Body(input, timestamp, nonce) : JSON.stringify({
       commandVersion: input.command.commandVersion,
       targetId: input.target.targetId,
       publicationId: input.publication.productionDeliverableId,
@@ -103,8 +110,11 @@ export async function executeSignedApiPublish(input: FirstPartyAdapterInput, dep
       timestamp,
       nonce,
     })
+    if (v2 && Buffer.byteLength(body, 'utf8') > input.target.maximumPayloadBytes) return blocked('CONTENT_TOO_LARGE', 'signed API request exceeds the target byte limit')
+    const signature = v2 ? buildSignedApiV2Signature(body, input.target.targetOrigin, secret, timestamp, nonce) : buildSignedApiSignature(input, secret, timestamp, nonce)
     const headers = {
       'content-type': 'application/json',
+      ...(v2 ? { 'x-discoverystack-signature-version': SIGNED_API_V2_VERSION } : {}),
       'x-discoverystack-version': input.command.commandVersion,
       'x-discoverystack-publication-id': input.publication.productionDeliverableId,
       'x-discoverystack-idempotency-key': input.command.idempotencyKey,

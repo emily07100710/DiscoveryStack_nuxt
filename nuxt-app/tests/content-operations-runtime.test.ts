@@ -142,6 +142,7 @@ describe('Content Operations Persistence & Scheduler Core V1', () => {
 
   it('bounds a scheduler tick at 50 entries and lists only truthful capabilities', async () => {
     const fixture = new ContentOperationsFixture()
+    fixture.addClient(1).canonicalSiteOrigin = 'https://site.customer-domain.com'
     let calendar = await fixture.addCalendar(1, '2026-01-01', 1)
     for (let index = 1; index < 60; index += 1) calendar = await fixture.addCalendar(1, '2026-01-01', 1)
     expect(new Set(fixture.entries.map(entry => entry.idempotencyKey)).size).toBe(60)
@@ -151,6 +152,10 @@ describe('Content Operations Persistence & Scheduler Core V1', () => {
     expect(fixture.entries.filter(entry => entry.status === 'materialized')).toHaveLength(50)
     const workspace = await getOwnerContentOperationsWorkspace(1, fixture.repository)
     expect(workspace.capabilities).toMatchObject({ schedulerAvailable: true, generationExecutorConfigured: expect.any(Boolean), firstPartyPublisherConfigured: expect.any(Boolean), outcomeCollectionConfigured: true, externalRuntimeAvailability: { generationProviderConfigured: expect.any(Boolean), firstPartyTransportConfigured: expect.any(Boolean), nonFirstPartyTransportConfigured: expect.any(Boolean), credentialResolverAvailable: expect.any(Boolean) } })
+    expect(workspace.readiness).toMatchObject({ outcomeCollectionConfigured: false, outcomeCollectionStatus: 'unverified', configuredMeasurementConnectionCount: 0 })
+    const client = workspace.clients[0]!
+    const configured = await getOwnerContentOperationsWorkspace(1, fixture.repository, { googleCredentialsConfigured: true, listMeasurementConnections: async () => [{ ownerUserId: 1, clientId: client.id, publicationTargetId: null, source: 'google_search_console', status: 'configured', canonicalOrigin: client.canonicalSiteOrigin, allowedPageScope: [`${client.canonicalSiteOrigin}/page`], credentialReference: 'envref:google-service-account', googleSearchConsoleProperty: client.canonicalSiteOrigin, ga4PropertyId: null }] })
+    expect(configured.readiness).toMatchObject({ outcomeCollectionConfigured: true, outcomeCollectionStatus: 'configured', configuredMeasurementConnectionCount: 1 })
     expect(workspace.entries.every(item => Array.isArray(item.publicationTargetBindings))).toBe(true)
     expect(workspace.calendars.some(item => item.id === calendar.id)).toBe(true)
   })

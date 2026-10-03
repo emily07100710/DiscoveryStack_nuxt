@@ -34,7 +34,7 @@ describe('managed-site provider registry and generation admission', () => {
     const live = createLiveConnectorMemoryRepository()
     const runtimeValue = randomBytes(32).toString('hex')
     const resolver = async (reference: string) => reference === 'vault:qwen-prod' ? { ok: true as const, value: runtimeValue } : { ok: false as const, reason: 'missing_reference' as const }
-    await configureManagedSiteProvider(1, { capability: 'website_generator', providerKey: 'bailian-qwen', readinessStatus: 'configured', credentialReference: 'vault:qwen-prod', transportConfiguration: { endpointOrigin: 'https://workspace.cn-beijing.maas.aliyuncs.com', model: 'qwen-plus' }, idempotencyKey: 'configured-qwen-001' }, live.repository)
+    await configureManagedSiteProvider(1, { capability: 'website_generator', providerKey: 'bailian-qwen', readinessStatus: 'configured', credentialReference: 'vault:qwen-prod', transportConfiguration: { endpointOrigin: 'https://ws-fixture1.cn-beijing.maas.aliyuncs.com', model: 'qwen-plus' }, idempotencyKey: 'configured-qwen-001' }, live.repository)
     const configured = await getManagedSiteProviderReadiness(1, live.repository, resolver)
     expect(configured.capabilities.find(item => item.capability === 'website_generator')).toMatchObject({ status: 'configured', configured: true, verified: false, liveMutationAllowed: false })
     expect(JSON.stringify(configured)).not.toContain(runtimeValue)
@@ -127,7 +127,7 @@ describe('managed-site provider registry and generation admission', () => {
   it('fails closed before adapter execution when live provider verification is missing', async () => {
     const line = await sourceLineage()
     line.live.state.configurations.length = 0
-    await configureManagedSiteProvider(1, { capability: 'website_generator', providerKey: 'bailian-qwen', readinessStatus: 'configured', credentialReference: 'vault:qwen-unresolved', transportConfiguration: { endpointOrigin: 'https://workspace.cn-beijing.maas.aliyuncs.com' }, idempotencyKey: 'configure-live-unverified' }, line.live.repository)
+    await configureManagedSiteProvider(1, { capability: 'website_generator', providerKey: 'bailian-qwen', readinessStatus: 'configured', credentialReference: 'vault:qwen-unresolved', transportConfiguration: { endpointOrigin: 'https://ws-fixture1.cn-beijing.maas.aliyuncs.com' }, idempotencyKey: 'configure-live-unverified' }, line.live.repository)
     const adapter = { generate: vi.fn() }
     await expect(generateManagedSiteCandidate(1, { projectId: line.project.id, sourceVersionId: line.version.id, templateIntent: 'astro', executionMode: 'live', idempotencyKey: 'generation-live-blocked' }, { adapter: adapter as any, vault: createMemoryManagedSiteArtifactVault(), credentialResolver: async () => ({ ok: false, reason: 'missing_reference' }), repository: line.live.repository, managedRepository: line.managed.repository })).rejects.toMatchObject({ statusCode: 503 })
     expect(adapter.generate).not.toHaveBeenCalled()

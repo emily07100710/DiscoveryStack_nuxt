@@ -1,9 +1,14 @@
+import { fileURLToPath } from 'node:url'
+
 const faviconLink = [{ rel: 'icon' as const, type: 'image/svg+xml', href: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%234d5dad%22/%3E%3Cpath d=%22M8 23V16h4v7H8Zm6 0V10h4v13h-4Zm6 0V6h4v17h-4Z%22 fill=%22%23f5f2eb%22/%3E%3C/svg%3E' }]
 const modelImprovementCron = process.env.MODEL_IMPROVEMENT_CRON || '0 18 * * *'
 const geoModelOpsCron = process.env.GEO_MODELOPS_CRON || '*/15 * * * *'
 const managedSiteEditorCron = process.env.MANAGED_SITE_EDITOR_CRON || '*/5 * * * *'
 const managedSiteProvisioningCron = process.env.MANAGED_SITE_PROVISIONING_CRON || '*/5 * * * *'
 const systemFactoryCron = process.env.SYSTEM_FACTORY_CRON || '*/5 * * * *'
+const llmVisibilityBenchmarkCron = process.env.LLM_VISIBILITY_BENCHMARK_CRON || '*/5 * * * *'
+const contentOperationsCron = process.env.CONTENT_OPERATIONS_CRON || '*/15 * * * *'
+const contentOperationsExecutionCron = process.env.CONTENT_OPERATIONS_EXECUTION_CRON || '*/5 * * * *'
 const contentOperationsMeasurementCron = process.env.CONTENT_OPERATIONS_MEASUREMENT_CRON || '*/30 * * * *'
 
 // Several jobs intentionally share a cadence. Accumulate them instead of overwriting cron keys.
@@ -14,7 +19,11 @@ for (const [cron, tasks] of [
   [managedSiteEditorCron, ['managed-sites:editor-tick']],
   [managedSiteProvisioningCron, ['managed-sites:provisioning-tick']],
   [systemFactoryCron, ['system-factory:provisioning-tick']],
+  [llmVisibilityBenchmarkCron, ['llm-visibility:benchmark-tick']],
+  [contentOperationsCron, ['content-operations:tick']],
+  [contentOperationsExecutionCron, ['content-operations:execution-tick']],
   [contentOperationsMeasurementCron, ['content-operations:measurement-tick']],
+  ['*/5 * * * *', ['weekly-content:tick']],
 ] as const) (scheduledTasks[cron] ||= []).push(...tasks)
 
 export default defineNuxtConfig({
@@ -41,12 +50,24 @@ export default defineNuxtConfig({
   },
   nitro: {
     experimental: { tasks: true },
+    // Nitro keys tasks by file path, not defineTask.meta.name. Explicitly bind the
+    // existing flat handlers to their scheduled names: https://nitro.build/docs/tasks
+    tasks: {
+      'content-operations:tick': { handler: fileURLToPath(new URL('./server/tasks/content-operations-tick.ts', import.meta.url)) },
+      'content-operations:execution-tick': { handler: fileURLToPath(new URL('./server/tasks/content-operations-execution-tick.ts', import.meta.url)) },
+      'llm-visibility:benchmark-tick': { handler: fileURLToPath(new URL('./server/tasks/llm-visibility-benchmark-tick.ts', import.meta.url)) },
+      'weekly-content:tick': { handler: fileURLToPath(new URL('./server/tasks/weekly-content-tick.ts', import.meta.url)) },
+    },
     scheduledTasks,
   },
   routeRules: {
     '/': { redirect: { to: '/audit-lab', statusCode: 302 } },
     '/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
     '/audit-lab/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
+    '/audit-lab/content-operations/strategy': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
+    '/audit-lab/managed-sites/projects': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
+    '/audit-lab/measurement-operations/runs': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
+    '/audit-lab/system-factory/tenants': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
     '/ml-lab-preview': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/leads': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
     '/training-pipeline': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
@@ -56,6 +77,8 @@ export default defineNuxtConfig({
     '/managed-sites/checkout/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0' } },
     '/en/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/zh-hant/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
+    '/weekly-content/connect': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0', 'Referrer-Policy': 'no-referrer' } },
+    '/weekly-content/review/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0', 'Referrer-Policy': 'no-referrer' } },
     '/api/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
   },
   runtimeConfig: {

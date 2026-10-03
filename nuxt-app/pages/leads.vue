@@ -15,6 +15,14 @@ type Lead = {
   createdAt: string
 }
 
+type LeadUpdateBody = { status: LeadStatus } | { revokeModelImprovementConsent: true }
+type LeadUpdateResponse = { updated: boolean; id: number; status?: LeadStatus; revocation: unknown }
+type LeadFetch = {
+  (path: '/api/leads', options?: { query?: { status?: LeadStatus } }): Promise<{ leads: Lead[] }>
+  (path: `/api/leads/${number}`, options: { method: 'PATCH'; body: LeadUpdateBody }): Promise<LeadUpdateResponse>
+}
+const fetchLeads = $fetch as unknown as LeadFetch
+
 definePageMeta({ i18n: false, layout: 'owner' })
 useHead({ title: '客戶名單 · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 
@@ -30,7 +38,7 @@ async function loadLeads() {
   state.value = 'loading'
   message.value = ''
   try {
-    const response = await $fetch<{ leads: Lead[] }>('/api/leads', { query: filter.value ? { status: filter.value } : {} })
+    const response = await fetchLeads('/api/leads', { query: filter.value ? { status: filter.value } : {} })
     leads.value = response.leads
     state.value = 'ready'
   } catch (error: unknown) {
@@ -47,7 +55,7 @@ async function updateStatus(lead: Lead, status: LeadStatus) {
   savingId.value = lead.id
   message.value = ''
   try {
-    await $fetch(`/api/leads/${lead.id}`, { method: 'PATCH', body: { status } })
+    await fetchLeads(`/api/leads/${lead.id}`, { method: 'PATCH', body: { status } })
     lead.status = status
     if (filter.value && filter.value !== status) leads.value = leads.value.filter(item => item.id !== lead.id)
     message.value = '狀態已更新。'
@@ -63,7 +71,7 @@ async function revokeModelConsent(lead: Lead) {
   savingId.value = lead.id
   message.value = ''
   try {
-    await $fetch(`/api/leads/${lead.id}`, { method: 'PATCH', body: { revokeModelImprovementConsent: true } })
+    await fetchLeads(`/api/leads/${lead.id}`, { method: 'PATCH', body: { revokeModelImprovementConsent: true } })
     lead.modelImprovementConsent = false
     message.value = '模型改善同意已撤回，相關候選資料已停用。'
   } catch {

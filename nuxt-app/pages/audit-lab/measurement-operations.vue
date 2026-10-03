@@ -1,4 +1,6 @@
 <script setup lang="ts">
+type MeasurementFetch = <T = unknown>(path: `/api/measurement-collection/${string}`, options?: { method?: 'POST' }) => Promise<T>
+const fetchMeasurement = $fetch as unknown as MeasurementFetch
 definePageMeta({ layout: 'owner' })
 useHead({ title: '成效測量｜DiscoveryStack Private Workbench', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 
@@ -13,6 +15,8 @@ type Workspace = {
 }
 
 const workspace = ref<Workspace | null>(null)
+const route = useRoute()
+const isNestedRoute = computed(() => route.path.startsWith('/audit-lab/measurement-operations/'))
 const loading = ref(true)
 const errorMessage = ref('')
 const notice = ref('')
@@ -50,7 +54,7 @@ async function loadWorkspace() {
   loading.value = true
   errorMessage.value = ''
   try {
-    workspace.value = await $fetch<Workspace>('/api/measurement-collection/workspace')
+    workspace.value = await fetchMeasurement<Workspace>('/api/measurement-collection/workspace')
     if (selectedClientId.value !== null && !workspace.value.clients.some(client => client.id === selectedClientId.value)) selectedClientId.value = null
   } catch (error: any) {
     workspace.value = null
@@ -63,7 +67,7 @@ async function changeConnection(connection: Record<string, any>, action: 'pause'
   notice.value = ''
   errorMessage.value = ''
   try {
-    await $fetch(`/api/measurement-collection/connections/${connection.id}/${action}`, { method: 'POST' })
+    await fetchMeasurement(`/api/measurement-collection/connections/${connection.id}/${action}`, { method: 'POST' })
     notice.value = action === 'pause' ? 'Connection 已暫停。' : 'Connection 已撤銷；歷史 snapshots 與 outcome lineage 保留。'
     await loadWorkspace()
   } catch (error: any) { errorMessage.value = error?.data?.message || 'Connection 狀態更新失敗。' }
@@ -74,23 +78,28 @@ async function dryRun(run: Record<string, any>) {
   notice.value = ''
   errorMessage.value = ''
   try {
-    const result = await $fetch(`/api/measurement-collection/runs/${run.id}/dry-run`, { method: 'POST' })
+    const result = await fetchMeasurement(`/api/measurement-collection/runs/${run.id}/dry-run`, { method: 'POST' })
     notice.value = `Dry-run 完成：已產生 ${Array.isArray((result as any)?.planned) ? (result as any).planned.length : 0} 筆 planned request metadata；未呼叫 provider。`
   } catch (error: any) { errorMessage.value = error?.data?.message || 'Dry-run 失敗。' }
 }
 
-onMounted(loadWorkspace)
+// Returning from a child route reuses this component, so onMounted does not run again.
+let workspaceRequested = false
+function loadWhenParentVisible() { if (isNestedRoute.value || workspaceRequested) return; workspaceRequested = true; void loadWorkspace() }
+onMounted(loadWhenParentVisible)
+watch(isNestedRoute, loadWhenParentVisible)
 </script>
 
 <template>
-  <section class="measurement-page">
+  <NuxtPage v-if="isNestedRoute" />
+  <section v-else class="measurement-page">
     <div class="measurement-page__hero">
       <div>
         <p class="eyebrow">PRIVATE / MEASUREMENT COLLECTION</p>
         <h1>成效測量與 Outcome Automation</h1>
-        <p class="lede">只呈現可追溯的 connection、measurement window、snapshot 與 outcome 狀態；本頁不推算排名、流量、AI 曝光、ROI 或轉換因果。</p>
+        <p class="lede">只呈現可追溯的 connection、measurement window、snapshot 與 outcome 狀態；本頁不推算排名、流量、AI 曝光、ROI 或轉換因果。</p><p class="lede">需要建立排程或處理失敗／停滯的執行紀錄時，請使用測量排程與重試頁。</p>
       </div>
-      <button class="button button--primary" type="button" :disabled="loading" @click="loadWorkspace">{{ loading ? '載入中…' : '重新整理' }}</button>
+      <NuxtLink class="button button--primary" to="/audit-lab/measurement-operations/runs">前往測量排程與重試</NuxtLink><button class="button button--primary" type="button" :disabled="loading" @click="loadWorkspace">{{ loading ? '載入中…' : '重新整理' }}</button>
     </div>
 
     <p v-if="notice" class="notice notice--success" role="status">{{ notice }}</p>

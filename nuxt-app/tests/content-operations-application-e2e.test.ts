@@ -5,7 +5,7 @@ import { geoRules } from '../server/geo/rules'
 import type { GeoRewriteAdapter } from '../server/geo/contracts'
 import { bindOwnerEntryPublicationTargets, createOwnerPublicationTarget, runContentOperationsExecutionTick, runOwnerContentEntryWorkflow } from '../server/content-operations/orchestrator'
 import type { ContentOperationOrchestratorDependencies } from '../server/content-operations/orchestrator'
-import { enableOwnerAutopilot, revokeOwnerAutopilot } from '../server/content-operations/autopilot-service'
+import { enableOwnerAutopilot, revokeOwnerAutopilot, projectAutopilotPolicy } from '../server/content-operations/autopilot-service'
 import { saveOwnerEntityStrategyProfile, saveOwnerQueryOwnership } from '../server/content-operations/governance-service'
 import { materializeOwnerDueContent } from '../server/content-operations/service'
 import { contentFingerprint } from '../server/seo-geo-core/riskGate'
@@ -51,7 +51,7 @@ function createProviderBackedMockRuntime(options: { qwenFetch?: ReturnType<typeo
   const responseBody = options.highRisk ? `${baseBody}\n\nApproved test evidence records ranked #1 as a prohibited measurement claim.` : options.lowQuality ? baseBody.replace('[cite:1]', '') : baseBody
   const qwenFetch = options.qwenFetch || vi.fn().mockResolvedValue(new Response(JSON.stringify({ model: 'qwen-plus', choices: [{ message: { content: responseBody } }] }), { status: 200 }))
   const autoGeoProvider = vi.fn()
-  const qwenRuntime = createGeoFlowQwenGenerationRuntime({ endpoint: 'https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions', credentialRef: 'ref-qwen-credential', resolveCredential: async () => 'mock-qwen-secret', fetchImpl: qwenFetch as typeof fetch, now: () => NOW.toISOString() })
+  const qwenRuntime = createGeoFlowQwenGenerationRuntime({ endpoint: 'https://ws-fixture1.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions', credentialRef: 'ref-qwen-credential', resolveCredential: async () => 'mock-qwen-secret', fetchImpl: qwenFetch as typeof fetch, now: () => NOW.toISOString() })
   const optimizationAdapter: GeoRewriteAdapter = {
     id: 'custom',
     version: 'mock-autogeo-provider-v1',
@@ -133,6 +133,45 @@ async function createFormalV4GateFixture(label: string, options: { evidenceAppro
 }
 
 describe('Content Operations application-level lifecycle V1', () => {
+  it('queueOnly waits for customer consent and revalidates the identical draft after 15 minutes without provider/repair/publisher calls',async()=>{
+    const {fixture,entry,target}=await createFormalV4GateFixture('weekly-exact-revalidation')
+    const runtime=createProviderBackedMockRuntime()
+    const publicationExecutor=vi.fn(async()=>{throw new Error('queueOnly must never publish')})
+    const repairRunner=vi.fn(async()=>{throw new Error('exact revalidation must never repair')})
+    const policy=projectAutopilotPolicy(fixture.autopilotPolicies[0]!,target.targetId)
+    const dependencies={repository:fixture.repository,autopilotPolicy:policy,productionRuntime:productionRuntime(fixture,runtime),publicationExecutor,repairRunner}
+    const queued=await runOwnerContentEntryWorkflow({ownerUserId:1,entryId:entry.id,queueOnly:true,mode:'execute',idempotencyKey:'weekly-queue-only',now:NOW,dependencies})
+    expect(queued.outcome).toBe('ready_to_publish')
+    expect(fixture.reviews.size).toBe(0)
+    expect(fixture.attempts).toHaveLength(0)
+    expect(fixture.budgetReservations.filter(row=>row.kind==='generation')).toHaveLength(1)
+    expect(fixture.budgetReservations.filter(row=>row.kind==='publication')).toHaveLength(0)
+    const identity={draftId:fixture.entries[0]!.draftId,contentHash:fixture.entries[0]!.contentHash}
+    const oldAuthorization=fixture.machineAuthorizations[0]!
+    const later=new Date(NOW.getTime()+3600000)
+    expect(oldAuthorization.authorizationExpiresAt!.getTime()).toBeLessThan(later.getTime())
+    const refreshed=await runOwnerContentEntryWorkflow({ownerUserId:1,entryId:entry.id,queueOnly:true,exactDraftOnly:true,idempotencyKey:'weekly-customer-approved',now:later,dependencies})
+    expect(refreshed.outcome).toBe('ready_to_publish')
+    expect(fixture.entries[0]).toMatchObject(identity)
+    expect(fixture.machineAuthorizations.at(-1)!.authorizationExpiresAt!.getTime()).toBeGreaterThan(later.getTime())
+    expect(runtime.qwenFetch).toHaveBeenCalledTimes(1)
+    expect(runtime.autoGeoProvider).toHaveBeenCalledTimes(1)
+    expect(repairRunner).not.toHaveBeenCalled()
+    expect(publicationExecutor).not.toHaveBeenCalled()
+    const generated=fixture.generated.get(entry.id)!
+    const draft=generated.draft as {title:string;body:string;contentHash:string}
+    draft.body='Short unsupported body.'
+    draft.contentHash=contentFingerprint(draft.title,draft.body)
+    fixture.entries[0]!.contentHash=draft.contentHash
+    const rejected=await runOwnerContentEntryWorkflow({ownerUserId:1,entryId:entry.id,queueOnly:true,exactDraftOnly:true,idempotencyKey:'weekly-stale-quality',now:later,dependencies})
+    expect(rejected.outcome).toBe('blocked')
+    expect(fixture.repairAttempts).toHaveLength(0)
+    expect(fixture.topicSubstitutions).toHaveLength(0)
+    expect(runtime.qwenFetch).toHaveBeenCalledTimes(1)
+    expect(repairRunner).not.toHaveBeenCalled()
+    expect(publicationExecutor).not.toHaveBeenCalled()
+  })
+
   it('runs manual generation→owner review→publication and derives outcome/learning from the verified receipt', async () => {
     const { fixture, entry, target } = await createSingleManualFixture()
     const runtime = createProviderBackedMockRuntime()

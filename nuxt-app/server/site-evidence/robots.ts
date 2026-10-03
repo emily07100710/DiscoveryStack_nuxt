@@ -55,7 +55,10 @@ function ruleMatch(pattern: string, pathname: string): number {
 }
 
 export function evaluateRobots(content: string, path: string, userAgent = 'DiscoveryStack-SiteEvidence/1.0'): { verdict: Extract<RobotsVerdict, 'allowed' | 'disallowed'>, matchedRule: string | null } {
-  const parsed = parseRobots(content)
+  return evaluateParsedRobots(parseRobots(content), path, userAgent)
+}
+
+export function evaluateParsedRobots(parsed: ParsedRobots, path: string, userAgent: string): { verdict: Extract<RobotsVerdict, 'allowed' | 'disallowed'>, matchedRule: string | null } {
   const agent = userAgent.toLowerCase()
   const candidates = parsed.groups.map(group => ({
     group,

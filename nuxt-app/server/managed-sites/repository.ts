@@ -89,6 +89,9 @@ export function makeManagedSiteRepository(database: any): ManagedSiteRepository 
     async listMemberships(ownerUserId, projectId) {
       return database.select().from(managedSiteMemberships).where(and(eq(managedSiteMemberships.ownerUserId, ownerUserId), eq(managedSiteMemberships.projectId, projectId))).orderBy(asc(managedSiteMemberships.createdAt)).limit(100)
     },
+    async listActiveMembershipsByEmail(ownerUserId, principalEmail) {
+      return database.select().from(managedSiteMemberships).where(and(eq(managedSiteMemberships.ownerUserId, ownerUserId), eq(managedSiteMemberships.principalEmail, principalEmail), eq(managedSiteMemberships.status, 'active'))).orderBy(asc(managedSiteMemberships.createdAt)).limit(25)
+    },
     async insertMembership(input) {
       const id = rowId(await database.insert(managedSiteMemberships).values(input as any))
       const row = await repository.findMembership(input.ownerUserId, id)

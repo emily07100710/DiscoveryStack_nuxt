@@ -24,7 +24,7 @@ export async function runContentOperationsTick(input: ContentOperationsTickInput
   const clock = input.clock || getDefaultContentOperationsClock()
   const maxEntries = Math.max(1, Math.min(input.maxEntries || CONTENT_OPERATIONS_MAX_TICK_ENTRIES, CONTENT_OPERATIONS_MAX_TICK_ENTRIES))
   const clients = await repository.listClients(input.ownerUserId)
-  const activeClientIds = new Set(clients.filter(client => client.status === 'active').map(client => client.id))
+  const activeClientIds = new Set(clients.filter(client => client.status === 'active' && client.requireCustomerApproval !== true).map(client => client.id))
   const calendars = (await repository.listCalendars(input.ownerUserId)).filter(calendar => activeClientIds.has(calendar.clientId) && calendar.status !== 'archived' && calendar.status !== 'paused')
   const candidates: Array<{ calendarId: number; entry: ContentOperationCalendarEntryRow }> = []
   for (const calendar of calendars) {

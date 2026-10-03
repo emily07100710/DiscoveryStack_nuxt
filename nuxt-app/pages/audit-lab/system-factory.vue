@@ -1,8 +1,13 @@
 <script setup lang="ts">
+type SystemFactoryFetch = <T = unknown>(path: string, options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown> }) => Promise<T>
+// Preserve the original Nuxt fetch and local response DTOs.
+const fetchSystemFactory = $fetch as unknown as SystemFactoryFetch
 definePageMeta({ i18n: false, layout: 'owner' })
 useHead({ title: '系統工廠 · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 
 const tabs = ['Overview', 'Requirements / SystemSpec', 'Templates / Modules', 'Preview', 'Quote / Payment', 'Provisioning timeline', 'Health', 'Users / Roles / Invitations', 'Integrations', 'Upgrade / Backup / Rollback', 'Audit / Receipts / Advanced']
+const route = useRoute()
+const isNestedRoute = computed(() => route.path.startsWith('/audit-lab/system-factory/'))
 const activeTab = ref(tabs[0])
 const form = reactive({ requirements: '', clientId: '', websiteId: '', managedSiteProjectId: '', businessType: '', industry: '', preferredTemplate: 'light_crm' })
 const saving = ref(false); const notice = ref(''); const failure = ref(''); const operationState = ref<'idle' | 'saving' | 'success' | 'error' | 'unauthorized' | 'retry_wait' | 'collision' | 'stale'>('idle')
@@ -13,10 +18,14 @@ const systems = computed(() => systemsData.value?.systems || [])
 const selected = computed<any>(() => workspace.value as any)
 const templatesEndpoint: string = '/api/system-factory/templates'; const systemsEndpoint: string = '/api/system-factory/systems?limit=50'; const draftsEndpoint: string = '/api/system-factory/drafts'
 
-async function refresh() { pending.value = true; error.value = null; try { systemsData.value = await $fetch<any>(systemsEndpoint) } catch (caught) { error.value = caught } finally { pending.value = false } }
-async function refreshWorkspace() { if (!selectedSystemId.value) { workspace.value = null; return }; workspacePending.value = true; workspaceError.value = null; try { const endpoint: string = `/api/system-factory/systems/${selectedSystemId.value}`; workspace.value = await $fetch<any>(endpoint) } catch (caught) { workspaceError.value = caught; workspace.value = null } finally { workspacePending.value = false } }
+async function refresh() { pending.value = true; error.value = null; try { systemsData.value = await fetchSystemFactory<any>(systemsEndpoint) } catch (caught) { error.value = caught } finally { pending.value = false } }
+async function refreshWorkspace() { if (!selectedSystemId.value) { workspace.value = null; return }; workspacePending.value = true; workspaceError.value = null; try { const endpoint: string = `/api/system-factory/systems/${selectedSystemId.value}`; workspace.value = await fetchSystemFactory<any>(endpoint) } catch (caught) { workspaceError.value = caught; workspace.value = null } finally { workspacePending.value = false } }
 watch(selectedSystemId, refreshWorkspace)
-onMounted(async () => { try { templatesData.value = await $fetch<any>(templatesEndpoint) } catch { templatesData.value = { templates: [] } }; await refresh() })
+// Returning from a child route reuses this component, so onMounted does not run again.
+let overviewRequested = false
+async function loadOverview() { if (isNestedRoute.value || overviewRequested) return; overviewRequested = true; try { templatesData.value = await fetchSystemFactory<any>(templatesEndpoint) } catch { templatesData.value = { templates: [] } }; await refresh() }
+onMounted(loadOverview)
+watch(isNestedRoute, () => { void loadOverview() })
 
 function classify(error: any) {
   const status = Number(error?.statusCode || error?.response?.status || 0); const message = String(error?.data?.message || error?.message || '')
@@ -29,7 +38,7 @@ function classify(error: any) {
 async function createDraft() {
   saving.value = true; operationState.value = 'saving'; notice.value = ''; failure.value = ''
   try {
-    const result: any = await $fetch(draftsEndpoint, { method: 'POST', body: { requirements: form.requirements, clientId: Number(form.clientId), websiteId: form.websiteId || null, managedSiteProjectId: form.managedSiteProjectId ? Number(form.managedSiteProjectId) : null, businessType: form.businessType, industry: form.industry, preferredTemplate: form.preferredTemplate, idempotencyKey: crypto.randomUUID() } })
+    const result: any = await fetchSystemFactory(draftsEndpoint, { method: 'POST', body: { requirements: form.requirements, clientId: Number(form.clientId), websiteId: form.websiteId || null, managedSiteProjectId: form.managedSiteProjectId ? Number(form.managedSiteProjectId) : null, businessType: form.businessType, industry: form.industry, preferredTemplate: form.preferredTemplate, idempotencyKey: crypto.randomUUID() } })
     operationState.value = 'success'; notice.value = 'SystemSpec 與 synthetic preview 已建立；尚未報價、付款或部署。'; await refresh(); selectedSystemId.value = result.system.id
   } catch (caught: any) { operationState.value = classify(caught); failure.value = caught?.data?.message || '草稿未建立，沒有 provisioning 或外部寫入。' }
   finally { saving.value = false }
@@ -39,8 +48,9 @@ function truth(value: unknown, yes: string, no: string) { return value ? yes : n
 </script>
 
 <template>
-  <main class="factory">
-    <header class="hero"><div><p class="eyebrow">OWNER ONLY / FRAPPE + ERPNEXT V16</p><h1>AI System Factory</h1><p>從需求、版本化 SystemSpec、互動預覽與 server quote，一路到 verified payment 後的隔離 Frappe site。預覽、意圖與 dry-run 都不會顯示成已部署。</p></div><button type="button" :disabled="pending" @click="refresh">重新整理</button></header>
+  <NuxtPage v-if="isNestedRoute" />
+  <main v-else class="factory">
+    <header class="hero"><div><p class="eyebrow">OWNER ONLY / FRAPPE + ERPNEXT V16</p><h1>AI System Factory</h1><p>從需求、版本化 SystemSpec、互動預覽與 server quote，一路到 verified payment 後的隔離 Frappe site。預覽、意圖與 dry-run 都不會顯示成已部署。</p><p>租戶運維頁可集中管理佈建、健康、邀請、生命週期與方案意圖。</p></div><NuxtLink class="button button--primary" to="/audit-lab/system-factory/tenants">前往租戶運維</NuxtLink><button type="button" :disabled="pending" @click="refresh">重新整理</button></header>
     <nav class="tabs" aria-label="系統工廠區段"><button v-for="tab in tabs" :key="tab" type="button" :aria-pressed="activeTab === tab" @click="activeTab = tab">{{ tab }}</button></nav>
     <p v-if="pending" class="state" role="status">正在載入受治理系統清單…</p>
     <p v-else-if="error" class="state state--error" role="alert">無法載入 owner-scoped 系統；未執行任何外部操作。</p>

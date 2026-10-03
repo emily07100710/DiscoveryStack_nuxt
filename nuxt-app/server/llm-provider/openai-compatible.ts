@@ -2,7 +2,7 @@ export type OpenAiCompatibleProviderLabel = 'bailian' | 'openai'
 
 export const OPENAI_COMPATIBLE_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 
-const WORKSPACE_BAILIAN_HOST_PATTERN = /^(?:[a-z0-9][a-z0-9-]{0,62}\.)?(?:cn-beijing|ap-southeast-1|ap-northeast-1|cn-hongkong|eu-central-1)\.maas\.aliyuncs\.com$/
+const WORKSPACE_BAILIAN_HOST_PATTERN = /^ws-[a-z0-9]{1,60}\.(?:cn-beijing|ap-southeast-1|ap-northeast-1|cn-hongkong|eu-central-1|us-east-1)\.maas\.aliyuncs\.com$/u
 const BAILIAN_HOSTS = new Set(['dashscope-intl.aliyuncs.com', 'dashscope.aliyuncs.com'])
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_RESPONSE_BYTES = 200_000
@@ -11,7 +11,7 @@ export type OpenAiCompatibleProviderConfiguration =
   | { configured: true; endpoint: string; model: string; apiKey: string; providerLabel: OpenAiCompatibleProviderLabel; source: 'llm' | 'legacy-geoflow-qwen' | 'legacy-autogeo-bailian' }
   | { configured: false; reason: 'endpoint-missing' | 'endpoint-not-allowed' | 'api-key-missing' | 'model-missing' | 'model-invalid' }
 
-export type OpenAiCompatibleProviderErrorCode = 'configuration' | 'timeout' | 'transport' | 'unauthorized' | 'rate_limited' | 'upstream' | 'malformed_response'
+export type OpenAiCompatibleProviderErrorCode = 'configuration' | 'timeout' | 'transport' | 'unauthorized' | 'rate_limited' | 'upstream' | 'malformed_response' | 'empty_content'
 
 export class OpenAiCompatibleProviderError extends Error {
   constructor(readonly code: OpenAiCompatibleProviderErrorCode, readonly retryable: boolean = code === 'timeout' || code === 'transport' || code === 'rate_limited', readonly httpStatus: number | null = null) {
@@ -28,6 +28,7 @@ export interface OpenAiCompatibleChatClient {
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
     responseFormat?: 'text' | 'json_object'
     reasoning?: 'default' | 'disabled'
+    strictEnvelopeIdentity?: boolean
     timeoutMs?: number
     requestId?: string
     maxResponseBytes?: number
@@ -37,12 +38,18 @@ export interface OpenAiCompatibleChatClient {
     providerLabel: OpenAiCompatibleProviderLabel
     usage: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }
     finishReason: string | null
+    responseId: string | null
+    transportRequestId: string | null
   }>
+}
+
+export function isOfficialBailianWorkspaceHostname(hostname: string): boolean {
+  return WORKSPACE_BAILIAN_HOST_PATTERN.test(hostname)
 }
 
 function providerLabelForHost(hostname: string): OpenAiCompatibleProviderLabel | null {
   if (hostname === 'api.openai.com') return 'openai'
-  if (BAILIAN_HOSTS.has(hostname) || WORKSPACE_BAILIAN_HOST_PATTERN.test(hostname)) return 'bailian'
+  if (BAILIAN_HOSTS.has(hostname) || isOfficialBailianWorkspaceHostname(hostname)) return 'bailian'
   return null
 }
 
@@ -52,13 +59,15 @@ export function normalizeOpenAiCompatibleEndpoint(value: string): string | null 
     const authority = /^https:\/\/([^/?#]+)/iu.exec(trimmed)?.[1]
     const authorityHost = authority?.split('@').at(-1)
     const url = new URL(trimmed)
-    if (url.protocol !== 'https:' || !authorityHost || authorityHost.includes(':') || trimmed.includes('?') || trimmed.includes('#') || url.username || url.password || url.search || url.hash || url.port) return null
+    if (url.protocol !== 'https:' || !authorityHost || authority?.includes('@') || authorityHost.toLowerCase() !== url.hostname || authorityHost.includes(':') || trimmed.includes('?') || trimmed.includes('#') || url.username || url.password || url.search || url.hash || url.port) return null
     const hostname = url.hostname.toLowerCase()
     const label = providerLabelForHost(hostname)
     if (!label) return null
     const basePath = label === 'bailian' ? '/compatible-mode/v1' : '/v1'
     const fullPath = `${basePath}/chat/completions`
     const normalizedPath = url.pathname.endsWith('/') && url.pathname !== '/' ? url.pathname.slice(0, -1) : url.pathname
+    const rawPath = trimmed.slice(8 + authority!.length)
+    if (![basePath, `${basePath}/`, fullPath, `${fullPath}/`].includes(rawPath)) return null
     if (normalizedPath !== basePath && normalizedPath !== fullPath) return null
     return `https://${hostname}${fullPath}`
   } catch { return null }
@@ -113,6 +122,24 @@ export function resolveOpenAiCompatibleProviderConfiguration(input: { env?: Reco
 
 function numericToken(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function assertStrictEnvelopeIdentity(envelope: any, transportRequestId: string | null, model: string): void {
+  // OpenAI-compatible vendors legitimately append additive metadata (`object`, `created`, `logprobs`,
+  // `reasoning_content`, token detail objects) and prefix the body id over the transport request id, so every
+  // field the caller trusts is pinned exactly while unrecognised extras are only bounded, never enumerated.
+  const requiredEnvelopeKeys = ['id', 'model', 'choices', 'usage']
+  const envelopeIdentifier = envelope && typeof envelope === 'object' && typeof envelope.id === 'string' ? envelope.id : ''
+  const requestIdentifier = transportRequestId || ''
+  const vendorIdPrefix = envelopeIdentifier.length > requestIdentifier.length ? envelopeIdentifier.slice(0, envelopeIdentifier.length - requestIdentifier.length) : ''
+  const envelopeBoundToTransport = requestIdentifier.length >= 3 && (envelopeIdentifier === requestIdentifier || (envelopeIdentifier.endsWith(requestIdentifier) && /^[A-Za-z0-9._:-]{1,32}-$/u.test(vendorIdPrefix)))
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope) || Object.keys(envelope).length < requiredEnvelopeKeys.length || Object.keys(envelope).length > 12 || !requiredEnvelopeKeys.every(key => Object.hasOwn(envelope, key)) || !/^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/u.test(envelopeIdentifier) || !envelopeBoundToTransport || envelope.model !== model || !Array.isArray(envelope.choices) || envelope.choices.length !== 1) throw new OpenAiCompatibleProviderError('malformed_response', false)
+  const choice = envelope.choices[0]
+  if (!choice || typeof choice !== 'object' || Array.isArray(choice) || Object.keys(choice).length > 8 || !['index', 'message', 'finish_reason'].every(key => Object.hasOwn(choice, key)) || choice.index !== 0 || choice.finish_reason !== 'stop') throw new OpenAiCompatibleProviderError('malformed_response', false)
+  const message = choice.message
+  if (!message || typeof message !== 'object' || Array.isArray(message) || Object.keys(message).length > 6 || !['role', 'content'].every(key => Object.hasOwn(message, key)) || message.role !== 'assistant' || typeof message.content !== 'string') throw new OpenAiCompatibleProviderError('malformed_response', false)
+  const usage = envelope.usage
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage) || Object.keys(usage).length > 8 || !['prompt_tokens', 'completion_tokens', 'total_tokens'].every(key => Object.hasOwn(usage, key) && Number.isSafeInteger(usage[key]) && usage[key] >= 0) || usage.prompt_tokens + usage.completion_tokens !== usage.total_tokens) throw new OpenAiCompatibleProviderError('malformed_response', false)
 }
 
 async function readBoundedResponse(response: Response, maxBytes: number): Promise<string> {
@@ -188,14 +215,18 @@ export function createOpenAiCompatibleChatClient(options: { endpoint: string; ap
         if (error instanceof OpenAiCompatibleProviderError) throw error
         throw new OpenAiCompatibleProviderError('malformed_response', false)
       }
+      const transportRequestId = response.headers.get('x-request-id')
+      if (input.strictEnvelopeIdentity) assertStrictEnvelopeIdentity(payload, transportRequestId, model)
       const content = payload?.choices?.[0]?.message?.content
-      if (typeof content !== 'string' || !content.trim()) throw new OpenAiCompatibleProviderError('malformed_response', false)
+      if (typeof content !== 'string' || !content.trim()) throw new OpenAiCompatibleProviderError('empty_content', true)
       return {
         content,
         model: typeof payload.model === 'string' && OPENAI_COMPATIBLE_MODEL_PATTERN.test(payload.model) ? payload.model : model,
         providerLabel,
         usage: { inputTokens: numericToken(payload?.usage?.prompt_tokens), outputTokens: numericToken(payload?.usage?.completion_tokens), totalTokens: numericToken(payload?.usage?.total_tokens) },
         finishReason: typeof payload?.choices?.[0]?.finish_reason === 'string' ? payload.choices[0].finish_reason : null,
+        responseId: typeof payload.id === 'string' ? payload.id : null,
+        transportRequestId,
       }
     },
   }

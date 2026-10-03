@@ -27,6 +27,8 @@ import {
   validateRoutingPlan,
 } from '../server/publication-routing'
 import { normalizeMarkdownContent } from '../server/publication-routing/normalization'
+import { validateFirstPartyPublishTarget } from '../server/first-party-publishing/target-guard'
+import { makeSignedTarget } from './fixtures/first-party-publishing/fixtures'
 import type { CreateRoutingPlanInput, DeliveryReceipt, PublicationTargetInput, RouteEvent, RouteIntent, RoutingPlan } from '../server/publication-routing'
 import { FIXTURE_CONTENT, FIXTURE_EVIDENCE_HASH, FIXTURE_NOW, LEGAL_TARGETS, makeDraft, makeEvent, makeInput, makePlan, makeReceipt, makeResultEvent, makeTarget, opaque, targetFor } from './fixtures/publication-routing/fixtures'
 
@@ -66,8 +68,22 @@ describe('Unified Multi-channel Publication Routing Capability Engine V2 repair'
       expect(capability).toMatchObject({ framework, transport, executor, authority })
       expect(matrixAllows(framework, transport, authority, executor)).toBe(true)
     })
-    it('contains exactly the nine fixed capabilities', () => {
-      expect(CAPABILITY_MATRIX).toHaveLength(9)
+    it('preserves exactly the nine original capabilities and adds one bounded Next.js signed article capability', () => {
+      const original = CAPABILITY_MATRIX.filter(capability => capability.framework !== 'nextjs')
+      expect(original.map(({ framework, transport, executor, authority }) => [framework, transport, executor, authority])).toEqual(legal)
+      const next = CAPABILITY_MATRIX.filter(capability => capability.framework === 'nextjs')
+      expect(next).toEqual([{ framework: 'nextjs', transport: 'first_party_signed_api', executor: 'first_party_signed_api', authority: 'discoverystack_first_party', projection: 'first_party', requiresPublicHttps: true, requiresServiceReference: false }])
+      expect(matrixAllows('nextjs', 'first_party_signed_api', 'discoverystack_first_party', 'first_party_signed_api')).toBe(true)
+      expect(capabilityFor('nextjs', 'first_party_git')).toBeNull()
+      expect(matrixAllows('nextjs', 'first_party_signed_api', 'geoflow_content_engine', 'first_party_signed_api')).toBe(false)
+      expect(matrixAllows('nextjs', 'first_party_signed_api', 'discoverystack_first_party', 'first_party_git')).toBe(false)
+      const target = makeSignedTarget({ framework: 'nextjs', allowedContentTypes: ['article'], allowedLanguages: ['zh-hant'] })
+      expect(validateFirstPartyPublishTarget(target).status).toBe('valid')
+      expect(validateFirstPartyPublishTarget({ ...target, transport: 'first_party_git' })).toMatchObject({ status: 'blocked', code: 'UNSUPPORTED_TRANSPORT' })
+      expect(validateFirstPartyPublishTarget({ ...target, allowedContentTypes: ['faq'] })).toMatchObject({ status: 'blocked', code: 'UNSUPPORTED_CONTENT_TYPE' })
+      expect(validateFirstPartyPublishTarget({ ...target, allowedContentTypes: ['article', 'faq'] })).toMatchObject({ status: 'blocked', code: 'UNSUPPORTED_CONTENT_TYPE' })
+      expect(validateFirstPartyPublishTarget({ ...target, allowedLanguages: ['en'] })).toMatchObject({ status: 'blocked', code: 'UNSUPPORTED_LANGUAGE' })
+      expect(validateFirstPartyPublishTarget({ ...target, allowedLanguages: ['zh-hant', 'en'] })).toMatchObject({ status: 'blocked', code: 'UNSUPPORTED_LANGUAGE' })
     })
     it('exports the pinned GEOFlow SHA', () => {
       expect(GEOFlow_PINNED_SOURCE_SHA).toBe('9d70db04ee9c5d308f5fa29b4c65834229af9eea')
