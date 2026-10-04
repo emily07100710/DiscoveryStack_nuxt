@@ -3,16 +3,16 @@ import { createError, getRequestHeader, setResponseHeaders, type H3Event } from 
 import { z, ZodError } from 'zod'
 import { readBoundedRequestBody } from '../utils/bounded-request-body'
 import { createWeeklyContentRepository, type WeeklyContentRepository } from './repository'
-import { claimLineBindingInvite } from './service'
+import { claimLineBindingInvite, LINE_IDENTITY_BINDING_PURPOSE } from './service'
 import { verifyWeeklyLiffIdentity, type VerifiedWeeklyLiffIdentity } from './liff-identity'
 import type { ContentOperationClientRow } from '../content-operations/types'
-import type { LineBindingInvitation, WeeklyConfig } from './types'
+import type { LineBindingInvitation } from './types'
 export const WEEKLY_LIFF_CONNECT_PATH = '/weekly-content/connect'
 export const WEEKLY_LIFF_HEADERS = { 'cache-control': 'private, no-store, max-age=0', 'x-robots-tag': 'noindex, nofollow, noarchive', 'referrer-policy': 'no-referrer' }
 export const WEEKLY_LIFF_ID_PATTERN = /^[0-9]{8,15}-[A-Za-z0-9]{4,32}$/
 export type WeeklyLiffConfiguration = { enabled: false } | { enabled: true; liffId: string; channelId: string; origin: string; tokenKey: string }
 export type WeeklyLiffCompany = { displayName: string; canonicalSiteOrigin: string }
-export type WeeklyLiffContext = { mode: 'bindings'; companies: WeeklyLiffCompany[] } | { mode: 'invitation'; company: WeeklyLiffCompany; expiresAt: string; confirmationToken: string }
+export type WeeklyLiffContext = { mode: 'bindings'; companies: WeeklyLiffCompany[] } | { mode: 'invitation'; purpose: typeof LINE_IDENTITY_BINDING_PURPOSE; company: WeeklyLiffCompany; expiresAt: string; confirmationToken: string }
 export type WeeklyLiffDependencies = { configuration: WeeklyLiffConfiguration; repository: () => WeeklyContentRepository; fetchImpl?: typeof fetch; now?: Date }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const fail = (code: string, statusCode = 409): never => { throw createError({ statusCode, statusMessage: code }) }
@@ -43,23 +43,22 @@ function company(client: ContentOperationClientRow): WeeklyLiffCompany {
   if (!canonicalSiteOrigin || !client.displayName || client.displayName.length > 160) return fail('LIFF_COMPANY_NOT_AVAILABLE', 404)
   return { displayName: client.displayName, canonicalSiteOrigin }
 }
-type InvitationContext = { invite: LineBindingInvitation; client: ContentOperationClientRow; config: WeeklyConfig; company: WeeklyLiffCompany }
+type InvitationContext = { invite: LineBindingInvitation; client: ContentOperationClientRow; company: WeeklyLiffCompany }
 async function invitationContext(repo: WeeklyContentRepository, raw: string, identity: VerifiedWeeklyLiffIdentity, getNow: () => Date, lock = false): Promise<InvitationContext> {
   const first = await repo.findInvitation(hash(raw))
   if (!first) return fail('LIFF_INVITATION_NOT_AVAILABLE', 404)
   const client = await repo.findClient(first.ownerUserId, first.clientId, lock)
   const invite = lock ? await repo.findInvitation(hash(raw), true) : first
-  const config = await repo.getConfig(first.ownerUserId, first.clientId, lock)
   const binding = await repo.getBinding(first.ownerUserId, first.clientId, lock)
   const now = getNow()
   if (identity.expiresAtSeconds <= Math.floor(now.getTime() / 1000)) return fail('LINE_IDENTITY_INVALID', 401)
-  if (!invite || !client || client.status !== 'active' || client.requireCustomerApproval !== true || config?.status !== 'active' || invite.expiresAt.getTime() <= now.getTime()) return fail('LIFF_INVITATION_NOT_AVAILABLE', 409)
+  if (!invite || !client || client.ownerUserId !== first.ownerUserId || client.id !== first.clientId || invite.ownerUserId !== client.ownerUserId || invite.clientId !== client.id || client.status !== 'active' || invite.expiresAt.getTime() <= now.getTime()) return fail('LIFF_INVITATION_NOT_AVAILABLE', 409)
   const fingerprint = hash(JSON.stringify({ owner: invite.ownerUserId, client: invite.clientId, recipient: identity.lineUserId }))
   if (binding?.status === 'active' && binding.lineUserId !== identity.lineUserId || invite.consumedAt && (invite.bindingFingerprint !== fingerprint || binding?.status !== 'active' || binding.bindingFingerprint !== fingerprint)) return fail('LIFF_INVITATION_NOT_AVAILABLE', 409)
-  return { invite, client, config, company: company(client) }
+  return { invite, client, company: company(client) }
 }
 function confirmation(context: InvitationContext, identity: VerifiedWeeklyLiffIdentity, key: string) {
-  return createHmac('sha256', key).update(JSON.stringify({ purpose: 'weekly-liff-confirm-v1', invitationHash: context.invite.tokenHash, invitationExpiresAt: context.invite.expiresAt.toISOString(), owner: context.client.ownerUserId, client: context.client.id, company: context.company, configurationFingerprint: context.config.configurationFingerprint, channel: identity.channelId, recipient: identity.lineUserId })).digest('base64url')
+  return createHmac('sha256', key).update(JSON.stringify({ purpose: 'weekly-liff-identity-confirm-v1', invitationHash: context.invite.tokenHash, invitationExpiresAt: context.invite.expiresAt.toISOString(), owner: context.client.ownerUserId, client: context.client.id, company: context.company, channel: identity.channelId, recipient: identity.lineUserId })).digest('base64url')
 }
 export function productionWeeklyLiffDependencies(): WeeklyLiffDependencies { return { configuration: weeklyLiffConfiguration(), repository: createWeeklyContentRepository } }
 export async function getWeeklyLiffConnectContext(raw: unknown, deps: WeeklyLiffDependencies): Promise<WeeklyLiffContext> {
@@ -67,12 +66,12 @@ export async function getWeeklyLiffConnectContext(raw: unknown, deps: WeeklyLiff
   const identity = await verifyWeeklyLiffIdentity(input.idToken, { channelId: config.channelId, fetchImpl: deps.fetchImpl, now: deps.now })
   const repo = deps.repository()
   if (!input.invitationToken) {
-    const rows = await repo.listActiveBindingsForLineUser(identity.lineUserId, 20)
+    const rows = await repo.listActiveIdentityBindingsForLineUser(identity.lineUserId, 20)
     if (identity.expiresAtSeconds <= Math.floor((deps.now || new Date()).getTime() / 1000)) return fail('LINE_IDENTITY_INVALID', 401)
-    return { mode: 'bindings', companies: rows.filter(row => row.binding.lineUserId === identity.lineUserId && row.binding.status === 'active' && row.client.status === 'active' && row.client.requireCustomerApproval === true && row.config.status === 'active' && row.binding.ownerUserId === row.client.ownerUserId && row.binding.clientId === row.client.id && row.config.ownerUserId === row.client.ownerUserId && row.config.clientId === row.client.id).map(row => company(row.client)) }
+    return { mode: 'bindings', companies: rows.filter(row => row.binding.lineUserId === identity.lineUserId && row.binding.status === 'active' && row.client.status === 'active' && row.binding.ownerUserId === row.client.ownerUserId && row.binding.clientId === row.client.id).map(row => company(row.client)) }
   }
   const current = await invitationContext(repo, input.invitationToken, identity, () => deps.now || new Date())
-  return { mode: 'invitation', company: current.company, expiresAt: current.invite.expiresAt.toISOString(), confirmationToken: confirmation(current, identity, config.tokenKey) }
+  return { mode: 'invitation', purpose: LINE_IDENTITY_BINDING_PURPOSE, company: current.company, expiresAt: current.invite.expiresAt.toISOString(), confirmationToken: confirmation(current, identity, config.tokenKey) }
 }
 export async function confirmWeeklyLiffConnection(raw: unknown, deps: WeeklyLiffDependencies) {
   const config = enabled(deps.configuration), input = weeklyLiffConfirmInput.parse(raw)
@@ -86,7 +85,7 @@ export async function confirmWeeklyLiffConnection(raw: unknown, deps: WeeklyLiff
     const event = { namespace: 'weekly-liff-bind-v1', channel: identity.channelId, recipient: identity.lineUserId, invitationHash: current.invite.tokenHash }
     const eventFingerprint = hash(JSON.stringify(event))
     const result = await claimLineBindingInvite({ invitationToken: input.invitationToken, lineUserId: identity.lineUserId, webhookEventId: `weekly-liff-bind-v1:${eventFingerprint}`, semanticFingerprint: eventFingerprint }, { repository: transactionRepository, featureEnabled: true, tokenKey: config.tokenKey, now: deps.now })
-    return { status: result.status === 'bound' ? 'bound' as const : 'replayed' as const, company: current.company }
+    return { status: result.status === 'bound' ? 'bound' as const : 'replayed' as const, purpose: LINE_IDENTITY_BINDING_PURPOSE, company: current.company }
   })
 }
 export async function weeklyLiffHttpInput(event: H3Event, confirm = false) {

@@ -5,6 +5,7 @@ import type { WeeklyContentRepository } from './repository'
 import type { WeeklyConfig, WeeklyReviewRequest, WeeklyOwnerConfig, WeeklyDecision, WeeklyPublicReview } from './types'
 import { weeklyRequestMatchesCurrent, weeklyConsentAllowsPublication } from './publication-guard'
 export type WeeklyContentDependencies = { repository: WeeklyContentRepository; featureEnabled: boolean; tokenKey: string; now?: Date }
+export const LINE_IDENTITY_BINDING_PURPOSE = 'identity_binding' as const
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const error = (code: string, statusCode = 409): never => { throw createError({ statusCode, statusMessage: code }) }
 const bounded = (value: unknown, max = 128): string => { if (typeof value !== 'string' || !value || value.length > max) return error('WEEKLY_INPUT_INVALID',422); return value }
@@ -63,15 +64,16 @@ export async function pauseWeeklyReviewConfig(input: { ownerUserId: number; clie
     return projectWeeklyOwnerConfig(updated,(await repo.getBinding(input.ownerUserId,input.clientId))?.status==='active')
   })
 }
+/** A wli_ invite establishes company/LINE identity only; it never enables article review or publishing. */
 export async function issueLineBindingInvite(input: { ownerUserId: number; clientId: number }, deps: WeeklyContentDependencies) {
   enabled(deps); const invitationToken=opaque('wli_')
   return deps.repository.transaction(async repo => {
-    if (!await repo.findClient(input.ownerUserId,input.clientId,true)) return error('WEEKLY_CLIENT_NOT_AVAILABLE',404)
-    if ((await repo.getConfig(input.ownerUserId,input.clientId,true))?.status!=='active') return error('WEEKLY_CONFIG_NOT_ACTIVE')
+    const client=await repo.findClient(input.ownerUserId,input.clientId,true)
+    if (!client || client.ownerUserId!==input.ownerUserId || client.id!==input.clientId || client.status!=='active') return error('WEEKLY_CLIENT_NOT_AVAILABLE',404)
     const now=clock(deps), expiresAt=new Date(now.getTime()+10*60*1000)
     await repo.expireInvitations(input.ownerUserId,input.clientId,now)
     await repo.insertInvitation({ ownerUserId:input.ownerUserId,clientId:input.clientId,tokenHash:hash(invitationToken),expiresAt,consumedAt:null,bindingFingerprint:null,eventHash:null })
-    return { invitationToken, expiresAt:expiresAt.toISOString() }
+    return { purpose:LINE_IDENTITY_BINDING_PURPOSE, invitationToken, expiresAt:expiresAt.toISOString() }
   })
 }
 async function replayInbox(repo: WeeklyContentRepository, eventHash: string, fingerprint: string) {
@@ -104,10 +106,10 @@ export async function claimLineBindingInvite(input: VerifiedLineIdentity & { inv
   return eventTransaction(deps,eventHash,input.semanticFingerprint,async repo => {
     const replay=await replayInbox(repo,eventHash,input.semanticFingerprint);if(replay)return replay
     const candidate=await repo.findInvitation(hash(input.invitationToken));if(!candidate)return error('WEEKLY_INVITATION_INVALID',404)
-    if (!await repo.findClient(candidate.ownerUserId,candidate.clientId,true))return error('WEEKLY_CLIENT_NOT_AVAILABLE',404)
+    const client=await repo.findClient(candidate.ownerUserId,candidate.clientId,true)
+    if (!client || client.ownerUserId!==candidate.ownerUserId || client.id!==candidate.clientId || client.status!=='active')return error('WEEKLY_CLIENT_NOT_AVAILABLE',404)
     const invite=await repo.findInvitation(hash(input.invitationToken),true)
-    const config=await repo.getConfig(candidate.ownerUserId,candidate.clientId,true)
-    if(!invite || config?.status!=='active')return error('WEEKLY_INVITATION_EXPIRED')
+    if(!invite || invite.ownerUserId!==client.ownerUserId || invite.clientId!==client.id)return error('WEEKLY_INVITATION_EXPIRED')
     const fingerprint=hash(JSON.stringify({ owner:invite.ownerUserId,client:invite.clientId,recipient:input.lineUserId }))
     if(invite.consumedAt && invite.bindingFingerprint!==fingerprint)return error('WEEKLY_INVITATION_ALREADY_USED')
     const wasConsumed=Boolean(invite.consumedAt)

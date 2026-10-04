@@ -4,7 +4,7 @@ import { getDatabase } from '../database'
 import { contentOperationClients, contentOperationAutopilotPolicies, contentOperationPublicationTargets, contentOperationPublicationAttempts, seoGeoContentJobs, weeklyContentConfigs as configs, weeklyContentInvitations as invitations, weeklyContentBindings as bindings, weeklyContentReviewRequests as requests, weeklyContentConsents as consents, weeklyContentOutbox as outbox, weeklyContentWebhookInbox as inbox, contentOperationRuns } from '../database/schema'
 import { createContentOperationsRepositoryFromDatabase } from '../content-operations/repository'
 import type { ContentOperationClientRow } from '../content-operations/types'
-import type { WeeklyConfig, LineBindingInvitation, PrivateLineBinding, WeeklyReviewRequest, WeeklyConsent, WeeklyOutbox, WeeklyDraft, WeeklyWebhookInbox } from './types'
+import type { WeeklyConfig, LineBindingInvitation, PrivateLineBinding, WeeklyIdentityBinding, WeeklyReviewRequest, WeeklyConsent, WeeklyOutbox, WeeklyDraft, WeeklyWebhookInbox } from './types'
 export type InsertRow<T> = Omit<T, 'id' | 'createdAt' | 'updatedAt'>
 export interface WeeklyContentRepository {
   transaction<T>(work: (repository: WeeklyContentRepository) => Promise<T>): Promise<T>
@@ -24,7 +24,7 @@ export interface WeeklyContentRepository {
   findInvitation(tokenHash: string, lock?: boolean): Promise<LineBindingInvitation | null>
   consumeInvitation(id: number, bindingFingerprint: string, eventHash: string, now: Date): Promise<boolean>
   getBinding(ownerUserId: number, clientId: number, lock?: boolean): Promise<PrivateLineBinding | null>
-  listActiveBindingsForLineUser(lineUserId: string, limit?: number): Promise<Array<{ binding: PrivateLineBinding; client: ContentOperationClientRow; config: WeeklyConfig }>>
+  listActiveIdentityBindingsForLineUser(lineUserId: string, limit?: number): Promise<WeeklyIdentityBinding[]>
   saveBinding(row: InsertRow<PrivateLineBinding>): Promise<PrivateLineBinding>
   getRequest(requestId: string, lock?: boolean): Promise<WeeklyReviewRequest | null>
   findLatestRequestForEntry(ownerUserId: number, clientId: number, entryId: number): Promise<WeeklyReviewRequest|null>
@@ -96,10 +96,9 @@ function makeRepository(database: any, transactional = false): WeeklyContentRepo
     findInvitation: (hash, lock) => one(invitations, eq(invitations.tokenHash, hash), lock),
     async consumeInvitation(id, fingerprint, eventHash, now) { const r = await database.update(invitations).set({ consumedAt: now, bindingFingerprint: fingerprint, eventHash }).where(and(eq(invitations.id, id), isNull(invitations.consumedAt), gt(invitations.expiresAt, now))); return Number(r?.[0]?.affectedRows || 0) === 1 },
     getBinding: (owner, client, lock) => one(bindings, and(eq(bindings.ownerUserId, owner), eq(bindings.clientId, client)), lock),
-    listActiveBindingsForLineUser: (lineUserId, limit = 20) => database.select({ binding: bindings, client: contentOperationClients, config: configs }).from(bindings)
+    listActiveIdentityBindingsForLineUser: (lineUserId, limit = 20) => database.select({ binding: bindings, client: contentOperationClients }).from(bindings)
       .innerJoin(contentOperationClients, and(eq(contentOperationClients.id, bindings.clientId), eq(contentOperationClients.ownerUserId, bindings.ownerUserId)))
-      .innerJoin(configs, and(eq(configs.clientId, bindings.clientId), eq(configs.ownerUserId, bindings.ownerUserId)))
-      .where(and(eq(bindings.lineUserId, lineUserId), eq(bindings.status, 'active'), eq(contentOperationClients.status, 'active'), eq(contentOperationClients.requireCustomerApproval, true), eq(configs.status, 'active')))
+      .where(and(eq(bindings.lineUserId, lineUserId), eq(bindings.status, 'active'), eq(contentOperationClients.status, 'active')))
       .orderBy(asc(bindings.id)).limit(Math.max(1, Math.min(20, limit))),
     async saveBinding(row) { await database.insert(bindings).values(row).onDuplicateKeyUpdate({ set: row }); return (await repository.getBinding(row.ownerUserId, row.clientId))! },
     getRequest: (id, lock) => one(requests, eq(requests.requestId, id), lock),
