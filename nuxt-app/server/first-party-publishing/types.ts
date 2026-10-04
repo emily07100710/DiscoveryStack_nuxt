@@ -4,7 +4,7 @@ export const FIRST_PARTY_EXECUTOR_VERSION = 'first-party-publish-executor-v1' as
 export const GITHUB_CONTENTS_ORIGIN = 'https://api.github.com' as const
 export const SIGNED_API_COMMAND_VERSION = 'first-party-signed-api-v1' as const
 
-export type FirstPartyFramework = 'astro' | 'nuxt'
+export type FirstPartyFramework = 'astro' | 'nuxt' | 'nextjs'
 export type FirstPartyTransport = 'first_party_git' | 'first_party_signed_api'
 export type FirstPartyTargetStatus = 'active' | 'paused' | 'revoked'
 export type FirstPartyExecutionMode = 'dry_run' | 'execute'

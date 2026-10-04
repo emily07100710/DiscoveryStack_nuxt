@@ -11,6 +11,7 @@ import argparse
 import ast
 import json
 from pathlib import Path
+from harden_recovery_notebooks import harden_notebook
 
 MANIFEST_HASH = "08931b3827f37d9254c9d8d0555aa635babc26d6c94c218bac523cc4a86f2003"
 DATASET_DIGEST = "c787aad7f775a3f4db705c171b22f968bd1fff09b3ee3ee7e99557afccea60a6"
@@ -59,6 +60,8 @@ def main() -> None:
 
     for cell in notebook.get("cells", []):
         text = replace_all(source_text(cell), pairs)
+        if "raw_lines = [line.rstrip" in text and "review_states.get('needs_adjudication', 0) >= 1" not in text:
+            text = text.replace("print({'validated': True", "rights_statuses = Counter(row['governance']['rightsStatus'] for row in rows)\nreview_states = Counter(row['reviewState'] for row in rows)\nassert rights_statuses.get('public_access_only_pending_human_review', 0) >= 1\nassert review_states.get('needs_adjudication', 0) >= 1\nprint({'validated': True")
         if cell.get("cell_type") == "markdown":
             text = text.replace(
                 "尚未取得可信 checkpoint、metrics、final evaluation 或 trained artifact ZIP。",
@@ -97,6 +100,7 @@ def main() -> None:
         "governanceValidation": "approved_or_public_access_only_pending_human_review",
     }
 
+    notebook = harden_notebook(notebook)
     for index, cell in enumerate(notebook.get("cells", [])):
         if cell.get("cell_type") == "code":
             py_source = "\n".join(line for line in source_text(cell).splitlines() if not line.lstrip().startswith(("!", "%")))
@@ -109,8 +113,9 @@ def main() -> None:
     assert all(token in all_source for token in required), "v5 constants missing"
     assert "discoverystack-manifest-v4-500" not in all_source, "v4 snapshot residue"
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(notebook, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print({"output": str(args.output), "cells": len(notebook.get("cells", [])), "outputsCleared": True, "status": metadata["status"]})
+    with args.output.open("x", encoding="utf-8") as handle:
+        handle.write(json.dumps(notebook, ensure_ascii=False, indent=2) + "\n")
+    print({"cells": len(notebook.get("cells", [])), "outputsCleared": True, "status": metadata["status"], "trainingExecuted": False})
 
 
 if __name__ == "__main__":

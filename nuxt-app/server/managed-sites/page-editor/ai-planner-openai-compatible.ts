@@ -49,7 +49,7 @@ function plannerError(error: unknown): AiPlannerUnavailableError {
   if (error instanceof AiPlannerUnavailableError) return error
   if (error instanceof OpenAiCompatibleProviderError) {
     if (error.code === 'timeout') return new AiPlannerUnavailableError('timeout')
-    if (error.code === 'malformed_response') return new AiPlannerUnavailableError('malformed_output')
+    if (error.code === 'malformed_response' || error.code === 'empty_content') return new AiPlannerUnavailableError('malformed_output')
   }
   return new AiPlannerUnavailableError('provider_error')
 }

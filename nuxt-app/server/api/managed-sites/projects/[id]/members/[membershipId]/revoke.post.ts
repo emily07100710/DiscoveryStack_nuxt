@@ -1,8 +1,8 @@
 import { getRouterParam, getQuery } from 'h3'
-import { requireOwner } from '../../../../../utils/auth'
-import { getOwnerDatabaseUserId } from '../../../../../audit/repository'
-import { revokeManagedSiteMember } from '../../../../../managed-sites/service'
-import { parsePathId } from '../../../../../managed-sites/normalization'
+import { requireOwner } from '../../../../../../utils/auth'
+import { getOwnerDatabaseUserId } from '../../../../../../audit/repository'
+import { revokeManagedSiteMember } from '../../../../../../managed-sites/service'
+import { parsePathId } from '../../../../../../managed-sites/normalization'
 
 export default defineEventHandler(async (event) => {
   const owner = await requireOwner(event)

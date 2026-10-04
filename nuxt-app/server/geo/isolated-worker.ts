@@ -103,12 +103,12 @@ export function createAutoGeoIsolatedWorkerAdapter(): GeoRewriteAdapter {
         optimizedContent: result.optimizedContent,
         appliedRuleIds: result.appliedRuleIds,
         safetyNotes: [
-          '完整 AutoGEO 或 Qwen provider 本次未執行；這是 isolated deterministic reference fallback。',
+          '完整 AutoGEO 或 AI provider 本次未執行；這是 isolated deterministic reference fallback。',
           'worker 只執行 pinned selected-rule transformation，沒有 hidden network 或 model inference。',
           'provider unavailable 時此候選只能供 preview、development 或 manual inspection，不能在 governed_autopilot 自動發布。',
         ],
         provenance: {
-          requestedProvider: 'autogeo-bailian-qwen',
+          requestedProvider: 'autogeo-openai-compatible',
           execution: 'reference-fallback',
           providerExecution: false,
           upstreamRepository: 'cxcscmu/AutoGEO',

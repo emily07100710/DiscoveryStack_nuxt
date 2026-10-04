@@ -15,7 +15,7 @@ definePageMeta({ i18n: false, layout: 'owner' })
 useHead({ title: '私有 GEO Workbench · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 async function runOptimization() {
   state.value = 'running'; errorMessage.value = ''; result.value = null
-  try { result.value = await $fetch<Result>('/api/geo/optimise', { method: 'POST', body: form }); state.value = 'ready' }
+  try { result.value = await $fetch<Result, '/api/geo/optimise'>('/api/geo/optimise', { method: 'POST', body: form }); state.value = 'ready' }
   catch (error: unknown) { state.value = 'error'; const status = (error as { status?: number, statusCode?: number }).status ?? (error as { statusCode?: number }).statusCode; errorMessage.value = status === 401 ? '需要 owner 工作階段。請先從私有稽核實驗室登入。' : (error as { data?: { message?: string } }).data?.message || '目前無法完成比較。輸入未被儲存。' }
 }
 const deltaClass = (metric: Metric) => metric.delta > 0 ? 'metric-up' : metric.delta < 0 ? 'metric-down' : 'metric-flat'

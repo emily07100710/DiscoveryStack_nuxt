@@ -153,6 +153,7 @@ export async function runSiteEvidenceScan(scanId: number, inputDependencies: Sit
   try {
     await deps.repository.updateScan(scan.id, { status: 'running', startedAt, heartbeatAt: startedAt, errorCode: null, updatedAt: startedAt })
     let robotsContent: string | null = null
+    let robotsCapturedAt: Date | null = null
     let robotsAvailability: 'available' | 'unavailable' = 'unavailable'
     let sitemapDirectives: string[] = []
     try {
@@ -161,6 +162,7 @@ export async function runSiteEvidenceScan(scanId: number, inputDependencies: Sit
         const parsed = parseRobots(robots.body)
         if (!parsed.malformed) {
           robotsContent = robots.body
+          robotsCapturedAt = deps.clock.now()
           robotsAvailability = 'available'
           sitemapDirectives = parsed.sitemaps
         }
@@ -253,7 +255,7 @@ export async function runSiteEvidenceScan(scanId: number, inputDependencies: Sit
       }
     }
 
-    const findings = buildSiteEvidenceFindings({ inventory, sitemaps: sitemap.documents, targetOrigin: scan.targetOrigin, limitations }).map(item => ({ ...item, ownerUserId: scan.ownerUserId, scanId: scan.id }))
+    const findings = buildSiteEvidenceFindings({ inventory, sitemaps: sitemap.documents, targetOrigin: scan.targetOrigin, limitations, robotsContent, robotsCapturedAt }).map(item => ({ ...item, ownerUserId: scan.ownerUserId, scanId: scan.id }))
     await deps.repository.insertFindings(findings)
     const finalLimitations = unique(limitations)
     const partial = finalLimitations.some(value => ['page_cap_reached', 'scan_deadline_reached', 'sitemap_url_consideration_cap_reached', 'rendered_snapshots_unavailable'].includes(value))

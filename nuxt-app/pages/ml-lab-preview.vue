@@ -41,11 +41,11 @@ async function loadWorkbench() {
   state.value = 'loading'
   try {
     const [sourceRows, jobRows, runRows, providerRows, datasetRows] = await Promise.all([
-      $fetch<Source[]>('/api/intelligence/sources'),
-      $fetch<Job[]>('/api/intelligence/ingestion-jobs'),
-      $fetch<TrainingRun[]>('/api/intelligence/training-runs'),
-      $fetch<ProviderStatus>('/api/intelligence/providers'),
-      $fetch<PublicDataset[]>('/api/intelligence/datasets'),
+      $fetch<Source[], '/api/intelligence/sources'>('/api/intelligence/sources'),
+      $fetch<Job[], '/api/intelligence/ingestion-jobs'>('/api/intelligence/ingestion-jobs'),
+      $fetch<TrainingRun[], '/api/intelligence/training-runs'>('/api/intelligence/training-runs'),
+      $fetch<ProviderStatus, '/api/intelligence/providers'>('/api/intelligence/providers'),
+      $fetch<PublicDataset[], '/api/intelligence/datasets'>('/api/intelligence/datasets'),
     ])
     sources.value = sourceRows
     jobs.value = jobRows
@@ -69,7 +69,7 @@ async function saveProviderSettings() {
   providerSaveStatus.value = 'saving'
   providerSaveMessage.value = ''
   try {
-    const result = await $fetch<{ status: ProviderStatus }>('/api/intelligence/providers', { method: 'POST', body: { firecrawlApiKey: providerForm.firecrawlApiKey, huggingFaceApiToken: providerForm.huggingFaceApiToken, huggingFaceNamespace: providerForm.huggingFaceNamespace } })
+    const result = await $fetch<{ status: ProviderStatus }, '/api/intelligence/providers'>('/api/intelligence/providers', { method: 'POST', body: { firecrawlApiKey: providerForm.firecrawlApiKey, huggingFaceApiToken: providerForm.huggingFaceApiToken, huggingFaceNamespace: providerForm.huggingFaceNamespace } })
     providerStatus.value = result.status
     providerForm.firecrawlApiKey = ''
     providerForm.huggingFaceApiToken = ''
@@ -85,7 +85,7 @@ async function startCrawl() {
   crawlStatus.value = 'saving'
   crawlMessage.value = ''
   try {
-    const result = await $fetch<{ message: string }>('/api/intelligence/ingestion-jobs', { method: 'POST', body: { mode: 'site', sourceId: crawlForm.sourceId, requestedUrl: crawlForm.requestedUrl, maxPages: crawlForm.maxPages, maxDepth: crawlForm.maxDepth } })
+    const result = await $fetch<{ message: string }, '/api/intelligence/ingestion-jobs'>('/api/intelligence/ingestion-jobs', { method: 'POST', body: { mode: 'site', sourceId: crawlForm.sourceId, requestedUrl: crawlForm.requestedUrl, maxPages: crawlForm.maxPages, maxDepth: crawlForm.maxDepth } })
     crawlStatus.value = 'success'
     crawlMessage.value = result.message
     crawlForm.requestedUrl = ''
@@ -96,14 +96,14 @@ async function startCrawl() {
   }
 }
 
-async function refreshJobs() { jobs.value = await $fetch<Job[]>('/api/intelligence/ingestion-jobs') }
-async function refreshRuns() { trainingRuns.value = await $fetch<TrainingRun[]>('/api/intelligence/training-runs') }
+async function refreshJobs() { jobs.value = await $fetch<Job[], '/api/intelligence/ingestion-jobs'>('/api/intelligence/ingestion-jobs') }
+async function refreshRuns() { trainingRuns.value = await $fetch<TrainingRun[], '/api/intelligence/training-runs'>('/api/intelligence/training-runs') }
 
 async function startTraining() {
   trainingStatus.value = 'running'
   trainingMessage.value = ''
   try {
-    const result = await $fetch<{ message: string, status: string }>('/api/intelligence/training-runs', { method: 'POST', body: { mode: trainingMode.value, datasetBuildId: trainingDatasetId.value } })
+    const result = await $fetch<{ message: string, status: string }, '/api/intelligence/training-runs'>('/api/intelligence/training-runs', { method: 'POST', body: { mode: trainingMode.value, datasetBuildId: trainingDatasetId.value } })
     trainingStatus.value = result.status === 'blocked' || result.status === 'failed' ? 'error' : 'success'
     trainingMessage.value = result.message
     await refreshRuns()

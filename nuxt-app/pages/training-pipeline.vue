@@ -30,13 +30,40 @@ const state = ref<'loading' | 'signin' | 'ready' | 'error'>('loading')
 const data = ref<PipelineResponse | null>(null)
 const busy = ref<string | null>(null)
 const notice = ref('')
+type TrainingSnapshotRow = { id: number, split: 'train' | 'validation' | 'test', targets: Record<string, string | string[]>, manifestHash: string }
+const snapshotRows = ref<TrainingSnapshotRow[]>([])
+const snapshotLoading = ref(false)
+const snapshotError = ref('')
+const colabError = ref('')
+const snapshotDatasetBuildId = ref(1)
+const snapshotSplitFilter = ref('')
+const snapshotPage = ref(1)
+const snapshotPageSize = 10
+const colabSubmitting = ref(false)
+const colabForm = reactive({ datasetBuildId: 1, manifestHash: '', datasetDigest: '', checkpointSha256: '', artifactStorage: 'owner_browser_download' as 'owner_browser_download' | 'owner_controlled_google_drive', baseModelId: '', modelVersion: '', metrics: '{}', startedAt: '', completedAt: '', smokeExampleCount: '' as number | '', smokeResult: '' as '' | 'passed' | 'failed', smokeTaskHeads: [] as string[] })
+const taskHeads = ['journeyStage', 'searchIntents', 'contentTypes', 'audienceRoles', 'geoSignals', 'citationReadiness', 'technicalSeoSignals', 'frictionSignals', 'actionPriority']
+const approvedColabBaseModelId = 'distilbert-base-multilingual-cased'
+const colabBlockers = computed(() => {
+  const blockers: string[] = []
+  if (!colabForm.baseModelId) blockers.push('請填入 Colab 實際使用的 base model ID。')
+  else if (colabForm.baseModelId !== approvedColabBaseModelId) blockers.push(`server 只接受 ${approvedColabBaseModelId}；用其他 base model 訓練的結果不能提交。`)
+  if (colabForm.smokeExampleCount === '') blockers.push('請填入 smoke test 實際使用的非訓練樣本數。')
+  else if (colabForm.smokeExampleCount !== 5) blockers.push('server 只接受使用 5 筆非訓練資料的 smoke test；筆數不同請先在 Colab 重跑。')
+  if (!colabForm.smokeResult) blockers.push('請選擇 smoke test 的實際結果。')
+  else if (colabForm.smokeResult !== 'passed') blockers.push('Smoke test 未通過時不能提交；請先在 Colab 修正後重跑。')
+  const coveredHeads = taskHeads.filter(head => colabForm.smokeTaskHeads.includes(head)).length
+  if (coveredHeads < taskHeads.length) blockers.push(`請勾選 smoke test 實際涵蓋的 task heads；九個全部涵蓋才能提交（目前 ${coveredHeads} / ${taskHeads.length}）。`)
+  return blockers
+})
+const filteredSnapshotRows = computed(() => snapshotRows.value.filter(row => !snapshotSplitFilter.value || row.split === snapshotSplitFilter.value))
+const pagedSnapshotRows = computed(() => filteredSnapshotRows.value.slice((snapshotPage.value - 1) * snapshotPageSize, snapshotPage.value * snapshotPageSize))
 const reviews = reactive<Record<number, { labels: string, note: string, rightsConfirmed: boolean }>>({})
 const stages = ['discovery', 'understanding', 'response', 'progression', 'conversion']
 
 async function loadPipeline() {
   state.value = 'loading'
   try {
-    data.value = await $fetch<PipelineResponse>('/api/intelligence/model-improvement/pipeline')
+    data.value = await $fetch<PipelineResponse, '/api/intelligence/model-improvement/pipeline'>('/api/intelligence/model-improvement/pipeline')
     for (const candidate of data.value.candidates) {
       reviews[candidate.id] ||= { labels: JSON.stringify(candidate.suggestedLabelData, null, 2), note: '', rightsConfirmed: false }
     }
@@ -55,7 +82,7 @@ async function collectNow() {
   busy.value = 'collect'
   notice.value = ''
   try {
-    const result = await $fetch<{ collection: { collectedCandidates: number, duplicateCandidates: number, failedCandidates: number } }>('/api/intelligence/model-improvement/collect', { method: 'POST' })
+    const result = await $fetch<{ collection: { collectedCandidates: number, duplicateCandidates: number, failedCandidates: number } }, '/api/intelligence/model-improvement/collect'>('/api/intelligence/model-improvement/collect', { method: 'POST' })
     notice.value = `完成：新增 ${result.collection.collectedCandidates}、重複 ${result.collection.duplicateCandidates}、失敗 ${result.collection.failedCandidates}。`
     await loadPipeline()
   } catch {
@@ -71,7 +98,7 @@ async function review(candidate: Candidate, decision: 'approved' | 'rejected') {
   notice.value = ''
   try {
     const labels = decision === 'approved' ? JSON.parse(form.labels) : undefined
-    await $fetch(`/api/intelligence/model-improvement/candidates/${candidate.id}/review`, {
+    await $fetch<unknown, `/api/intelligence/model-improvement/candidates/${number}/review`>(`/api/intelligence/model-improvement/candidates/${candidate.id}/review`, {
       method: 'POST',
       body: { decision, reviewNote: form.note, rightsConfirmed: decision === 'approved' ? form.rightsConfirmed : false, labels },
     })
@@ -88,7 +115,7 @@ async function prepareManifest() {
   busy.value = 'manifest'
   notice.value = ''
   try {
-    const result = await $fetch<{ manifest: { status: string } }>('/api/intelligence/model-improvement/prepare-manifest', { method: 'POST' })
+    const result = await $fetch<{ manifest: { status: string } }, '/api/intelligence/model-improvement/prepare-manifest'>('/api/intelligence/model-improvement/prepare-manifest', { method: 'POST' })
     notice.value = result.manifest.status === 'gate_blocked' ? '尚未達到 150 筆、每階段 20 筆的正式門檻。' : '新版 manifest 已檢查或建立，仍需 owner 核准。'
     await loadPipeline()
   } catch {
@@ -98,7 +125,38 @@ async function prepareManifest() {
   }
 }
 
-onMounted(loadPipeline)
+// The snapshot is NDJSON, so it is read as text; error bodies then arrive as a JSON string too.
+function textResponseErrorMessage(error: any, fallback: string) {
+  if (typeof error?.data === 'string') {
+    try { const body = JSON.parse(error.data) as { message?: unknown, statusMessage?: unknown }; if (typeof body?.message === 'string' && body.message) return body.message; if (typeof body?.statusMessage === 'string' && body.statusMessage) return body.statusMessage } catch {}
+  }
+  return error?.data?.message || error?.statusMessage || fallback
+}
+async function loadTrainingSnapshot() {
+  snapshotLoading.value = true; snapshotError.value = ''
+  try {
+    const payload = await $fetch<string, '/api/intelligence/training-snapshot'>('/api/intelligence/training-snapshot', { query: { datasetBuildId: snapshotDatasetBuildId.value }, responseType: 'text' })
+    snapshotRows.value = String(payload).trim().split('\n').filter(Boolean).map(line => { const row = JSON.parse(line) as TrainingSnapshotRow & { trainingText?: string }; return { id: row.id, split: row.split, targets: row.targets, manifestHash: row.manifestHash } })
+  } catch (error: any) { snapshotRows.value = []; snapshotError.value = textResponseErrorMessage(error, '訓練快照目前無法載入。') }
+  finally { snapshotLoading.value = false }
+}
+function onSnapshotPage(page: number) { snapshotPage.value = page }
+async function submitColabResults() {
+  colabError.value = ''; notice.value = ''
+  if (colabBlockers.value.length) { colabError.value = `尚未符合提交條件：${colabBlockers.value.join(' ')}`; return }
+  colabSubmitting.value = true
+  try {
+    const metrics = JSON.parse(colabForm.metrics) as Record<string, unknown>
+    if (!metrics || Array.isArray(metrics) || typeof metrics !== 'object') throw new Error('Metrics 必須是 JSON 物件。')
+    await $fetch<unknown, '/api/intelligence/colab-training-results'>('/api/intelligence/colab-training-results', { method: 'POST', body: { datasetBuildId: colabForm.datasetBuildId, manifestHash: colabForm.manifestHash, datasetDigest: colabForm.datasetDigest, checkpointSha256: colabForm.checkpointSha256, artifactStorage: colabForm.artifactStorage, baseModelId: colabForm.baseModelId, modelVersion: colabForm.modelVersion, metrics, smokeTest: { nonTrainingExampleCount: colabForm.smokeExampleCount, passed: colabForm.smokeResult === 'passed', taskHeads: taskHeads.filter(head => colabForm.smokeTaskHeads.includes(head)) }, startedAt: new Date(colabForm.startedAt).toISOString(), completedAt: new Date(colabForm.completedAt).toISOString() } })
+    notice.value = 'Colab 訓練收據已記錄為 development run；正式 production gate 仍未通過。'
+    snapshotDatasetBuildId.value = colabForm.datasetBuildId
+    await loadTrainingSnapshot()
+  } catch (error: any) { colabError.value = error?.data?.message || error?.statusMessage || error?.message || 'Colab 訓練結果無法提交。' }
+  finally { colabSubmitting.value = false }
+}
+
+onMounted(() => { void loadPipeline(); void loadTrainingSnapshot() })
 </script>
 
 <template>
@@ -123,6 +181,10 @@ onMounted(loadPipeline)
       <section class="readiness">
         <article v-for="stage in stages" :key="stage"><span>{{ stage }}</span><strong>{{ data.readiness.stageCounts[stage] || 0 }}</strong><small>/ {{ data.readiness.productionMinimumPerStage }}</small></article>
       </section>
+
+      <section class="runs" aria-labelledby="training-snapshot-title"><p class="eyebrow">COLAB TRAINING SNAPSHOT</p><h2 id="training-snapshot-title">不可變訓練快照</h2><p class="limitation">此快照只交給 owner-controlled Google Colab 作開發用途；畫面不顯示訓練文字，提交結果只記錄 owner 提供的收據，不會開通或驗證外部 Google Drive、模型服務或 production deployment。</p><div class="toolbar"><label>Dataset build ID<input v-model.number="snapshotDatasetBuildId" type="number" min="1"></label><label>Split<select v-model="snapshotSplitFilter" @change="snapshotPage = 1"><option value="">全部 split</option><option value="train">train</option><option value="validation">validation</option><option value="test">test</option></select></label><button type="button" :disabled="snapshotLoading" @click="loadTrainingSnapshot">重新取得快照</button></div><OwnerAsyncState :loading="snapshotLoading" :error="snapshotError" :empty="filteredSnapshotRows.length === 0" loading-label="正在載入訓練快照…" empty-label="目前沒有可用的不可變訓練快照。" @retry="loadTrainingSnapshot"><div class="snapshot-list"><article v-for="row in pagedSnapshotRows" :key="row.id"><span>#{{ row.id }} · {{ row.split }}</span><strong class="mono">{{ row.manifestHash }}</strong><small>{{ Object.keys(row.targets).length }} 個 task targets</small><details class="advanced"><summary>目標欄位</summary><pre>{{ JSON.stringify(row.targets, null, 2) }}</pre></details></article></div><OwnerPager :page="snapshotPage" :page-size="snapshotPageSize" :total="filteredSnapshotRows.length" :disabled="snapshotLoading" @update:page="onSnapshotPage" /></OwnerAsyncState></section>
+
+      <section class="queue" aria-labelledby="colab-result-title"><header><div><p class="eyebrow">COLAB RESULT RECEIPT</p><h2 id="colab-result-title">提交 Colab 開發訓練結果</h2></div></header><p class="limitation">請依 Colab 實際執行結果填寫，下面的 base model 與 smoke test 欄位不會預先代填，沒填完不會送出。server 會重新計算這個 dataset build 的快照，manifest SHA-256 與 dataset digest 必須完全相符；base model 只接受 distilbert-base-multilingual-cased；smoke test 必須通過、使用 5 筆非訓練資料並涵蓋全部九個 task heads；完成時間不能早於開始時間。這些值由你自行填寫，server 不會回頭檢查 Colab 或 checkpoint 檔案本身。未接真實對端，不會真的開通：提交成功只會在本地新增一筆 development 訓練紀錄（production gate 標記為未通過），不會部署模型，也不會購買或變更外部服務。</p><form class="colab-form" @submit.prevent="submitColabResults"><label>Dataset build ID<input v-model.number="colabForm.datasetBuildId" type="number" min="1" required></label><label>Manifest SHA-256<input v-model.trim="colabForm.manifestHash" required pattern="[a-fA-F0-9]{64}"></label><label>Dataset digest<input v-model.trim="colabForm.datasetDigest" required pattern="[a-fA-F0-9]{64}"></label><label>Checkpoint SHA-256<input v-model.trim="colabForm.checkpointSha256" required pattern="[a-fA-F0-9]{64}"></label><label>Artifact storage<select v-model="colabForm.artifactStorage"><option value="owner_browser_download">owner browser download</option><option value="owner_controlled_google_drive">owner-controlled Google Drive</option></select></label><label>Base model（Colab 實際使用的模型 ID）<input v-model.trim="colabForm.baseModelId" required maxlength="120" autocomplete="off" spellcheck="false"></label><label>Model version<input v-model.trim="colabForm.modelVersion" required maxlength="120"></label><label>開始時間<input v-model="colabForm.startedAt" type="datetime-local" required></label><label>完成時間<input v-model="colabForm.completedAt" type="datetime-local" required></label><label class="wide">Metrics JSON object<textarea v-model.trim="colabForm.metrics" required rows="5"></textarea></label><fieldset class="wide smoke-test"><legend>Smoke test 實際結果（請依 Colab 輸出填寫）</legend><label>非訓練樣本數<input v-model.number="colabForm.smokeExampleCount" type="number" min="0" step="1" required></label><label>結果<select v-model="colabForm.smokeResult" required><option value="" disabled>請選擇</option><option value="passed">通過</option><option value="failed">未通過</option></select></label><div class="wide smoke-heads" role="group" aria-label="Smoke test 實際涵蓋的 task heads"><span>實際涵蓋的 task heads</span><label v-for="head in taskHeads" :key="head" class="check"><input v-model="colabForm.smokeTaskHeads" type="checkbox" :value="head"><span class="mono">{{ head }}</span></label></div></fieldset><div v-if="colabBlockers.length" class="wide colab-blockers" aria-live="polite"><strong>提交前還需要：</strong><ul><li v-for="blocker in colabBlockers" :key="blocker">{{ blocker }}</li></ul></div><button :disabled="colabSubmitting || colabBlockers.length > 0">{{ colabSubmitting ? '正在提交收據…' : '提交 Colab 結果' }}</button><p v-if="colabError" class="error" role="alert">{{ colabError }}</p></form></section>
 
       <section class="queue">
         <header><div><p class="eyebrow">REVIEW QUEUE</p><h2>待審候選</h2></div><p>{{ data.candidates.filter(item => item.status === 'ready_for_review').length }} 筆等待人工確認</p></header>
@@ -151,4 +213,5 @@ onMounted(loadPipeline)
 
 <style scoped>
 .pipeline{min-height:100vh;padding:clamp(7rem,12vw,10rem) max(1.25rem,calc((100vw - 78rem)/2));background:var(--paper);color:var(--ink)}.pipeline-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2rem;padding-bottom:3rem;border-bottom:1px solid var(--line)}.pipeline-head h1{margin:1rem 0;font-size:clamp(2.8rem,7vw,6.5rem);line-height:.94}.pipeline-head h1 em{color:var(--cobalt);font-style:normal}.pipeline-head p:last-child{max-width:48rem;color:var(--ink-mid);line-height:1.8}.pipeline-head nav{display:flex;gap:1rem;flex-wrap:wrap}.pipeline-head nav a{color:var(--cobalt);font:500 .68rem/1.4 var(--font-mono)}.state{margin-top:2rem;padding:2rem;border:1px solid var(--line);background:var(--sand)}button{border:0;background:var(--cobalt);color:white;padding:.85rem 1rem;cursor:pointer}button.secondary{background:transparent;color:var(--cobalt);border:1px solid var(--cobalt)}button:disabled{opacity:.45;cursor:wait}.controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) auto auto;gap:1rem;align-items:center;padding:2rem 0;border-bottom:1px solid var(--line)}.controls div{display:grid;gap:.35rem}.controls span,.controls small,.candidate small,.runs span,.runs small{font:500 .65rem/1.5 var(--font-mono);color:var(--ink-soft)}.controls strong{font-size:1.4rem}.notice{min-height:2rem;padding:1rem 0;color:var(--cobalt)}.readiness{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--line)}.readiness article{display:grid;gap:.5rem;padding:1rem;border-right:1px solid var(--line)}.readiness article:last-child{border-right:0}.readiness span{font:500 .6rem/1.3 var(--font-mono)}.readiness strong{font-size:2rem;color:var(--cobalt)}.queue{margin-top:4rem}.queue>header{display:flex;justify-content:space-between;align-items:end;padding-bottom:1.5rem;border-bottom:1px solid var(--line)}.queue h2,.runs h2{font-size:clamp(2rem,5vw,4rem)}.candidate{display:grid;grid-template-columns:minmax(16rem,.7fr) minmax(0,1fr);gap:2rem;padding:2rem 0;border-bottom:1px solid var(--line)}.candidate h3{margin:.5rem 0;font-size:1.8rem}.candidate a{color:var(--cobalt);overflow-wrap:anywhere}.candidate dl{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin-top:1.5rem}.candidate dt{font:500 .6rem/1.3 var(--font-mono);color:var(--ink-soft)}.candidate dd{margin:.2rem 0;font-size:1.2rem}.candidate form{display:grid;gap:1rem}.candidate label{display:grid;gap:.4rem}.candidate label>span{font:500 .64rem/1.4 var(--font-mono)}.candidate textarea{min-height:7rem;padding:.8rem;border:1px solid var(--line);background:var(--sand);color:var(--ink);font:400 .75rem/1.5 var(--font-mono)}.candidate label:first-child textarea{min-height:18rem}.candidate .confirm{display:flex;grid-template-columns:auto 1fr;align-items:start}.actions{display:flex;gap:.7rem}.candidate-result{display:grid;place-content:center;gap:.5rem;padding:2rem;background:var(--sand)}.error{color:#a33}.runs{margin-top:5rem}.runs>div{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-top:1.5rem}.runs article{display:grid;gap:.5rem;padding:1rem;border:1px solid var(--line)}@media(max-width:60rem){.pipeline-head,.candidate{grid-template-columns:1fr}.controls{grid-template-columns:repeat(2,1fr)}.runs>div{grid-template-columns:1fr 1fr}}@media(max-width:40rem){.controls,.readiness,.runs>div{grid-template-columns:1fr}.readiness article{border-right:0;border-bottom:1px solid var(--line)}.candidate dl{grid-template-columns:1fr 1fr}}
+.toolbar{display:flex;flex-wrap:wrap;gap:.8rem;margin:1rem 0}.toolbar label,.colab-form label{display:grid;gap:.35rem;font:500 .68rem/1.4 var(--font-mono)}.toolbar input,.toolbar select,.colab-form input,.colab-form select,.colab-form textarea{box-sizing:border-box;width:100%;padding:.7rem;border:1px solid var(--line);background:#fff;color:var(--ink);font:inherit}.snapshot-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin-top:1rem}.snapshot-list article{display:grid;gap:.45rem;padding:1rem;border:1px solid var(--line);background:#fff}.mono{font:500 .65rem/1.45 var(--font-mono);overflow-wrap:anywhere}.limitation{max-width:70rem;color:var(--ink-mid);line-height:1.7}.advanced pre{overflow:auto;white-space:pre-wrap}.colab-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin-top:1.25rem}.colab-form .wide{grid-column:1/-1}.smoke-test{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin:0;padding:1rem;border:1px solid var(--line)}.smoke-test legend{padding:0 .4rem;font:500 .68rem/1.4 var(--font-mono)}.smoke-heads{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem}.smoke-heads>span{grid-column:1/-1;font:500 .68rem/1.4 var(--font-mono)}.colab-form .check{display:flex;align-items:center;gap:.5rem}.colab-form .check input{width:auto;padding:0}.colab-blockers{color:#a33;line-height:1.6}.colab-blockers ul{margin:.35rem 0 0;padding-left:1.2rem}@media(max-width:40rem){.snapshot-list,.colab-form,.smoke-test,.smoke-heads{grid-template-columns:1fr}}
 </style>

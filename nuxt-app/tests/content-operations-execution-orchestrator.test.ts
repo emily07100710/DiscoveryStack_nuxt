@@ -149,6 +149,7 @@ describe('content operations execution orchestrator', () => {
   it('executes generation once, waits for real review synchronization, then records dry-run and delivery attempts append-only', async () => {
     const fixture = new ContentOperationsFixture()
     const client = fixture.addClient(1)
+    client.canonicalSiteOrigin = 'https://customer.acme.taipei'
     const calendar = await fixture.addCalendar(1, '2026-01-10', 1)
     const entry = fixture.entries.find(item => item.calendarId === calendar.id)!
       entry.status = 'materialized'
@@ -174,6 +175,7 @@ describe('content operations execution orchestrator', () => {
     expect(delivered.outcome).toBe('delivered')
     expect(lineage.entry.status).toBe('delivered')
     expect(fixture.attempts).toHaveLength(2)
+    expect(fixture.attempts.find(attempt => attempt.status === 'delivered')?.publicationUrl).toBe(`https://customer.acme.taipei/en/articles/${lineage.entry.publicationSlug}`)
     expect(fixture.events.some(event => event.eventType === 'publication_delivered')).toBe(true)
   })
 

@@ -1,4 +1,9 @@
 <script setup lang="ts">
+type WorkspaceFetchOptions = { method?: 'GET' | 'POST'; body?: Record<string, unknown>; query?: Record<string, string | number | boolean | undefined> }
+type WorkspaceFetch = <T extends object | void = void>(path: string, options?: WorkspaceFetchOptions) => Promise<T>
+// Keep the same Nuxt runtime fetch. Only erase its generated route-union inference at this explicit DTO boundary.
+const fetchWorkspace = $fetch as unknown as WorkspaceFetch
+
 type Readiness = {
   contracts: { feature: string, taxonomy: string, label: string }
   stageCoverage: Record<string, number>
@@ -26,6 +31,11 @@ const manualStatus = ref<'idle' | 'saving' | 'success' | 'error'>('idle')
 const reviewStatus = ref<'idle' | 'saving' | 'success' | 'error'>('idle')
 const pilotStatus = ref<'idle' | 'running' | 'success' | 'error'>('idle')
 const manualForm = reactive({ workspaceId: 0, targetUrl: '', authorizationConfirmed: false })
+const auditRunForm = reactive({ workspaceId: 0, targetUrl: '', authorizationConfirmed: false })
+const auditRunConfirmOpen = ref(false)
+const auditRunConfirmBusy = ref(false)
+const auditRunConfirmError = ref('')
+const notice = ref('')
 const signalLabels: Record<string, string> = { 'seo.title_present': 'SEO 標題存在', 'content.h1_present': '主要 H1 存在', 'content.service_language': '服務說明文字清楚', 'content.faq_present': '存在常見問題或引導主題', 'journey.contact_route': '存在真人聯絡途徑', 'journey.booking_route': '存在預約途徑', 'journey.cta_present': '存在主要行動呼籲' }
 const signalValues = reactive<Record<string, boolean | null>>(Object.fromEntries(Object.keys(signalLabels).map(key => [key, null])))
 const lastAudit = ref<{ auditRunId: number, assessments: Array<{ journeyStage: string, priorityRank: number, score: number, assessmentStatus: string, summary: string }> } | null>(null)
@@ -82,6 +92,8 @@ const analysisStatus = ref<'idle' | 'saving' | 'success' | 'error'>('idle')
 const mlMessage = ref('')
 const ingestionForm = reactive({ sourceId: 0, requestedUrl: '', mode: 'site' as 'document' | 'site', maxPages: 10, maxDepth: 1 })
 const bgeJobIds = ref<number[]>([])
+const auditRunWorkspace = computed(() => overview.value?.workspaces.find(workspace => workspace.id === auditRunForm.workspaceId) || null)
+const auditRunTarget = computed(() => auditRunWorkspace.value?.displayName || '')
 
 definePageMeta({ i18n: false, layout: 'owner' })
 useHead({ title: '私有稽核實驗室 · 發現方式Stack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
@@ -89,7 +101,7 @@ useHead({ title: '私有稽核實驗室 · 發現方式Stack', meta: [{ name: 'r
 async function loadOverview() {
   state.value = 'loading'
   try {
-    overview.value = await $fetch<Overview>('/api/audit/overview')
+    overview.value = await fetchWorkspace<Overview>('/api/audit/overview')
     await loadPublicSources()
     await loadPublicArtifacts()
     await loadPublicDatasets()
@@ -111,7 +123,7 @@ function startAuditSignIn() {
 async function createWorkspace() {
   formStatus.value = 'saving'
   try {
-    await $fetch('/api/audit/workspaces', { method: 'POST', body: { ...workspaceForm, publicAuditAuthorization: workspaceForm.publicAuditAuthorization } })
+    await fetchWorkspace('/api/audit/workspaces', { method: 'POST', body: { ...workspaceForm, publicAuditAuthorization: workspaceForm.publicAuditAuthorization } })
     workspaceForm.displayName = ''
     workspaceForm.targetUrl = ''
     workspaceForm.publicAuditAuthorization = false
@@ -127,7 +139,7 @@ async function createWorkspace() {
 async function revokeConsent(workspaceId: number) {
   if (!window.confirm('要撤回此工作區的訓練同意嗎？既有去識別候選資料將不再用於未來模型工作。')) return
   try {
-    await $fetch(`/api/audit/workspaces/${workspaceId}/revoke-consent`, { method: 'POST' })
+    await fetchWorkspace(`/api/audit/workspaces/${workspaceId}/revoke-consent`, { method: 'POST' })
     await loadOverview()
   } catch (error: unknown) {
     errorMessage.value = (error as { statusMessage?: string }).statusMessage || '訓練同意無法撤回。'
@@ -138,7 +150,7 @@ async function recordManualObservations() {
   manualStatus.value = 'saving'
   try {
     const observations = Object.entries(signalValues).filter(([, value]) => value !== null).map(([key, value]) => ({ key, value, evidenceNote: '' }))
-    const result = await $fetch<{ auditRunId: number, assessments: Array<{ journeyStage: string, priorityRank: number, score: number, assessmentStatus: string, summary: string }> }>('/api/audit/manual-observations', { method: 'POST', body: { workspaceId: manualForm.workspaceId, targetUrl: manualForm.targetUrl, authorizationConfirmed: manualForm.authorizationConfirmed, observations } })
+    const result = await fetchWorkspace<{ auditRunId: number, assessments: Array<{ journeyStage: string, priorityRank: number, score: number, assessmentStatus: string, summary: string }> }>('/api/audit/manual-observations', { method: 'POST', body: { workspaceId: manualForm.workspaceId, targetUrl: manualForm.targetUrl, authorizationConfirmed: manualForm.authorizationConfirmed, observations } })
     lastAudit.value = result
     reviewForm.correctedPrimaryStage = result.assessments[0]?.journeyStage || 'discovery'
     manualStatus.value = 'success'
@@ -148,11 +160,28 @@ async function recordManualObservations() {
   }
 }
 
+function requestAuditRun() {
+  auditRunConfirmError.value = ''
+  if (!auditRunWorkspace.value || !auditRunForm.authorizationConfirmed) { auditRunConfirmError.value = '請選擇已授權工作區並確認授權後再登錄稽核工作。'; return }
+  auditRunConfirmOpen.value = true
+}
+async function startAuditRun() {
+  if (!auditRunWorkspace.value) return
+  auditRunConfirmBusy.value = true; auditRunConfirmError.value = ''; notice.value = ''
+  try {
+    await fetchWorkspace('/api/audit/runs', { method: 'POST', body: { workspaceId: auditRunForm.workspaceId, targetUrl: auditRunForm.targetUrl, authorizationConfirmed: true } })
+    notice.value = '已建立一筆 queued 稽核紀錄。目前沒有任何 worker 會消費這個佇列，因此不會抓取目標網站，也不會產生稽核結果；要拿到實際結果請用下方的人工結構稽核。'
+    auditRunConfirmOpen.value = false
+    await loadOverview()
+  } catch (error: any) { auditRunConfirmError.value = error?.data?.message || error?.statusMessage || '無法登錄稽核工作。' }
+  finally { auditRunConfirmBusy.value = false }
+}
+
 async function submitReview() {
   if (!lastAudit.value) return
   reviewStatus.value = 'saving'
   try {
-    await $fetch('/api/audit/reviews', { method: 'POST', body: { auditRunId: lastAudit.value.auditRunId, ...reviewForm } })
+    await fetchWorkspace('/api/audit/reviews', { method: 'POST', body: { auditRunId: lastAudit.value.auditRunId, ...reviewForm } })
     reviewStatus.value = 'success'
     await loadOverview()
   } catch (error: unknown) {
@@ -165,7 +194,7 @@ async function runSimilarityPilot() {
   pilotStatus.value = 'running'
   pilotMessage.value = ''
   try {
-    const result = await $fetch<{ message: string }>('/api/audit/similarity-pilot', { method: 'POST', body: { maxCandidates: 3 } })
+    const result = await fetchWorkspace<{ message: string }>('/api/audit/similarity-pilot', { method: 'POST', body: { maxCandidates: 3 } })
     pilotStatus.value = 'success'
     pilotMessage.value = result.message
   } catch (error: unknown) {
@@ -177,7 +206,7 @@ async function runSimilarityPilot() {
 async function createPublicSource() {
   sourceStatus.value = 'saving'
   try {
-    await $fetch('/api/intelligence/sources', { method: 'POST', body: { ...sourceForm, robotsUrl: sourceForm.robotsUrl || null, termsUrl: sourceForm.termsUrl || null, licenceReference: sourceForm.licenceReference || null, language: sourceForm.language || null, region: sourceForm.region || null, policyEvidence: { ownerRecordedAt: new Date().toISOString(), sourceCardIntent: 'public-intelligence' }, reviewNote: sourceForm.reviewNote || null } })
+    await fetchWorkspace('/api/intelligence/sources', { method: 'POST', body: { ...sourceForm, robotsUrl: sourceForm.robotsUrl || null, termsUrl: sourceForm.termsUrl || null, licenceReference: sourceForm.licenceReference || null, language: sourceForm.language || null, region: sourceForm.region || null, policyEvidence: { ownerRecordedAt: new Date().toISOString(), sourceCardIntent: 'public-intelligence' }, reviewNote: sourceForm.reviewNote || null } })
     sourceForm.sourceUrl = ''; sourceForm.sourceName = ''; sourceForm.language = ''; sourceForm.region = ''; sourceForm.robotsUrl = ''; sourceForm.termsUrl = ''; sourceForm.licenceReference = ''; sourceForm.reviewNote = ''
     sourceStatus.value = 'success'
     await loadPublicSources()
@@ -189,7 +218,7 @@ async function createPublicSource() {
 
 async function approvePublicSource(sourceId: number, requestedUse: 'research_only' | 'evaluation_candidate' | 'training_candidate' = 'research_only') {
   try {
-    await $fetch(`/api/intelligence/sources/${sourceId}/approve`, { method: 'POST', body: { requestedUse, reviewNote: 'Owner reviewed source policy and intended use.' } })
+    await fetchWorkspace(`/api/intelligence/sources/${sourceId}/approve`, { method: 'POST', body: { requestedUse, reviewNote: 'Owner reviewed source policy and intended use.' } })
     await loadPublicSources()
   } catch (error: unknown) { errorMessage.value = (error as { statusMessage?: string }).statusMessage || '此來源無法核准用於指定用途。' }
 }
@@ -199,7 +228,7 @@ async function createPublicArtifact() {
   try {
     const fieldData = buildArtifactFieldData()
     const sourceSpanHash = await sha256(artifactForm.sourceSpanText)
-    await $fetch('/api/intelligence/artifacts', { method: 'POST', body: { sourceId: artifactForm.sourceId, sourceUrl: artifactForm.sourceUrl, artifactType: artifactForm.artifactType, artifactText: artifactForm.sourceSpanText, sourceLocator: artifactForm.sourceLocator, sourceSpanHash, fieldData, language: artifactForm.language || null, extractionMethod: 'human_annotation', requestedUse: artifactForm.requestedUse } })
+    await fetchWorkspace('/api/intelligence/artifacts', { method: 'POST', body: { sourceId: artifactForm.sourceId, sourceUrl: artifactForm.sourceUrl, artifactType: artifactForm.artifactType, artifactText: artifactForm.sourceSpanText, sourceLocator: artifactForm.sourceLocator, sourceSpanHash, fieldData, language: artifactForm.language || null, extractionMethod: 'human_annotation', requestedUse: artifactForm.requestedUse } })
     artifactForm.sourceUrl = ''; artifactForm.sourceLocator = ''; artifactForm.sourceSpanText = ''; artifactForm.language = ''
     artifactStatus.value = 'success'
   } catch (error: unknown) {
@@ -217,7 +246,7 @@ function syncIngestionSourceSelection() {
   if (!eligible.some(source => source.id === ingestionForm.sourceId)) ingestionForm.sourceId = eligible.length === 1 ? eligible[0]!.id : 0
 }
 async function loadPublicSources() {
-  publicSources.value = await $fetch<PublicSource[]>('/api/intelligence/sources', { query: { search: sourceFilters.search || undefined, reviewStatus: sourceFilters.reviewStatus || undefined, allowedUse: sourceFilters.allowedUse || undefined, includeRemoved: sourceFilters.includeRemoved ? 'true' : undefined } })
+  publicSources.value = await fetchWorkspace<PublicSource[]>('/api/intelligence/sources', { query: { search: sourceFilters.search || undefined, reviewStatus: sourceFilters.reviewStatus || undefined, allowedUse: sourceFilters.allowedUse || undefined, includeRemoved: sourceFilters.includeRemoved ? 'true' : undefined } })
   syncIngestionSourceSelection()
 }
 
@@ -235,7 +264,7 @@ async function submitSourceReview() {
   if (!activeSourceReview.value) return
   sourceReviewStatus.value = 'saving'
   try {
-    await $fetch(`/api/intelligence/sources/${activeSourceReview.value.id}/review`, { method: 'POST', body: { ...sourceReviewForm, robotsUrl: sourceReviewForm.robotsUrl || null, termsUrl: sourceReviewForm.termsUrl || null, licenceReference: sourceReviewForm.licenceReference || null, retentionUntil: null, policyEvidence: { ownerReviewedAt: new Date().toISOString(), review: 'manual' }, reviewNote: sourceReviewForm.reviewNote || null } })
+    await fetchWorkspace(`/api/intelligence/sources/${activeSourceReview.value.id}/review`, { method: 'POST', body: { ...sourceReviewForm, robotsUrl: sourceReviewForm.robotsUrl || null, termsUrl: sourceReviewForm.termsUrl || null, licenceReference: sourceReviewForm.licenceReference || null, retentionUntil: null, policyEvidence: { ownerReviewedAt: new Date().toISOString(), review: 'manual' }, reviewNote: sourceReviewForm.reviewNote || null } })
     sourceReviewStatus.value = 'success'
     await loadPublicSources()
   } catch (error: unknown) { sourceReviewStatus.value = 'error'; errorMessage.value = (error as { statusMessage?: string }).statusMessage || 'The source policy could not be re-reviewed.' }
@@ -243,11 +272,11 @@ async function submitSourceReview() {
 
 async function removePublicSource(source: PublicSource) {
   if (!window.confirm(`Disable ${source.sourceName || source.domain} and revoke every linked artifact from future dataset use?`)) return
-  try { await $fetch(`/api/intelligence/sources/${source.id}/remove`, { method: 'POST', body: { reviewNote: 'Owner requested source removal.' } }); await loadPublicSources() } catch (error: unknown) { errorMessage.value = (error as { statusMessage?: string }).statusMessage || 'The source could not be disabled.' }
+  try { await fetchWorkspace(`/api/intelligence/sources/${source.id}/remove`, { method: 'POST', body: { reviewNote: 'Owner requested source removal.' } }); await loadPublicSources() } catch (error: unknown) { errorMessage.value = (error as { statusMessage?: string }).statusMessage || 'The source could not be disabled.' }
 }
 
 async function showSourceHistory(sourceId: number) {
-  try { sourceHistory.value = await $fetch<SourceHistory[]>(`/api/intelligence/sources/${sourceId}/history`) } catch (error: unknown) { errorMessage.value = (error as { statusMessage?: string }).statusMessage || 'The source history could not be loaded.' }
+  try { sourceHistory.value = await fetchWorkspace<SourceHistory[]>(`/api/intelligence/sources/${sourceId}/history`) } catch (error: unknown) { errorMessage.value = (error as { statusMessage?: string }).statusMessage || 'The source history could not be loaded.' }
 }
 
 async function sha256(value: string) {
@@ -274,7 +303,7 @@ async function createSeoGeoAnnotation() {
   try {
     const sourceSpanHash = await sha256(seoGeoForm.evidenceSpanText)
     const fieldData = { annotationKind: 'seo_geo_multilabel', annotationVersion: 'seo-geo-journey-v1', primaryJourneyStage: seoGeoForm.primaryJourneyStage, journeyStages: [...new Set([seoGeoForm.primaryJourneyStage, ...csvValues(seoGeoForm.journeyStages)])], searchIntents: csvValues(seoGeoForm.searchIntents), contentTypes: csvValues(seoGeoForm.contentTypes), audienceRoles: csvValues(seoGeoForm.audienceRoles), topicClusters: csvValues(seoGeoForm.topicClusters), entitySignals: [{ name: seoGeoForm.entityName, type: seoGeoForm.entityType, relationship: seoGeoForm.entityRelationship }], geoSignals: csvValues(seoGeoForm.geoSignals), citationReadiness: csvValues(seoGeoForm.citationReadiness), technicalSeoSignals: csvValues(seoGeoForm.technicalSeoSignals), frictionSignals: csvValues(seoGeoForm.frictionSignals), actionPriority: seoGeoForm.actionPriority, annotationRationale: seoGeoForm.annotationRationale, reviewerConfidence: seoGeoForm.reviewerConfidence }
-    await $fetch('/api/intelligence/artifacts', { method: 'POST', body: { sourceId: seoGeoForm.sourceId, sourceUrl: seoGeoForm.sourceUrl, artifactType: 'human_annotation', artifactText: seoGeoForm.evidenceSpanText, sourceLocator: seoGeoForm.sourceLocator, sourceSpanHash, fieldData, language: seoGeoForm.language || null, extractionMethod: 'human_annotation', requestedUse: 'training_candidate' } })
+    await fetchWorkspace('/api/intelligence/artifacts', { method: 'POST', body: { sourceId: seoGeoForm.sourceId, sourceUrl: seoGeoForm.sourceUrl, artifactType: 'human_annotation', artifactText: seoGeoForm.evidenceSpanText, sourceLocator: seoGeoForm.sourceLocator, sourceSpanHash, fieldData, language: seoGeoForm.language || null, extractionMethod: 'human_annotation', requestedUse: 'training_candidate' } })
     seoGeoForm.sourceUrl = ''; seoGeoForm.sourceLocator = ''; seoGeoForm.evidenceSpanText = ''; seoGeoForm.topicClusters = ''; seoGeoForm.entityName = ''; seoGeoForm.entityRelationship = ''; seoGeoForm.annotationRationale = ''
     seoGeoStatus.value = 'success'
     await loadPublicArtifacts()
@@ -282,26 +311,26 @@ async function createSeoGeoAnnotation() {
 }
 
 async function loadPublicArtifacts() {
-  publicArtifacts.value = await $fetch<PublicArtifact[]>('/api/intelligence/artifacts')
+  publicArtifacts.value = await fetchWorkspace<PublicArtifact[]>('/api/intelligence/artifacts')
 }
 
 async function loadPublicDatasets() {
-  publicDatasets.value = await $fetch<PublicDataset[]>('/api/intelligence/datasets')
+  publicDatasets.value = await fetchWorkspace<PublicDataset[]>('/api/intelligence/datasets')
 }
 
 async function loadIngestionJobs() {
-  ingestionJobs.value = await $fetch<IngestionJob[]>('/api/intelligence/ingestion-jobs')
+  ingestionJobs.value = await fetchWorkspace<IngestionJob[]>('/api/intelligence/ingestion-jobs')
 }
 
 async function loadPublicInferences() {
-  publicInferences.value = await $fetch<PublicInference[]>('/api/intelligence/inferences')
+  publicInferences.value = await fetchWorkspace<PublicInference[]>('/api/intelligence/inferences')
 }
 
 async function createIngestionJob() {
   ingestionStatus.value = 'saving'
   mlMessage.value = ''
   try {
-    const result = await $fetch<{ message: string }>('/api/intelligence/ingestion-jobs', { method: 'POST', body: { ...ingestionForm } })
+    const result = await fetchWorkspace<{ message: string }>('/api/intelligence/ingestion-jobs', { method: 'POST', body: { ...ingestionForm } })
     ingestionStatus.value = 'success'
     mlMessage.value = result.message
     ingestionForm.requestedUrl = ''
@@ -316,7 +345,7 @@ async function runFrictionBaseline(ingestionJobId: number) {
   analysisStatus.value = 'saving'
   mlMessage.value = ''
   try {
-    const result = await $fetch<{ status: string }>('/api/intelligence/inferences', { method: 'POST', body: { action: 'run_friction_baseline', ingestionJobId } })
+    const result = await fetchWorkspace<{ status: string }>('/api/intelligence/inferences', { method: 'POST', body: { action: 'run_friction_baseline', ingestionJobId } })
     analysisStatus.value = 'success'
     mlMessage.value = `基準結果已記錄為「${displayLabel(result.status)}」。仍需要策略師人工審核。`
     await loadPublicInferences()
@@ -327,7 +356,7 @@ async function runBgeSimilarity() {
   analysisStatus.value = 'saving'
   mlMessage.value = ''
   try {
-    const result = await $fetch<{ status: string }>('/api/intelligence/inferences', { method: 'POST', body: { action: 'run_bge_similarity', ingestionJobIds: bgeJobIds.value } })
+    const result = await fetchWorkspace<{ status: string }>('/api/intelligence/inferences', { method: 'POST', body: { action: 'run_bge_similarity', ingestionJobIds: bgeJobIds.value } })
     analysisStatus.value = 'success'
     mlMessage.value = `BGE-M3 相似度結果已記錄為「${displayLabel(result.status)}」。相似度不是成效預測。`
     await loadPublicInferences()
@@ -338,7 +367,7 @@ async function requestPredictionReadiness() {
   analysisStatus.value = 'saving'
   mlMessage.value = ''
   try {
-    const result = await $fetch<{ message: string }>('/api/intelligence/inferences', { method: 'POST', body: { action: 'request_supervised_prediction' } })
+    const result = await fetchWorkspace<{ message: string }>('/api/intelligence/inferences', { method: 'POST', body: { action: 'request_supervised_prediction' } })
     analysisStatus.value = 'success'
     mlMessage.value = result.message
   } catch (error: unknown) { analysisStatus.value = 'error'; mlMessage.value = (error as { statusMessage?: string }).statusMessage || '無法檢查預測就緒度。' }
@@ -349,7 +378,7 @@ async function reviewArtifactQuality(artifactId: number, qualityStatus: 'passed'
   artifactQualityStatus.value = 'saving'
   artifactQualityMessage.value = ''
   try {
-    await $fetch(`/api/intelligence/artifacts/${artifactId}/quality`, { method: 'POST', body: { qualityStatus, qualityNote: '擁有者品質審核。' } })
+    await fetchWorkspace(`/api/intelligence/artifacts/${artifactId}/quality`, { method: 'POST', body: { qualityStatus, qualityNote: '擁有者品質審核。' } })
     await loadPublicArtifacts()
     artifactQualityStatus.value = 'success'
     artifactQualityMessage.value = `產物 #${artifactId} 已儲存為「${displayLabel(qualityStatus)}」。`
@@ -363,7 +392,7 @@ async function reviewArtifactQuality(artifactId: number, qualityStatus: 'passed'
 async function createDatasetManifest() {
   datasetStatus.value = 'saving'
   try {
-    await $fetch('/api/intelligence/datasets', { method: 'POST', body: { ...datasetForm, labelTaxonomyVersion: datasetForm.labelTaxonomyVersion || null, splitVersion: datasetForm.splitVersion || null, reviewNote: datasetForm.reviewNote || null } })
+    await fetchWorkspace('/api/intelligence/datasets', { method: 'POST', body: { ...datasetForm, labelTaxonomyVersion: datasetForm.labelTaxonomyVersion || null, splitVersion: datasetForm.splitVersion || null, reviewNote: datasetForm.reviewNote || null } })
     datasetStatus.value = 'success'
     datasetForm.artifactIds = []
     await loadPublicDatasets()
@@ -373,7 +402,7 @@ async function createDatasetManifest() {
 async function approvePublicDataset(datasetId: number) {
   datasetApprovalStatus.value = 'saving'
   try {
-    await $fetch(`/api/intelligence/datasets/${datasetId}/approve`, { method: 'POST', body: { reviewNote: datasetApprovalNotes[datasetId] || '' } })
+    await fetchWorkspace(`/api/intelligence/datasets/${datasetId}/approve`, { method: 'POST', body: { reviewNote: datasetApprovalNotes[datasetId] || '' } })
     datasetApprovalStatus.value = 'success'
     await loadPublicDatasets()
   } catch (error: unknown) { datasetApprovalStatus.value = 'error'; errorMessage.value = (error as { statusMessage?: string }).statusMessage || '資料集 manifest 無法核准。' }
@@ -443,6 +472,9 @@ onMounted(() => { if (!isNestedAuditRoute.value) void loadOverview() })
         <h2 id="workspace-list-title">{{ overview.workspaces.length ? '已授權邊界' : '尚未授權任何工作區。' }}</h2>
         <div v-if="overview.workspaces.length" class="audit-table-wrap"><table><thead><tr><th>工作區</th><th>目標</th><th>語言</th><th>訓練同意</th><th>狀態</th></tr></thead><tbody><tr v-for="workspace in overview.workspaces" :key="workspace.id"><td>{{ workspace.displayName }}</td><td>{{ workspace.targetDomain }}</td><td>{{ workspace.language === 'zh-hant' ? '繁體中文' : '英文' }}</td><td>{{ workspace.consentRevokedAt ? '已撤回' : workspace.trainingConsent ? '已明確同意' : '尚未同意' }}</td><td><button v-if="workspace.trainingConsent && !workspace.consentRevokedAt" class="audit-revoke" type="button" @click="revokeConsent(workspace.id)">撤回訓練同意</button><span v-else>範圍已儲存・未抓取</span></td></tr></tbody></table></div>
       </section>
+
+      <section v-if="overview.workspaces.length" class="audit-grid" aria-labelledby="audit-run-title"><div class="audit-panel audit-panel-wide"><p class="eyebrow">03／登錄稽核工作</p><h2 id="audit-run-title">在授權範圍內登錄稽核意圖。</h2><p class="audit-panel-copy">此動作只會在資料庫寫入一筆狀態為 queued 的稽核紀錄。目前沒有排程或 worker 會消費這個佇列，所以不會抓取目標網站、也不會產生稽核結果；要取得實際結果請用下方的人工結構稽核。只接受已登錄工作區與公開 URL，確認視窗會要求重新輸入該工作區名稱。</p><form class="audit-workspace-form" @submit.prevent="requestAuditRun"><label><span>已授權工作區</span><select v-model.number="auditRunForm.workspaceId" required><option :value="0" disabled>選擇工作區</option><option v-for="workspace in overview.workspaces" :key="`run-${workspace.id}`" :value="workspace.id">{{ workspace.displayName }} · {{ workspace.targetDomain }}</option></select></label><label><span>公開目標 URL</span><input v-model.trim="auditRunForm.targetUrl" required type="url" placeholder="https://authorized-target.example/page" inputmode="url"></label><label class="audit-check"><input v-model="auditRunForm.authorizationConfirmed" type="checkbox" required><span>我確認這是我獲授權稽核的公開目標，並理解此動作只會記錄一筆待處理的稽核意圖。</span></label><button class="audit-button" :disabled="auditRunConfirmBusy || !auditRunForm.workspaceId || !auditRunForm.authorizationConfirmed" type="submit">登錄稽核工作 <span aria-hidden="true">↗</span></button><p v-if="auditRunConfirmError" class="audit-feedback audit-failure" role="alert">{{ auditRunConfirmError }}</p></form><p v-if="notice" class="notice notice--success" role="status">{{ notice }}</p></div><div class="audit-panel"><p class="eyebrow">執行邊界</p><h2>不擴大已登錄的授權。</h2><p class="audit-panel-copy">稽核目標會由 server 驗證；沒有 owner 工作區、授權確認或合法公開 URL 時，系統會拒絕建立紀錄。這條佇列目前沒有消費者，紀錄會停在 queued，不會自行對外連線。</p></div></section>
+      <OwnerConfirmAction :open="auditRunConfirmOpen" title="登錄稽核工作" :target="auditRunTarget" description="此動作只會為已授權的公開目標寫入一筆 queued 稽核紀錄，不會抓取網站或產生結果。請輸入工作區名稱以確認。" confirm-label="登錄稽核工作" :busy="auditRunConfirmBusy" :error="auditRunConfirmError" :simulated="true" @confirm="startAuditRun" @cancel="auditRunConfirmOpen = false" />
 
       <section v-if="overview.workspaces.length" class="audit-grid audit-manual" aria-labelledby="manual-audit-title">
         <div class="audit-panel audit-panel-wide">

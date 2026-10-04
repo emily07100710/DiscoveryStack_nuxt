@@ -7,7 +7,7 @@ const reviewedText = '核准的 synthetic evidence：這是一段可由 owner �
 const normalizedReviewedText = reviewedText.normalize('NFKC').trim().replace(/\s+/gu, ' ')
 const chunkHash = createHash('sha256').update(Buffer.from(normalizedReviewedText, 'utf8')).digest('hex')
 const evidenceSnapshotHash = 'a'.repeat(64)
-const endpoint = 'https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions'
+const endpoint = 'https://ws-fixture1.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions'
 
 function request(overrides: Record<string, unknown> = {}) {
   return {
@@ -113,6 +113,17 @@ describe('GEOFlow Qwen generation runtime', () => {
     if (result.value.status !== 'failed') return
     expect(result.value.failure.retryable).toBe(true)
     expect(result.value.attempt).toBe(2)
+  })
+
+  it('keeps a blank provider reply non-retryable in the GEOFlow runtime', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '   ' } }] }), { status: 200 }))
+    const result = await runtime(fetchImpl).generate(request())
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.status).toBe('blocked')
+    if (result.value.status !== 'blocked') return
+    expect(result.value.failure.retryable).toBe(false)
+    expect(result.value.failure.code).toBe('INVALID_INPUT')
   })
 
   it('blocks NUL-containing provider content without retrying or returning an artifact', async () => {

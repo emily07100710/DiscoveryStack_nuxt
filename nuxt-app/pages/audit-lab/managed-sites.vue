@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { createManagedSiteOperationState, refreshManagedSiteOperationScreen, runManagedSiteOperation } from '../../utils/managedSiteOperation'
+type ManagedSiteFetch = <T = unknown>(path: string, options?: { method?: 'POST'; body?: Record<string, unknown> }) => Promise<T>
+const fetchManagedSite = $fetch as unknown as ManagedSiteFetch
 
 type Capability = 'website_generator' | 'payment' | 'domain_registration' | 'dns_tls' | 'deployment'
 type Readiness = { capability: Capability; providerKey: string | null; status: string; configured: boolean; verified: boolean; credentialReferenceConfigured: boolean; credentialResolvable: boolean; liveMutationAllowed: boolean; missing: string[]; blockedReasonCode: string | null; verifiedAt: string | null }
@@ -22,10 +24,12 @@ useHead({ title: 'Managed Sites · DiscoveryStack', meta: [{ name: 'robots', con
 const emptyWorkspace = (): Workspace => ({ readiness: { capabilities: [], liveReady: false, dryRunAllowed: true, mockedAllowed: false, truthfulBoundary: [] }, projects: [], nextSafeActions: [], executionModes: { dryRun: true, mocked: false, live: false }, authority: {}, limitations: [] })
 const workspaceEndpoint: string = '/api/managed-sites/live-connectors/workspace'
 const ordersEndpoint: string = '/api/managed-sites/payments/orders'
-const { data, pending, error, refresh: refreshWorkspace } = await useAsyncData<Workspace>('managed-site-live-connectors', () => $fetch<Workspace>(workspaceEndpoint), { server: false, default: emptyWorkspace })
-const { data: ordersData, pending: ordersPending, error: ordersError, refresh: refreshOrders } = await useAsyncData<OrdersResponse>('managed-site-orders', () => $fetch<OrdersResponse>(ordersEndpoint), { server: false, default: () => ({ orders: [] }) })
+const { data, pending, error, refresh: refreshWorkspace } = await useAsyncData<Workspace>('managed-site-live-connectors', () => fetchManagedSite<Workspace>(workspaceEndpoint), { server: false, default: emptyWorkspace })
+const { data: ordersData, pending: ordersPending, error: ordersError, refresh: refreshOrders } = await useAsyncData<OrdersResponse>('managed-site-orders', () => fetchManagedSite<OrdersResponse>(ordersEndpoint), { server: false, default: () => ({ orders: [] }) })
 const workspace = computed(() => data.value || emptyWorkspace())
 const orders = computed(() => ordersData.value?.orders || [])
+const route = useRoute()
+const isNestedRoute = computed(() => route.path.startsWith('/audit-lab/managed-sites/'))
 const saving = ref(false)
 const notice = ref('')
 const failure = ref('')
@@ -65,7 +69,7 @@ async function resolveModule(order: ManagedSiteOrder, fulfilment: ManagedSiteMod
   if (managementOperations.completed[operationKey]) return
   operationStates[operationKey] = 'loading'; failure.value = ''; notice.value = ''
   const endpoint: string = `/api/managed-sites/payments/orders/${order.id}/modules/${fulfilment.moduleKey}/${confirmation.operation}`
-  const outcome = await runManagedSiteOperation(managementOperations, operationKey, () => $fetch<ManagementResponse>(endpoint, { method: 'POST', body: { reason: moduleReasons[key]?.trim() || '', idempotencyKey: confirmation.idempotencyKey, confirmation: confirmation.operation === 'complete' ? 'service_delivered' : 'not_activated' } }), refreshScreen)
+  const outcome = await runManagedSiteOperation(managementOperations, operationKey, () => fetchManagedSite<ManagementResponse>(endpoint, { method: 'POST', body: { reason: moduleReasons[key]?.trim() || '', idempotencyKey: confirmation.idempotencyKey, confirmation: confirmation.operation === 'complete' ? 'service_delivered' : 'not_activated' } }), refreshScreen)
   if (outcome.status === 'blocked') { const caught: any = outcome.error; operationStates[operationKey] = 'blocked'; failure.value = caught?.data?.message || '尚未確認操作結果，請重新整理確認。'; return }
   operationStates[operationKey] = 'success'; delete moduleConfirmations[key]
   if (outcome.status === 'success') notice.value = outcome.result.replayed ? '這筆處理先前已完成，沒有重複執行。' : confirmation.operation === 'complete' ? '已記錄服務實際完成並結案。' : '已取消未開通項目；訂單與付款紀錄未變更，也未自動退款。'
@@ -84,7 +88,7 @@ async function suspendProject(projectId: number) {
   if (managementOperations.completed[key]) return
   operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
   const endpoint: string = `/api/managed-sites/payments/projects/${projectId}/suspend`
-  const outcome = await runManagedSiteOperation(managementOperations, key, () => $fetch<ManagementResponse>(endpoint, { method: 'POST', body: { reason: suspensionReasons[projectId]?.trim() || '', idempotencyKey: confirmation.idempotencyKey, confirmation: 'suspend_project' } }), refreshScreen)
+  const outcome = await runManagedSiteOperation(managementOperations, key, () => fetchManagedSite<ManagementResponse>(endpoint, { method: 'POST', body: { reason: suspensionReasons[projectId]?.trim() || '', idempotencyKey: confirmation.idempotencyKey, confirmation: 'suspend_project' } }), refreshScreen)
   if (outcome.status === 'blocked') { const caught: any = outcome.error; operationStates[key] = 'blocked'; failure.value = caught?.data?.message || '尚未確認操作結果，請重新整理確認。'; return }
   operationStates[key] = 'success'; delete suspensionConfirmations[projectId]
   if (outcome.status === 'success') notice.value = outcome.result.replayed ? '此專案先前已停用，沒有重複執行。' : '專案已停用；未退款、未刪除網域，也未取消 Stripe 訂閱。'
@@ -98,7 +102,7 @@ async function configureProvider() {
     if (form.checkoutOrigin.trim()) transportConfiguration.checkoutOrigin = form.checkoutOrigin.trim()
     if (form.returnOrigin.trim()) transportConfiguration.returnOrigin = form.returnOrigin.trim()
     if (form.model.trim()) transportConfiguration.model = form.model.trim()
-    await $fetch('/api/managed-sites/live-connectors/provider-configurations', { method: 'POST', body: { capability: form.capability, providerKey: form.providerKey.trim(), readinessStatus: form.readinessStatus, credentialReference: form.readinessStatus === 'configured' ? form.credentialReference.trim() : null, transportConfiguration, idempotencyKey: crypto.randomUUID() } })
+    await fetchManagedSite('/api/managed-sites/live-connectors/provider-configurations', { method: 'POST', body: { capability: form.capability, providerKey: form.providerKey.trim(), readinessStatus: form.readinessStatus, credentialReference: form.readinessStatus === 'configured' ? form.credentialReference.trim() : null, transportConfiguration, idempotencyKey: crypto.randomUUID() } })
     notice.value = 'Provider reference 已保存；configured 仍不代表 verified。'
     await refresh()
   } catch (caught: any) { failure.value = caught?.data?.message || 'Provider reference 未保存，沒有 live authority 被啟用。' }
@@ -107,13 +111,13 @@ async function configureProvider() {
 
 async function verifyProvider(item: Readiness) {
   const key = `verify-${item.capability}`; operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
-  try { await $fetch(`/api/managed-sites/live-connectors/providers/${item.capability}/verify`, { method: 'POST', body: {} }); operationStates[key] = 'success'; notice.value = `${capabilityLabels[item.capability]} connection verification receipt 已保存。`; await refresh() }
+  try { await fetchManagedSite(`/api/managed-sites/live-connectors/providers/${item.capability}/verify`, { method: 'POST', body: {} }); operationStates[key] = 'success'; notice.value = `${capabilityLabels[item.capability]} connection verification receipt 已保存。`; await refresh() }
   catch (caught: any) { operationStates[key] = 'blocked'; failure.value = caught?.data?.message || 'Provider verification fail closed；設定仍不等於 verified。' }
 }
 
 async function convertPrePurchase() {
   const key = 'prepurchase'; operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
-  try { const result: any = await $fetch('/api/managed-sites/projects/prepurchase', { method: 'POST', body: { previewId: Number(conversion.previewId), quoteId: Number(conversion.quoteId), leadIntentId: Number(conversion.leadIntentId), draftOrderId: Number(conversion.draftOrderId), idempotencyKey: crypto.randomUUID() } }); operationStates[key] = 'success'; notice.value = `Draft project #${result.projectId} 已建立；未付款、未啟用訂閱。`; await refresh() }
+  try { const result: any = await fetchManagedSite('/api/managed-sites/projects/prepurchase', { method: 'POST', body: { previewId: Number(conversion.previewId), quoteId: Number(conversion.quoteId), leadIntentId: Number(conversion.leadIntentId), draftOrderId: Number(conversion.draftOrderId), idempotencyKey: crypto.randomUUID() } }); operationStates[key] = 'success'; notice.value = `Draft project #${result.projectId} 已建立；未付款、未啟用訂閱。`; await refresh() }
   catch (caught: any) { operationStates[key] = 'error'; failure.value = caught?.data?.message || 'Pre-purchase lineage conversion 未完成。' }
 }
 
@@ -122,7 +126,7 @@ async function generationDryRun(project: any) {
   if (!sourceVersionId) return
   saving.value = true; notice.value = ''; failure.value = ''
   try {
-    const result: any = await $fetch(`/api/managed-sites/projects/${project.project.id}/live-generation`, { method: 'POST', body: { sourceVersionId, executionMode: 'dry_run', idempotencyKey: `dry-${crypto.randomUUID()}` } })
+    const result: any = await fetchManagedSite(`/api/managed-sites/projects/${project.project.id}/live-generation`, { method: 'POST', body: { sourceVersionId, executionMode: 'dry_run', idempotencyKey: `dry-${crypto.randomUUID()}` } })
     notice.value = `Dry-run 完成：${result.request?.requestFingerprint || 'request validated'}；沒有外部呼叫或部署。`
     await refresh()
   } catch (caught: any) { failure.value = caught?.data?.message || 'Dry-run 未完成。' }
@@ -131,25 +135,25 @@ async function generationDryRun(project: any) {
 
 async function generateCandidate(row: any) {
   const key = `generation-${row.project.id}`; operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
-  try { await $fetch(`/api/managed-sites/projects/${row.project.id}/live-generation`, { method: 'POST', body: { sourceVersionId: row.prePurchaseBinding?.sourceVersionId, executionMode: 'live', idempotencyKey: crypto.randomUUID() } }); operationStates[key] = 'success'; notice.value = 'Immutable generation candidate 已保存；尚未部署。'; await refresh() }
+  try { await fetchManagedSite(`/api/managed-sites/projects/${row.project.id}/live-generation`, { method: 'POST', body: { sourceVersionId: row.prePurchaseBinding?.sourceVersionId, executionMode: 'live', idempotencyKey: crypto.randomUUID() } }); operationStates[key] = 'success'; notice.value = 'Immutable generation candidate 已保存；尚未部署。'; await refresh() }
   catch (caught: any) { operationStates[key] = 'blocked'; failure.value = caught?.data?.message || 'Generation blocked；沒有 provider authority 被接受。' }
 }
 
 async function createRelease(row: any, candidate: any) {
   const key = `release-${candidate.id}`; operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
-  try { await $fetch(`/api/managed-sites/projects/${row.project.id}/releases/generated`, { method: 'POST', body: { generationCandidateId: candidate.id, canonicalDomain: domains[row.project.id] || '', targetKey: 'production-primary', idempotencyKey: crypto.randomUUID() } }); operationStates[key] = 'success'; notice.value = 'Immutable release candidate 已建立；尚未付款或部署。'; await refresh() }
+  try { await fetchManagedSite(`/api/managed-sites/projects/${row.project.id}/releases/generated`, { method: 'POST', body: { generationCandidateId: candidate.id, canonicalDomain: domains[row.project.id] || '', targetKey: 'production-primary', idempotencyKey: crypto.randomUUID() } }); operationStates[key] = 'success'; notice.value = 'Immutable release candidate 已建立；尚未付款或部署。'; await refresh() }
   catch (caught: any) { operationStates[key] = 'error'; failure.value = caught?.data?.message || 'Release candidate 未建立。' }
 }
 
 async function createExistingRelease(row: any) {
   const key = `existing-${row.project.id}`; operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
-  try { await $fetch(`/api/managed-sites/projects/${row.project.id}/releases/existing`, { method: 'POST', body: { canonicalDomain: domains[row.project.id] || '', targetKey: 'existing-primary', idempotencyKey: crypto.randomUUID() } }); operationStates[key] = 'success'; notice.value = 'Existing-site ownership release 已建立；尚未驗證 ownership。'; await refresh() }
+  try { await fetchManagedSite(`/api/managed-sites/projects/${row.project.id}/releases/existing`, { method: 'POST', body: { canonicalDomain: domains[row.project.id] || '', targetKey: 'existing-primary', idempotencyKey: crypto.randomUUID() } }); operationStates[key] = 'success'; notice.value = 'Existing-site ownership release 已建立；尚未驗證 ownership。'; await refresh() }
   catch (caught: any) { operationStates[key] = 'error'; failure.value = caught?.data?.message || 'Existing-site release 未建立。' }
 }
 
 async function rollbackRelease(row: any) {
   const key = `rollback-${row.project.id}`; const input = rollbacks[row.project.id]; operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
-  try { await $fetch(`/api/managed-sites/projects/${row.project.id}/releases/rollback`, { method: 'POST', body: { fromReleaseId: Number(input?.fromReleaseId), toReleaseId: Number(input?.toReleaseId), executionMode: 'live', idempotencyKey: crypto.randomUUID() } }); operationStates[key] = 'success'; notice.value = 'Rollback provider receipt 已驗證並更新 release projection。'; await refresh() }
+  try { await fetchManagedSite(`/api/managed-sites/projects/${row.project.id}/releases/rollback`, { method: 'POST', body: { fromReleaseId: Number(input?.fromReleaseId), toReleaseId: Number(input?.toReleaseId), executionMode: 'live', idempotencyKey: crypto.randomUUID() } }); operationStates[key] = 'success'; notice.value = 'Rollback provider receipt 已驗證並更新 release projection。'; await refresh() }
   catch (caught: any) { operationStates[key] = 'blocked'; failure.value = caught?.data?.message || 'Rollback fail closed；live authority 未改變。'; await refresh() }
 }
 
@@ -160,18 +164,18 @@ async function performReleaseAction(row: any, release: any) {
   const base = `/api/managed-sites/projects/${row.project.id}/releases/${release.id}`
   const action = release.nextSafeAction
   try {
-    if (action === 'inspect_preview_gates') await $fetch(`${base}/gates`)
-    else if (action === 'approve_preview') await $fetch(`${base}/approve`, { method: 'POST', body: { idempotencyKey: crypto.randomUUID() } })
-    else if (action === 'create_checkout_session') { const result: any = await $fetch(`${base}/checkout`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } }); if (release.draftOrderId && result.checkout?.url) checkoutUrls[release.draftOrderId] = result.checkout.url }
-    else if (action === 'bind_verified_payment') await $fetch(`${base}/payment-bind`, { method: 'POST', body: { idempotencyKey: crypto.randomUUID() } })
-    else if (action === 'quote_domain') await $fetch(`${base}/domain-quote`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
-    else if (action === 'confirm_domain_purchase') await $fetch(`${base}/domain-purchase`, { method: 'POST', body: { explicitConfirmation: true, executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
-    else if (['configure_dns_tls', 'retry_dns_tls_after_eligibility'].includes(action)) await $fetch(`${base}/dns-tls`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
-    else if (['deploy_production', 'retry_deployment_after_eligibility'].includes(action)) await $fetch(`${base}/deploy`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
-    else if (['build_preview', 'retry_preview_after_eligibility'].includes(action)) await $fetch(`${base}/preview-build`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
-    else if (action === 'verify_existing_site_ownership') await $fetch(`${base}/ownership-challenge`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
-    else if (['complete_existing_site_ownership_verification', 'retry_ownership_after_eligibility'].includes(action)) await $fetch(`${base}/ownership-verify`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
-    else if (action === 'activate_geo') await $fetch(`${base}/geo-activate`, { method: 'POST', body: { timeZone: 'Asia/Taipei', cadenceDays: 7, monthlyBudgetUnits: 12, idempotencyKey: crypto.randomUUID() } })
+    if (action === 'inspect_preview_gates') await fetchManagedSite(`${base}/gates`)
+    else if (action === 'approve_preview') await fetchManagedSite(`${base}/approve`, { method: 'POST', body: { idempotencyKey: crypto.randomUUID() } })
+    else if (action === 'create_checkout_session') { const result: any = await fetchManagedSite(`${base}/checkout`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } }); if (release.draftOrderId && result.checkout?.url) checkoutUrls[release.draftOrderId] = result.checkout.url }
+    else if (action === 'bind_verified_payment') await fetchManagedSite(`${base}/payment-bind`, { method: 'POST', body: { idempotencyKey: crypto.randomUUID() } })
+    else if (action === 'quote_domain') await fetchManagedSite(`${base}/domain-quote`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
+    else if (action === 'confirm_domain_purchase') await fetchManagedSite(`${base}/domain-purchase`, { method: 'POST', body: { explicitConfirmation: true, executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
+    else if (['configure_dns_tls', 'retry_dns_tls_after_eligibility'].includes(action)) await fetchManagedSite(`${base}/dns-tls`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
+    else if (['deploy_production', 'retry_deployment_after_eligibility'].includes(action)) await fetchManagedSite(`${base}/deploy`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
+    else if (['build_preview', 'retry_preview_after_eligibility'].includes(action)) await fetchManagedSite(`${base}/preview-build`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
+    else if (action === 'verify_existing_site_ownership') await fetchManagedSite(`${base}/ownership-challenge`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
+    else if (['complete_existing_site_ownership_verification', 'retry_ownership_after_eligibility'].includes(action)) await fetchManagedSite(`${base}/ownership-verify`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
+    else if (action === 'activate_geo') await fetchManagedSite(`${base}/geo-activate`, { method: 'POST', body: { timeZone: 'Asia/Taipei', cadenceDays: 7, monthlyBudgetUnits: 12, idempotencyKey: crypto.randomUUID() } })
     else throw new Error('No safe runtime action is projected.')
     operationStates[key] = 'success'; notice.value = `${actionLabels[action] || action} 已由 server receipt 更新。`; await refresh()
   } catch (caught: any) { operationStates[key] = release.status === 'retry_wait' ? 'retry_wait' : 'blocked'; failure.value = caught?.data?.message || caught?.message || 'Operation fail closed；沒有成功 authority 被保存。'; await refresh() }
@@ -183,7 +187,7 @@ async function createOrderCheckout(order: ManagedSiteOrder) {
   if (!project) return
   const key = `order-checkout-${order.id}`; operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
   try {
-    const result: any = await $fetch(`/api/managed-sites/projects/${project.project.id}/releases/${order.release.id}/checkout`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
+    const result: any = await fetchManagedSite(`/api/managed-sites/projects/${project.project.id}/releases/${order.release.id}/checkout`, { method: 'POST', body: { executionMode: 'live', idempotencyKey: crypto.randomUUID() } })
     checkoutUrls[order.id] = String(result.checkout?.url || '')
     operationStates[key] = 'success'; notice.value = checkoutUrls[order.id] ? '付款連結已產生，可複製後傳給客戶。' : '付款連結 receipt 已更新。'
     await refresh()
@@ -196,7 +200,7 @@ async function reconcileOrder(order: ManagedSiteOrder) {
   if (!project) return
   const key = `order-reconcile-${order.id}`; operationStates[key] = 'loading'; failure.value = ''; notice.value = ''
   try {
-    const result: any = await $fetch(`/api/managed-sites/payments/projects/${project.project.id}/releases/${order.release.id}/reconcile`, { method: 'POST', body: { idempotencyKey: crypto.randomUUID() } })
+    const result: any = await fetchManagedSite(`/api/managed-sites/payments/projects/${project.project.id}/releases/${order.release.id}/reconcile`, { method: 'POST', body: { idempotencyKey: crypto.randomUUID() } })
     reconciliationReports[order.id] = `Stripe：${result.reported?.lifecycle || 'unknown'} · session ${result.reported?.checkoutStatus || 'unknown'} · payment ${result.reported?.paymentStatus || 'unknown'}${result.reported?.paymentIntentStatus ? ` · intent ${result.reported.paymentIntentStatus}` : ''}`
     operationStates[key] = 'success'; notice.value = 'Stripe 核對證據已保存；只有 provider read 與既有狀態不一致時才交由唯一 webhook transition 處理。'
     await refresh()
@@ -207,11 +211,13 @@ const statusClass = (status: string) => status === 'verified' || status === 'liv
 </script>
 
 <template>
-  <main class="workbench">
+  <NuxtPage v-if="isNestedRoute" />
+  <main v-else class="workbench">
     <header class="hero">
       <div><p class="eyebrow">OWNER ONLY / LIVE CONNECTORS V1</p><h1>Managed AI Website + GEO</h1><p>這裡顯示 provider、生成候選、付款、網域、DNS/TLS、部署與 GEO 啟用的真實 receipt 狀態。意圖、configured 或瀏覽器回傳都不算成功。</p></div>
-      <button type="button" :disabled="pending || ordersPending || saving" @click="refresh">重新整理</button>
+      <div><NuxtLink class="button button--primary" to="/audit-lab/managed-sites/projects">開啟專案交付</NuxtLink><button type="button" :disabled="pending || ordersPending || saving" @click="refresh">重新整理</button></div>
     </header>
+    <p class="muted">專案交付頁可管理成員、佈建、網域、發佈與稽核軌跡。</p>
 
     <p v-if="error && !managementOperations.refreshFailed" class="alert alert--error">Owner workspace 無法載入；沒有任何外部操作被執行。</p>
     <p v-if="ordersError && !managementOperations.refreshFailed" class="alert alert--error">訂單清單無法載入；沒有任何付款狀態被推定。</p>

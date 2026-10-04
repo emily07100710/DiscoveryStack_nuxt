@@ -2,7 +2,7 @@ export const PUBLICATION_ROUTING_VERSION = 'publication-routing-v2' as const
 export const GEOFlow_PINNED_SOURCE_SHA = '9d70db04ee9c5d308f5fa29b4c65834229af9eea' as const
 
 export type PublicationRoutingVersion = typeof PUBLICATION_ROUTING_VERSION
-export type Framework = 'astro' | 'nuxt' | 'wordpress' | 'php_agent' | 'generic_http' | 'geoflow_local' | 'static_site'
+export type Framework = 'astro' | 'nuxt' | 'nextjs' | 'wordpress' | 'php_agent' | 'generic_http' | 'geoflow_local' | 'static_site'
 export type Transport = 'first_party_git' | 'first_party_signed_api' | 'wordpress_rest' | 'geoflow_agent' | 'generic_http' | 'geoflow_local'
 export type Executor = 'first_party_git' | 'first_party_signed_api' | 'wordpress_rest' | 'geoflow_agent' | 'generic_http' | 'geoflow_local'
 export type ExecutorAuthority = 'discoverystack_first_party' | 'geoflow_content_engine'
@@ -133,7 +133,7 @@ export interface ProjectionLineage {
 
 export interface FirstPartyProjectionIntent extends ProjectionLineage {
   readonly projection: 'first_party'
-  readonly framework: 'astro' | 'nuxt'
+  readonly framework: 'astro' | 'nuxt' | 'nextjs'
   readonly transport: 'first_party_git' | 'first_party_signed_api'
   readonly executor: 'first_party_git' | 'first_party_signed_api'
   readonly executorAuthority: 'discoverystack_first_party'

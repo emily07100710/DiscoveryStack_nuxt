@@ -1,10 +1,16 @@
 <script setup lang="ts">
+import type { Ref } from 'vue'
+import type { NuxtError } from '#app'
+type InterventionWorkspaceFetch = <T>(path: '/api/interventions/list' | '/api/interventions/refresh-queue?status=open' | '/api/interventions/experiments', options: { server: false }) => Promise<{ data: Ref<T | undefined>; error: Ref<NuxtError<unknown> | undefined>; refresh: () => Promise<void> }>
+type InterventionFetch = <T = unknown>(path: string, options?: { method?: 'POST'; headers?: Record<string, string>; body?: unknown }) => Promise<T>
+const useInterventionWorkspace = useFetch as unknown as InterventionWorkspaceFetch
+const fetchIntervention = $fetch as unknown as InterventionFetch
 definePageMeta({ layout: 'owner' })
 useHead({ title: '改動追蹤｜DiscoveryStack', meta: [{ name: 'robots', content: 'noindex,nofollow,noarchive' }] })
 type AnyRow = Record<string, any>
-const { data, error, refresh } = await useFetch<any>('/api/interventions/list', { server: false })
-const { data: queueData, error: queueError, refresh: refreshQueue } = await useFetch<any>('/api/interventions/refresh-queue?status=open', { server: false })
-const { data: experimentData, error: experimentError, refresh: refreshExperiments } = await useFetch<any>('/api/interventions/experiments', { server: false })
+const { data, error, refresh } = await useInterventionWorkspace<{ interventions: AnyRow[] }>('/api/interventions/list', { server: false })
+const { data: queueData, error: queueError, refresh: refreshQueue } = await useInterventionWorkspace<{ items: AnyRow[] }>('/api/interventions/refresh-queue?status=open', { server: false })
+const { data: experimentData, error: experimentError, refresh: refreshExperiments } = await useInterventionWorkspace<{ experiments: AnyRow[] }>('/api/interventions/experiments', { server: false })
 const selected = ref<AnyRow | null>(null); const detail = ref<any>(null); const notice = ref(''); const actionError = ref(''); const saving = ref(false)
 const statusFilter = ref('')
 const form = reactive<any>({ targetUrl: '', changeSummary: '', interventionType: 'content_update', metric: 'clicks', direction: 'increase', impactNote: '', expectedSnippet: '', hypothesis: '', briefId: '', draftId: '', entryId: '', targetId: '', idempotencyKey: crypto.randomUUID() })
@@ -20,8 +26,8 @@ const typeLabel: Record<string, string> = { content_update: '內容更新', new_
 function errorStatus(error: any) { return error?.statusCode || error?.status || error?.response?.status || error?.data?.statusCode }
 const isUnauthorized = computed(() => [error.value, queueError.value, experimentError.value].some(item => errorStatus(item) === 401 || errorStatus(item) === 403))
 function requestFailureMessage(error: any) { const status = errorStatus(error); if (status === 401 || status === 403) return '登入已逾期，請重新登入。'; return error?.data?.statusMessage || error?.statusMessage || error?.message || '請求沒有完成。' }
-async function post(path: string, body: any = {}) { saving.value = true; actionError.value = ''; try { const result = await $fetch<any>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body }); notice.value = '已完成。'; await Promise.all([refresh(), refreshQueue(), refreshExperiments()]); if (selected.value) await load(selected.value.id); return result } catch (error) { actionError.value = requestFailureMessage(error) } finally { saving.value = false } }
-async function load(id: number) { try { detail.value = await $fetch(`/api/interventions/${id}`); selected.value = detail.value.intervention } catch (error) { actionError.value = requestFailureMessage(error) } }
+async function post(path: string, body: any = {}) { saving.value = true; actionError.value = ''; try { const result = await fetchIntervention<{ intervention?: { id: number } }>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body }); notice.value = '已完成。'; await Promise.all([refresh(), refreshQueue(), refreshExperiments()]); if (selected.value) await load(selected.value.id); return result } catch (error) { actionError.value = requestFailureMessage(error) } finally { saving.value = false } }
+async function load(id: number) { try { detail.value = await fetchIntervention<{ intervention: AnyRow }>(`/api/interventions/${id}`); selected.value = detail.value.intervention } catch (error) { actionError.value = requestFailureMessage(error) } }
 async function register() { const expectedImpact = form.impactNote ? { metric: form.metric, direction: form.direction, note: form.impactNote } : { metric: form.metric, direction: form.direction }; const result = await post('/api/interventions/register', { targetUrl: form.targetUrl, changeSummary: form.changeSummary, interventionType: form.interventionType, expectedImpact, expectedSnippet: form.expectedSnippet || undefined, hypothesis: form.hypothesis || undefined, briefId: Number(form.briefId) || undefined, draftId: Number(form.draftId) || undefined, entryId: Number(form.entryId) || undefined, targetId: Number(form.targetId) || undefined, idempotencyKey: form.idempotencyKey }); if (result?.intervention) { form.idempotencyKey = crypto.randomUUID(); await load(result.intervention.id) } }
 function deployment(id: number) { const note = window.prompt('請輸入手動確認上線的說明：'); if (note) return post(`/api/interventions/${id}/confirm-deployment`, { note }) }
 function recrawl(id: number) { const note = window.prompt('請輸入手動確認 Google 已重抓的說明（必填）：'); if (!note) { actionError.value = '手動確認重抓必須填寫說明。'; return } return post(`/api/interventions/${id}/confirm-recrawl`, { note }) }

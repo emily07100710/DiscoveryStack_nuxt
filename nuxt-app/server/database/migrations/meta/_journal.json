@@ -302,6 +302,20 @@
       "when": 1788470406556,
       "tag": "0042_stormy_umar",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "5",
+      "when": 1788907165158,
+      "tag": "0043_stiff_monster_badoon",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "5",
+      "when": 1791060745045,
+      "tag": "0044_peaceful_lethal_legion",
+      "breakpoints": true
     }
   ]
 }

@@ -66,6 +66,7 @@ import type {
 } from './types'
 import { CONTENT_OPERATIONS_LIMITATIONS } from './types'
 import { canonicalContentOperationRunIdentity } from './run-identity'
+import { getOutcomeCollectionReadiness, type ContentWorkspaceReadinessDependencies } from './workspace-readiness'
 
 const CALENDAR_ENGINE_VERSION = 'content-calendar-cadence-engine-v1'
 const DEFAULT_LEASE_MS = 5 * 60 * 1000
@@ -751,7 +752,7 @@ export async function buildOwnerContentLearningDataset(ownerUserId: number, repo
   return buildContentLearningDataset({ records })
 }
 
-export async function getOwnerContentOperationsWorkspace(ownerUserId: number, repository?: ContentOperationsRepository): Promise<WorkspacePayload> {
+export async function getOwnerContentOperationsWorkspace(ownerUserId: number, repository?: ContentOperationsRepository, readinessDependencies?: ContentWorkspaceReadinessDependencies): Promise<WorkspacePayload> {
   const db = await getRepository(repository)
   const [clients, calendars, entries, runs, outcomeAssessments, targets, entityProfiles, queryOwnership, budgetReservations] = await Promise.all([db.listClients(ownerUserId), db.listCalendars(ownerUserId), db.listEntries(ownerUserId), db.listRuns(ownerUserId), db.listOutcomes(ownerUserId), db.listPublicationTargets(ownerUserId), db.listEntityStrategyProfiles(ownerUserId), db.listQueryOwnership(ownerUserId), db.listAutopilotBudgetReservations(ownerUserId)])
   const policies = (await Promise.all(clients.map(client => db.listAutopilotPolicies(ownerUserId, client.id)))).flat()
@@ -777,11 +778,12 @@ export async function getOwnerContentOperationsWorkspace(ownerUserId: number, re
   const firstPartyTransportConfigured = activeTargets.some(target => ['first_party_git', 'first_party_signed_api'].includes(target.transport))
   const nonFirstPartyTransportConfigured = activeTargets.some(target => !['first_party_git', 'first_party_signed_api'].includes(target.transport))
   const credentialResolverConfigured = runtimeCredentialResolverAvailable()
+  const outcomeCollection = await getOutcomeCollectionReadiness(ownerUserId, { clients, targets }, Boolean(repository), readinessDependencies)
   const publicationTargets = targets.map(target => ({ id: target.id, clientId: target.clientId, targetId: target.targetId, websiteId: target.websiteId ?? null, framework: target.framework, transport: target.transport, targetOrigin: target.targetOrigin, contentRoot: target.contentRoot, defaultBranch: target.defaultBranch, repositoryOwner: target.repositoryOwner, repositoryName: target.repositoryName, endpointPath: target.endpointPath, allowedContentTypes: target.allowedContentTypes, allowedLanguages: target.allowedLanguages, maximumPayloadBytes: target.maximumPayloadBytes, status: target.status, activeSlot: target.activeSlot, executionEnabled: target.executionEnabled, credentialConfigured: Boolean(target.credentialReference), destinationPublicationIdentityConfigured: Boolean(target.destinationPublicationIdentity), serviceReferenceConfigured: Boolean(target.serviceReference), configurationFingerprint: target.configurationFingerprint, idempotencyKey: target.idempotencyKey, createdAt: target.createdAt, updatedAt: target.updatedAt }))
   const capabilities = { schedulerAvailable: true, generationExecutorConfigured: generationProviderConfigured, firstPartyPublisherConfigured: firstPartyTransportConfigured, outcomeCollectionConfigured: true, externalRuntimeAvailability: { generationProviderConfigured, firstPartyTransportConfigured, nonFirstPartyTransportConfigured, credentialResolverAvailable: credentialResolverConfigured } }
-  const readiness = { schedulerAvailable: true, generationExecutorAvailable: generationProviderConfigured, publicationTargetConfigured: activeTargets.length > 0, publicationExecutionEnabled: activeTargets.some(target => target.executionEnabled), credentialReferenceConfigured: activeTargets.some(target => Boolean(target.credentialReference)), runtimeCredentialResolverAvailable: credentialResolverConfigured, outcomeCollectionConfigured: true }
+  const readiness = { schedulerAvailable: true, schedulerEnabled: process.env.NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED === 'true', generationExecutorAvailable: generationProviderConfigured, publicationTargetConfigured: activeTargets.length > 0, publicationExecutionEnabled: activeTargets.some(target => target.executionEnabled), credentialReferenceConfigured: activeTargets.some(target => Boolean(target.credentialReference)), runtimeCredentialResolverAvailable: credentialResolverConfigured, outcomeCollectionConfigured: outcomeCollection.configured, outcomeCollectionStatus: outcomeCollection.status, configuredMeasurementConnectionCount: outcomeCollection.configuredConnectionCount }
   const governance = { policies, entityProfiles, queryOwnership, budgetReservations, repairs: entryDetails.flatMap(detail => detail.repairs), substitutions: entryDetails.flatMap(detail => detail.substitutions), machineAuthorizations: entryDetails.flatMap(detail => detail.machineAuthorizations) }
-  return { clients: clients.map(publicClient), calendars, entries: projections, runs, outcomeAssessments: outcomeAssessments.map(outcome => ({ ...outcome, validPairCount: outcomeValidPairCount(outcome.assessmentSnapshot) })), publicationTargets, governance, capabilities, readiness, limitations: [...CONTENT_OPERATIONS_LIMITATIONS] }
+  return { clients: clients.map(publicClient), calendars, entries: projections, runs, outcomeAssessments: outcomeAssessments.map(outcome => ({ ...outcome, validPairCount: outcomeValidPairCount(outcome.assessmentSnapshot) })), publicationTargets, governance, capabilities, readiness, limitations: [...CONTENT_OPERATIONS_LIMITATIONS, 'measurement readiness describes owner-scoped Google connection configuration; provider permissions, actual collection and scheduler uptime are unverified', ...(outcomeCollection.status === 'unverified' ? ['measurement configuration could not be read; automatic collection readiness is unknown'] : [])] }
 }
 
 export function getDefaultContentOperationsClock(): Clock {

@@ -224,6 +224,22 @@ describe('managed-site Stripe payment provider', () => {
     }
   })
 
+  it('accepts subscription checkout with a null payment_intent and preserves invoice/subscription identity on exact replay', async () => {
+    const line = await stripeLine({ canonicalDomain: 'subscription-null-intent.acme.taipei' }); const credential = randomBytes(32).toString('hex'); const server = await routeFor(line, credential)
+    try {
+      const payload = stripeEvent(line, { id: 'subscription_null_intent_001', type: 'checkout.session.completed', object: { mode: 'subscription', payment_intent: null } })
+      const paid = await deliver(server, payload, credential)
+      expect(paid.response.status).toBe(200); expect(paid.body).toMatchObject({ accepted: true, replayed: false, effective: true })
+      const receipt = line.live.state.receipts.find(row => row.providerEventId === payload.id)!
+      expect(receipt.metadata).toMatchObject({ stripeInvoiceId: 'in_event_subscription_null_intent_001', stripeSubscriptionId: 'sub_event_subscription_null_intent_001' })
+      expect(receipt.metadata).not.toHaveProperty('stripePaymentIntentId')
+      const before = structuredClone({ live: line.live.state, ordering: line.ordering.state, managed: line.managed.state })
+      const replay = await deliver(server, payload, credential)
+      expect(replay.response.status).toBe(200); expect(replay.body).toMatchObject({ accepted: true, replayed: true, effective: true })
+      expect({ live: line.live.state, ordering: line.ordering.state, managed: line.managed.state }).toEqual(before)
+    } finally { await server.close() }
+  })
+
   it('fails closed unless Stripe checkout and merchant return origins are exact and separate', () => {
     process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS = 'https://api.stripe.com'
     process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_CHECKOUT_ORIGINS = 'https://checkout.stripe.com'

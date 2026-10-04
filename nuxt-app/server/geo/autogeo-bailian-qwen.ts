@@ -2,12 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { AUTOGEO_UPSTREAM, buildOfficialAutoGeoPrompt } from './autogeo-api'
 import type { GeoDocumentInput, GeoRewriteAdapter, GeoRewriteCandidate } from './contracts'
 import { assertSourceBoundRewrite } from './output-safety'
+import { isOfficialBailianWorkspaceHostname } from '../llm-provider/openai-compatible'
 
 const BAILIAN_ENDPOINT_PATH = '/compatible-mode/v1/chat/completions'
 const DEFAULT_BAILIAN_MODEL = 'qwen-plus'
 const DEFAULT_TIMEOUT_MS = 30_000
 const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/
-const WORKSPACE_BAILIAN_HOST_PATTERN = /^(?:[a-z0-9][a-z0-9-]{0,62}\.)?(?:cn-beijing|ap-southeast-1|ap-northeast-1|cn-hongkong|eu-central-1)\.maas\.aliyuncs\.com$/
 const LEGACY_BAILIAN_HOSTS = new Set(['dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com', 'dashscope-us.aliyuncs.com', 'cn-hongkong.dashscope.aliyuncs.com'])
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 type BailianResponse = { model?: string, choices?: Array<{ message?: { content?: string } }>, usage?: { prompt_tokens?: number, completion_tokens?: number, total_tokens?: number } }
@@ -33,8 +33,10 @@ function serverRuntimeConfiguration(): BailianRuntimeConfiguration {
 
 export function isAllowedBailianEndpoint(value: string): boolean {
   try {
-    const url = new URL(value)
-    return url.protocol === 'https:' && (WORKSPACE_BAILIAN_HOST_PATTERN.test(url.hostname) || LEGACY_BAILIAN_HOSTS.has(url.hostname)) && url.pathname === BAILIAN_ENDPOINT_PATH && !url.username && !url.password && !url.search && !url.hash
+    const trimmed = value.trim()
+    const authority = /^https:\/\/([^/?#]+)/iu.exec(trimmed)?.[1]
+    const url = new URL(trimmed)
+    return url.protocol === 'https:' && Boolean(authority && authority.toLowerCase() === url.hostname) && !url.port && !trimmed.includes('?') && !trimmed.includes('#') && (isOfficialBailianWorkspaceHostname(url.hostname) || LEGACY_BAILIAN_HOSTS.has(url.hostname)) && trimmed.slice(8 + (authority?.length || 0)) === BAILIAN_ENDPOINT_PATH && url.pathname === BAILIAN_ENDPOINT_PATH && !url.username && !url.password && !url.search && !url.hash
   } catch { return false }
 }
 

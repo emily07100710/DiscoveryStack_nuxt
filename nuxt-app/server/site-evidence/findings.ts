@@ -1,9 +1,10 @@
 import { classifyUrlVariant, isSameSite, normalizeUrl, urlHash } from './normalization'
 import { compareRawRendered } from './html'
+import { buildBotRobotsFindings, buildObservedInternalLinkFindings } from './access-and-link-findings'
 import type { HtmlSignals, SiteEvidenceFinding, SiteEvidenceSitemap, SiteEvidenceUrl } from './types'
 
 export type FindingInventoryItem = SiteEvidenceUrl & { rawSignals?: HtmlSignals | null, renderedSignals?: HtmlSignals | null, renderedUnavailableReason?: string | null }
-export type ReconciliationInput = { inventory: FindingInventoryItem[], sitemaps: SiteEvidenceSitemap[], targetOrigin?: string, limitations?: string[] }
+export type ReconciliationInput = { inventory: FindingInventoryItem[], sitemaps: SiteEvidenceSitemap[], targetOrigin?: string, limitations?: string[], robotsContent?: string | null, robotsCapturedAt?: Date | null }
 
 const duplicateCategory = {
   scheme_variant: 'http_https_duplicate',
@@ -74,5 +75,6 @@ export function buildSiteEvidenceFindings(input: ReconciliationInput): SiteEvide
       if (relation in duplicateCategory) output.push(finding(duplicateCategory[relation as keyof typeof duplicateCategory], 'warning', { urls: [a.url, b.url], urlHashes: [a.urlHash, b.urlHash] }))
     }
   }
+  output.push(...buildObservedInternalLinkFindings(input), ...buildBotRobotsFindings(input))
   return output.sort((left, right) => left.category.localeCompare(right.category) || JSON.stringify(left.evidence).localeCompare(JSON.stringify(right.evidence)))
 }

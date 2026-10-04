@@ -1,4 +1,8 @@
 <script setup lang="ts">
+type CustomerEditorFetch = <T = unknown>(path: `/api/managed-sites/editor/${string}`, options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown> }) => Promise<T>
+// Preserve the existing Nuxt fetch, page DTOs and customer permission checks.
+const fetchCustomerEditor = $fetch as unknown as CustomerEditorFetch
+
 import { computed, nextTick, onMounted, ref } from 'vue'
 
 useHead({ title: '網站編輯器', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
@@ -11,6 +15,7 @@ const selectedBlockId = ref('')
 const device = ref<'desktop' | 'tablet' | 'mobile'>('desktop')
 const status = ref<'loading' | 'saved' | 'saving' | 'publishing' | 'published' | 'error' | 'conflict'>('loading')
 const message = ref('')
+const requiresReaccess = ref(false)
 const mediaOpen = ref(false)
 const mediaQuery = ref('')
 const uploading = ref<Record<string, number>>({})
@@ -40,20 +45,26 @@ const blockCatalog: Array<[string, string]> = [
 ]
 const variants: Record<string, string[]> = { hero: ['split', 'overlay', 'centered'], rich_text: ['prose', 'columns'], image_text: ['split', 'stacked'], services: ['cards', 'list', 'featured'], case_studies: ['cards', 'editorial', 'masonry'], gallery_grid: ['grid', 'masonry'], carousel: ['contained', 'edge'], team: ['cards', 'portraits'], testimonials: ['cards', 'quotes'], faq: ['accordion', 'list'], cta: ['band', 'card'], article_list: ['cards', 'list'], contact: ['form', 'split'], booking_intent: ['form', 'card'], spacer: ['default'], divider: ['default'] }
 
-function errorText(error: any) { return error?.data?.message || error?.data?.statusMessage || error?.message || '操作失敗，沒有覆寫任何內容。' }
+function errorText(error: any) {
+  if ((error?.statusCode || error?.status || error?.response?.status) === 401) {
+    requiresReaccess.value = true
+    return '登入已到期，請重新登入網站後台。'
+  }
+  return error?.data?.message || error?.data?.statusMessage || error?.message || '操作失敗，沒有覆寫任何內容。'
+}
 function key(prefix: string) { return `${prefix}:${Date.now()}:${crypto.randomUUID()}` }
 function cancelUpload(name: string) { uploadControllers.get(name)?.abort(); uploadControllers.delete(name); uploading.value[name] = -1; message.value = `${name} 已取消；未完成的短效 upload session 會由排程器安全回收。` }
 async function loadWorkspace() {
   status.value = 'loading'; message.value = ''
-  try { workspace.value = await $fetch('/api/managed-sites/editor/workspace'); selectedPageId.value ||= workspace.value.pages?.[0]?.pageId || ''; if (selectedPageId.value) await loadPage(selectedPageId.value); status.value = 'saved' } catch (error) { status.value = 'error'; message.value = errorText(error) }
+  try { workspace.value = await fetchCustomerEditor('/api/managed-sites/editor/workspace'); selectedPageId.value ||= workspace.value.pages?.[0]?.pageId || ''; if (selectedPageId.value) await loadPage(selectedPageId.value); requiresReaccess.value = false; status.value = 'saved' } catch (error) { status.value = 'error'; message.value = errorText(error) }
 }
 async function loadPage(pageId: string) {
-  const result: any = await $fetch(`/api/managed-sites/editor/pages/${encodeURIComponent(pageId)}`); page.value = result.page; versions.value = result.versions || []; selectedBlockId.value = page.value.sections?.[0]?.blockId || ''; previewArtifact.value = null
+  const result: any = await fetchCustomerEditor(`/api/managed-sites/editor/pages/${encodeURIComponent(pageId)}`); page.value = result.page; versions.value = result.versions || []; selectedBlockId.value = page.value.sections?.[0]?.blockId || ''; previewArtifact.value = null
 }
 async function choosePage() { if (selectedPageId.value) await loadPage(selectedPageId.value) }
 async function applyCommand(type: string, target: any, payload: any, reason: string) {
   if (!page.value) return; status.value = 'saving'; message.value = ''
-  try { const previous = page.value.version; const result: any = await $fetch(`/api/managed-sites/editor/pages/${encodeURIComponent(page.value.pageId)}/commands`, { method: 'POST', body: { schemaVersion: 'managed-site-page-command-v1', type, expectedPageVersion: previous, idempotencyKey: key('editor'), target, payload, reason } }); undoVersions.value.push(previous); redoVersions.value = []; page.value = result.page; versions.value.unshift(result.page); status.value = 'saved' }
+  try { const previous = page.value.version; const result: any = await fetchCustomerEditor(`/api/managed-sites/editor/pages/${encodeURIComponent(page.value.pageId)}/commands`, { method: 'POST', body: { schemaVersion: 'managed-site-page-command-v1', type, expectedPageVersion: previous, idempotencyKey: key('editor'), target, payload, reason } }); undoVersions.value.push(previous); redoVersions.value = []; page.value = result.page; versions.value.unshift(result.page); status.value = 'saved' }
   catch (error: any) { status.value = error?.statusCode === 409 || error?.response?.status === 409 ? 'conflict' : 'error'; message.value = errorText(error) }
 }
 async function saveText(path: string, value: string) { if (selectedBlock.value && value.trim()) await applyCommand('update_text', { blockId: selectedBlock.value.blockId, path }, value, '客戶在屬性面板更新文字') }
@@ -72,17 +83,17 @@ function defaultBlock(type: string) {
 async function addBlock(type: string) { const payload = defaultBlock(type); if (!payload) { mediaOpen.value = true; message.value = '此區塊需要先選擇已處理完成的媒體。'; return } await applyCommand('add_block', { index: page.value.sections.length }, payload, `客戶新增 ${type} 區塊`); selectedBlockId.value = payload.block?.blockId || payload.blockId }
 async function duplicateBlock() { const newBlockId = `block_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`; await applyCommand('duplicate_block', { blockId: selectedBlock.value.blockId }, { newBlockId }, '客戶複製區塊'); selectedBlockId.value = newBlockId }
 async function scheduleBlock(until: string) { if (!until) return; await applyCommand('schedule_visibility', { blockId: selectedBlock.value.blockId }, { visibleFrom: null, visibleUntil: new Date(until).toISOString(), timezone: 'Asia/Taipei' }, '客戶設定區塊下架時間') }
-async function restoreDraft(version: number, fromRedo = false) { if (!page.value || version === page.value.version) return; const current = page.value.version; status.value = 'saving'; try { const result: any = await $fetch(`/api/managed-sites/editor/pages/${encodeURIComponent(page.value.pageId)}/restore-draft`, { method: 'POST', body: { version, expectedPageVersion: current, idempotencyKey: key('restore'), reason: '客戶回復草稿版本' } }); if (fromRedo) undoVersions.value.push(current); else redoVersions.value.push(current); page.value = result.page; versions.value.unshift(result.page); status.value = 'saved' } catch (error) { status.value = 'conflict'; message.value = errorText(error) } }
+async function restoreDraft(version: number, fromRedo = false) { if (!page.value || version === page.value.version) return; const current = page.value.version; status.value = 'saving'; try { const result: any = await fetchCustomerEditor(`/api/managed-sites/editor/pages/${encodeURIComponent(page.value.pageId)}/restore-draft`, { method: 'POST', body: { version, expectedPageVersion: current, idempotencyKey: key('restore'), reason: '客戶回復草稿版本' } }); if (fromRedo) undoVersions.value.push(current); else redoVersions.value.push(current); page.value = result.page; versions.value.unshift(result.page); status.value = 'saved' } catch (error) { status.value = 'conflict'; message.value = errorText(error) } }
 async function undo() { const version = undoVersions.value.pop(); if (version) await restoreDraft(version) }
 async function redo() { const version = redoVersions.value.pop(); if (version) await restoreDraft(version, true) }
-async function requestPreview() { try { const result: any = await $fetch(`/api/managed-sites/editor/pages/${encodeURIComponent(page.value.pageId)}/preview`, { method: 'POST', body: { expectedPageVersion: page.value.version } }); previewArtifact.value = result.artifact; message.value = '已建立短效、noindex 的 server preview。' } catch (error) { message.value = errorText(error) } }
-async function publish() { status.value = 'publishing'; try { const result: any = await $fetch(`/api/managed-sites/editor/pages/${encodeURIComponent(page.value.pageId)}/publish`, { method: 'POST', body: { expectedPageVersion: page.value.version, idempotencyKey: key('publish') } }); message.value = `已排入正式發布工作 ${result.receipt.receiptFingerprint.slice(0, 12)}…；只有既有 first-party executor 回傳 verified receipt 後才會顯示為已發布。` } catch (error) { status.value = 'error'; message.value = errorText(error) } }
+async function requestPreview() { try { const result: any = await fetchCustomerEditor(`/api/managed-sites/editor/pages/${encodeURIComponent(page.value.pageId)}/preview`, { method: 'POST', body: { expectedPageVersion: page.value.version } }); previewArtifact.value = result.artifact; message.value = '已建立短效、noindex 的 server preview。' } catch (error) { message.value = errorText(error) } }
+async function publish() { status.value = 'publishing'; try { const result: any = await fetchCustomerEditor(`/api/managed-sites/editor/pages/${encodeURIComponent(page.value.pageId)}/publish`, { method: 'POST', body: { expectedPageVersion: page.value.version, idempotencyKey: key('publish') } }); message.value = `已排入正式發布工作 ${result.receipt.receiptFingerprint.slice(0, 12)}…；只有既有 first-party executor 回傳 verified receipt 後才會顯示為已發布。` } catch (error) { status.value = 'error'; message.value = errorText(error) } }
 async function uploadFiles(files: FileList | null) {
   if (!files?.length) return
   const selected = [...files].slice(0, 25)
   selected.forEach(file => { uploading.value[file.name] = 5 })
   try {
-    const batch: any = await $fetch('/api/managed-sites/editor/assets/upload-intent', { method: 'POST', body: { requests: selected.map(file => ({ filename: file.name, declaredMime: file.type, declaredBytes: file.size, visibility: 'private', idempotencyKey: key('bulk-upload') })) } })
+    const batch: any = await fetchCustomerEditor('/api/managed-sites/editor/assets/upload-intent', { method: 'POST', body: { requests: selected.map(file => ({ filename: file.name, declaredMime: file.type, declaredBytes: file.size, visibility: 'private', idempotencyKey: key('bulk-upload') })) } })
     for (const [index, intent] of batch.results.entries()) {
       const file = selected[index]!
       try {
@@ -93,7 +104,7 @@ async function uploadFiles(files: FileList | null) {
         const response = await fetch(intent.authorization.url, { method: 'PUT', headers, body: file, signal: controller.signal, credentials: intent.authorization.url.startsWith('/') ? 'same-origin' : 'omit' })
         if (!response.ok) throw new Error('物件上傳失敗')
         uploading.value[file.name] = 70
-        await $fetch('/api/managed-sites/editor/assets/complete', { method: 'POST', body: { uploadId: intent.session.uploadId } })
+        await fetchCustomerEditor('/api/managed-sites/editor/assets/complete', { method: 'POST', body: { uploadId: intent.session.uploadId } })
         uploading.value[file.name] = 100
       } catch (error) { uploading.value[file.name] = -1; message.value = `${file.name}：${errorText(error)}` } finally { uploadControllers.delete(file.name) }
     }
@@ -101,18 +112,18 @@ async function uploadFiles(files: FileList | null) {
   await loadWorkspace(); mediaOpen.value = true
 }
 async function replaceMedia(asset: any) { const block = selectedBlock.value; const bindingId = block?.mediaBindingIds?.[0]; const current = page.value.mediaBindings.find((binding: any) => binding.bindingId === bindingId); if (!bindingId || !current || asset.status !== 'ready' || !asset.sha256) { message.value = '請先選擇有圖片角色的區塊與 ready 素材。'; return } const binding = { ...current, assetId: asset.assetId, assetVersion: asset.version, assetSha256: asset.sha256, focalPoint: { x: focalX.value, y: focalY.value }, provenance: 'customer' }; await applyCommand('replace_media', { bindingId }, binding, `只替換目前 ${bindingId} 使用位置`); mediaOpen.value = false }
-async function approveForPublicUse(asset: any) { if (!confirm('請確認你有權在此網站公開使用這張圖片；這不是法律合規判定。')) return; try { await $fetch(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/governance`, { method: 'POST', body: { visibility: 'public', rightsMetadata: { publishAllowed: true, license: asset.rightsMetadata?.license || 'customer-confirmed' } } }); await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
-async function downloadOriginal(asset: any) { try { const result: any = await $fetch(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/read`, { method: 'POST', body: { variantKey: 'original' } }); const link = document.createElement('a'); link.href = result.authorization.url; link.download = asset.filename; link.rel = 'noopener'; link.click() } catch (error) { message.value = errorText(error) } }
-async function retryAsset(asset: any) { try { await $fetch(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/processing-retry`, { method: 'POST', body: {} }); await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
-async function trashAsset(asset: any) { if (!confirm('將素材移到回收桶？使用中的素材仍不會被永久刪除。')) return; try { await $fetch(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/trash`, { method: 'POST', body: {} }); await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
-async function restoreAsset(asset: any) { try { await $fetch(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/restore`, { method: 'POST', body: {} }); await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
-async function showAssetHistory(asset: any) { try { const detail: any = await $fetch(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}`); message.value = `素材 ${asset.filename}：${detail.versions.length} 個 immutable 版本、${detail.usageCount} 個使用位置、${detail.events.length} 筆事件。` } catch (error) { message.value = errorText(error) } }
-async function createCollection() { if (!collectionName.value.trim()) return; try { await $fetch('/api/managed-sites/editor/collections', { method: 'POST', body: { name: collectionName.value, parentId: null, idempotencyKey: key('collection') } }); collectionName.value = ''; await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
-async function createTag() { if (!tagName.value.trim()) return; try { await $fetch('/api/managed-sites/editor/tags', { method: 'POST', body: { name: tagName.value, idempotencyKey: key('tag') } }); tagName.value = ''; await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
-async function organizeAsset(asset: any, collectionId: string) { try { await $fetch(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/organize`, { method: 'POST', body: { collectionId: collectionId ? Number(collectionId) : null, tagIds: (asset.tags || []).map((tag: any) => tag.id), idempotencyKey: key('organize') } }); await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
-async function cropAndUse(asset: any) { try { const result: any = await $fetch(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/transform`, { method: 'POST', body: { aspect: cropAspect.value, focalPoint: { x: focalX.value, y: focalY.value }, rotation: 0, expectedAssetVersion: asset.version, idempotencyKey: key('transform') } }); workspace.value.assets = workspace.value.assets.map((item: any) => item.assetId === asset.assetId ? result.asset : item); await replaceMedia(result.asset) } catch (error) { message.value = errorText(error) } }
-async function proposeAi() { aiLoading.value = true; aiProposal.value = null; try { aiProposal.value = await $fetch('/api/managed-sites/editor/ai/propose', { method: 'POST', body: { pageId: page.value.pageId, expectedPageVersion: page.value.version, request: aiRequest.value, selectedMediaAssetIds: workspace.value.assets.filter((asset: any) => asset.status === 'ready').slice(0, 12).map((asset: any) => asset.assetId), idempotencyKey: key('ai-proposal') } }) } catch (error) { message.value = errorText(error) } finally { aiLoading.value = false } }
-async function applyAi() { try { const result: any = await $fetch('/api/managed-sites/editor/ai/apply', { method: 'POST', body: { proposalId: aiProposal.value.proposalId } }); page.value = result.results.at(-1)?.page || page.value; aiProposal.value = null; status.value = 'saved'; message.value = 'AI 提案已由你確認並套用到草稿；尚未發布。' } catch (error) { status.value = 'conflict'; message.value = errorText(error) } }
+async function approveForPublicUse(asset: any) { if (!confirm('請確認你有權在此網站公開使用這張圖片；這不是法律合規判定。')) return; try { await fetchCustomerEditor(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/governance`, { method: 'POST', body: { visibility: 'public', rightsMetadata: { publishAllowed: true, license: asset.rightsMetadata?.license || 'customer-confirmed' } } }); await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
+async function downloadOriginal(asset: any) { try { const result: any = await fetchCustomerEditor(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/read`, { method: 'POST', body: { variantKey: 'original' } }); const link = document.createElement('a'); link.href = result.authorization.url; link.download = asset.filename; link.rel = 'noopener'; link.click() } catch (error) { message.value = errorText(error) } }
+async function retryAsset(asset: any) { try { await fetchCustomerEditor(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/processing-retry`, { method: 'POST', body: {} }); await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
+async function trashAsset(asset: any) { if (!confirm('將素材移到回收桶？使用中的素材仍不會被永久刪除。')) return; try { await fetchCustomerEditor(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/trash`, { method: 'POST', body: {} }); await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
+async function restoreAsset(asset: any) { try { await fetchCustomerEditor(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/restore`, { method: 'POST', body: {} }); await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
+async function showAssetHistory(asset: any) { try { const detail: any = await fetchCustomerEditor(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}`); message.value = `素材 ${asset.filename}：${detail.versions.length} 個 immutable 版本、${detail.usageCount} 個使用位置、${detail.events.length} 筆事件。` } catch (error) { message.value = errorText(error) } }
+async function createCollection() { if (!collectionName.value.trim()) return; try { await fetchCustomerEditor('/api/managed-sites/editor/collections', { method: 'POST', body: { name: collectionName.value, parentId: null, idempotencyKey: key('collection') } }); collectionName.value = ''; await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
+async function createTag() { if (!tagName.value.trim()) return; try { await fetchCustomerEditor('/api/managed-sites/editor/tags', { method: 'POST', body: { name: tagName.value, idempotencyKey: key('tag') } }); tagName.value = ''; await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
+async function organizeAsset(asset: any, collectionId: string) { try { await fetchCustomerEditor(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/organize`, { method: 'POST', body: { collectionId: collectionId ? Number(collectionId) : null, tagIds: (asset.tags || []).map((tag: any) => tag.id), idempotencyKey: key('organize') } }); await loadWorkspace(); mediaOpen.value = true } catch (error) { message.value = errorText(error) } }
+async function cropAndUse(asset: any) { try { const result: any = await fetchCustomerEditor(`/api/managed-sites/editor/assets/${encodeURIComponent(asset.assetId)}/transform`, { method: 'POST', body: { aspect: cropAspect.value, focalPoint: { x: focalX.value, y: focalY.value }, rotation: 0, expectedAssetVersion: asset.version, idempotencyKey: key('transform') } }); workspace.value.assets = workspace.value.assets.map((item: any) => item.assetId === asset.assetId ? result.asset : item); await replaceMedia(result.asset) } catch (error) { message.value = errorText(error) } }
+async function proposeAi() { aiLoading.value = true; aiProposal.value = null; try { aiProposal.value = await fetchCustomerEditor('/api/managed-sites/editor/ai/propose', { method: 'POST', body: { pageId: page.value.pageId, expectedPageVersion: page.value.version, request: aiRequest.value, selectedMediaAssetIds: workspace.value.assets.filter((asset: any) => asset.status === 'ready').slice(0, 12).map((asset: any) => asset.assetId), idempotencyKey: key('ai-proposal') } }) } catch (error) { message.value = errorText(error) } finally { aiLoading.value = false } }
+async function applyAi() { try { const result: any = await fetchCustomerEditor('/api/managed-sites/editor/ai/apply', { method: 'POST', body: { proposalId: aiProposal.value.proposalId } }); page.value = result.results.at(-1)?.page || page.value; aiProposal.value = null; status.value = 'saved'; message.value = 'AI 提案已由你確認並套用到草稿；尚未發布。' } catch (error) { status.value = 'conflict'; message.value = errorText(error) } }
 
 function blockTitle(block: any) { return block.data?.title || block.data?.eyebrow || block.type.replaceAll('_', ' ') }
 onMounted(loadWorkspace)
@@ -122,13 +133,14 @@ onMounted(loadWorkspace)
   <main class="editor-shell">
     <header class="topbar">
       <div class="brand"><NuxtLink to="/customer/managed-sites">DiscoveryStack</NuxtLink><span>網站編輯器</span></div>
+      <a class="quiet" href="/managed-site-access">重新登入</a>
       <label class="page-select"><span class="sr-only">選擇頁面</span><select v-model="selectedPageId" @change="choosePage"><option v-for="item in workspace?.pages || []" :key="item.pageId" :value="item.pageId">{{ item.route }} · v{{ item.version }}</option></select></label>
       <div class="device-switch" aria-label="預覽裝置"><button v-for="item in ['desktop', 'tablet', 'mobile']" :key="item" :aria-pressed="device === item" @click="device = item as any">{{ item }}</button></div>
       <div class="save-state" :data-state="status" role="status">{{ { loading: '載入中', saved: '草稿已儲存', saving: '儲存中', publishing: '建立發布意圖', published: '已送交發布', error: '發生錯誤', conflict: '版本衝突' }[status] }}</div>
       <button class="quiet" :disabled="!undoVersions.length" @click="undo">復原</button><button class="quiet" :disabled="!redoVersions.length" @click="redo">重做</button><button class="quiet" @click="requestPreview">Server 預覽</button><button class="primary" :disabled="!workspace?.capabilities.canPublish || status === 'publishing'" @click="publish">發布</button>
     </header>
 
-    <p v-if="message" class="notice" :class="{ danger: status === 'error' || status === 'conflict' }" role="alert">{{ message }}<button @click="message = ''">關閉</button></p>
+    <p v-if="message" class="notice" :class="{ danger: status === 'error' || status === 'conflict' }" role="alert">{{ message }} <a v-if="requiresReaccess" href="/managed-site-access">重新登入網站後台</a><button @click="message = ''">關閉</button></p>
     <section v-if="workspace && page" class="workbench">
       <aside class="structure-panel" aria-label="頁面結構">
         <div class="panel-heading"><div><span>PAGE STRUCTURE</span><h2>區塊</h2></div><button class="icon" title="重新載入" @click="loadPage(page.pageId)">↻</button></div>

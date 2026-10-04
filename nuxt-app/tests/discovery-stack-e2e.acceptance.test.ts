@@ -60,7 +60,7 @@ function qwenRequest(overrides: Record<string, unknown> = {}) {
 }
 
 function qwenRuntime(fetchImpl: typeof fetch, resolveCredential: (ref: string) => string | undefined | Promise<string | undefined> = async () => 'fake-placeholder-secret') {
-  return createGeoFlowQwenGenerationRuntime({ endpoint: 'https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions', credentialRef: 'opaque:qwen-ref', resolveCredential, fetchImpl, now: () => NOW.toISOString() })
+  return createGeoFlowQwenGenerationRuntime({ endpoint: 'https://ws-fixture1.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions', credentialRef: 'opaque:qwen-ref', resolveCredential, fetchImpl, now: () => NOW.toISOString() })
 }
 
 describe('DiscoveryStack End-to-End Platform V1 mocked acceptance', () => {

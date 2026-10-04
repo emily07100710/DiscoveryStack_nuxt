@@ -1,11 +1,22 @@
 from __future__ import annotations
+import argparse
 import json
 from pathlib import Path
+from harden_recovery_notebooks import harden_notebook
 
-SOURCE = Path('/home/ubuntu/private_training/DiscoveryStack_SEO_GEO_500_OPTIMIZED.ipynb')
-OUT = Path('/home/ubuntu/private_training/DiscoveryStack_SEO_GEO_500_OPTIMIZED_RECOVERY.ipynb')
+parser = argparse.ArgumentParser(description='Prepare output-free v4 recovery source; never executes notebook cells.')
+parser.add_argument('--source', type=Path, default=Path(__file__).with_name('DiscoveryStack_SEO_GEO_500_OPTIMIZED_RECOVERY.ipynb'))
+parser.add_argument('--output', type=Path, required=True)
+args = parser.parse_args()
+SOURCE = args.source
+OUT = args.output
 
 nb = json.loads(SOURCE.read_text(encoding='utf-8'))
+if nb.get('metadata', {}).get('discoverystackTraining', {}).get('recoveryNotebook'):
+    with OUT.open('x', encoding='utf-8') as handle:
+        handle.write(json.dumps(harden_notebook(nb), ensure_ascii=False, indent=2) + '\n')
+    print({'recoverySourcePrepared': True, 'trainingExecuted': False})
+    raise SystemExit(0)
 
 def source_text(cell):
     return ''.join(cell.get('source', []))
@@ -100,5 +111,6 @@ nb['metadata'].setdefault('discoverystackTraining', {})['recoveryNotebook'] = Tr
 nb['metadata']['discoverystackTraining']['runModeDefault'] = 'fast_path'
 nb['metadata']['discoverystackTraining']['smokeGate'] = 'imports_ready, model_definition_ready, smoke_train_batch_ready'
 nb['metadata']['colab'] = {'name': 'DiscoveryStack SEO GEO 500 optimized recovery'}
-OUT.write_text(json.dumps(nb, ensure_ascii=False, indent=2), encoding='utf-8')
-print(OUT)
+with OUT.open('x', encoding='utf-8') as handle:
+    handle.write(json.dumps(harden_notebook(nb), ensure_ascii=False, indent=2) + '\n')
+print({'recoverySourcePrepared': True, 'trainingExecuted': False})

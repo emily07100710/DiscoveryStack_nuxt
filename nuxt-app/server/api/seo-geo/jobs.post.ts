@@ -6,7 +6,7 @@ import { requireOwner } from '../../utils/auth'
 const inputSchema = z.object({
   briefId: z.number().int().positive(),
   operation: z.enum(['autogeo_recommendation', 'content_draft', 'risk_scan', 'delivery_preview', 'delivery_publish']),
-  providerMode: z.enum(['reference_rules', 'autogeo_bailian_qwen', 'autogeo_api', 'manual']),
+  providerMode: z.enum(['reference_rules', 'autogeo_bailian_qwen', 'autogeo_api', 'manual', 'openai_compatible']),
   productionPlanId: z.number().int().positive().optional(),
   strategyRecommendationId: z.number().int().positive().optional(),
   productionDeliverableId: z.number().int().positive().optional(),

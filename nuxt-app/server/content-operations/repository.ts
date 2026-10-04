@@ -1,5 +1,7 @@
+import { assertWeeklyPublicationConsent, assertWeeklyWorkflowActive } from '../weekly-content/publication-guard'
 import { and, desc, eq, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm'
 import { createError } from 'h3'
+import { stableFingerprint } from './normalization'
 import { getDatabase } from '../database'
 import {
   contentOperationAutopilotPolicies,
@@ -75,6 +77,38 @@ export type PublicationAttemptReservationInput = Omit<PublicationAttemptInsert, 
   riskGateId: number
   authorityReference?: string | null
 }
+/** A V4 fingerprint is authority only when the exact durable row was already claimed and every current binding still matches. */
+export function matchesCurrentV4ReservationAuthority(authorization: ContentOperationMachineAuthorizationRow | null | undefined, policy: ContentOperationAutopilotPolicyRow | null | undefined, target: ContentOperationPublicationTargetRow | null | undefined, input: Pick<PublicationAttemptReservationInput,'ownerUserId'|'clientId'|'entryId'|'jobId'|'draftId'|'targetId'|'contentHash'|'evidenceSnapshotHash'|'startedAt'|'authorityReference'>): boolean {
+  if(!authorization || !policy || !target || !authorization.authorizationExpiresAt || typeof authorization.authorizationPayload!=='object' || !authorization.authorizationPayload || Array.isArray(authorization.authorizationPayload))return false
+  const payload=authorization.authorizationPayload as Record<string,unknown>
+  const record=(value:unknown):Record<string,unknown>=> value && typeof value==='object' && !Array.isArray(value) ? value as Record<string,unknown> : {}
+  const {authorizationFingerprint:_embedded,...base}=payload
+  const p=record(payload.policy),t=record(payload.target),lineage=record(payload.lineage),decision=record(payload.decision),candidate=record(payload.candidate),evidence=record(payload.evidence),quality=record(payload.quality)
+  return authorization.status==='executing' && authorization.revokedAt===null && authorization.authorizationExpiresAt.getTime()>input.startedAt.getTime()
+    && authorization.authorizationFingerprint===input.authorityReference && stableFingerprint(base)===authorization.authorizationFingerprint
+    && authorization.ownerUserId===input.ownerUserId && authorization.clientId===input.clientId && authorization.entryId===input.entryId && authorization.jobId===input.jobId && authorization.draftId===input.draftId && authorization.publicationTargetId===input.targetId
+    && authorization.contentHash===input.contentHash && authorization.evidenceSnapshotHash===input.evidenceSnapshotHash && authorization.qualityStatus==='passed' && authorization.qualityFingerprint===quality.fingerprint && quality.status==='passed'
+    && policy.ownerUserId===input.ownerUserId && policy.authorizedByOwnerUserId===input.ownerUserId && policy.clientId===input.clientId && policy.publicationTargetId===input.targetId && policy.policyVersion==='governed-autopilot-policy-v4' && policy.status==='enabled' && policy.requireApprovedForDelivery===false && policy.revokedAt===null && policy.expiresAt.getTime()>input.startedAt.getTime()
+    && authorization.policyId===policy.policyId && authorization.policyVersion===policy.policyVersion && authorization.policyFingerprint===policy.configurationFingerprint && authorization.websiteId===policy.websiteId
+    && target.ownerUserId===input.ownerUserId && target.clientId===input.clientId && target.id===input.targetId && target.status==='active' && target.executionEnabled===true && target.revokedAt===null && target.websiteId===policy.websiteId && authorization.targetId===target.targetId
+    && p.policyId===policy.policyId && p.policyVersion===policy.policyVersion && p.configurationFingerprint===policy.configurationFingerprint && p.ownerUserId===input.ownerUserId && p.clientId===input.clientId && p.websiteId===policy.websiteId
+    && t.targetRowId===input.targetId && t.destinationId===target.targetId && t.configurationFingerprint===target.configurationFingerprint && t.identityVerified===true
+    && lineage.entryId===input.entryId && lineage.jobId===input.jobId && lineage.draftId===String(input.draftId) && lineage.entityProfileFingerprint===authorization.entityProfileFingerprint && lineage.queryOwnershipFingerprint===authorization.queryOwnershipFingerprint
+    && candidate.contentHash===input.contentHash && evidence.snapshotHash===input.evidenceSnapshotHash && evidence.status==='approved_fresh' && decision.action==='publish'
+}
+/** Completed publications retain exact durable authority after the short execution lease expires. */
+export function matchesPublishedV4DeliveredAuthority(authorization:ContentOperationMachineAuthorizationRow|null|undefined,input:{ownerUserId:number;clientId:number;entryId:number;jobId:number;draftId:number;targetId:number|null;contentHash:string;evidenceSnapshotHash:string;authorityReference:string}):boolean {
+  if(!authorization || authorization.status!=='published' || authorization.revokedAt!==null || !authorization.authorizationPayload || typeof authorization.authorizationPayload!=='object' || Array.isArray(authorization.authorizationPayload))return false
+  const payload=authorization.authorizationPayload as Record<string,unknown>,record=(value:unknown):Record<string,unknown>=>value && typeof value==='object' && !Array.isArray(value)?value as Record<string,unknown>:{}
+  const {authorizationFingerprint:_embedded,...base}=payload,p=record(payload.policy),target=record(payload.target),lineage=record(payload.lineage),candidate=record(payload.candidate),content=record(payload.content),evidence=record(payload.evidence),quality=record(payload.quality),decision=record(payload.decision)
+  return /^[a-f0-9]{64}$/.test(input.authorityReference) && authorization.authorizationFingerprint===input.authorityReference && stableFingerprint(base)===input.authorityReference
+    && authorization.ownerUserId===input.ownerUserId && authorization.clientId===input.clientId && authorization.entryId===input.entryId && authorization.jobId===input.jobId && authorization.draftId===input.draftId && authorization.publicationTargetId===input.targetId
+    && authorization.contentHash===input.contentHash && authorization.evidenceSnapshotHash===input.evidenceSnapshotHash && authorization.policyVersion==='governed-autopilot-policy-v4' && authorization.qualityStatus==='passed'
+    && p.ownerUserId===input.ownerUserId && p.clientId===input.clientId && p.websiteId===authorization.websiteId && p.policyId===authorization.policyId && p.policyVersion===authorization.policyVersion && p.configurationFingerprint===authorization.policyFingerprint
+    && target.targetRowId===input.targetId && target.destinationId===authorization.targetId && target.identityVerified===true && target.websiteId===authorization.websiteId
+    && lineage.entryId===input.entryId && lineage.jobId===input.jobId && lineage.draftId===String(input.draftId) && lineage.entityProfileFingerprint===authorization.entityProfileFingerprint && lineage.queryOwnershipFingerprint===authorization.queryOwnershipFingerprint
+    && candidate.contentHash===input.contentHash && content.contentHash===input.contentHash && content.draftId===String(input.draftId) && evidence.snapshotHash===input.evidenceSnapshotHash && evidence.status==='approved_fresh' && quality.status==='passed' && quality.fingerprint===authorization.qualityFingerprint && decision.action==='publish'
+}
 export type PublicationAttemptReservation = { attempt: ContentOperationPublicationAttemptRow; run: ContentOperationRunRow; replayed: boolean }
 export type PublicationAttemptFinalization = Pick<ContentOperationPublicationAttemptRow, 'status' | 'artifactFingerprint' | 'remoteState' | 'receiptLedger' | 'remoteRevision' | 'receiptFingerprint' | 'publicationUrl' | 'errorCode' | 'errorSummary' | 'completedAt'>
 
@@ -145,6 +179,9 @@ export type ContentOperationsRepository = {
   findPublicationAttemptByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationPublicationAttemptRow | null>
   listPublicationAttempts(ownerUserId: number, entryId?: number): Promise<ContentOperationPublicationAttemptRow[]>
   insertPublicationAttempt(input: PublicationAttemptInsert): Promise<ContentOperationPublicationAttemptRow>
+  renewMachineAuthorizationLease?(input: {ownerUserId:number;authorizationFingerprint:string;expectedExpiresAt:Date;now:Date;expiresAt:Date}): Promise<ContentOperationMachineAuthorizationRow|null>
+  assertWeeklyWorkflowActive?(ownerUserId: number, clientId: number, now: Date): Promise<void>
+  assertWeeklyCustomerConsent?(input: { ownerUserId: number; clientId: number; entryId: number; jobId: number; draftId: number; targetId: number; contentHash: string; evidenceSnapshotHash: string; startedAt: Date }): Promise<void>
   reservePublicationAttempt(input: PublicationAttemptReservationInput & { ownerUserId: number; runId: number; leaseToken: string; entryId: number }): Promise<PublicationAttemptReservation>
   finalizePublicationAttempt(ownerUserId: number, attemptId: number, patch: PublicationAttemptFinalization): Promise<ContentOperationPublicationAttemptRow | null>
   findOutcomeByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationOutcomeAssessmentRow | null>
@@ -173,10 +210,10 @@ function isDuplicateError(error: unknown): boolean {
   return candidate?.code === 'ER_DUP_ENTRY' || candidate?.errno === 1062 || /duplicate entry|unique constraint/i.test(candidate?.message || '')
 }
 
-function makeRepository(database: any): ContentOperationsRepository {
+function makeRepository(database: any, currentTime: () => Date = () => new Date()): ContentOperationsRepository {
   const repository: ContentOperationsRepository = {
     async transaction<T>(work: (repository: ContentOperationsRepository) => Promise<T>) {
-      return database.transaction(async (transaction: any) => work(makeRepository(transaction)))
+      return database.transaction(async (transaction: any) => work(makeRepository(transaction,currentTime)))
     },
     async findClientByIdempotency(ownerUserId, idempotencyKey) {
       const [row] = await database.select().from(contentOperationClients).where(and(eq(contentOperationClients.ownerUserId, ownerUserId), eq(contentOperationClients.idempotencyKey, idempotencyKey))).limit(1)
@@ -615,6 +652,13 @@ function makeRepository(database: any): ContentOperationsRepository {
         throw error
       }
     },
+    async renewMachineAuthorizationLease(input) {
+      if(!Number.isFinite(input.expiresAt.getTime()) || input.expiresAt.getTime()<=input.now.getTime() || input.expiresAt.getTime()>input.now.getTime()+15*60*1000)throw createError({statusCode:422,statusMessage:'Machine revalidation lease exceeds the original bounded window.'})
+      await database.update(contentOperationMachineAuthorizations).set({authorizationExpiresAt:input.expiresAt}).where(and(eq(contentOperationMachineAuthorizations.ownerUserId,input.ownerUserId),eq(contentOperationMachineAuthorizations.authorizationFingerprint,input.authorizationFingerprint),eq(contentOperationMachineAuthorizations.status,'authorized'),isNull(contentOperationMachineAuthorizations.revokedAt),eq(contentOperationMachineAuthorizations.authorizationExpiresAt,input.expectedExpiresAt)))
+      const [row]=await database.select().from(contentOperationMachineAuthorizations).where(and(eq(contentOperationMachineAuthorizations.ownerUserId,input.ownerUserId),eq(contentOperationMachineAuthorizations.authorizationFingerprint,input.authorizationFingerprint),eq(contentOperationMachineAuthorizations.status,'authorized'),eq(contentOperationMachineAuthorizations.authorizationExpiresAt,input.expiresAt))).limit(1);return row || null
+    },
+    async assertWeeklyWorkflowActive(owner,client,now) { await assertWeeklyWorkflowActive(database,{ownerUserId:owner,clientId:client,now}) },
+    async assertWeeklyCustomerConsent(input) { await database.transaction(async(tx:any)=> { const [job]=await tx.select({id:seoGeoContentJobs.id}).from(seoGeoContentJobs).where(and(eq(seoGeoContentJobs.id,input.jobId),eq(seoGeoContentJobs.ownerUserId,input.ownerUserId))).for('update').limit(1); if(!job)throw createError({statusCode:409,statusMessage:'WEEKLY_CUSTOMER_APPROVAL_REQUIRED'}); await assertWeeklyPublicationConsent(tx,input,undefined,currentTime) }) },
     async reservePublicationAttempt(input) {
       return database.transaction(async (transaction: any) => {
         const [lockedJob] = await transaction.select({ id: seoGeoContentJobs.id }).from(seoGeoContentJobs).where(and(
@@ -623,13 +667,25 @@ function makeRepository(database: any): ContentOperationsRepository {
         )).for('update').limit(1)
         if (!lockedJob) throw createError({ statusCode: 409, statusMessage: 'Publication job is missing or no longer owner-scoped.' })
         const authorityReference = input.authorityReference || null
-        const governedAutopilot = typeof authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(authorityReference)
+        const legacyGovernedAutopilot = typeof authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(authorityReference)
+        let durableV4Authority=false
+        let recheckV4Authority=()=>false
+        if (typeof authorityReference==='string' && /^[a-f0-9]{64}$/.test(authorityReference)) {
+          const [authorization]=await transaction.select().from(contentOperationMachineAuthorizations).where(and(eq(contentOperationMachineAuthorizations.ownerUserId,input.ownerUserId),eq(contentOperationMachineAuthorizations.authorizationFingerprint,authorityReference))).for('update').limit(1)
+          const [policy]=await transaction.select().from(contentOperationAutopilotPolicies).where(and(eq(contentOperationAutopilotPolicies.ownerUserId,input.ownerUserId),eq(contentOperationAutopilotPolicies.clientId,input.clientId),eq(contentOperationAutopilotPolicies.publicationTargetId,input.targetId))).for('update').limit(1)
+          const [target]=await transaction.select().from(contentOperationPublicationTargets).where(and(eq(contentOperationPublicationTargets.ownerUserId,input.ownerUserId),eq(contentOperationPublicationTargets.clientId,input.clientId),eq(contentOperationPublicationTargets.id,input.targetId))).for('update').limit(1)
+          // startedAt remains the immutable audit timestamp, never the expiry clock.
+          recheckV4Authority=()=>matchesCurrentV4ReservationAuthority(authorization,policy,target,{...input,startedAt:currentTime()})
+          durableV4Authority=recheckV4Authority()
+        }
+        const governedAutopilot=legacyGovernedAutopilot || durableV4Authority
         const [latestReview] = await transaction.select({ id: seoGeoContentReviews.id, decision: seoGeoContentReviews.decision }).from(seoGeoContentReviews).where(and(
           eq(seoGeoContentReviews.jobId, input.jobId),
           eq(seoGeoContentReviews.draftId, input.draftId),
           eq(seoGeoContentReviews.reviewerUserId, input.ownerUserId),
           eq(seoGeoContentReviews.evidenceSnapshotHash, input.evidenceSnapshotHash),
         )).orderBy(desc(seoGeoContentReviews.id)).limit(1)
+        if (governedAutopilot && latestReview && latestReview.decision!=='approved_for_delivery') throw createError({ statusCode:409,statusMessage:'A newer owner review blocks machine publication.' })
         if (!governedAutopilot && (!latestReview || latestReview.id !== input.reviewId || latestReview.decision !== 'approved_for_delivery')) throw createError({ statusCode: 409, statusMessage: 'Publication approval changed before attempt reservation.' })
         if (governedAutopilot && input.reviewId !== null && input.reviewId !== 0) throw createError({ statusCode: 409, statusMessage: 'Governed autopilot reservation must not impersonate a human review id.' })
         const [latestRiskGate] = await transaction.select({ id: seoGeoContentRiskGates.id, status: seoGeoContentRiskGates.status }).from(seoGeoContentRiskGates).where(and(
@@ -637,13 +693,21 @@ function makeRepository(database: any): ContentOperationsRepository {
           eq(seoGeoContentRiskGates.evidenceSnapshotHash, input.evidenceSnapshotHash),
         )).orderBy(desc(seoGeoContentRiskGates.id)).limit(1)
         if (!latestRiskGate || latestRiskGate.id !== input.riskGateId || latestRiskGate.status !== 'passed') throw createError({ statusCode: 409, statusMessage: 'Publication risk gate changed before attempt reservation.' })
-        const txRepository = makeRepository(transaction)
+        const assertCurrentReservationAuthority=async()=>{
+          const currentV4Authority=recheckV4Authority()
+          if(durableV4Authority && !currentV4Authority)throw createError({statusCode:409,statusMessage:'Publication approval changed before attempt reservation.'})
+          if(input.mode==='execute')await assertWeeklyPublicationConsent(transaction,input,currentV4Authority,currentTime)
+          if(durableV4Authority && !recheckV4Authority())throw createError({statusCode:409,statusMessage:'Publication approval changed before attempt reservation.'})
+        }
+        await assertCurrentReservationAuthority()
+        const txRepository = makeRepository(transaction,currentTime)
         const existing = await txRepository.findPublicationAttemptByIdempotency(input.ownerUserId, input.idempotencyKey)
         if (existing) {
           if (existing.entryId !== input.entryId || existing.runId !== input.runId || existing.targetId !== input.targetId || existing.mode !== input.mode || existing.inputFingerprint !== input.inputFingerprint) throw createError({ statusCode: 409, statusMessage: 'Publication attempt idempotency key is associated with a different publication.' })
           const [run] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId), eq(contentOperationRuns.stage, 'publication'), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, input.leaseToken))).limit(1)
           if (!run) throw createError({ statusCode: 409, statusMessage: 'Publication attempt run is missing or is not leased by this worker.' })
           await transaction.update(contentOperationCalendarEntries).set({ status: 'publishing', updatedAt: input.startedAt }).where(and(eq(contentOperationCalendarEntries.ownerUserId, input.ownerUserId), eq(contentOperationCalendarEntries.id, input.entryId), or(eq(contentOperationCalendarEntries.status, 'ready_to_publish'), eq(contentOperationCalendarEntries.status, 'publishing'))))
+          await assertCurrentReservationAuthority()
           return { attempt: existing, run, replayed: true } satisfies PublicationAttemptReservation
         }
         const [current] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId), eq(contentOperationRuns.stage, 'publication'), eq(contentOperationRuns.state, 'processing'), eq(contentOperationRuns.leaseOwner, input.leaseToken))).limit(1)
@@ -658,8 +722,11 @@ function makeRepository(database: any): ContentOperationsRepository {
         }
         const [run] = await transaction.select().from(contentOperationRuns).where(and(eq(contentOperationRuns.ownerUserId, input.ownerUserId), eq(contentOperationRuns.id, input.runId))).limit(1)
         if (!run || run.attemptNumber !== requestedAttemptNumber) throw createError({ statusCode: 409, statusMessage: 'Publication execute attempt counter could not be verified.' })
+        // Ledger reads and run updates may also wait; check again immediately before INSERT.
+        await assertCurrentReservationAuthority()
         const { jobId: _jobId, draftId: _draftId, reviewId: _reviewId, riskGateId: _riskGateId, leaseToken: _leaseToken, attemptNumber: _attemptNumber, ...attemptInput } = input
         const attempt = await txRepository.insertPublicationAttempt({ ...attemptInput, attemptNumber: requestedAttemptNumber, artifactFingerprint: null, status: 'planned', remoteState: null, remoteRevision: null, errorCode: null, errorSummary: null, completedAt: null })
+        await assertCurrentReservationAuthority()
         return { attempt, run, replayed: false } satisfies PublicationAttemptReservation
       })
     },
@@ -705,7 +772,10 @@ function makeRepository(database: any): ContentOperationsRepository {
     async resolveDeliveredPublication(ownerUserId, entryId) {
       const lineage = await repository.resolveWorkspaceEntry(ownerUserId, entryId)
       const authorityReference = lineage?.entry.publicationAuthorityReference
-      const governedAutopilot = typeof authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(authorityReference)
+      const legacyAutopilot = typeof authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(authorityReference)
+      const publishedAuthorization = lineage?.job && lineage.draft && typeof authorityReference==='string' && /^[a-f0-9]{64}$/.test(authorityReference) ? await repository.findMachineAuthorization(ownerUserId,entryId,authorityReference) : null
+      const durableV4Authority=Boolean(lineage?.job && lineage.draft && typeof authorityReference==='string' && matchesPublishedV4DeliveredAuthority(publishedAuthorization,{ownerUserId,clientId:lineage.client.id,entryId,jobId:lineage.job.id,draftId:lineage.draft.id,targetId:lineage.entry.publicationTargetId,contentHash:lineage.entry.contentHash || '',evidenceSnapshotHash:lineage.entry.evidenceSnapshotHash,authorityReference}))
+      const governedAutopilot=legacyAutopilot || durableV4Authority
       const manualReviewValid = Boolean(lineage?.review && lineage.review.decision === 'approved_for_delivery')
       if (!lineage || !lineage.job || !lineage.draft || (!manualReviewValid && !governedAutopilot) || lineage.entry.status !== 'delivered' && lineage.entry.status !== 'completed' || !lineage.entry.contentHash || lineage.draft.contentHash !== lineage.entry.contentHash || (lineage.review && lineage.review.evidenceSnapshotHash !== lineage.entry.evidenceSnapshotHash)) return null
       const publicationRuns = await repository.listRuns(ownerUserId, entryId)
@@ -714,6 +784,7 @@ function makeRepository(database: any): ContentOperationsRepository {
       const attempts = await repository.listPublicationAttempts(ownerUserId, entryId)
       const deliveredAttempt = attempts.find(attempt => attempt.runId === publicationRun.id && attempt.status === 'delivered' && attempt.entryId === entryId && attempt.ownerUserId === ownerUserId && attempt.contentHash === lineage.entry.contentHash && (lineage.target ? attempt.targetId === lineage.target.id : true)) || null
       if (!deliveredAttempt) return null
+      if(durableV4Authority && (deliveredAttempt.authorityReference!==authorityReference || !/^[a-f0-9]{64}$/.test(deliveredAttempt.receiptFingerprint || '') || !/^[a-f0-9]{64}$/.test(deliveredAttempt.artifactFingerprint || '')))return null
       return { entry: lineage.entry, calendar: lineage.calendar, deliverable: lineage.deliverable, job: lineage.job, draft: lineage.draft, review: lineage.review, riskGate: lineage.riskGate || undefined, publicationRun, authorityReference: governedAutopilot ? authorityReference : null, publicationTarget: lineage.target || null, publicationAttempt: deliveredAttempt, publicationIdentity: lineage.entry.publicationSlug && lineage.entry.publicationPath && lineage.entry.publicationIdentityFingerprint ? { publicationId: `publication-${lineage.entry.id}`, slug: lineage.entry.publicationSlug, path: lineage.entry.publicationPath, identityFingerprint: lineage.entry.publicationIdentityFingerprint } : null }
     },
   }
@@ -724,8 +795,8 @@ export function createContentOperationsRepository(): ContentOperationsRepository
   return makeRepository(requireOperationsDatabase())
 }
 
-export function createContentOperationsRepositoryFromDatabase(database: unknown): ContentOperationsRepository {
-  return makeRepository(database as any)
+export function createContentOperationsRepositoryFromDatabase(database: unknown, options: { currentTime?: () => Date } = {}): ContentOperationsRepository {
+  return makeRepository(database as any,options.currentTime)
 }
 
 export function createInMemoryRepositoryForTests(): ContentOperationsRepository {

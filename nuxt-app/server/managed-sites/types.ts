@@ -14,6 +14,30 @@ export const MANAGED_SITE_SESSION_COOKIE = '__Host-discoverystack-managed-site-s
 export const MANAGED_SITE_SESSION_TTL_MS = 1000 * 60 * 60 * 8
 export const MANAGED_SITE_INVITATION_TTL_MS = 1000 * 60 * 60 * 72
 
+/**
+ * Customer self-serve re-access.
+ *
+ * A paying customer whose 8h session expires must be able to get back into their
+ * own site without waiting for the owner to re-invite them. Re-access re-issues a
+ * single-use link on the SAME invitation ledger, so it never widens authority: it
+ * only reaches an email address that already holds an active, non-owner membership.
+ * The link lives much shorter than an owner invitation because it is unsolicited
+ * mail sitting in an inbox.
+ */
+export const MANAGED_SITE_REACCESS_TTL_MS = 1000 * 60 * 30
+/** Minimum spacing between two re-access links for the same address on the same project. */
+export const MANAGED_SITE_REACCESS_COOLDOWN_MS = 1000 * 60
+export const MANAGED_SITE_REACCESS_WINDOW_MS = 1000 * 60 * 60
+export const MANAGED_SITE_REACCESS_MAX_PER_WINDOW = 3
+/**
+ * The single source of truth for where a customer recovers access. It lives here,
+ * on a leaf module, because three unrelated places need it — the page that renders
+ * the form, the service that builds the emailed link, and the 401 that tells an
+ * expired session where to go. A second copy would silently break emailed links
+ * the day the route is renamed.
+ */
+export const MANAGED_SITE_REACCESS_PATH = '/managed-site-access'
+
 export const MANAGED_SITE_ROLES = ['owner', 'administrator', 'editor', 'reviewer', 'analyst'] as const
 export type ManagedSiteRole = typeof MANAGED_SITE_ROLES[number]
 
@@ -88,6 +112,8 @@ export type ManagedSiteRepository = {
   findMembership(ownerUserId: number, membershipId: number): Promise<ManagedSiteMembership | null>
   findMembershipByEmail(ownerUserId: number, projectId: number, principalEmail: string): Promise<ManagedSiteMembership | null>
   listMemberships(ownerUserId: number, projectId: number): Promise<ManagedSiteMembership[]>
+  /** Active memberships this address holds across every project of one owner. Used only by customer self-serve re-access. */
+  listActiveMembershipsByEmail(ownerUserId: number, principalEmail: string): Promise<ManagedSiteMembership[]>
   insertMembership(input: Omit<ManagedSiteMembership, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteMembership>
   updateMembership(ownerUserId: number, membershipId: number, patch: Partial<Omit<ManagedSiteMembership, 'id' | 'ownerUserId' | 'projectId' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteMembership | null>
   findInvitationByTokenHash(tokenHash: string): Promise<ManagedSiteInvitation | null>

@@ -76,3 +76,11 @@ Article JSON-LD 使用 normalized title、canonical URL、language、publishedAt
 正式 targeted suite 位於 `tests/first-party-content-site-kit.test.ts`，使用 synthetic fixtures 驗證 formal artifact happy paths、en/zh-hant、article/faq/service_page、frontmatter safety、exact hash preservation、identity/path guards、manifest collisions、500-item bound、public origin safety、SEO/OG/JSON-LD、bound FAQ gating、hreflang/x-default、sitemap、Astro/Nuxt parity、Nuxt useHead shape、recursive JSON-safe inputs、public API surface 與 malformed input。測試不包含真實客戶資料、網站內容、token 或 provider response。
 
 本版本尚未驗證真實客戶 Astro/Nuxt repository、實際 content loader、production routing、production deployment、live canonical domain、真實 search crawler rendering、customer-specific structured data policy 或 production content governance。任何 reference integration 在部署前都必須由客戶網站重新驗證 source path、content root、canonical origin、route collision、JSON-LD policy 與 production build。
+
+
+### Public URL lineage for measurement and intervention
+
+- Publisher `targetOrigin` is a transport/API destination and is never a public-page fallback. The owner-scoped client's stored `canonicalSiteOrigin` supplies the public origin.
+- Only `first_party_git` and `first_party_signed_api` derive Site Kit routes: `/<language>/<articles|faq|services>/<persisted-slug>`, after validating the artifact path, publication identity, and current owner/client/target binding. Successful delivery saves this URL in the existing publication-attempt field; no schema change or remote publication is required by this projection.
+- Saved URLs are revalidated against the current public origin and formal route. Missing, malformed, HTTP, cross-origin, API, or source-file URLs fail closed with `PUBLICATION_PUBLIC_URL_NOT_CONFIGURED`. Other transports require a trusted saved public URL and never guess a CMS permalink.
+- A projected URL and remote delivery receipt do not prove the rendered HTML is live or indexed. Live acceptance must separately check the public page, canonical/robots/sitemap/structured data, recrawl, and time-windowed SEO/GEO observations.

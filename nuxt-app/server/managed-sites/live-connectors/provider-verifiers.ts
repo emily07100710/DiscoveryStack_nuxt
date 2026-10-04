@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { createError } from 'h3'
-import { isAllowedBailianEndpoint } from '../../geo/autogeo-bailian-qwen'
+import { normalizeOpenAiCompatibleEndpoint } from '../../llm-provider/openai-compatible'
 import { assertPublicHttpsUrl } from '../../content-operations/normalization'
 import { stableFingerprint } from '../../seo-geo-core/repository'
 import { porkbunEnvironment } from './porkbun-adapters'
@@ -32,8 +32,9 @@ export function assertAllowedManagedSiteProviderOrigin(value: string, raw?: stri
 }
 
 export function assertCanonicalBailianManagedSiteEndpoint(value: string): string {
-  if (!isAllowedBailianEndpoint(value)) throw createError({ statusCode: 503, statusMessage: 'Bailian endpoint is outside the canonical official allowlist.' })
-  return value
+  const normalized = normalizeOpenAiCompatibleEndpoint(value)
+  if (!normalized) throw createError({ statusCode: 503, statusMessage: 'Bailian endpoint is outside the canonical official allowlist.' })
+  return normalized
 }
 
 const internalDeploymentVerifier: ManagedSiteProviderVerifier = async input => {
@@ -62,9 +63,8 @@ const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u
 
 /** Owner-triggered, bounded model-access probe. It never stores or returns generated text. */
 const bailianCapabilityProbe: ManagedSiteProviderVerifier = async input => {
-  const endpoint = typeof input.transportConfiguration.endpointOrigin === 'string' ? input.transportConfiguration.endpointOrigin : ''
+  const endpoint = assertCanonicalBailianManagedSiteEndpoint(typeof input.transportConfiguration.endpointOrigin === 'string' ? input.transportConfiguration.endpointOrigin : '')
   const model = typeof input.transportConfiguration.model === 'string' ? input.transportConfiguration.model : 'qwen-plus'
-  assertCanonicalBailianManagedSiteEndpoint(endpoint)
   if (!MODEL_ID.test(model)) throw createError({ statusCode: 422, statusMessage: 'Bailian model identifier is invalid.' })
   const credential = await input.resolveCredential(input.credentialReference)
   if (!credential.ok) throw createError({ statusCode: 409, statusMessage: 'Provider credential reference is unresolved.' })

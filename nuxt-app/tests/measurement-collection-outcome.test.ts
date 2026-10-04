@@ -18,8 +18,8 @@ function delivered() {
     review: { id: 6, jobId: 4, draftId: 5, reviewerUserId: ownerUserId, decision: 'approved_for_delivery', evidenceSnapshotHash: evidenceHash },
     riskGate: { id: 10, draftId: 5, status: 'passed', evidenceSnapshotHash: evidenceHash },
     publicationRun: { id: 11, ownerUserId, entryId: 30, stage: 'publication', state: 'succeeded', completedAt: new Date('2026-08-01T01:00:00.000Z') },
-    publicationTarget: { id: 55, targetOrigin: 'https://client.acme.taipei' },
-    publicationAttempt: { id: 12, ownerUserId, entryId: 30, runId: 11, targetId: 55, status: 'delivered', receiptFingerprint: receiptHash, publicationUrl: canonicalPage, contentHash, evidenceSnapshotHash: evidenceHash },
+    publicationTarget: { id: 55, ownerUserId, clientId: 20, transport: 'wordpress_rest', targetId: 'target-55', contentRoot: 'content', status: 'active', targetOrigin: 'https://client.acme.taipei' },
+    publicationAttempt: { id: 12, ownerUserId, clientId: 20, entryId: 30, runId: 11, targetId: 55, status: 'delivered', receiptFingerprint: receiptHash, publicationUrl: canonicalPage, contentHash, evidenceSnapshotHash: evidenceHash },
   }
 }
 
@@ -35,6 +35,7 @@ function contentRepository(outcomes: any[]) {
   const publication = delivered()
   let inserted: any = null
   const repository = {
+    async findClient() { return { id: 20, ownerUserId, canonicalSiteOrigin: 'https://client.acme.taipei' } },
     async resolveDeliveredPublication() { return publication },
     async resolveCanonicalContext() { return { evidenceSnapshot: { hash: evidenceHash, refs: [{ sourceId: 1 }] }, deliverable: { id: 2 }, strategy: { id: 3 }, opportunity: { key: 'topic-a' }, rules: [{ id: 'rule-1' }] } },
     async findOutcomeByIdempotency() { return null },
@@ -63,6 +64,19 @@ function measurementRepository(current: MeasurementRunRow, currentConnection: Me
 }
 
 describe('measurement outcome integration', () => {
+  it('blocks stale public origin configuration without retrying or calling a provider', async () => {
+    const current = run('google_search_console')
+    const measurement = measurementRepository(current, connection('google_search_console'))
+    const content = contentRepository([])
+    content.repository.findClient = async () => ({ id: 20, ownerUserId, canonicalSiteOrigin: 'https://replacement.acme.taipei' })
+    let calls = 0
+    const result = await processMeasurementRun(ownerUserId, current.id, { repository: measurement.repository, contentOperations: content.repository, fetcher: async () => { calls += 1; throw new Error('provider must not be called') }, now: new Date('2026-12-01T00:00:00.000Z') })
+    expect(result.run.state).toBe('blocked')
+    expect(result.run.errorCode).toBe('PUBLICATION_PUBLIC_URL_NOT_CONFIGURED')
+    expect(calls).toBe(0)
+    expect(measurement.snapshots).toHaveLength(0)
+  })
+
   it('calls the existing recordOwnerOutcomeAssessment chain and persists a one-source partial outcome without learning admission', async () => {
     const current = run('google_search_console')
     const outcomes: any[] = []

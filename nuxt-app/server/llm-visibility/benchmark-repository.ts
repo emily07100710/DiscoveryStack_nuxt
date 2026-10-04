@@ -77,12 +77,32 @@ export interface VisibilityBenchmarkRepository {
   listBenchmarks(ownerUserId: number, projectId: number, limit?: number): Promise<BenchmarkWithSamples[]>
   getBenchmark(ownerUserId: number, benchmarkId: number): Promise<BenchmarkWithSamples | null>
   claimBenchmarkForExecution(ownerUserId: number, benchmarkId: number, now: Date, staleBefore: Date): Promise<boolean>
+  listAutomaticResumeCandidates(ownerUserId: number, staleBefore: Date): Promise<BenchmarkWithSamples[]>
+  claimBenchmarkForAutomaticResume(ownerUserId: number, benchmarkId: number, now: Date, staleBefore: Date): Promise<boolean>
+  claimSampleForAutomaticAttempt(ownerUserId: number, benchmarkId: number, sampleId: number, now: Date): Promise<boolean>
   updateSample(ownerUserId: number, sampleId: number, values: Partial<Omit<BenchmarkSampleRow, 'id' | 'ownerUserId' | 'benchmarkRunId' | 'projectId' | 'queryId' | 'promptVersionId' | 'provider' | 'modelLabel' | 'adapterKey' | 'locale' | 'observationWindowKey' | 'requestFingerprint' | 'createdAt'>>): Promise<void>
   touchProgress(ownerUserId: number, benchmarkId: number, now: Date): Promise<{ succeeded: number, failed: number }>
   finalizeBenchmark(ownerUserId: number, benchmarkId: number, input: { status: BenchmarkStatus, limitationCodes: string[], aggregateSnapshot: unknown, aggregateComputedAt: Date, completedAt: Date }): Promise<void>
   findRunByFingerprint(ownerUserId: number, requestFingerprint: string): Promise<{ runId: number, observationId: number } | null>
   persistSampleObservation(ownerUserId: number, candidate: ObservationCandidate, input: { promptVersionId: number, benchmarkRunId: number, sampleIndex: number, now: Date, headFetch?: CitationHeadFetchOptions }): Promise<{ runId: number, observationId: number }>
   loadSucceededObservations(ownerUserId: number, benchmarkId: number): Promise<BenchmarkAggregateObservation[]>
+}
+
+// Scheduler reads and claims share the same narrow eligibility predicate. Manual
+// partial/failed retry remains exclusive to claimBenchmarkForExecution.
+function automaticResumePredicate(staleBefore: Date) {
+  return or(
+    eq(llmVisibilityBenchmarkRuns.status, 'queued'),
+    and(eq(llmVisibilityBenchmarkRuns.status, 'running'), or(
+      lte(llmVisibilityBenchmarkRuns.lastProgressAt, staleBefore),
+      and(isNull(llmVisibilityBenchmarkRuns.lastProgressAt), lte(llmVisibilityBenchmarkRuns.startedAt, staleBefore)),
+      and(isNull(llmVisibilityBenchmarkRuns.lastProgressAt), isNull(llmVisibilityBenchmarkRuns.startedAt), lte(llmVisibilityBenchmarkRuns.createdAt, staleBefore)),
+    )),
+  )
+}
+
+export function isAutomaticResumeCandidate(benchmark: BenchmarkRow, staleBefore: Date): boolean {
+  return benchmark.status === 'queued' || benchmark.status === 'running' && (benchmark.lastProgressAt || benchmark.startedAt || benchmark.createdAt) <= staleBefore
 }
 
 function asDate(value: unknown): Date | null { return value ? new Date(value as Date | string) : null }
@@ -147,6 +167,20 @@ export function createDrizzleVisibilityBenchmarkRepository(database: any = getDa
       ))
       return Number(result?.[0]?.affectedRows || 0) === 1
     },
+    async listAutomaticResumeCandidates(ownerUserId, staleBefore) {
+      const rows = await database.select().from(llmVisibilityBenchmarkRuns).where(and(eq(llmVisibilityBenchmarkRuns.ownerUserId, ownerUserId), automaticResumePredicate(staleBefore))).orderBy(asc(llmVisibilityBenchmarkRuns.createdAt), asc(llmVisibilityBenchmarkRuns.id)).limit(10)
+      if (!rows.length) return []
+      const samples = await database.select().from(llmVisibilityBenchmarkSamples).where(and(eq(llmVisibilityBenchmarkSamples.ownerUserId, ownerUserId), inArray(llmVisibilityBenchmarkSamples.benchmarkRunId, rows.map((row: any) => row.id)))).orderBy(asc(llmVisibilityBenchmarkSamples.sampleIndex), asc(llmVisibilityBenchmarkSamples.id))
+      return rows.map((row: any) => ({ benchmark: benchmarkProjection(row), samples: samples.filter((sample: any) => sample.benchmarkRunId === row.id).map(sampleProjection) }))
+    },
+    async claimBenchmarkForAutomaticResume(ownerUserId, benchmarkId, now, staleBefore) {
+      const result = await database.update(llmVisibilityBenchmarkRuns).set({ status: 'running', startedAt: now, lastProgressAt: now }).where(and(eq(llmVisibilityBenchmarkRuns.id, benchmarkId), eq(llmVisibilityBenchmarkRuns.ownerUserId, ownerUserId), automaticResumePredicate(staleBefore)))
+      return Number(result?.[0]?.affectedRows || 0) === 1
+    },
+    async claimSampleForAutomaticAttempt(ownerUserId, benchmarkId, sampleId, now) {
+      const result = await database.update(llmVisibilityBenchmarkSamples).set({ status: 'running', attempts: 1, startedAt: now, completedAt: null }).where(and(eq(llmVisibilityBenchmarkSamples.id, sampleId), eq(llmVisibilityBenchmarkSamples.ownerUserId, ownerUserId), eq(llmVisibilityBenchmarkSamples.benchmarkRunId, benchmarkId), inArray(llmVisibilityBenchmarkSamples.status, ['pending', 'running']), eq(llmVisibilityBenchmarkSamples.attempts, 0), isNull(llmVisibilityBenchmarkSamples.startedAt)))
+      return Number(result?.[0]?.affectedRows || 0) === 1
+    },
     async updateSample(ownerUserId, sampleId, values) {
       await database.update(llmVisibilityBenchmarkSamples).set(values).where(and(eq(llmVisibilityBenchmarkSamples.id, sampleId), eq(llmVisibilityBenchmarkSamples.ownerUserId, ownerUserId)))
     },
@@ -207,6 +241,9 @@ export function createInMemoryVisibilityBenchmarkRepository(seed: InMemoryBenchm
     async listBenchmarks(ownerUserId, projectId, limit = 50) { return state.benchmarks.filter(row => row.ownerUserId === ownerUserId && row.projectId === projectId).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, limit).map(benchmark => structuredClone({ benchmark, samples: state.samples.filter(row => row.benchmarkRunId === benchmark.id) })) },
     async getBenchmark(ownerUserId, id) { const benchmark = state.benchmarks.find(row => row.ownerUserId === ownerUserId && row.id === id); return benchmark ? structuredClone({ benchmark, samples: state.samples.filter(row => row.benchmarkRunId === id).sort((a, b) => a.sampleIndex - b.sampleIndex || a.id - b.id) }) : null },
     async claimBenchmarkForExecution(ownerUserId, id, now, staleBefore) { const row = state.benchmarks.find(item => item.ownerUserId === ownerUserId && item.id === id); if (!row) return false; const last = row.lastProgressAt || row.startedAt || row.createdAt; if (row.status === 'completed' || row.status === 'running' && last > staleBefore) return false; row.status = 'running'; row.startedAt ||= now; row.lastProgressAt = now; row.updatedAt = now; return true },
+    async listAutomaticResumeCandidates(ownerUserId, staleBefore) { return state.benchmarks.filter(row => row.ownerUserId === ownerUserId && isAutomaticResumeCandidate(row, staleBefore)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id).slice(0, 10).map(benchmark => structuredClone({ benchmark, samples: state.samples.filter(row => row.ownerUserId === ownerUserId && row.benchmarkRunId === benchmark.id) })) },
+    async claimBenchmarkForAutomaticResume(ownerUserId, id, now, staleBefore) { const row = state.benchmarks.find(item => item.ownerUserId === ownerUserId && item.id === id); if (!row || !isAutomaticResumeCandidate(row, staleBefore)) return false; row.status = 'running'; row.startedAt ||= now; row.lastProgressAt = now; row.updatedAt = now; return true },
+    async claimSampleForAutomaticAttempt(ownerUserId, benchmarkId, id, now) { const row = state.samples.find(item => item.ownerUserId === ownerUserId && item.benchmarkRunId === benchmarkId && item.id === id); if (!row || !['pending', 'running'].includes(row.status) || row.attempts !== 0 || row.startedAt !== null) return false; Object.assign(row, { status: 'running', attempts: 1, startedAt: now, completedAt: null, updatedAt: now }); return true },
     async updateSample(ownerUserId, id, values) { const row = state.samples.find(item => item.ownerUserId === ownerUserId && item.id === id); if (!row) throw new VisibilityContractError(404, '找不到 benchmark sample。'); Object.assign(row, values, { updatedAt: new Date() }) },
     async touchProgress(ownerUserId, id, now) { const benchmark = state.benchmarks.find(item => item.ownerUserId === ownerUserId && item.id === id); if (!benchmark) throw new VisibilityContractError(404, '找不到 benchmark。'); const samples = state.samples.filter(row => row.benchmarkRunId === id); benchmark.succeededSamples = samples.filter(row => row.status === 'succeeded').length; benchmark.failedSamples = samples.filter(row => row.status === 'failed').length; benchmark.lastProgressAt = now; return { succeeded: benchmark.succeededSamples, failed: benchmark.failedSamples } },
     async finalizeBenchmark(ownerUserId, id, input) { const row = state.benchmarks.find(item => item.ownerUserId === ownerUserId && item.id === id); if (!row) throw new VisibilityContractError(404, '找不到 benchmark。'); Object.assign(row, input, { updatedAt: input.completedAt }) },

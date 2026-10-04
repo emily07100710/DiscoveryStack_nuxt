@@ -2,7 +2,8 @@ import type { ContentCalendarEntry, ContentCalendarRequest, ContentCalendarResul
 import type { PublishedContentOutcomeAssessment, OutcomeLearningCandidateResult } from '../outcome-learning'
 import type { contentOperationAutopilotPolicies, contentOperationBudgetReservations, contentOperationCalendarEntries, contentOperationCalendarEntryTargets, contentOperationCalendars, contentOperationClients, contentOperationEntityStrategyProfiles, contentOperationEvents, contentOperationMachineAuthorizations, contentOperationOutcomeAssessments, contentOperationPublicationAttempts, contentOperationPublicationTargets, contentOperationQueryOwnership, contentOperationRepairAttempts, contentOperationRuns, contentOperationTopicSubstitutions } from '../database/schema'
 
-export type ContentOperationClientRow = typeof contentOperationClients.$inferSelect
+type ClientRow = typeof contentOperationClients.$inferSelect
+export type ContentOperationClientRow = Omit<ClientRow, 'requireCustomerApproval'> & Partial<Pick<ClientRow, 'requireCustomerApproval'>>
 export type ContentOperationCalendarRow = typeof contentOperationCalendars.$inferSelect
 type CalendarEntryRow = typeof contentOperationCalendarEntries.$inferSelect
 export type ContentOperationCalendarEntryRow = Omit<CalendarEntryRow, 'publicationContentHash' | 'publicationRoutingPlanId' | 'publicationAuthorityReference' | 'publicationTargetCount'> & Partial<Pick<CalendarEntryRow, 'publicationContentHash' | 'publicationRoutingPlanId' | 'publicationAuthorityReference' | 'publicationTargetCount'>>
@@ -28,7 +29,7 @@ export type ContentOperationOutcomeAssessmentRow = Omit<OutcomeAssessmentRow, 't
 export type ContentOperationClientInput = {
   displayName: string
   canonicalSiteOrigin: string
-  framework: 'astro' | 'nuxt'
+  framework: 'astro' | 'nuxt' | 'nextjs'
   publicationTransport: 'first_party_git' | 'first_party_signed_api'
   timeZone: string
   defaultCadenceDays: 3 | 7 | 15 | 30
@@ -64,7 +65,7 @@ export type MaterializeInput = {
 
 export type PublicationTargetInput = {
   idempotencyKey: string
-  framework: 'astro' | 'nuxt' | 'wordpress' | 'php_agent' | 'generic_http' | 'geoflow_local' | 'static_site'
+  framework: 'astro' | 'nuxt' | 'nextjs' | 'wordpress' | 'php_agent' | 'generic_http' | 'geoflow_local' | 'static_site'
   transport: 'first_party_git' | 'first_party_signed_api' | 'wordpress_rest' | 'geoflow_agent' | 'generic_http' | 'geoflow_local'
   targetOrigin: string
   serviceReference?: string | null
@@ -239,12 +240,15 @@ export type WorkspacePayload = {
   }
   readiness: {
     schedulerAvailable: boolean
+    schedulerEnabled: boolean
     generationExecutorAvailable: boolean
     publicationTargetConfigured: boolean
     publicationExecutionEnabled: boolean
     credentialReferenceConfigured: boolean
     runtimeCredentialResolverAvailable: boolean
     outcomeCollectionConfigured: boolean
+    outcomeCollectionStatus?: 'configured' | 'not_configured' | 'unverified'
+    configuredMeasurementConnectionCount?: number
   }
   limitations: string[]
 }

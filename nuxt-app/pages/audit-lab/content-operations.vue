@@ -1,5 +1,9 @@
 <script setup lang="ts">
-type Framework = 'astro' | 'nuxt' | 'wordpress' | 'php_agent' | 'generic_http' | 'geoflow_local' | 'static_site'
+import { buildContentOperationsAuthorization, contentTargetFrameworkDefaults, newWeeklyAuthorizationTargets, type ContentAuthorizationProfile, type ContentAuthorizationInput, type ContentAuthorizationMode } from '../../utils/contentOperationsAuthorization'
+type WorkbenchFetch = <T = unknown>(path: string, options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown> }) => Promise<T>
+// Preserve Nuxt's runtime fetch while keeping this page's existing DTO contract local.
+const fetchContent = $fetch as unknown as WorkbenchFetch
+type Framework = 'astro' | 'nuxt' | 'nextjs' | 'wordpress' | 'php_agent' | 'generic_http' | 'geoflow_local' | 'static_site'
 type PublicationTransport = 'first_party_git' | 'first_party_signed_api' | 'wordpress_rest' | 'geoflow_agent' | 'generic_http' | 'geoflow_local'
 type CadenceDays = 3 | 7 | 15 | 30
 type CatchUpPolicy = 'skip_missed' | 'one_catch_up'
@@ -15,6 +19,7 @@ type Client = {
   defaultCadenceDays: CadenceDays
   defaultPublishLocalTime: string
   monthlyBudgetUnits: number
+  requireCustomerApproval?: boolean
   status?: string
   publisherCapability?: string
 }
@@ -69,8 +74,8 @@ type AutopilotPolicy = { policyId: string, status: string, expiresAt: string, re
 type AutopilotPolicyView = { policy: AutopilotPolicy | null, policies: AutopilotPolicy[], activePolicies?: AutopilotPolicy[], revokedPolicies?: AutopilotPolicy[] }
 type LearningDataset = { status: 'ready_for_dataset_review' | 'gate_blocked', candidateResults: Array<{ candidateStatus: string, reasonCodes?: string[] }>, eligibleCandidates: unknown[], manifest: { status: string, eligibleCandidateCount: number, reasonCodes: string[], manifestFingerprint: string }, datasetDigest: string, limitations: string[] }
 type Capabilities = { schedulerAvailable: boolean, generationExecutorConfigured: boolean, firstPartyPublisherConfigured: boolean, outcomeCollectionConfigured: boolean, externalRuntimeAvailability?: { generationProviderConfigured: boolean, firstPartyTransportConfigured: boolean, nonFirstPartyTransportConfigured: boolean, credentialResolverAvailable: boolean } }
-type Readiness = { schedulerAvailable: boolean, generationExecutorAvailable: boolean, publicationTargetConfigured: boolean, publicationExecutionEnabled: boolean, credentialReferenceConfigured: boolean, runtimeCredentialResolverAvailable: boolean, outcomeCollectionConfigured: boolean }
-type GovernanceSnapshot = { policies: Array<Record<string, unknown>>, entityProfiles: Array<Record<string, unknown>>, queryOwnership: Array<Record<string, unknown>>, budgetReservations: Array<Record<string, unknown>>, repairs: Array<Record<string, unknown>>, substitutions: Array<Record<string, unknown>>, machineAuthorizations: Array<Record<string, unknown>> }
+type Readiness = { schedulerAvailable: boolean, schedulerEnabled: boolean, generationExecutorAvailable: boolean, publicationTargetConfigured: boolean, publicationExecutionEnabled: boolean, credentialReferenceConfigured: boolean, runtimeCredentialResolverAvailable: boolean, outcomeCollectionConfigured: boolean, outcomeCollectionStatus?: 'configured' | 'not_configured' | 'unverified', configuredMeasurementConnectionCount?: number }
+type GovernanceSnapshot = { policies: Array<Record<string, unknown>>, entityProfiles: ContentAuthorizationProfile[], queryOwnership: Array<Record<string, unknown>>, budgetReservations: Array<Record<string, unknown>>, repairs: Array<Record<string, unknown>>, substitutions: Array<Record<string, unknown>>, machineAuthorizations: Array<Record<string, unknown>> }
 type Workspace = {
   clients: Client[]
   calendars: Calendar[]
@@ -111,7 +116,7 @@ type CalendarForm = {
 const emptyWorkspace = (): Workspace => ({
   clients: [], calendars: [], entries: [], runs: [], outcomeAssessments: [], publicationTargets: [], governance: { policies: [], entityProfiles: [], queryOwnership: [], budgetReservations: [], repairs: [], substitutions: [], machineAuthorizations: [] },
   capabilities: { schedulerAvailable: false, generationExecutorConfigured: false, firstPartyPublisherConfigured: false, outcomeCollectionConfigured: false, externalRuntimeAvailability: { generationProviderConfigured: false, firstPartyTransportConfigured: false, nonFirstPartyTransportConfigured: false, credentialResolverAvailable: false } },
-  readiness: { schedulerAvailable: false, generationExecutorAvailable: false, publicationTargetConfigured: false, publicationExecutionEnabled: false, credentialReferenceConfigured: false, runtimeCredentialResolverAvailable: false, outcomeCollectionConfigured: false },
+  readiness: { schedulerAvailable: false, schedulerEnabled: false, generationExecutorAvailable: false, publicationTargetConfigured: false, publicationExecutionEnabled: false, credentialReferenceConfigured: false, runtimeCredentialResolverAvailable: false, outcomeCollectionConfigured: false },
   limitations: [],
 })
 const emptyLearningDataset = (): LearningDataset => ({ status: 'gate_blocked', candidateResults: [], eligibleCandidates: [], manifest: { status: 'gate_blocked', eligibleCandidateCount: 0, reasonCodes: [], manifestFingerprint: '' }, datasetDigest: '', limitations: [] })
@@ -124,20 +129,47 @@ useHead({
 
 const { data: workspaceData, pending, error: workspaceError, refresh } = await useAsyncData<Workspace>(
   'content-operations-owner-workspace',
-  () => $fetch<Workspace>('/api/content-operations/workspace'),
+  () => fetchContent<Workspace>('/api/content-operations/workspace'),
   { server: false, default: emptyWorkspace },
 )
 const { data: learningData, refresh: refreshLearningDataset } = await useAsyncData<LearningDataset>(
   'content-operations-owner-learning-dataset',
-  () => $fetch<LearningDataset>('/api/content-operations/learning-dataset'),
+  () => fetchContent<LearningDataset>('/api/content-operations/learning-dataset'),
   { server: false, default: emptyLearningDataset },
 )
 const workspace = computed(() => workspaceData.value || emptyWorkspace())
 const learningDataset = computed<LearningDataset>(() => learningData.value || emptyLearningDataset())
+const route = useRoute()
+const isNestedRoute = computed(() => route.path.startsWith('/audit-lab/content-operations/'))
 const actionState = ref<ActionState>('idle')
 const autopilotPolicies = reactive<Record<string, AutopilotPolicyView>>({})
 const autopilotExpiry = reactive<Record<string, string>>({})
 const autopilotRisk = reactive<Record<string, 'low' | 'general' | 'high'>>({})
+const autopilotPoliciesLoaded = reactive<Record<string, boolean>>({})
+const autopilotProfileIds = reactive<Record<string, string>>({})
+const autopilotModes = reactive<Record<string, ContentAuthorizationMode>>({})
+const autopilotGenerationBudgets = reactive<Record<string, number | '' | null>>({})
+const autopilotPublicationBudgets = reactive<Record<string, number | '' | null>>({})
+const autopilotTargetRows = reactive<Record<string, number | '' | null>>({})
+const autopilotAuthorization = ref<{ clientId: string | number, displayName: string, input: ContentAuthorizationInput, targetLabel: string, profileLabel: string } | null>(null)
+const autopilotAuthorizationBusy = ref(false)
+const autopilotAuthorizationError = ref('')
+const autopilotAuthorizationDescription = computed(() => {
+  const choice = autopilotAuthorization.value
+  if (!choice) return ''
+  if (choice.input.mode === 'legacy_v3') return `一般自動駕駛（V3），授權到 ${choice.input.expiresOn} UTC。這不會改成每週 LINE 客戶送審。`
+  return `每 7 天產生一篇繁體中文文章，發布目標：${choice.targetLabel}。實體策略：${choice.profileLabel}。生成額度 ${choice.input.generationBudget}、發布額度 ${choice.input.publicationBudget}（系統預算單位），授權到 ${choice.input.expiresOn} UTC。機器品質審核不能代替客戶在 LINE 同意；額度用盡或授權失效時停止。`
+})
+function weeklyTargetsFor(client: Client) { return newWeeklyAuthorizationTargets(client, workspace.value.publicationTargets, autopilotPoliciesFor(client.id), autopilotPoliciesLoaded[String(client.id)] === true) }
+function weeklyProfilesFor(client: Client) {
+  const target = weeklyTargetsFor(client).find(row => Number(row.id) === autopilotTargetRows[String(client.id)])
+  return target ? workspace.value.governance.entityProfiles.filter(profile => String(profile.clientId) === String(client.id) && profile.websiteId === target.websiteId && profile.status === 'active' && profile.revokedAt == null) : []
+}
+function clearWeeklySelection(client: Client) {
+  const key = String(client.id)
+  autopilotGenerationBudgets[key] = null; autopilotPublicationBudgets[key] = null; autopilotTargetRows[key] = null; autopilotProfileIds[key] = ''
+  if (autopilotModes[key] === 'weekly_customer_approval' && autopilotRisk[key] === 'high') autopilotRisk[key] = 'general'
+}
 const autopilotLoading = ref('')
 const defaultAutopilotExpiry = () => { const date = new Date(); date.setUTCDate(date.getUTCDate() + 30); return date.toISOString().slice(0, 10) }
 const autopilotPolicyViewFor = (clientId: string | number): AutopilotPolicyView => autopilotPolicies[String(clientId)] || { policy: null, policies: [] }
@@ -151,7 +183,15 @@ async function refreshAutopilotPolicies() {
     const key = String(client.id)
     autopilotExpiry[key] ||= defaultAutopilotExpiry()
     autopilotRisk[key] ||= 'general'
-    try {       const response = await $fetch<AutopilotPolicyView>(`/api/content-operations/clients/${client.id}/autopilot-policy`); autopilotPolicies[key] = { policy: response.policy || null, policies: response.policies || (response.policy ? [response.policy] : []), activePolicies: response.activePolicies || [], revokedPolicies: response.revokedPolicies || [] } } catch { autopilotPolicies[key] = { policy: null, policies: [] } }
+    autopilotModes[key] ??= 'legacy_v3'
+    autopilotGenerationBudgets[key] ??= null; autopilotPublicationBudgets[key] ??= null; autopilotTargetRows[key] ??= null; autopilotProfileIds[key] ??= ''
+    autopilotPoliciesLoaded[key] = false
+    try {
+      const response = await fetchContent<AutopilotPolicyView>(`/api/content-operations/clients/${client.id}/autopilot-policy`)
+      autopilotPolicies[key] = { policy: response.policy || null, policies: response.policies || (response.policy ? [response.policy] : []), activePolicies: response.activePolicies || [], revokedPolicies: response.revokedPolicies || [] }
+      autopilotPoliciesLoaded[key] = true
+      if (autopilotPolicies[key].policies.length && autopilotModes[key] === 'legacy_v3') autopilotModes[key] = ''
+    } catch { autopilotPolicies[key] = { policy: null, policies: [] }; autopilotPoliciesLoaded[key] = false }
   }))
 }
 watch(workspaceData, () => { void refreshAutopilotPolicies() }, { immediate: true })
@@ -191,7 +231,7 @@ const outcomeEntries = computed(() => {
 })
 
 const capabilityItems = computed(() => [
-  { key: 'schedulerAvailable', label: '內部排程器', falseMessage: '排程器尚未接通', trueMessage: '排程器已接通', available: workspace.value.capabilities.schedulerAvailable },
+  { key: 'schedulerAvailable', label: '內部排程器', falseMessage: '排程工作尚未註冊', trueMessage: workspace.value.readiness.schedulerEnabled ? '自動排程已啟用；主機持續執行仍待驗證' : '排程工作已註冊；自動執行尚未啟用', available: workspace.value.capabilities.schedulerAvailable },
   { key: 'generationExecutorAvailable', label: 'GEOFlow/Qwen generation boundary', falseMessage: '目前沒有已配置的 provider runtime', trueMessage: 'canonical Qwen generation runtime 已配置（仍需 credential/connectivity）', available: workspace.value.readiness.generationExecutorAvailable },
   { key: 'publicationTargetConfigured', label: 'Multi-channel target registry', falseMessage: '尚無 active publication target', trueMessage: '已設定 active publication target', available: workspace.value.readiness.publicationTargetConfigured },
   { key: 'publicationExecutionEnabled', label: 'Publication execute gate', falseMessage: '目前只允許 dry-run 或尚未啟用', trueMessage: '至少一個 target execution flag 已啟用', available: workspace.value.readiness.publicationExecutionEnabled },
@@ -209,9 +249,10 @@ const statusClass = (status: string) => ['blocked', 'failed', 'retry_wait', 'can
 const statusLabel = (status: string) => statusLabels[status] || status || '未提供狀態'
 const clientName = (clientId: string | number | undefined) => workspace.value.clients.find(client => String(client.id) === String(clientId))?.displayName || '未指定客戶'
 const selectedTargetClient = computed(() => workspace.value.clients.find(client => String(client.id) === String(targetForm.clientId)))
-const transportOptionsForFramework: Record<Framework, PublicationTransport[]> = { astro: ['first_party_git', 'first_party_signed_api'], nuxt: ['first_party_git', 'first_party_signed_api'], wordpress: ['wordpress_rest'], php_agent: ['geoflow_agent'], generic_http: ['generic_http'], geoflow_local: ['geoflow_local'], static_site: ['geoflow_agent'] }
+const transportOptionsForFramework: Record<Framework, PublicationTransport[]> = { astro: ['first_party_git', 'first_party_signed_api'], nuxt: ['first_party_git', 'first_party_signed_api'], nextjs: ['first_party_signed_api'], wordpress: ['wordpress_rest'], php_agent: ['geoflow_agent'], generic_http: ['generic_http'], geoflow_local: ['geoflow_local'], static_site: ['geoflow_agent'] }
 const transportOptions = computed(() => transportOptionsForFramework[targetForm.framework])
-watch(() => targetForm.framework, () => { if (!transportOptions.value.includes(targetForm.transport)) targetForm.transport = transportOptions.value[0]! }, { immediate: true })
+watch(() => targetForm.framework, () => { if (!transportOptions.value.includes(targetForm.transport)) targetForm.transport = transportOptions.value[0]!; Object.assign(targetForm, contentTargetFrameworkDefaults(targetForm.framework, targetForm)) }, { immediate: true })
+watch(() => clientForm.framework, () => { if (clientForm.framework === 'nextjs') clientForm.publicationTransport = 'first_party_signed_api' }, { immediate: true })
 const targetUsesGit = computed(() => targetForm.transport === 'first_party_git')
 const targetUsesEndpoint = computed(() => !targetUsesGit.value && targetForm.transport !== 'geoflow_local')
 const targetUsesServiceReference = computed(() => targetForm.transport === 'geoflow_local')
@@ -242,7 +283,7 @@ const formatLocalDate = (value: string | null | undefined) => {
   const day = Number(value.slice(8, 10))
   return new Intl.DateTimeFormat('zh-Hant', { dateStyle: 'medium' }).format(new Date(year, month - 1, day))
 }
-const frameworkLabel = (framework: Framework | string | undefined) => ({ astro: 'Astro', nuxt: 'Nuxt', wordpress: 'WordPress', php_agent: 'PHP / GEOFlow agent', generic_http: 'Generic HTTP', geoflow_local: 'GEOFlow local', static_site: 'Static site' } as Record<string, string>)[framework || ''] || 'Framework 未提供'
+const frameworkLabel = (framework: Framework | string | undefined) => ({ astro: 'Astro', nuxt: 'Nuxt', nextjs: 'Next.js', wordpress: 'WordPress', php_agent: 'PHP / GEOFlow agent', generic_http: 'Generic HTTP', geoflow_local: 'GEOFlow local', static_site: 'Static site' } as Record<string, string>)[framework || ''] || 'Framework 未提供'
 const transportLabel = (transport: PublicationTransport | string | undefined) => ({ first_party_git: 'First-party Git', first_party_signed_api: 'First-party Signed API', wordpress_rest: 'WordPress REST', geoflow_agent: 'PHP / GEOFlow agent', generic_http: 'Generic HTTP', geoflow_local: 'GEOFlow local' } as Record<string, string>)[transport || ''] || 'Transport 未提供'
 const targetBindingStatus = (binding: EntryTargetBinding) => binding.latestAttempt ? `${statusLabel(binding.latestAttempt.status)} · attempt ${binding.latestAttempt.attemptNumber}` : '尚無 delivery attempt'
 const calendarName = (calendarId: string | number | undefined) => workspace.value.calendars.find(calendar => String(calendar.id) === String(calendarId))?.productionPlanId || '未指定月曆'
@@ -294,7 +335,7 @@ async function post<T = unknown>(route: string, body: Record<string, unknown>, s
   if (actionState.value === 'saving') return undefined
   actionState.value = 'saving'; actionNotice.value = ''; actionError.value = ''
   try {
-    const result = await $fetch<T>(route, { method: 'POST', body })
+    const result = await fetchContent<T>(route, { method: 'POST', body })
     await refresh()
     await refreshLearningDataset()
     await refreshAutopilotPolicies()
@@ -356,27 +397,73 @@ async function createPublicationTarget() {
   const requestKey = targetRequestKey.value || (targetRequestKey.value = idempotencyKey('publication-target'))
   const client = workspace.value.clients.find(item => String(item.id) === String(targetForm.clientId))
   if (!client) return undefined
-  const result = await post(`/api/content-operations/clients/${targetForm.clientId}/publication-target`, { idempotencyKey: requestKey, framework: targetForm.framework, transport: targetForm.transport, targetOrigin: targetForm.targetOrigin.trim(), serviceReference: targetUsesServiceReference.value ? targetForm.serviceReference.trim() : null, contentRoot: targetForm.contentRoot.trim(), defaultBranch: targetUsesGit.value ? targetForm.defaultBranch.trim() : null, repositoryOwner: targetUsesGit.value ? targetForm.repositoryOwner.trim() || null : null, repositoryName: targetUsesGit.value ? targetForm.repositoryName.trim() || null : null, endpointPath: targetUsesEndpoint.value ? targetForm.endpointPath.trim() || null : null, credentialReference: targetForm.credentialReference.trim(), allowedContentTypes: ['article', 'faq', 'service_page'], allowedLanguages: ['en', 'zh-hant'], maximumPayloadBytes: targetForm.maximumPayloadBytes, executionEnabled: targetForm.executionEnabled }, 'Publication target 已送出；畫面正在重新整理。')
+  const result = await post(`/api/content-operations/clients/${targetForm.clientId}/publication-target`, { idempotencyKey: requestKey, framework: targetForm.framework, transport: targetForm.transport, targetOrigin: targetForm.targetOrigin.trim(), serviceReference: targetUsesServiceReference.value ? targetForm.serviceReference.trim() : null, contentRoot: targetForm.contentRoot.trim(), defaultBranch: targetUsesGit.value ? targetForm.defaultBranch.trim() : null, repositoryOwner: targetUsesGit.value ? targetForm.repositoryOwner.trim() || null : null, repositoryName: targetUsesGit.value ? targetForm.repositoryName.trim() || null : null, endpointPath: targetUsesEndpoint.value ? targetForm.endpointPath.trim() || null : null, credentialReference: targetForm.credentialReference.trim(), allowedContentTypes: targetForm.framework === 'nextjs' ? ['article'] : ['article', 'faq', 'service_page'], allowedLanguages: targetForm.framework === 'nextjs' ? ['zh-hant'] : ['en', 'zh-hant'], maximumPayloadBytes: targetForm.maximumPayloadBytes, executionEnabled: targetForm.executionEnabled }, 'Publication target 已送出；畫面正在重新整理。')
   if (result !== undefined) targetRequestKey.value = ''
   return result
 }
 
-async function enableAutopilot(client: Client) {
+function beginAutopilotAuthorization(client: Client) {
+  if (isSaving.value || autopilotAuthorizationBusy.value) return
   const key = String(client.id)
-  autopilotLoading.value = key
-  const expiryDate = autopilotExpiry[key] || defaultAutopilotExpiry()
-  const expiresAt = new Date(`${expiryDate}T23:59:59.000Z`).toISOString()
-  const result = await post(`/api/content-operations/clients/${client.id}/autopilot-policy`, { expiresAt, maximumRiskLevel: autopilotRisk[key] || 'general', allowedContentTypes: ['article', 'faq', 'service_page'], allowedLanguages: ['en', 'zh-hant'] }, 'Governed autopilot authorization 已送出；policy 會重新載入。')
-  if (result !== undefined) await refreshAutopilotPolicies()
-  autopilotLoading.value = ''
+  const mode = autopilotModes[key] ?? 'legacy_v3'
+  if (!mode) { actionError.value = '請明確選擇文章授權模式。'; return }
+  if (mode === 'weekly_customer_approval' && client.requireCustomerApproval !== true) { actionError.value = '請先到每週文章後台，將這位客戶改為同意後才發文。'; return }
+  const targetRowId = autopilotTargetRows[key] ?? null
+  const target = weeklyTargetsFor(client).find(row => Number(row.id) === targetRowId)
+  const profile = weeklyProfilesFor(client).find(row => row.profileId === autopilotProfileIds[key])
+  autopilotAuthorizationError.value = ''
+  autopilotAuthorization.value = { clientId: client.id, displayName: client.displayName || String(client.id), targetLabel: target ? `${target.targetId}` : '尚未選擇', profileLabel: profile ? `${profile.canonicalBrandName || profile.profileId} · ${profile.profileId}` : '尚未選擇', input: { mode, expiresOn: autopilotExpiry[key] || defaultAutopilotExpiry(), maximumRiskLevel: autopilotRisk[key] || 'general', targetRowId, entityStrategyProfileId: autopilotProfileIds[key] || '', generationBudget: autopilotGenerationBudgets[key] ?? null, publicationBudget: autopilotPublicationBudgets[key] ?? null, confirmed: false } }
+}
+function closeAutopilotAuthorization() { if (!autopilotAuthorizationBusy.value) { autopilotAuthorization.value = null; autopilotAuthorizationError.value = '' } }
+async function enableAutopilot() {
+  const choice = autopilotAuthorization.value
+  if (!choice || autopilotAuthorizationBusy.value || isSaving.value) return
+  const client = workspace.value.clients.find(row => String(row.id) === String(choice.clientId))
+  if (!client) { autopilotAuthorizationError.value = '找不到這位客戶，請重新整理。'; return }
+  const key = String(client.id)
+  let body: ReturnType<typeof buildContentOperationsAuthorization>
+  try { body = buildContentOperationsAuthorization({ ...choice.input, confirmed: true }, client, workspace.value.publicationTargets, new Date(), { profiles: workspace.value.governance.entityProfiles, policies: autopilotPoliciesFor(client.id), policiesLoaded: autopilotPoliciesLoaded[key] === true }) }
+  catch (error: unknown) { autopilotAuthorizationError.value = error instanceof Error ? error.message : '請重新檢查授權選擇。'; return }
+  autopilotAuthorizationBusy.value = true; autopilotLoading.value = key; actionState.value = 'saving'; actionError.value = ''
+  try {
+    const response = await fetchContent<AutopilotPolicyView>(`/api/content-operations/clients/${client.id}/autopilot-policy`, { method: 'POST', body })
+    autopilotPolicies[key] = { policy: response.policy || null, policies: response.policies || (response.policy ? [response.policy] : []), activePolicies: response.activePolicies || [], revokedPolicies: response.revokedPolicies || [] }
+    autopilotAuthorization.value = null; actionState.value = 'success'
+    actionNotice.value = choice.input.mode === 'weekly_customer_approval' ? '每週文章規則已保存；請回到每週文章後台啟用 LINE 送審。客戶同意前不會發文。' : '一般自動駕駛 V3 授權已保存。'
+    try { await refresh(); await refreshLearningDataset(); await refreshAutopilotPolicies() }
+    catch { actionNotice.value += ' 畫面更新未完成，請重新整理；不要重送已保存的授權。' }
+  } catch {
+    actionState.value = 'error'; autopilotAuthorizationError.value = '授權未完成或回應尚未確認，請先重新整理確認現有規則，再決定是否重送。'
+  } finally { autopilotAuthorizationBusy.value = false; autopilotLoading.value = '' }
 }
 
-async function revokeAutopilot(client: Client) {
-  const key = String(client.id)
-  autopilotLoading.value = key
-  const result = await post(`/api/content-operations/clients/${client.id}/autopilot-policy/revoke`, {}, 'Governed autopilot 已撤銷；scheduler 不會自動復活。')
-  if (result !== undefined) await refreshAutopilotPolicies()
-  autopilotLoading.value = ''
+const autopilotRevokeClient = ref<Client | null>(null)
+const autopilotRevokeBusy = ref(false)
+const autopilotRevokeError = ref('')
+
+function beginAutopilotRevoke(client: Client) { autopilotRevokeClient.value = client; autopilotRevokeError.value = '' }
+function closeAutopilotRevoke() { if (!autopilotRevokeBusy.value) { autopilotRevokeClient.value = null; autopilotRevokeError.value = '' } }
+
+async function revokeAutopilot() {
+  const client = autopilotRevokeClient.value
+  if (!client || autopilotRevokeBusy.value || actionState.value === 'saving') return
+  autopilotRevokeBusy.value = true; autopilotRevokeError.value = ''; autopilotLoading.value = String(client.id)
+  let result: { revokedCount?: number } | undefined
+  try {
+    result = await fetchContent<{ revokedCount?: number }>(`/api/content-operations/clients/${client.id}/autopilot-policy.revoke`, { method: 'POST', body: {} })
+  } catch (error: unknown) {
+    const failure = error as { statusMessage?: string, message?: string, data?: { statusMessage?: string, message?: string } } | null
+    autopilotRevokeError.value = failure?.data?.statusMessage || failure?.data?.message || failure?.statusMessage || failure?.message || '撤銷沒有完成；請重新整理確認政策目前的狀態後再試。'
+    return
+  } finally {
+    autopilotRevokeBusy.value = false; autopilotLoading.value = ''
+  }
+  autopilotRevokeClient.value = null
+  actionError.value = ''; actionState.value = 'success'
+  actionNotice.value = result?.revokedCount ? `已撤銷此客戶 ${result.revokedCount} 筆自動駕駛政策。` : '此客戶沒有啟用中或暫停中的自動駕駛政策，這次沒有撤銷任何政策。'
+  await refresh()
+  await refreshLearningDataset()
+  await refreshAutopilotPolicies()
 }
 
 async function executeEntry(entry: ContentEntry, mode: 'dry_run' | 'execute') {
@@ -389,12 +476,15 @@ async function executeEntry(entry: ContentEntry, mode: 'dry_run' | 'execute') {
 </script>
 
 <template>
-  <main class="operations-page">
+  <NuxtPage v-if="isNestedRoute" />
+  <main v-else class="operations-page">
     <header class="operations-hero">
       <NuxtLink class="back-link" to="/audit-lab">← 返回私有稽核實驗室</NuxtLink>
       <p class="eyebrow">OWNER-ONLY · CONTENT OPERATIONS V1</p>
       <h1>把內容營運，<em>排得清楚。</em></h1>
       <p class="hero-copy">在同一個私有工作台查看客戶網站、內容月曆、文章流程與成效資料是否已足夠。這裡只呈現 API 回傳的實際狀態，不把尚未接通的能力說成已完成，也不顯示虛構的排名、流量、ROI 或 LLM 提及數。</p>
+      <NuxtLink class="button button--primary" to="/audit-lab/content-operations/strategy">開啟內容策略治理</NuxtLink>
+      <p class="data-note">集中管理實體策略、查詢主權、自動駕駛撤銷與成效紀錄。</p>
     </header>
 
     <section v-if="pending" class="state-card" role="status" aria-live="polite"><strong>正在讀取內容營運資料…</strong><span>請稍候，尚未執行任何寫入操作。</span></section>
@@ -430,15 +520,15 @@ async function executeEntry(entry: ContentEntry, mode: 'dry_run' | 'execute') {
         <div v-if="workspace.capabilities.externalRuntimeAvailability" class="runtime-matrix"><span>Generation provider：{{ workspace.capabilities.externalRuntimeAvailability.generationProviderConfigured ? 'configured' : 'not configured' }}</span><span>First-party transport：{{ workspace.capabilities.externalRuntimeAvailability.firstPartyTransportConfigured ? 'configured' : 'not configured' }}</span><span>Non-first-party transport：{{ workspace.capabilities.externalRuntimeAvailability.nonFirstPartyTransportConfigured ? 'configured' : 'not configured' }}</span><span>Credential resolver：{{ workspace.capabilities.externalRuntimeAvailability.credentialResolverAvailable ? 'available' : 'unavailable' }}</span></div><ul v-if="workspace.limitations.length" class="limitation-list"><li v-for="limitation in workspace.limitations" :key="limitation">{{ limitation }}</li></ul>
       </section>
 
-      <section class="section-block governance-section" aria-labelledby="governance-title"><div class="section-heading"><div><p class="eyebrow">GOVERNED AUTOMATION</p><h2 id="governance-title">自動化與學習，現在是否被授權？</h2></div><span class="data-note">owner authorization · fail-closed</span></div><div class="governance-grid"><article class="work-card"><h3>Owner-scoped autopilot</h3><p class="section-copy">Autopilot 只會針對 owner 的 active publication target 生效；同一 client 可有多個 target policy。每次 scheduler tick 重新驗證 target、review、risk gate、expiry 與 allowlist。client-wide 撤銷是 terminal，不會自動復活。</p><div v-if="workspace.clients.length === 0" class="empty-card"><strong>尚無可授權的客戶</strong><span>先建立 client 與 publication target。</span></div><div v-else class="policy-list"><article v-for="client in workspace.clients" :key="`policy-${client.id}`" class="policy-card"><div class="policy-card__top"><div><strong>{{ client.displayName }}</strong><small>{{ client.framework }} · {{ autopilotPoliciesFor(client.id).length }} target policies · client {{ client.id }}</small></div><span :class="statusClass(autopilotStatusFor(client.id))">{{ autopilotStatusFor(client.id) }}</span></div><template v-if="autopilotPoliciesFor(client.id).length"><div class="policy-target-list"><div v-for="policy in autopilotPoliciesFor(client.id)" :key="policy.policyId" class="policy-target-row"><strong>{{ policy.targetId }}</strong><span :class="statusClass(policy.status)">{{ policy.status }}</span><small>到期 {{ formatLocalDate(policy.expiresAt.slice(0, 10)) }} · risk ≤ {{ policy.maximumRiskLevel || 'general' }} · {{ policy.allowedContentTypes.join(', ') }} · {{ policy.allowedLanguages.join(', ') }}</small></div></div><button v-if="autopilotActivePoliciesFor(client.id).length" class="secondary-button" type="button" :disabled="isSaving || autopilotLoading === String(client.id)" @click="revokeAutopilot(client)">{{ autopilotLoading === String(client.id) ? '正在撤銷全部 target policy…' : '撤銷此 client 全部 autopilot' }}</button><span v-else class="inline-help">此 client 的所有 policy 已停止；terminal revoke 不會自動復活。</span></template><template v-else><label class="policy-expiry">授權到期日<input v-model="autopilotExpiry[String(client.id)]" type="date" :min="todayLocalDate"></label><label class="policy-expiry">最高允許 risk<select v-model="autopilotRisk[String(client.id)]"><option value="low">Low only</option><option value="general">Low + general</option><option value="high">Low + general + high（owner explicit）</option></select></label><button class="primary-button" type="button" :disabled="isSaving || autopilotLoading === String(client.id) || !workspace.publicationTargets.some(target => String(target.clientId) === String(client.id) && target.status === 'active' && target.executionEnabled)" @click="enableAutopilot(client)">{{ autopilotLoading === String(client.id) ? '正在授權…' : '啟用 governed autopilot' }}</button><span v-if="!workspace.publicationTargets.some(target => String(target.clientId) === String(client.id) && target.status === 'active' && target.executionEnabled)" class="inline-help">需要 active 且 execution-enabled 的 publication target；沒有 target 時維持 fail-closed。</span></template></article></div></article><article class="work-card learning-card"><div class="section-heading"><div><p class="eyebrow">GEO CONTENT LEARNING</p><h3>Dataset review gate</h3></div><span :class="statusClass(learningDataset.manifest.status)">{{ learningDataset.manifest.status }}</span></div><p class="section-copy">Learning runtime 只建立 owner outcome 的去識別化、hash-only dataset review artifact；未達 admission gate 時不會 training、upload、promotion，也不會把 provider observation 當成 consumer truth。</p><div class="learning-facts"><span><strong>{{ learningDataset.manifest.eligibleCandidateCount }}</strong> eligible candidates</span><span><strong>{{ learningDataset.candidateResults.filter(candidate => candidate.candidateStatus === 'blocked').length }}</strong> blocked candidates</span><span><strong>{{ learningDataset.manifest.reasonCodes.length }}</strong> gate reasons</span></div><dl class="hash-facts"><div><dt>Dataset digest</dt><dd>{{ learningDataset.datasetDigest || '尚未產生' }}</dd></div><div><dt>Manifest fingerprint</dt><dd>{{ learningDataset.manifest.manifestFingerprint || '尚未產生' }}</dd></div></dl><ul v-if="learningDataset.manifest.reasonCodes.length" class="limitation-list"><li v-for="reason in learningDataset.manifest.reasonCodes" :key="reason">{{ reason }}</li></ul><button class="secondary-button" type="button" :disabled="pending" @click="refreshLearningDataset">重新讀取 learning gate</button></article></div></section>
+      <section class="section-block governance-section" aria-labelledby="governance-title"><div class="section-heading"><div><p class="eyebrow">GOVERNED AUTOMATION</p><h2 id="governance-title">自動化與學習，現在是否被授權？</h2></div><span class="data-note">owner authorization · fail-closed</span></div><div class="governance-grid"><article class="work-card"><h3>Owner-scoped autopilot</h3><p class="section-copy">Autopilot 只會針對 owner 的 active publication target 生效；同一 client 可有多個 target policy。每次 scheduler tick 重新驗證 target、review、risk gate、expiry 與 allowlist。client-wide 撤銷是 terminal，不會自動復活。</p><div v-if="workspace.clients.length === 0" class="empty-card"><strong>尚無可授權的客戶</strong><span>先建立 client 與 publication target。</span></div><div v-else class="policy-list"><article v-for="client in workspace.clients" :key="`policy-${client.id}`" class="policy-card"><div class="policy-card__top"><div><strong>{{ client.displayName }}</strong><small>{{ client.framework }} · {{ autopilotPoliciesFor(client.id).length }} target policies · client {{ client.id }}</small></div><span :class="statusClass(autopilotStatusFor(client.id))">{{ autopilotStatusFor(client.id) }}</span></div><template v-if="autopilotPoliciesFor(client.id).length"><div class="policy-target-list"><div v-for="policy in autopilotPoliciesFor(client.id)" :key="policy.policyId" class="policy-target-row"><strong>{{ policy.targetId }}</strong><span :class="statusClass(policy.status)">{{ policy.status }}</span><small>到期 {{ formatLocalDate(policy.expiresAt.slice(0, 10)) }} · risk ≤ {{ policy.maximumRiskLevel || 'general' }} · {{ policy.allowedContentTypes.join(', ') }} · {{ policy.allowedLanguages.join(', ') }}</small></div></div><button v-if="autopilotActivePoliciesFor(client.id).length" class="secondary-button" type="button" :disabled="isSaving || autopilotRevokeBusy || autopilotLoading === String(client.id)" @click="beginAutopilotRevoke(client)">{{ autopilotLoading === String(client.id) ? '正在撤銷全部 target policy…' : '撤銷此 client 全部 autopilot' }}</button><span v-else class="inline-help">此 client 的所有 policy 已停止；terminal revoke 不會自動復活。</span></template><template v-if="autopilotPoliciesLoaded[String(client.id)] && (!autopilotPoliciesFor(client.id).length || weeklyTargetsFor(client).length)"><label class="policy-expiry">文章授權模式<select v-model="autopilotModes[String(client.id)]" @change="clearWeeklySelection(client)"><option value="">請明確選擇授權模式</option><option value="legacy_v3" :disabled="autopilotPoliciesFor(client.id).length > 0">一般自動駕駛（V3，保留既有流程）</option><option value="weekly_customer_approval" :disabled="client.requireCustomerApproval !== true">每週文章，客戶 LINE 同意後發佈（V4）</option></select></label><p v-if="client.requireCustomerApproval !== true" class="inline-help">每週 LINE 送審需要先保護這位客戶：<NuxtLink to="/audit-lab/weekly-content">改用客戶同意後才發文</NuxtLink>。</p><template v-if="autopilotModes[String(client.id)] === 'weekly_customer_approval'"><p class="inline-help">每 7 天一篇繁體中文文章。機器品質審核不能代替客戶在 LINE 同意；額度是系統預算單位，不是付款金額。</p><label class="policy-expiry">發布目標<select v-model.number="autopilotTargetRows[String(client.id)]" @change="autopilotProfileIds[String(client.id)] = ''"><option :value="null">請明確選擇發布目標</option><option v-for="target in weeklyTargetsFor(client)" :key="target.id" :value="Number(target.id)">{{ target.targetOrigin }} · {{ target.targetId }}</option></select></label><label class="policy-expiry">已保存的客戶實體策略<select v-model="autopilotProfileIds[String(client.id)]"><option value="">請明確選擇實體策略</option><option v-for="profile in weeklyProfilesFor(client)" :key="profile.profileId" :value="profile.profileId">{{ profile.canonicalBrandName || profile.profileId }}</option></select></label><p v-if="!weeklyProfilesFor(client).length" class="inline-help">選擇新發布目標後，需要同網站的有效實體策略。<NuxtLink to="/audit-lab/content-operations/strategy">建立或查看客戶實體策略與查詢主權</NuxtLink>；缺少治理依據時維持停止。</p><label class="policy-expiry">生成額度<input v-model.number="autopilotGenerationBudgets[String(client.id)]" type="number" min="1" max="1000000" step="1" required placeholder="請自行填入整數額度"></label><label class="policy-expiry">發布額度<input v-model.number="autopilotPublicationBudgets[String(client.id)]" type="number" min="1" max="1000000" step="1" required placeholder="請自行填入整數額度"></label></template><label class="policy-expiry">授權到期日（UTC）<input v-model="autopilotExpiry[String(client.id)]" type="date" :min="todayLocalDate"></label><label class="policy-expiry">最高允許 risk<select v-model="autopilotRisk[String(client.id)]"><option value="low">Low only</option><option value="general">Low + general</option><option v-if="autopilotModes[String(client.id)] !== 'weekly_customer_approval'" value="high">Low + general + high（owner explicit）</option></select></label><button class="primary-button" type="button" :disabled="isSaving || autopilotLoading === String(client.id) || !workspace.publicationTargets.some(target => String(target.clientId) === String(client.id) && target.status === 'active' && target.executionEnabled)" @click="beginAutopilotAuthorization(client)">{{ autopilotLoading === String(client.id) ? '正在授權…' : '啟用 governed autopilot' }}</button><span v-if="!workspace.publicationTargets.some(target => String(target.clientId) === String(client.id) && target.status === 'active' && target.executionEnabled)" class="inline-help">需要 active 且 execution-enabled 的 publication target；沒有 target 時維持 fail-closed。</span></template><p v-if="!autopilotPoliciesLoaded[String(client.id)]" class="inline-help">既有授權尚未讀取或讀取失敗，請重新整理確認後再建立新授權。</p><p v-else-if="autopilotPoliciesFor(client.id).length && !weeklyTargetsFor(client).length" class="inline-help">既有授權與已撤銷目標不能改寫。若要新增每週 LINE 送審，請先建立尚未授權的新發布目標；不會自動撤銷或升級既有政策。</p></article></div></article><article class="work-card learning-card"><div class="section-heading"><div><p class="eyebrow">GEO CONTENT LEARNING</p><h3>Dataset review gate</h3></div><span :class="statusClass(learningDataset.manifest.status)">{{ learningDataset.manifest.status }}</span></div><p class="section-copy">Learning runtime 只建立 owner outcome 的去識別化、hash-only dataset review artifact；未達 admission gate 時不會 training、upload、promotion，也不會把 provider observation 當成 consumer truth。</p><div class="learning-facts"><span><strong>{{ learningDataset.manifest.eligibleCandidateCount }}</strong> eligible candidates</span><span><strong>{{ learningDataset.candidateResults.filter(candidate => candidate.candidateStatus === 'blocked').length }}</strong> blocked candidates</span><span><strong>{{ learningDataset.manifest.reasonCodes.length }}</strong> gate reasons</span></div><dl class="hash-facts"><div><dt>Dataset digest</dt><dd>{{ learningDataset.datasetDigest || '尚未產生' }}</dd></div><div><dt>Manifest fingerprint</dt><dd>{{ learningDataset.manifest.manifestFingerprint || '尚未產生' }}</dd></div></dl><ul v-if="learningDataset.manifest.reasonCodes.length" class="limitation-list"><li v-for="reason in learningDataset.manifest.reasonCodes" :key="reason">{{ reason }}</li></ul><button class="secondary-button" type="button" :disabled="pending" @click="refreshLearningDataset">重新讀取 learning gate</button></article></div></section>
 
       <section class="work-grid" aria-label="網站與內容月曆設定">
         <article class="work-card"><div class="section-heading"><div><p class="eyebrow">CLIENT SITE</p><h2>新增客戶網站設定</h2></div></div><p class="section-copy">用客戶看得懂的設定開始。網站必須是 HTTPS origin；client 保存 canonical site defaults，實際 publication transport 由下面的 multi-channel target registry 決定。</p>
           <form class="form-grid" @submit.prevent="createClient">
             <label>客戶／專案名稱<input v-model.trim="clientForm.displayName" required maxlength="120" autocomplete="off"></label>
             <label>網站 HTTPS origin<input v-model.trim="clientForm.canonicalSiteOrigin" required type="url" placeholder="https://example.com" autocomplete="url"></label>
-            <label>Framework<select v-model="clientForm.framework"><option value="astro">Astro</option><option value="nuxt">Nuxt</option></select></label>
-            <label>發布方式<select v-model="clientForm.publicationTransport"><option value="first_party_git">First-party Git</option><option value="first_party_signed_api">First-party Signed API</option></select></label>
+            <label>Framework<select v-model="clientForm.framework"><option value="astro">Astro</option><option value="nuxt">Nuxt</option><option value="nextjs">Next.js</option></select></label>
+            <label>發布方式<select v-model="clientForm.publicationTransport"><option value="first_party_git" :disabled="clientForm.framework === 'nextjs'">First-party Git</option><option value="first_party_signed_api">First-party Signed API</option></select></label>
             <label>時區<input v-model.trim="clientForm.timeZone" required placeholder="Asia/Taipei"></label>
             <label>預設發布時間<input v-model="clientForm.defaultPublishLocalTime" required type="time"></label>
             <label>預設頻率<select v-model.number="clientForm.defaultCadenceDays"><option v-for="days in cadenceOptions" :key="days" :value="days">每 {{ days }} 天</option></select></label>
@@ -466,7 +556,7 @@ async function executeEntry(entry: ContentEntry, mode: 'dry_run' | 'execute') {
         </article>
       </section>
 
-      <section class="section-block" aria-labelledby="targets-title"><div class="section-heading"><div><p class="eyebrow">MULTI-CHANNEL TARGETS</p><h2 id="targets-title">Publication target registry</h2></div><span class="data-note">credential reference 只在 server-side 保存</span></div><div class="work-grid"><article class="work-card"><p class="section-copy">同一 client 可設定最多 20 個 owner-scoped target。這裡只建立 redacted target metadata；execute 仍會重新驗證 canonical evidence、owner policy、risk gate、receipt與 target guard。</p><form class="form-grid" @submit.prevent="createPublicationTarget"><label>客戶<select v-model="targetForm.clientId" required><option disabled value="">請選擇客戶</option><option v-for="client in workspace.clients" :key="client.id" :value="String(client.id)">{{ client.displayName }} · client {{ client.id }}</option></select></label><label>Framework<select v-model="targetForm.framework"><option value="astro">Astro</option><option value="nuxt">Nuxt</option><option value="wordpress">WordPress</option><option value="php_agent">PHP / GEOFlow agent</option><option value="generic_http">Generic HTTP</option><option value="geoflow_local">GEOFlow local</option><option value="static_site">Static site</option></select></label><label>Transport<select v-model="targetForm.transport"><option v-for="transport in transportOptions" :key="transport" :value="transport">{{ transportLabel(transport) }}</option></select></label><label>Target origin<input v-model.trim="targetForm.targetOrigin" required type="url" placeholder="https://customer.example"></label><label>Content root<input v-model.trim="targetForm.contentRoot" required placeholder="content"></label><label v-if="targetUsesGit">Branch<input v-model.trim="targetForm.defaultBranch" required placeholder="main"></label><label v-if="targetUsesGit">Repository owner<input v-model.trim="targetForm.repositoryOwner" required autocomplete="off"></label><label v-if="targetUsesGit">Repository name<input v-model.trim="targetForm.repositoryName" required autocomplete="off"></label><label v-if="targetUsesEndpoint">Endpoint path<input v-model.trim="targetForm.endpointPath" required placeholder="/api/content-ingest"></label><label v-if="targetUsesServiceReference">Opaque service reference<input v-model.trim="targetForm.serviceReference" required autocomplete="off" placeholder="server-ref-only"></label><label>Credential reference<input v-model.trim="targetForm.credentialReference" required autocomplete="off" placeholder="server-ref-only"></label><label>最大 payload bytes<input v-model.number="targetForm.maximumPayloadBytes" required type="number" min="1" max="10000000"></label><label class="checkbox-label"><input v-model="targetForm.executionEnabled" type="checkbox">允許 execute（預設只 dry-run）</label><p v-if="targetForm.executionEnabled" class="notice notice--warning">開啟後，通過正式 evidence/risk/policy gate 的內容才可送入對應 transport；本 branch 不進行真實 provider/customer-site connection test。</p><button class="primary-button" type="submit" :disabled="isSaving || workspace.clients.length === 0">建立 publication target</button></form></article><article class="work-card"><h3>目前 targets</h3><div v-if="workspace.publicationTargets.length === 0" class="empty-card"><strong>尚未設定 target</strong><span>先建立 client，再建立 owner-scoped target。</span></div><dl v-else class="target-list"><div v-for="target in workspace.publicationTargets" :key="target.id"><dt>{{ clientName(target.clientId) }} · {{ frameworkLabel(target.framework) }} · {{ transportLabel(target.transport) }}</dt><dd>{{ target.targetId }} · {{ target.targetOrigin }} · {{ target.executionEnabled ? 'execute enabled' : 'dry-run only' }} · {{ target.status }} · {{ target.credentialConfigured ? 'credential reference 已設定' : 'credential reference 未設定' }} · website {{ target.websiteId || '尚未提供' }} · destination {{ target.destinationPublicationIdentityConfigured ? '已配置' : '尚未配置' }} · service {{ target.serviceReferenceConfigured ? '已配置' : '不適用／未配置' }}</dd></div></dl></article></div></section>
+      <section class="section-block" aria-labelledby="targets-title"><div class="section-heading"><div><p class="eyebrow">MULTI-CHANNEL TARGETS</p><h2 id="targets-title">Publication target registry</h2></div><span class="data-note">credential reference 只在 server-side 保存</span></div><div class="work-grid"><article class="work-card"><p class="section-copy">同一 client 可設定最多 20 個 owner-scoped target。這裡只建立 redacted target metadata；execute 仍會重新驗證 canonical evidence、owner policy、risk gate、receipt與 target guard。</p><form class="form-grid" @submit.prevent="createPublicationTarget"><label>客戶<select v-model="targetForm.clientId" required><option disabled value="">請選擇客戶</option><option v-for="client in workspace.clients" :key="client.id" :value="String(client.id)">{{ client.displayName }} · client {{ client.id }}</option></select></label><label>Framework<select v-model="targetForm.framework"><option value="astro">Astro</option><option value="nuxt">Nuxt</option><option value="nextjs">Next.js</option><option value="wordpress">WordPress</option><option value="php_agent">PHP / GEOFlow agent</option><option value="generic_http">Generic HTTP</option><option value="geoflow_local">GEOFlow local</option><option value="static_site">Static site</option></select></label><label>Transport<select v-model="targetForm.transport"><option v-for="transport in transportOptions" :key="transport" :value="transport">{{ transportLabel(transport) }}</option></select></label><label>Target origin<input v-model.trim="targetForm.targetOrigin" required type="url" placeholder="https://customer.example"></label><label>Content root<input v-model.trim="targetForm.contentRoot" required placeholder="content"></label><label v-if="targetUsesGit">Branch<input v-model.trim="targetForm.defaultBranch" required placeholder="main"></label><label v-if="targetUsesGit">Repository owner<input v-model.trim="targetForm.repositoryOwner" required autocomplete="off"></label><label v-if="targetUsesGit">Repository name<input v-model.trim="targetForm.repositoryName" required autocomplete="off"></label><label v-if="targetUsesEndpoint">Endpoint path<input v-model.trim="targetForm.endpointPath" :readonly="targetForm.framework === 'nextjs'" required placeholder="/api/content-ingest"></label><label v-if="targetUsesServiceReference">Opaque service reference<input v-model.trim="targetForm.serviceReference" required autocomplete="off" placeholder="server-ref-only"></label><label>Credential reference<input v-model.trim="targetForm.credentialReference" required autocomplete="off" placeholder="server-ref-only"></label><label>最大 payload bytes<input v-model.number="targetForm.maximumPayloadBytes" required type="number" min="1" max="10000000"></label><label class="checkbox-label"><input v-model="targetForm.executionEnabled" type="checkbox">允許 execute（預設只 dry-run）</label><p v-if="targetForm.executionEnabled" class="notice notice--warning">開啟後，通過正式 evidence/risk/policy gate 的內容才可送入對應 transport；本 branch 不進行真實 provider/customer-site connection test。</p><button class="primary-button" type="submit" :disabled="isSaving || workspace.clients.length === 0">建立 publication target</button></form></article><article class="work-card"><h3>目前 targets</h3><div v-if="workspace.publicationTargets.length === 0" class="empty-card"><strong>尚未設定 target</strong><span>先建立 client，再建立 owner-scoped target。</span></div><dl v-else class="target-list"><div v-for="target in workspace.publicationTargets" :key="target.id"><dt>{{ clientName(target.clientId) }} · {{ frameworkLabel(target.framework) }} · {{ transportLabel(target.transport) }}</dt><dd>{{ target.targetId }} · {{ target.targetOrigin }} · {{ target.executionEnabled ? 'execute enabled' : 'dry-run only' }} · {{ target.status }} · {{ target.credentialConfigured ? 'credential reference 已設定' : 'credential reference 未設定' }} · website {{ target.websiteId || '尚未提供' }} · destination {{ target.destinationPublicationIdentityConfigured ? '已配置' : '尚未配置' }} · service {{ target.serviceReferenceConfigured ? '已配置' : '不適用／未配置' }}</dd></div></dl></article></div></section>
 
       <section class="section-block" aria-labelledby="clients-title"><div class="section-heading"><div><p class="eyebrow">CLIENTS</p><h2 id="clients-title">客戶網站</h2></div></div><div v-if="workspace.clients.length === 0" class="empty-card"><strong>尚未建立客戶網站</strong><span>完成上面的表單後，客戶會在這裡顯示。</span></div><div v-else class="client-grid"><article v-for="client in workspace.clients" :key="client.id" class="client-card"><div class="client-card__top"><div><h3>{{ client.displayName }}</h3><p>{{ frameworkLabel(client.framework) }} · {{ client.timeZone }} · 每 {{ client.defaultCadenceDays }} 天</p></div><span class="status" :class="client.status === 'active' ? 'status--positive' : 'status--neutral'">{{ client.status || '狀態未提供' }}</span></div><p class="site-origin">{{ client.canonicalSiteOrigin }}</p><div class="client-capability"><strong>發布能力</strong><span>{{ client.publisherCapability || (workspace.readiness.publicationTargetConfigured ? '第一方 target 已設定' : '第一方 target 尚未設定') }}</span></div><details><summary>Advanced details</summary><dl><div><dt>Client ID</dt><dd>{{ client.id }}</dd></div><div><dt>發布方式</dt><dd>{{ client.publicationTransport }}</dd></div><div><dt>每月預算單位</dt><dd>{{ client.monthlyBudgetUnits }}</dd></div></dl></details></article></div></section>
 
@@ -476,8 +566,10 @@ async function executeEntry(entry: ContentEntry, mode: 'dry_run' | 'execute') {
 
       <section class="section-block" aria-labelledby="entries-title"><div class="section-heading"><div><p class="eyebrow">CONTENT PIPELINE</p><h2 id="entries-title">每篇內容目前走到哪裡？</h2></div><span class="data-note">blocked、failed、retry_wait 會獨立顯示</span></div><div v-if="workspace.entries.length === 0" class="empty-card"><strong>還沒有內容項目</strong><span>先建立月曆，再由 runtime materialize 內容項目。</span></div><div v-else class="entry-list"><article v-for="entry in workspace.entries" :key="entry.id" class="entry-card"><div class="entry-card__header"><div><p class="entry-date">{{ formatLocalDate(entry.plannedLocalDate) }}</p><h3>{{ entry.title || entry.topic || '未命名內容' }}</h3><p>{{ entry.contentType }} · {{ entry.language }} · {{ frameworkLabel(entry.framework) }}{{ entry.target ? ` · ${entry.target}` : '' }}</p></div><span :class="statusClass(entry.status)">{{ statusLabel(entry.status) }}</span></div><div class="pipeline" aria-label="內容 pipeline"><span v-for="step in pipelineSteps" :key="step.key" class="pipeline-step" :class="{ 'pipeline-step--active': pipelineStage(entry) === step.key, 'pipeline-step--complete': pipelineSteps.findIndex(item => item.key === pipelineStage(entry)) > pipelineSteps.findIndex(item => item.key === step.key) }">{{ step.label }}</span></div><div class="entry-checks"><span :class="entry.hasApprovedDraft === true ? 'check check--yes' : 'check check--no'">{{ entry.hasApprovedDraft === true ? '✓ 已有 approved draft' : '— 尚無 approved draft' }}</span><span :class="entry.hasPassedRiskGate === true ? 'check check--yes' : 'check check--no'">{{ entry.hasPassedRiskGate === true ? '✓ risk gate passed' : '— risk gate 尚未通過' }}</span><span v-if="runForEntry(entry.id)" class="check">Run：{{ statusLabel(runForEntry(entry.id)!.state) }}</span></div><div class="entry-bindings"><div class="entry-bindings__heading"><div><strong>Publication target bindings</strong><span>server contract：1–20 個 target，binding 會在 generation 開始後鎖定</span></div><button class="secondary-button" type="button" :disabled="isSaving || !entryTargetsFor(entry).length || !entryBindingSelectionFor(entry).length" @click="bindEntryTargets(entry)">儲存 target bindings</button></div><div v-if="entryTargetsFor(entry).length" class="binding-options"><label v-for="target in entryTargetsFor(entry)" :key="target.id" class="binding-option"><input type="checkbox" :checked="isEntryTargetSelected(entry, target.id)" :disabled="isSaving || !['planned', 'materialized', 'awaiting_generation'].includes(entry.status)" @change="toggleEntryBinding(entry, target.id, $event)"><span><strong>{{ target.targetId }}</strong> · {{ frameworkLabel(target.framework) }} · {{ transportLabel(target.transport) }}<small>{{ target.executionEnabled ? 'execute enabled' : 'dry-run only' }} · {{ target.status }} · website {{ target.websiteId || '尚未提供' }}</small></span></label></div><p v-else class="inline-help">此 entry 所屬 client 尚無可綁定 target；請先在 target registry 建立 active target。</p><div v-if="entry.publicationTargetBindings?.length" class="binding-receipts"><div v-for="binding in entry.publicationTargetBindings" :key="binding.bindingId" class="binding-receipt"><span><strong>#{{ binding.slot }} {{ binding.targetId }}</strong> · {{ frameworkLabel(binding.framework) }} · {{ transportLabel(binding.transport) }}</span><span :class="statusClass(binding.latestAttempt?.status || binding.status)">{{ targetBindingStatus(binding) }}</span><small v-if="binding.latestAttempt?.receiptFingerprint">receipt {{ binding.latestAttempt.receiptFingerprint }}<template v-if="binding.latestAttempt.publicationUrl"> · {{ binding.latestAttempt.publicationUrl }}</template></small><small v-else-if="binding.latestAttempt?.errorSummary">{{ binding.latestAttempt.errorSummary }}</small><small v-else>尚未產生 verified receipt</small></div></div></div><div v-if="!['delivered', 'completed', 'cancelled', 'skipped', 'blocked'].includes(entry.status)" class="button-row entry-actions"><button class="secondary-button" type="button" :disabled="isSaving || !workspace.readiness.generationExecutorAvailable" @click="executeEntry(entry, 'dry_run')">執行下一步 dry-run</button><button v-if="entry.status === 'ready_to_publish'" class="primary-button" type="button" :disabled="isSaving || !workspace.readiness.publicationExecutionEnabled" @click="executeEntry(entry, 'execute')">執行 publication</button></div><p class="next-action"><strong>下一動作</strong>{{ entryNextAction(entry) }}</p><div v-if="assessmentForEntry(entry.id)" class="outcome-note"><strong>Outcome Learning</strong><span>{{ assessmentForEntry(entry.id)!.assessmentStatus }}<template v-if="assessmentForEntry(entry.id)!.validPairCount !== undefined"> · {{ assessmentForEntry(entry.id)!.validPairCount }} 個有效資料配對</template></span></div><details><summary>Advanced details</summary><dl><div><dt>Entry ID</dt><dd>{{ entry.id }}</dd></div><div><dt>Calendar</dt><dd>{{ calendarName(entry.calendarId) }}</dd></div><div><dt>Draft ID</dt><dd>{{ entry.draftId || '尚未提供' }}</dd></div><div><dt>Review ID</dt><dd>{{ entry.reviewId || '尚未提供' }}</dd></div><div><dt>Evidence hash</dt><dd>{{ entry.evidenceSnapshotHash || '尚未提供' }}</dd></div><div><dt>Content hash</dt><dd>{{ entry.contentHash || '尚未提供' }}</dd></div><div><dt>Idempotency key</dt><dd>{{ entry.idempotencyKey || '尚未提供' }}</dd></div><div v-if="runForEntry(entry.id)"><dt>Run ID</dt><dd>{{ runForEntry(entry.id)!.id }}</dd></div></dl></details></article></div></section>
 
-      <section v-if="workspace.entries.length" class="section-block outcome-summary" aria-labelledby="outcome-title"><div class="section-heading"><div><p class="eyebrow">OUTCOME LEARNING</p><h2 id="outcome-title">成效資料是否足夠？</h2></div></div><div class="outcome-grid"><article><strong>{{ outcomeEntries.length }}</strong><span>目前具有 ready 或 partial assessment 的內容</span></article><article><strong>{{ workspace.capabilities.outcomeCollectionConfigured ? '已接通' : '尚未接通' }}</strong><span>{{ workspace.capabilities.outcomeCollectionConfigured ? '資料回收能力已由 API 標示可用' : '成效資料尚未自動回收' }}</span></article></div><p class="section-copy">這裡只呈現資料是否存在與 assessment 狀態，不把 observational signal 說成因果成效，也不推估排名、流量、轉換或 ROI。</p></section>
+      <section v-if="workspace.entries.length" class="section-block outcome-summary" aria-labelledby="outcome-title"><div class="section-heading"><div><p class="eyebrow">OUTCOME LEARNING</p><h2 id="outcome-title">成效資料是否足夠？</h2></div></div><div class="outcome-grid"><article><strong>{{ outcomeEntries.length }}</strong><span>目前具有 ready 或 partial assessment 的內容</span></article><article><strong>{{ workspace.readiness.outcomeCollectionStatus === 'unverified' ? '設定尚未確認' : workspace.readiness.outcomeCollectionConfigured ? '收數設定已備妥' : '尚未設定自動收數' }}</strong><span>GSC／GA4 的設定狀態；真實收數、供應商權限與主機持續執行仍待驗證。</span></article></div><p class="section-copy">可保存成效資料不代表已自動收數。這裡只呈現設定、已有資料與 assessment 狀態，不把 observational signal 說成因果成效，也不推估排名、流量、轉換或 ROI。</p></section>
     </template>
+    <OwnerConfirmAction :open="autopilotAuthorization !== null" title="確認文章授權範圍" :target="autopilotAuthorization?.displayName || ''" :description="autopilotAuthorizationDescription" consequence="只保存你選擇的文章規則。每週 LINE 送審仍須完成客戶綁定，每篇都要客戶本人同意；這個確認不會代替客戶批准。" confirm-label="保存這次授權" :busy="autopilotAuthorizationBusy" :error="autopilotAuthorizationError" @confirm="enableAutopilot" @cancel="closeAutopilotAuthorization" />
+    <OwnerConfirmAction :open="autopilotRevokeClient !== null" title="撤銷此客戶全部自動駕駛政策" :target="autopilotRevokeClient ? autopilotRevokeClient.displayName || String(autopilotRevokeClient.id) : ''" description="這會一次撤銷這個客戶所有發布目標上啟用中或暫停中的自動駕駛政策，並為每一筆寫入一筆撤銷事件。" consequence="撤銷後是終止狀態，無法恢復；原本的發布目標之後不能再授權自動駕駛，必須先建立新的發布目標。" confirm-label="撤銷全部政策" :busy="autopilotRevokeBusy" :error="autopilotRevokeError" @confirm="revokeAutopilot" @cancel="closeAutopilotRevoke" />
   </main>
 </template>
 

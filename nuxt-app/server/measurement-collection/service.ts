@@ -3,13 +3,14 @@ import { createError } from 'h3'
 import { z } from 'zod'
 import { recordOwnerOutcomeAssessment, createContentOperationsRepository, normalizePublicHttpsOrigin, normalizeTimeZone } from '../content-operations'
 import type { ContentOperationsRepository } from '../content-operations'
+import { publicationPublicOrigin, resolvePublicationPublicUrl, PUBLICATION_PUBLIC_URL_NOT_CONFIGURED } from '../content-operations/publication-public-url'
 import { OUTCOME_DATA_CONTRACT_VERSION } from '../outcome-learning'
 import { runOwnerProviderObservation } from '../llm-visibility/repository'
 import type { ProviderObservationRunInput } from '../llm-visibility/contracts'
 import { createMeasurementCollectionRepository } from './repository'
 import { isGoogleServiceAccountConfigured, resolveCredentialDependencies, type MeasurementCredentialDependencies } from './credentials'
 import { ga4DataApiAdapter, googleSearchConsoleAdapter } from './adapters'
-import { buildMeasurementWindow, canonicalConnectionFingerprint, deidentifiedSubjectKey, isMeasurementCheckpoint, measurementIdempotencyKey, measurementInputFingerprint, measurementScopeFingerprint, normalizeCanonicalPage, normalizeCredentialReference, normalizeGa4PropertyId, normalizePageScope, normalizeSearchConsoleProperty, publicationLocalDate, sanitizeError } from './normalization'
+import { buildMeasurementWindow, canonicalConnectionFingerprint, deidentifiedSubjectKey, isMeasurementCheckpoint, measurementIdempotencyKey, measurementInputFingerprint, measurementScopeFingerprint, normalizeCredentialReference, normalizeGa4PropertyId, normalizePageScope, normalizeSearchConsoleProperty, publicationLocalDate, sanitizeError } from './normalization'
 import { MEASUREMENT_CHECKPOINTS, MEASUREMENT_LEASE_MS, MEASUREMENT_MAX_RETRY_ATTEMPTS, MEASUREMENT_MAX_RUNS_PER_TICK, MEASUREMENT_RETRY_BASE_MS, MEASUREMENT_SOURCES, type AdapterSuccess, type MeasurementAdapterContext, type MeasurementAdapterResult, type MeasurementConnectionInput, type MeasurementConnectionRow, type MeasurementPhase, type MeasurementRepository, type MeasurementRunRow, type MeasurementSnapshotRow, type MeasurementSource, type MeasurementState, type MeasurementWorkspace, type MeasurementSourceSnapshot } from './types'
 
 const providerTargetSchema = z.object({
@@ -72,10 +73,10 @@ function connectionPageScope(connection: MeasurementConnectionRow): string[] {
 }
 
 function connectionMatchesLineage(connection: MeasurementConnectionRow, lineage: DeliveredMeasurementLineage): boolean {
-  if (connection.clientId !== lineage.clientId || connection.status !== 'configured') return false
+  if (connection.ownerUserId !== lineage.ownerUserId || connection.clientId !== lineage.clientId || connection.status !== 'configured') return false
   if (connection.publicationTargetId && connection.publicationTargetId !== lineage.targetId) return false
   try {
-    if (!connection.publicationTargetId && new URL(lineage.canonicalPage).origin !== connection.canonicalOrigin) return false
+    if (new URL(lineage.canonicalPage).origin !== connection.canonicalOrigin) return false
   } catch { return false }
   return connectionPageScope(connection).includes(lineage.canonicalPage)
 }
@@ -118,7 +119,8 @@ export async function createMeasurementConnection(ownerUserId: number, value: un
   const input = parseMeasurementConnectionInput(value)
   const client = await repository.findClient(ownerUserId, input.clientId)
   const target = input.publicationTargetId ? await contentRepository.findPublicationTarget(ownerUserId, input.publicationTargetId) : null
-  const expectedOrigin = target?.targetOrigin || client?.canonicalSiteOrigin
+  const expectedOrigin = publicationPublicOrigin(ownerUserId, client, target)
+  if (client && (!input.publicationTargetId || target) && !expectedOrigin) publicUrlNotConfigured()
   if (!client || (Boolean(input.publicationTargetId) && !target) || (target && (target.clientId !== client.id || target.status === 'revoked')) || expectedOrigin !== input.canonicalOrigin) notFound('Measurement client or publication target was not found for this owner and origin.')
   const websiteIdentity = target ? `target:${target.id}` : `client-origin:${createHash('sha256').update(input.canonicalOrigin).digest('hex')}`
   const fingerprint = canonicalConnectionFingerprint(input as MeasurementConnectionInput & { canonicalOrigin: string; timeZone: string; allowedPageScope: string[]; sourceAvailabilityLagDays: number; credentialReference: string | null; googleSearchConsoleProperty: string | null; ga4PropertyId: string | null; llmVisibilityProjectId: number | null; providerTargets: unknown[] | null })
@@ -161,16 +163,23 @@ export async function revokeMeasurementConnection(ownerUserId: number, connectio
   return repository.updateConnection(ownerUserId, connectionId, { status: 'revoked', activeSource: null, revokedAt: dependencies?.now || new Date() })
 }
 
-function projectDeliveredMeasurementLineage(delivered: Awaited<ReturnType<ContentOperationsRepository['resolveDeliveredPublication']>>, target = delivered?.publicationTarget, attempt = delivered?.publicationAttempt, publicationRun = delivered?.publicationRun) {
+function publicUrlNotConfigured(): never {
+  const error = createError({ statusCode: 422, statusMessage: PUBLICATION_PUBLIC_URL_NOT_CONFIGURED, data: { code: PUBLICATION_PUBLIC_URL_NOT_CONFIGURED } })
+  Object.assign(error, { code: PUBLICATION_PUBLIC_URL_NOT_CONFIGURED })
+  throw error
+}
+
+function projectDeliveredMeasurementLineage(ownerUserId: number, client: Awaited<ReturnType<ContentOperationsRepository['findClient']>>, delivered: Awaited<ReturnType<ContentOperationsRepository['resolveDeliveredPublication']>>, target = delivered?.publicationTarget, attempt = delivered?.publicationAttempt, publicationRun = delivered?.publicationRun) {
   if (!delivered || !target || !attempt || !publicationRun || attempt.status !== 'delivered' || publicationRun.stage !== 'publication' || publicationRun.state !== 'succeeded' || attempt.runId !== publicationRun.id || attempt.targetId !== target.id || attempt.contentHash !== delivered.entry.contentHash || attempt.evidenceSnapshotHash !== delivered.entry.evidenceSnapshotHash || typeof attempt.receiptFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(attempt.receiptFingerprint)) return null
-  const targetOrigin = target.targetOrigin
-  const publicationUrl = attempt.publicationUrl || (targetOrigin && delivered.entry.publicationPath ? `${targetOrigin}${delivered.entry.publicationPath.startsWith('/') ? '' : '/'}${delivered.entry.publicationPath}` : null)
-  if (!publicationUrl || !delivered.entry.contentHash || !delivered.entry.evidenceSnapshotHash) return null
-  const canonicalPage = normalizeCanonicalPage(publicationUrl, targetOrigin)
-  if (!canonicalPage) return null
+  if (delivered.calendar.ownerUserId !== ownerUserId || attempt.ownerUserId !== ownerUserId || attempt.clientId !== delivered.calendar.clientId || attempt.entryId !== delivered.entry.id || publicationRun.ownerUserId !== ownerUserId || publicationRun.entryId !== delivered.entry.id) return null
+  if (!client || client.id !== delivered.calendar.clientId) publicUrlNotConfigured()
+  const publicPage = resolvePublicationPublicUrl({ ownerUserId, client, entry: delivered.entry, target, identity: { publicationId: attempt.publicationId, slug: attempt.publicationSlug, path: attempt.publicationPath }, publicationUrl: attempt.publicationUrl })
+  if (!publicPage.configured) publicUrlNotConfigured()
+  if (!delivered.entry.contentHash || !delivered.entry.evidenceSnapshotHash) return null
+  const canonicalPage = publicPage.publicationUrl
   const publishedAt = attempt.completedAt || publicationRun.completedAt || delivered.entry.updatedAt
   if (!(publishedAt instanceof Date) || !Number.isFinite(publishedAt.getTime())) return null
-  return { entryId: delivered.entry.id, targetId: target.id, clientId: delivered.calendar.clientId, canonicalPage, publicationReceiptFingerprint: attempt.receiptFingerprint, contentHash: delivered.entry.contentHash, evidenceSnapshotHash: delivered.entry.evidenceSnapshotHash, timeZone: delivered.calendar.timeZone, publicationLocalDate: publicationLocalDate(publishedAt, delivered.calendar.timeZone), publishedAt }
+  return { ownerUserId, entryId: delivered.entry.id, targetId: target.id, clientId: delivered.calendar.clientId, canonicalPage, publicationReceiptFingerprint: attempt.receiptFingerprint, contentHash: delivered.entry.contentHash, evidenceSnapshotHash: delivered.entry.evidenceSnapshotHash, timeZone: delivered.calendar.timeZone, publicationLocalDate: publicationLocalDate(publishedAt, delivered.calendar.timeZone), publishedAt }
 }
 
 async function resolveDeliveredMeasurementLineages(ownerUserId: number, entryId: number, contentRepository: ContentOperationsRepository) {
@@ -178,7 +187,8 @@ async function resolveDeliveredMeasurementLineages(ownerUserId: number, entryId:
   const autopilotAuthority = typeof delivered?.authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(delivered.authorityReference)
   const manualReviewValid = delivered?.review?.decision === 'approved_for_delivery'
   if (!delivered || (delivered.entry.status !== 'delivered' && delivered.entry.status !== 'completed') || !delivered.job || !delivered.draft || !delivered.riskGate || delivered.riskGate.status !== 'passed' || (!autopilotAuthority && !manualReviewValid)) return []
-  const primary = projectDeliveredMeasurementLineage(delivered)
+  const client = await contentRepository.findClient(ownerUserId, delivered.calendar.clientId)
+  const primary = projectDeliveredMeasurementLineage(ownerUserId, client, delivered)
   if (typeof contentRepository.listEntryTargetBindings !== 'function' || typeof contentRepository.listPublicationTargets !== 'function' || typeof contentRepository.listPublicationAttempts !== 'function' || typeof contentRepository.listRuns !== 'function') return primary ? [primary] : []
   const [bindings, targets, attempts, runs] = await Promise.all([
     contentRepository.listEntryTargetBindings(ownerUserId, entryId),
@@ -195,7 +205,7 @@ async function resolveDeliveredMeasurementLineages(ownerUserId: number, entryId:
       const target = targetById.get(binding.targetId)
       const attempt = attempts.find(candidate => candidate.ownerUserId === ownerUserId && candidate.entryId === entryId && candidate.targetId === binding.targetId && candidate.status === 'delivered' && candidate.contentHash === delivered.entry.contentHash && candidate.evidenceSnapshotHash === delivered.entry.evidenceSnapshotHash && typeof candidate.receiptFingerprint === 'string' && /^[a-f0-9]{64}$/u.test(candidate.receiptFingerprint))
       const run = attempt ? runs.find(candidate => candidate.id === attempt.runId && candidate.ownerUserId === ownerUserId && candidate.entryId === entryId && candidate.stage === 'publication' && candidate.state === 'succeeded') : undefined
-      const lineage = target && attempt && run ? projectDeliveredMeasurementLineage(delivered, target, attempt, run) : null
+      const lineage = target && attempt && run ? projectDeliveredMeasurementLineage(ownerUserId, client, delivered, target, attempt, run) : null
       return lineage ? [lineage] : []
     })
   return lineages
@@ -356,8 +366,8 @@ export async function processMeasurementRun(ownerUserId: number, runId: number, 
   } catch (error) {
     const safe = sanitizeError(error, 'MEASUREMENT_RUNTIME_ERROR')
     const terminal = claimed.attemptNumber >= MEASUREMENT_MAX_RETRY_ATTEMPTS
-    const state: MeasurementState = terminal ? 'failed' : 'retry_wait'
-    const released = await repository.releaseRunLease(ownerUserId, runId, leaseOwner, state, now, { retryEligibleAt: terminal ? null : retryDate(now, claimed.attemptNumber), errorCode: safe.code, errorSummary: safe.summary })
+    const state: MeasurementState = safe.code === PUBLICATION_PUBLIC_URL_NOT_CONFIGURED ? 'blocked' : terminal ? 'failed' : 'retry_wait'
+    const released = await repository.releaseRunLease(ownerUserId, runId, leaseOwner, state, now, { retryEligibleAt: state === 'retry_wait' ? retryDate(now, claimed.attemptNumber) : null, errorCode: safe.code, errorSummary: safe.summary })
     if (!released) throw error
     return { run: released, replayed: false, assessment: null }
   }

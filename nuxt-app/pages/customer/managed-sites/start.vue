@@ -1,4 +1,7 @@
 <script setup lang="ts">
+type FunnelRequestFetch = <T = unknown>(path: string, options?: { method?: 'GET' | 'POST' | 'PATCH'; body?: unknown; credentials?: 'omit'; headers?: Record<string, string> }) => Promise<T>
+// Preserve the original Nuxt fetch and local response DTOs.
+const fetchFunnel = $fetch as unknown as FunnelRequestFetch
 import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import {
   CONVERSION_GOAL_OPTIONS,
@@ -238,7 +241,7 @@ function funnelHeaders(): Record<string, string> {
 }
 
 async function getSessionProjection(): Promise<SessionProjection> {
-  return await $fetch<SessionProjection>(funnelSessionPath(), { method: 'GET', credentials: 'omit', headers: funnelHeaders() })
+  return await fetchFunnel<SessionProjection>(funnelSessionPath(), { method: 'GET', credentials: 'omit', headers: funnelHeaders() })
 }
 
 async function loadFunnelStatus(): Promise<void> {
@@ -275,7 +278,7 @@ function restoreProjection(projection: SessionProjection) {
 }
 
 async function createFreshSession() {
-  const created = await $fetch<{ sessionId: number; sessionToken: string }>('/api/managed-sites/funnel/sessions', { method: 'POST', body: {}, credentials: 'omit' })
+  const created = await fetchFunnel<{ sessionId: number; sessionToken: string }>('/api/managed-sites/funnel/sessions', { method: 'POST', body: {}, credentials: 'omit' })
   sessionId.value = created.sessionId
   sessionToken.value = created.sessionToken
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionId: created.sessionId, sessionToken: created.sessionToken }))
@@ -300,7 +303,7 @@ async function createFreshSession() {
 
 async function funnelFetch<T>(suffix: string, options: any): Promise<T> {
   try {
-    return await $fetch<T>(funnelSessionPath(suffix), { ...options, credentials: 'omit', headers: { ...(options?.headers || {}), ...funnelHeaders() } })
+    return await fetchFunnel<T>(funnelSessionPath(suffix), { ...options, credentials: 'omit', headers: { ...(options?.headers || {}), ...funnelHeaders() } })
   } catch (error) {
     if (isExpiredSession(error)) {
       clearStoredSession()
@@ -315,7 +318,7 @@ async function bootstrap() {
   loading.value = true
   bootstrapError.value = ''
   try {
-    catalog.value = await $fetch<PriceCatalog>('/api/managed-sites/price-catalog', { credentials: 'omit' })
+    catalog.value = await fetchFunnel<PriceCatalog>('/api/managed-sites/price-catalog', { credentials: 'omit' })
     let stored: { sessionId: number; sessionToken: string } | null = null
     try {
       const raw = localStorage.getItem(STORAGE_KEY)

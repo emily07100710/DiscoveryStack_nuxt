@@ -926,7 +926,7 @@ describe('final trust-boundary regressions', () => {
   })
 
   it('accepts exactly 500 raw candidates within the capacity bound', { timeout: 15_000 }, () => {
-    const values = Array.from({ length: 500 }, (_, index) => goldenCandidate({ candidateId: `capacity-${index}`, variantLabel: `capacity-${index}` }))
+    const values = Array.from({ length: 500 }, (_, index) => goldenCandidate({ candidateId: `capacity-${index}`, variantLabel: `capacity-${index}`, providerOutput: structuredClone(GOLDEN_OUTPUT) }))
     const report = buildGeoContentRegressionReport(values)
     expect(report.status).toBe('review_ready')
     expect(report.caseCount).toBe(500)

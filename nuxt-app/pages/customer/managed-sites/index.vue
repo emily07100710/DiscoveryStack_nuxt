@@ -1,10 +1,15 @@
 <script setup lang="ts">
+type CustomerPortalFetch = <T = unknown>(path: '/api/managed-sites/customer/session' | '/api/managed-sites/customer/modules' | '/api/system-factory/customer/status' | '/api/managed-sites/customer/assistant', options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown> }) => Promise<T>
+// Preserve the same Nuxt requests, session checks and customer response DTOs.
+const fetchCustomerPortal = $fetch as unknown as CustomerPortalFetch
+
 import { onMounted, ref } from 'vue'
 
 useHead({ meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 
 const loading = ref(true)
 const errorMessage = ref('')
+const requiresReaccess = ref(false)
 const projection = ref<any>(null)
 const moduleWorkspace = ref<any>(null)
 const systemStatus = ref<any>(null)
@@ -15,13 +20,15 @@ const assistantLoading = ref(false)
 async function loadCustomerSite() {
   loading.value = true
   errorMessage.value = ''
+  requiresReaccess.value = false
   try {
-    projection.value = await $fetch('/api/managed-sites/customer/session')
-    try { moduleWorkspace.value = await $fetch('/api/managed-sites/customer/modules') } catch { moduleWorkspace.value = null }
-    try { systemStatus.value = await $fetch('/api/system-factory/customer/status') } catch { systemStatus.value = null }
+    projection.value = await fetchCustomerPortal('/api/managed-sites/customer/session')
+    try { moduleWorkspace.value = await fetchCustomerPortal('/api/managed-sites/customer/modules') } catch { moduleWorkspace.value = null }
+    try { systemStatus.value = await fetchCustomerPortal('/api/system-factory/customer/status') } catch { systemStatus.value = null }
   } catch (error: any) {
     projection.value = null
-    errorMessage.value = error?.data?.message || '此客戶入口需要有效的邀請工作階段。'
+    requiresReaccess.value = (error?.statusCode || error?.status || error?.response?.status) === 401
+    errorMessage.value = requiresReaccess.value ? '登入已到期，請重新登入網站後台。' : error?.data?.message || '此客戶入口需要有效的邀請工作階段。'
   } finally {
     loading.value = false
   }
@@ -35,7 +42,7 @@ async function askAssistant() {
   if (!assistantQuestion.value.trim() || assistantLoading.value) return
   assistantLoading.value = true
   assistantResult.value = null
-  try { assistantResult.value = await $fetch('/api/managed-sites/customer/assistant', { method: 'POST', body: { question: assistantQuestion.value } }) }
+  try { assistantResult.value = await fetchCustomerPortal('/api/managed-sites/customer/assistant', { method: 'POST', body: { question: assistantQuestion.value } }) }
   catch (error: any) { assistantResult.value = { status: 'blocked', answer: null, limitation: error?.data?.message || '目前無法使用助手。' } }
   finally { assistantLoading.value = false }
 }
@@ -53,16 +60,17 @@ onMounted(loadCustomerSite)
       </div>
       <button v-if="projection?.capabilities.customerDataExport" type="button" class="button" @click="exportData">匯出我的資料</button>
       <NuxtLink v-if="projection && ['owner', 'administrator', 'editor'].includes(projection.membership.role)" class="button button--editor" to="/customer/managed-sites/editor">開啟網站編輯器</NuxtLink>
+      <a class="button button--editor" href="/managed-site-access">重新登入</a>
     </header>
 
     <p v-if="loading" class="state" role="status">正在載入專案資料…</p>
-    <p v-else-if="errorMessage" class="state state--error" role="alert">{{ errorMessage }}</p>
+    <p v-else-if="errorMessage" class="state state--error" role="alert">{{ errorMessage }} <a v-if="requiresReaccess" href="/managed-site-access">重新登入網站後台</a></p>
     <section v-else-if="projection" class="managed-site-portal__grid">
       <article class="card card--wide">
         <p class="card__label">PROJECT</p>
         <h2>{{ projection.project.canonicalClientIdentity }}</h2>
         <p v-if="projection.launch?.attention" class="state state--error" role="alert">{{ projection.launch.attention }}</p>
-        <p v-else-if="projection.launch?.order?.status === 'payment_verified' && !projection.launch?.release?.liveUrl" class="muted">正在自動完成網域與網站上線。網域及 HTTPS 生效需要一些時間，請稍後重新整理查看進度。</p>
+        <p v-else-if="projection.launch?.order?.status === 'payment_verified' && !projection.launch?.release?.liveUrl" class="muted">付款已確認。正式網站與網域仍在準備中，完成驗證後才會顯示上線連結。</p>
         <dl>
           <div><dt>網站</dt><dd><a v-if="projection.launch?.release?.liveUrl" :href="projection.launch.release.liveUrl" rel="noopener noreferrer">查看已上線網站</a><span v-else>{{ projection.project.canonicalWebsiteIdentity }}</span></dd></div>
           <div><dt>類型</dt><dd>{{ projection.project.siteType }}</dd></div>

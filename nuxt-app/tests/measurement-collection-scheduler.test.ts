@@ -16,8 +16,8 @@ function delivered() {
     review: { id: 6, jobId: 4, draftId: 5, reviewerUserId: ownerUserId, decision: 'approved_for_delivery', evidenceSnapshotHash: 'd'.repeat(64) },
     riskGate: { id: 10, draftId: 5, status: 'passed', evidenceSnapshotHash: 'd'.repeat(64) },
     publicationRun: { id: 11, ownerUserId, entryId: 30, stage: 'publication', state: 'succeeded', completedAt: new Date('2026-08-01T01:00:00.000Z') },
-    publicationTarget: { id: 55, targetOrigin: 'https://client.acme.taipei' },
-    publicationAttempt: { id: 12, ownerUserId, entryId: 30, runId: 11, targetId: 55, status: 'delivered', receiptFingerprint: 'a'.repeat(64), publicationUrl: 'https://client.acme.taipei/articles/a', contentHash: 'c'.repeat(64), evidenceSnapshotHash: 'd'.repeat(64) },
+    publicationTarget: { id: 55, ownerUserId, clientId: 20, transport: 'wordpress_rest', targetId: 'target-55', contentRoot: 'content', status: 'active', targetOrigin: 'https://client.acme.taipei' },
+    publicationAttempt: { id: 12, ownerUserId, clientId: 20, entryId: 30, runId: 11, targetId: 55, status: 'delivered', receiptFingerprint: 'a'.repeat(64), publicationUrl: 'https://client.acme.taipei/articles/a', contentHash: 'c'.repeat(64), evidenceSnapshotHash: 'd'.repeat(64) },
   }
 }
 
@@ -35,7 +35,8 @@ function fakeRepository(connections: MeasurementConnectionRow[] = [connectionBas
   return repository
 }
 
-const contentRepository = { async resolveDeliveredPublication() { return delivered() } } as any
+const contentRepository = { async findClient() { return { id: 20, ownerUserId, canonicalSiteOrigin: 'https://client.acme.taipei' } },
+    async resolveDeliveredPublication() { return delivered() } } as any
 
 describe('measurement windows and scheduling', () => {
   it.each([7, 15, 30, 60, 90] as const)('creates a non-overlapping baseline/follow-up pair for %s days', checkpoint => {
@@ -64,14 +65,15 @@ describe('measurement windows and scheduling', () => {
 
   it('schedules target-bound windows for every delivered site without mixing receipts', async () => {
     const primary = delivered()
-    const secondTarget = { ...primary.publicationTarget, id: 56, ownerUserId, clientId: 20, targetOrigin: 'https://second.acme.taipei' }
-    const secondAttempt = { ...primary.publicationAttempt, id: 13, runId: 14, targetId: 56, receiptFingerprint: 'b'.repeat(64), publicationUrl: 'https://second.acme.taipei/articles/a' }
+    const secondTarget = { ...primary.publicationTarget, id: 56, ownerUserId, clientId: 20, targetOrigin: 'https://client.acme.taipei' }
+    const secondAttempt = { ...primary.publicationAttempt, id: 13, runId: 14, targetId: 56, receiptFingerprint: 'b'.repeat(64), publicationUrl: 'https://client.acme.taipei/articles/b' }
     const secondRun = { ...primary.publicationRun, id: 14, completedAt: new Date('2026-08-01T02:00:00.000Z') }
     const connections = [
       { ...connectionBase, publicationTargetId: 55, websiteIdentity: 'target:55' },
-      { ...connectionBase, id: 2, publicationTargetId: 56, websiteIdentity: 'target:56', canonicalOrigin: 'https://second.acme.taipei', allowedPageScope: ['https://second.acme.taipei/articles/a'], googleSearchConsoleProperty: 'https://second.acme.taipei', idempotencyKey: 'connection-second', configurationFingerprint: '2'.repeat(64) },
+      { ...connectionBase, id: 2, publicationTargetId: 56, websiteIdentity: 'target:56', canonicalOrigin: 'https://client.acme.taipei', allowedPageScope: ['https://client.acme.taipei/articles/b'], googleSearchConsoleProperty: 'https://client.acme.taipei', idempotencyKey: 'connection-second', configurationFingerprint: '2'.repeat(64) },
     ] as MeasurementConnectionRow[]
     const contentOperations = {
+      async findClient() { return { id: 20, ownerUserId, canonicalSiteOrigin: 'https://client.acme.taipei' } },
       async resolveDeliveredPublication() { return primary },
       async listEntryTargetBindings() { return [{ ownerUserId, clientId: 20, entryId: 30, targetId: 55, slot: 1 }, { ownerUserId, clientId: 20, entryId: 30, targetId: 56, slot: 2 }] },
       async listPublicationTargets() { return [{ ...primary.publicationTarget, ownerUserId, clientId: 20 }, secondTarget] },
@@ -83,6 +85,24 @@ describe('measurement windows and scheduling', () => {
     expect(result.scheduled).toBe(10)
     expect(new Set(result.runs.map(run => run.targetId))).toEqual(new Set([55, 56]))
     expect(result.runs.filter(run => run.targetId === 56).every(run => run.publicationReceiptFingerprint === 'b'.repeat(64))).toBe(true)
+  })
+
+  it('schedules a real delivered Git artifact with a null URL on the owner public Site Kit route', async () => {
+    const publication = delivered()
+    Object.assign(publication.publicationTarget, { transport: 'first_party_git', targetOrigin: 'https://api.github.com' })
+    Object.assign(publication.publicationAttempt, { publicationUrl: null, publicationId: 'publication-30', publicationSlug: 'verified-page', publicationPath: 'content/zh-hant/articles/verified-page.md' })
+    const publicPage = 'https://client.acme.taipei/zh-hant/articles/verified-page'
+    const contentOperations = { async findClient() { return { id: 20, ownerUserId, canonicalSiteOrigin: 'https://client.acme.taipei' } }, async resolveDeliveredPublication() { return publication } } as any
+    const result = await scheduleMeasurementForEntry(ownerUserId, 30, { repository: fakeRepository([{ ...connectionBase, publicationTargetId: 55, allowedPageScope: [publicPage] }]), contentOperations })
+    expect(result.scheduled).toBe(5)
+    expect(result.runs.every(run => run.canonicalPage === publicPage)).toBe(true)
+    expect(result.runs.some(run => run.canonicalPage.includes('api.github.com') || run.canonicalPage.endsWith('.md'))).toBe(false)
+  })
+
+  it.each([null, 'https://api.github.com/content/zh-hant/articles/a.md', 'http://client.acme.taipei/articles/a', 'https://other.acme.taipei/articles/a'])('fails closed with an explicit code for an unconfigured saved CMS URL: %s', publicationUrl => {
+    const publication = delivered(); Object.assign(publication.publicationAttempt, { publicationUrl })
+    const contentOperations = { async findClient() { return { id: 20, ownerUserId, canonicalSiteOrigin: 'https://client.acme.taipei' } }, async resolveDeliveredPublication() { return publication } } as any
+    return expect(scheduleMeasurementForEntry(ownerUserId, 30, { repository: fakeRepository(), contentOperations })).rejects.toMatchObject({ statusCode: 422, code: 'PUBLICATION_PUBLIC_URL_NOT_CONFIGURED' })
   })
 
   it('does not create new runs for a revoked connection', async () => {
@@ -116,7 +136,7 @@ describe('measurement windows and scheduling', () => {
       async findConnection() { return inserted || revoked },
       async updateConnection(_owner: number, _id: number, patch: any) { return { ...(inserted || revoked), ...patch } },
     } as unknown as MeasurementRepository
-    const contentOperations = { async findPublicationTarget() { return { id: 55, ownerUserId, clientId: 20, targetOrigin: 'https://client.acme.taipei', status: 'active' } } } as any
+    const contentOperations = { async findPublicationTarget() { return { id: 55, ownerUserId, clientId: 20, transport: 'first_party_git', targetId: 'target-55', contentRoot: 'content', targetOrigin: 'https://api.github.com', status: 'active' } } } as any
     const input = { clientId: 20, publicationTargetId: 55, source: 'google_search_console', googleSearchConsoleProperty: 'https://client.acme.taipei', canonicalOrigin: 'https://client.acme.taipei', timeZone: 'Asia/Taipei', allowedPageScope: ['https://client.acme.taipei/articles/a'], idempotencyKey: 'replacement-key' }
     const result = await createMeasurementConnection(ownerUserId, input, { repository, contentOperations })
     expect(result.replayed).toBe(false)

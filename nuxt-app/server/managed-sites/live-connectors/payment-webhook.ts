@@ -1,6 +1,6 @@
 import { createError } from 'h3'
 import { getDatabase } from '../../database'
-import type { ManagedSiteConnectorReceipt } from '../../database/schema'
+import type { ManagedSiteConnectorReceipt, ManagedSitePaymentWebhookInbox } from '../../database/schema'
 import { stableFingerprint } from '../../seo-geo-core/repository'
 import { isOpaqueReference } from '../../first-party-publishing/normalization'
 import { processManagedSitePaymentAndConversion } from '../conversion-service'
@@ -10,7 +10,7 @@ import type { ManagedSiteRepository } from '../types'
 import { managedSiteCommerceSnapshotFingerprint } from '../prepurchase-service'
 import type { PreviewRepository } from '../ordering-types'
 import { MANAGED_SITE_PAYMENT_WEBHOOK_MAX_BYTES } from './http'
-import { makeManagedSiteLiveConnectorRepository } from './repository'
+import { makeManagedSiteLiveConnectorRepository, ManagedSitePaymentWebhookInboxClaimCollision } from './repository'
 import { requireVerifiedManagedSiteProvider, resolveManagedSiteCredential } from './provider-registry'
 import { StripeWebhookIgnoredError } from './stripe-adapters'
 import type { ManagedSiteConnectorExecutionMode, ManagedSiteCredentialResolver, ManagedSiteLiveConnectorRepository, ManagedSitePaymentWebhookAdapter, ManagedSiteSignatureVerifiedPaymentWebhook, ManagedSiteVerifiedPaymentWebhook } from './types'
@@ -108,6 +108,16 @@ export async function processManagedSiteRawPaymentWebhook(
 
 export type ManagedSiteAppliedPaymentWebhookResult = { event: ManagedSiteConnectorReceipt; replayed: boolean; effective: boolean; projectId: number }
 
+async function completedPaymentWebhookReplay(event: ManagedSiteVerifiedPaymentWebhook, fingerprint: string, inbox: ManagedSitePaymentWebhookInbox, repository: ManagedSiteLiveConnectorRepository): Promise<ManagedSiteAppliedPaymentWebhookResult> {
+  if (inbox.eventFingerprint !== fingerprint) conflict('Payment webhook provider event collided with a different signed payload.')
+  if (!['succeeded', 'ignored'].includes(inbox.processingStatus)) conflict('Payment webhook inbox is not complete; a concurrent delivery must retry later.')
+  const receipt = await repository.findReceiptByProviderEvent(event.providerKey, event.providerEventId)
+  const metadata = plainRecord(receipt?.metadata)
+  const effective = inbox.processingStatus === 'succeeded'
+  if (!receipt?.projectId || receipt.providerKey !== event.providerKey || receipt.providerEventId !== event.providerEventId || receipt.receiptType !== event.eventType || receipt.ownerUserId !== inbox.ownerUserId || receipt.projectId !== inbox.projectId || receipt.releaseId !== inbox.releaseId || receipt.draftOrderId !== event.draftOrderId || inbox.draftOrderId !== event.draftOrderId || receipt.externalReference !== event.providerReference || receipt.exactResponseIdentity !== event.exactResponseIdentity || metadata?.eventIdentityFingerprint !== fingerprint || metadata?.canonicalPayloadHash !== event.canonicalPayloadHash || metadata?.effective !== effective || receipt.receiptStatus !== (effective ? 'verified' : 'ignored_out_of_order')) conflict('Completed payment webhook inbox lacks its exact append-only receipt.')
+  return { event: receipt, replayed: true, effective, projectId: receipt.projectId }
+}
+
 /** Applies an already signature-verified provider event inside one joint transaction. */
 export async function processManagedSiteVerifiedPaymentWebhook(
   input: { verifiedEvent: ManagedSiteSignatureVerifiedPaymentWebhook; executionMode: Exclude<ManagedSiteConnectorExecutionMode, 'dry_run'> },
@@ -117,18 +127,14 @@ export async function processManagedSiteVerifiedPaymentWebhook(
   const credentialResolver = dependencies.credentialResolver || resolveManagedSiteCredential; const clock = dependencies.clock || (() => new Date())
   const rawEvent = validateSignatureVerifiedEvent(input.verifiedEvent, clock); const transact = jointBoundary(dependencies)
 
-  return transact(async repositories => {
+  const apply = async (repositories: ManagedSiteJointRepositories): Promise<ManagedSiteAppliedPaymentWebhookResult> => {
     const boundEvent = await bindVerifiedProviderEvent(rawEvent, repositories.connector)
     if (!boundEvent) throw new StripeWebhookIgnoredError('unbindable_provider_reference')
     const event = validateSignatureVerifiedEvent(boundEvent, clock) as ManagedSiteVerifiedPaymentWebhook
     const fingerprint = eventIdentity(event)
     const existingInbox = await repositories.connector.findPaymentWebhookInbox(event.providerKey, event.providerEventId)
     if (existingInbox && existingInbox.eventFingerprint !== fingerprint) conflict('Payment webhook provider event collided with a different signed payload.')
-    if (existingInbox && ['succeeded', 'ignored'].includes(existingInbox.processingStatus)) {
-      const receipt = await repositories.connector.findReceiptByProviderEvent(event.providerKey, event.providerEventId)
-      if (!receipt?.projectId) conflict('Completed payment webhook inbox lacks its append-only receipt.')
-      return { event: receipt, replayed: true, effective: receipt.receiptStatus === 'verified', projectId: receipt.projectId }
-    }
+    if (existingInbox && ['succeeded', 'ignored'].includes(existingInbox.processingStatus)) return completedPaymentWebhookReplay(event, fingerprint, existingInbox, repositories.connector)
     const order = await repositories.ordering.findDraftOrderById(event.draftOrderId)
     if (!order?.ownerUserId || !order.projectId) throw createError({ statusCode: 404, statusMessage: 'Payment webhook order lineage was not found or owner-claimed.' })
     const processingFingerprint = stableFingerprint({ fingerprint, status: 'processing' })
@@ -207,5 +213,21 @@ export async function processManagedSiteVerifiedPaymentWebhook(
     const completed = await repositories.connector.transitionPaymentWebhookInbox(inbox.id, 'processing', inbox.processingFingerprint, { ownerUserId, projectId, releaseId: release.id, processingStatus: effective ? 'succeeded' : 'ignored', processingFingerprint: stableFingerprint({ previous: inbox.processingFingerprint, receiptFingerprint: receipt.receiptFingerprint }), completedAt: clock() })
     if (!completed) conflict('Payment webhook inbox changed concurrently before completion.')
     return { event: receipt, replayed: false, effective, projectId }
-  })
+  }
+  try {
+    return await transact(apply)
+  } catch (error) {
+    if (!(error instanceof ManagedSitePaymentWebhookInboxClaimCollision)) throw error
+    // The failed joint transaction has rolled back. Open one fresh transaction
+    // solely to acknowledge the winner's exact committed inbox and receipt.
+    // Pending/colliding records never continue fulfilment or trigger another insert.
+    return transact(async repositories => {
+      const boundEvent = await bindVerifiedProviderEvent(rawEvent, repositories.connector)
+      if (!boundEvent) conflict('Payment webhook concurrent winner has no exact stored payment lineage.')
+      const event = validateSignatureVerifiedEvent(boundEvent, clock) as ManagedSiteVerifiedPaymentWebhook
+      const inbox = await repositories.connector.findPaymentWebhookInbox(event.providerKey, event.providerEventId)
+      if (!inbox) conflict('Payment webhook concurrent winner inbox is unavailable; retry later.')
+      return completedPaymentWebhookReplay(event, eventIdentity(event), inbox, repositories.connector)
+    })
+  }
 }

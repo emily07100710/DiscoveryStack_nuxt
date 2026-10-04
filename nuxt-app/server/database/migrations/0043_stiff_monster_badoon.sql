@@ -1,0 +1,1 @@
+ALTER TABLE `seoGeoContentJobs` MODIFY COLUMN `providerMode` enum('reference_rules','autogeo_bailian_qwen','autogeo_api','manual','openai_compatible') NOT NULL;

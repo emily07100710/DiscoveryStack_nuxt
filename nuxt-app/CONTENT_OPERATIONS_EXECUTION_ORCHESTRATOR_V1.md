@@ -50,7 +50,7 @@ retry policy 不會 sleep。第一次 retryable failure 的下一次 eligible ti
 
 Owner execution endpoint 為 `POST /api/content-operations/entries/:id/execute`。target 設定 endpoint 為 `POST /api/content-operations/clients/:id/publication-target`。兩者都使用 `requireOwner`，ownerUserId 僅從 session/database mapping 取得，client 不可提交 job、draft、review、risk gate、target、content hash 或 owner scope。route 不執行 generic HTTP、WordPress、crawler、scraping 或真實 provider request。
 
-Nitro task 名稱為 `content-operations:execution-tick`。task 只在明確 task invocation 時執行；module import 與 build 不會啟動 runner。task 使用 owner-controlled identity，最多處理 50 筆 owner-scoped eligible runs，並使用 durable lease 與 redacted bounded result。measurement 與 learning 不在此 tick 自動執行。
+Nitro task 名稱為 `content-operations:execution-tick`。此 task 已註冊於 Nitro 排程，每五分鐘觸發 task；預設立即回 `disabled`；`CONTENT_OPERATIONS_EXECUTION_CRON` 可在 build 時覆寫。module import 與 build 不會啟動 runner。內容 materialization task `content-operations:tick` 另以預設每十五分鐘觸發 task，未明確啟用時也立即回 `disabled`（`CONTENT_OPERATIONS_CRON`），與現有 ModelOps 等相同時段工作累加，不覆寫。task 使用 owner-controlled identity，最多處理 50 筆 owner-scoped eligible runs，並使用 durable lease 與 redacted bounded result。measurement 與 learning 不在此 tick 自動執行。
 
 ## Transaction 與 distributed write boundary
 
@@ -78,3 +78,12 @@ Owner execute API 與明確 Nitro task invocation 會使用 server-only credenti
 Bounded fetch 會先檢查可信的 bounded `content-length`，並以 stream reader 逐 chunk 累計 UTF-8 bytes；一旦超過 policy limit 立即 abort，不會先把任意大小的 response body 完整載入記憶體。
 
 本輪 migration 為 `0016_brief_morg.sql`，只由 Drizzle workflow 產生 activeSlot 欄位與 unique index DDL，未執行 migration runtime validation，未套用 production migration。Full Vitest 依任務要求 NOT RUN；production build 只代表 compile/prerender 可通過，不代表已部署或已對客戶網站寫入。
+
+
+## 排程啟用與上線邊界（2026-10-04）
+
+`content-operations:tick` 與 `content-operations:execution-tick` 可以已註冊 cron，但預設不執行。兩者必須在伺服器環境明確設定 `NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED=true` 才開始；未設定、`false`、其他字串或 task payload 均不會啟用，並在 config／owner lookup／資料庫／runtime dependencies／provider 前回傳 `disabled` 與 `processed: 0`。開關是 server-only，沒有公開 runtimeConfig、API key 或可由客戶修改的 authority。
+
+啟用後仍由伺服器 `OWNER_OPEN_ID` 決定 owner；每次最多 materialize 50 entries 或處理 50 runs，沿用原先 owner/client/target 範圍、證據、審核、風險、租約、指紋及 policy generation/publication budgets。50 是工作筆數限制，並非美元費用上限；启用前須另外核准既有工作與供應商費用。此開關只限制這兩個背景 task，不阻擋 owner 明確手動 API。既有 measurement／ModelOps 等其他 task 的啟用契約不變。
+
+工作台以 `capabilities.schedulerAvailable` 表示已註冊能力，以 owner-private `readiness.schedulerEnabled` 表示這兩個內容背景 task 的啟用設定。任一布林都不能證明 Render 長時間執行、供應商連線或真實客戶發布已驗收。新程式部署的核准不自動包含變更此開關、執行 migration 0043 或對客戶網站寫入。

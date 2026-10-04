@@ -1,0 +1,61 @@
+<script setup lang="ts">
+// This page owns explicit response DTOs; the runtime remains Nuxt's same-origin fetch.
+const fetchWeekly=$fetch as <T=unknown>(path:string,options?:{method?:'GET'|'POST';body?:Record<string,unknown>})=>Promise<T>
+definePageMeta({i18n:false,layout:'owner'})
+useHead({title:'每週文章送審｜搜尋王'})
+type Client={id:number;displayName:string;canonicalSiteOrigin:string;status:string;requiresCustomerApproval:boolean}
+type Config={clientId:number;status:string;lineBound:boolean;reviewTtlHours:number;publicationTargetId:number}
+type Policy={policyId:string;clientId:number;publicationTargetId:number;status:string;expiresAt:string;policyVersion:string}
+type Request={requestId:string;clientId:number;entryId:number;status:string;expiresAt:string;notificationStatus:string|null;notificationError:string|null;publicationStatus?:string|null;title?:string|null}
+type Workspace={readiness:{enabled:boolean;lineConfigured:boolean;schedulerEnabled:boolean};clients:Client[];configs:Config[];requests:Request[];policies:Policy[];plans:Array<{id:number;title:string;status:string}>;calendars:Array<{id:number;clientId:number;status:string;hasPendingArticle:boolean}>}
+const empty:Workspace={readiness:{enabled:false,lineConfigured:false,schedulerEnabled:false},clients:[],configs:[],requests:[],policies:[],plans:[],calendars:[]}
+const {data,pending,error,refresh}=await useAsyncData('weekly-content-workspace',()=>fetchWeekly<Workspace>('/api/weekly-content/workspace'),{default:()=>empty,server:false})
+const workspace=computed(()=>data.value || empty)
+const selected=ref('');const policyId=ref('');const planId=ref('');const startDate=ref(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Taipei',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()))
+const publishLocalTime=ref('10:00');const monthlyArticleLimit=ref(4);const busy=ref(false);const notice=ref('');const failed=ref(false)
+const invitation=ref<{invitationToken:string;expiresAt:string;connectUrl:string}|null>(null)
+const current=computed(()=>workspace.value.clients.find(c=>String(c.id)===selected.value))
+const config=computed(()=>workspace.value.configs.find(c=>String(c.clientId)===selected.value))
+const policies=computed(()=>workspace.value.policies.filter(p=>String(p.clientId)===selected.value && p.status==='enabled' && p.policyVersion==='governed-autopilot-policy-v4' && Date.parse(p.expiresAt)>Date.now()))
+const hasCalendar=computed(()=>workspace.value.calendars.some(c=>String(c.clientId)===selected.value && c.hasPendingArticle))
+watch(selected,()=>{policyId.value='';planId.value='';invitation.value=null;notice.value=''})
+const name=(id:number)=>workspace.value.clients.find(c=>c.id===id)?.displayName || '客戶'
+const time=(iso:string)=>new Date(iso).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})
+const requestStatus=(r:Request)=>['delivered','completed'].includes(r.publicationStatus || '')?'已發佈':r.status==='changes_requested'?'客戶要求修改':r.status==='revoked'?'送審已取消':Date.parse(r.expiresAt)<=Date.now()?'送審已過期':r.status==='approved'?'已同意，等待發佈':'等待客戶確認'
+const deliveryStatus=(r:Request)=>r.notificationStatus==='sent'?'LINE 已接受通知':r.notificationStatus==='failed'?'LINE 通知失敗':r.notificationStatus==='cancelled'?'通知已取消':'等待傳送'
+async function act(action:()=>Promise<unknown>,message:string){busy.value=true;failed.value=false;notice.value='';try{await action();notice.value=message;await refresh()}catch{failed.value=true;notice.value='這一步尚未完成。請檢查客戶的發文規則、網站設定與系統連線後再試。'}finally{busy.value=false}}
+async function addDo(){await act(async()=>{await fetchWeekly('/api/weekly-content/do-alignment',{method:'POST',body:{}})},'Do Alignment 已加入，可開始設定寫作規則。')}
+const activationKeys=new Map<string,string>()
+async function requireApproval(){if(!current.value)return;await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/require-approval`,{method:'POST',body:{consent:true}}),'已設定這位客戶每篇文章都要本人同意。接著可設定每週寫作與發文規則。')}
+async function activate(){const p=policies.value.find(p=>p.policyId===policyId.value);if(!p||!current.value)return;const key=`${current.value.id}:${p.policyId}`;let idempotencyKey=activationKeys.get(key);if(!idempotencyKey){idempotencyKey=crypto.randomUUID();activationKeys.set(key,idempotencyKey)}await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/activate`,{method:'POST',body:{publicationTargetId:p.publicationTargetId,policyId:p.policyId,reviewTtlHours:72,idempotencyKey}}),'每週文章送審已設定。下一步綁定收稿人的 LINE。')}
+async function invite(){if(!current.value)return;await act(async()=>{invitation.value=await fetchWeekly<{invitationToken:string;expiresAt:string;connectUrl:string}>(`/api/weekly-content/clients/${current.value!.id}/invitation`,{method:'POST',body:{}})},'請把下方綁定入口與一次性邀請碼交給這位客戶。')}
+async function createCalendar(){if(!current.value||!planId.value)return;await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/calendar`,{method:'POST',body:{productionPlanId:Number(planId.value),startDate:startDate.value,publishLocalTime:publishLocalTime.value,monthlyArticleLimit:monthlyArticleLimit.value}}),'每週寄稿時間已排好。系統會依序使用這份計畫中核准的選題。')}
+const reopenKeys=new Map<string,string>()
+const canReopen=(r:Request)=>!['delivered','completed','publishing'].includes(r.publicationStatus || '') && ['pending','approved'].includes(r.status) && (Date.parse(r.expiresAt)<=Date.now() || (r.status==='pending' && ['failed','cancelled'].includes(r.notificationStatus || '')))
+async function reopen(r:Request){let idempotencyKey=reopenKeys.get(r.requestId);if(!idempotencyKey){idempotencyKey=crypto.randomUUID();reopenKeys.set(r.requestId,idempotencyKey)}await act(()=>fetchWeekly(`/api/weekly-content/entries/${r.entryId}/reopen`,{method:'POST',body:{clientId:r.clientId,idempotencyKey}}),'同一篇文章已重新送審。客戶需要在新的通知再次確認。')}
+async function pause(){if(!current.value)return;await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/pause`,{method:'POST',body:{status:'paused'}}),'這位客戶的每週送審與發文已暫停。')}
+</script>
+<template>
+  <div class="weekly-page">
+    <header><p class="brand">搜尋王 · 客戶內容服務</p><h1>每週文章送審</h1><p>AI 寫好文章，送到客戶 LINE。客戶看完按「同意發佈」，文章才會出現在自己的網站。</p></header>
+    <section class="flow" aria-label="文章流程"><span>1 每週選題與寫稿</span><span>2 內容與 SEO 檢查</span><span>3 LINE 客戶確認</span><span>4 發佈到客戶網站</span></section>
+    <p v-if="pending" role="status">正在載入客戶設定…</p><p v-else-if="error" class="error" role="alert">目前無法讀取設定，請先登入後台並確認系統已完成部署。</p>
+    <p v-if="notice" :class="{error:failed}" role="status">{{notice}}</p>
+    <section v-if="!workspace.readiness.enabled" class="card"><h2>還沒啟用正式服務</h2><p>每週文章功能預設關閉。完成版本部署、資料庫更新與 LINE 連線設定後，才能開始寄稿。</p><p>第一位客戶：Do Alignment。LINE 官方帳號：搜尋王（@453ojflc）。</p></section>
+    <template v-else>
+      <section class="card"><h2>客戶與連線狀態</h2><p>{{workspace.readiness.lineConfigured?'LINE 連線設定已填妥，實際收發仍需驗收。':'LINE 連線設定尚未完成。'}} {{workspace.readiness.schedulerEnabled?'排程已啟用。':'每週排程尚未啟用。'}}</p><button :disabled="busy" @click="addDo">加入第一位客戶：Do Alignment</button><label>選擇客戶<select v-model="selected"><option value="">請選擇</option><option v-for="c in workspace.clients" :key="c.id" :value="String(c.id)">{{c.displayName}}</option></select></label></section>
+      <section v-if="current" class="card"><h2>{{current.displayName}} 的文章服務</h2><p>{{current.canonicalSiteOrigin}}</p><p v-if="config">{{config.status==='active'?'服務已啟用':'服務已暫停'}} · {{config.lineBound?'收稿 LINE 已綁定':'等待綁定收稿 LINE'}} · 客戶有 {{config.reviewTtlHours}} 小時確認文章</p>
+        <div v-if="!config || config.status!=='active'"><div v-if="!current.requiresCustomerApproval"><p>先設定這位客戶的文章要經本人確認。啟用後，所有發文入口都會要求有效的 LINE 同意。</p><button :disabled="busy" @click="requireApproval">我同意改用客戶確認後才發文</button></div><label>使用已核准的寫作與發文規則<select v-model="policyId"><option value="">請選擇</option><option v-for="p in policies" :key="p.policyId" :value="p.policyId">每週文章規則 · 有效至 {{time(p.expiresAt)}}</option></select></label><p v-if="!policies.length">還沒有有效的寫作規則。請先設定網站、可引用資料、品牌語氣和文章預算。</p><NuxtLink to="/audit-lab/content-operations/strategy">設定選題與品牌資料</NuxtLink><NuxtLink to="/audit-lab/content-operations">設定網站與發文規則</NuxtLink><button :disabled="busy || !policyId" @click="activate">啟用 LINE 送審</button></div>
+        <template v-else><button :disabled="busy" @click="invite">產生客戶 LINE 綁定邀請</button><div v-if="invitation" class="invite"><p>請客戶加入「搜尋王」好友（@453ojflc），開啟下方綁定入口，登入 LINE 後貼上邀請碼。確認公司名稱與網站正確，再同意綁定。邀請只對應這位客戶，有效十分鐘。</p><a :href="invitation.connectUrl" target="_blank" rel="noopener noreferrer">開啟 LINE 客戶綁定</a><p>一次性邀請碼（請私下交給指定客戶）：</p><code>{{invitation.invitationToken}}</code><p>有效至 {{time(invitation.expiresAt)}}</p></div>
+          <form v-if="!hasCalendar" @submit.prevent="createCalendar"><h3>排好第一篇與之後的每週文章</h3><label>核准的選題計畫<select v-model="planId" required><option value="">請選擇</option><option v-for="p in workspace.plans" :key="p.id" :value="String(p.id)">{{p.title}}</option></select></label><label>第一篇日期<input v-model="startDate" type="date" required></label><label>寄稿時間<input v-model="publishLocalTime" type="time" required></label><label>每月最多文章數<input v-model.number="monthlyArticleLimit" type="number" min="1" max="5" required></label><button :disabled="busy || !planId" type="submit">安排每週寄稿</button></form>
+          <p v-else>每週計畫已建立。一次只處理一篇；選題用完、資料過期或客戶要求修改時，會等待管理者處理。</p><button class="secondary" :disabled="busy" @click="pause">暫停這位客戶的文章服務</button>
+        </template>
+      </section>
+      <section class="card"><h2>文章進度</h2><p v-if="!workspace.requests.length">第一篇文章完成內容檢查後，會在這裡顯示。</p><ul v-else><li v-for="r in workspace.requests" :key="r.requestId"><strong>{{name(r.clientId)}} · {{r.title || '送審文章'}}</strong><span>{{requestStatus(r)}} · {{deliveryStatus(r)}}</span><span>確認期限 {{time(r.expiresAt)}}</span><button v-if="canReopen(r)" class="secondary" :disabled="busy" @click="reopen(r)">重新寄送同一篇文章</button></li></ul><button :disabled="busy || pending" class="secondary" @click="refresh()">更新進度</button></section>
+    </template>
+    <section class="card"><h2>怎樣算完成 GEO／SEO？</h2><p>文章會先確認來源、標題、內文結構與網站發文格式。發佈後，再檢查網址、搜尋引擎收錄條件與實際成效。文章通過內容檢查，不能直接代表 Google 已收錄或 AI 搜尋已引用。</p><NuxtLink to="/audit-lab/site-evidence">檢查網站 SEO</NuxtLink><NuxtLink to="/audit-lab/measurement-operations">查看搜尋與流量成效</NuxtLink><NuxtLink to="/audit-lab/llm-visibility">查看 AI 搜尋觀測</NuxtLink></section>
+  </div>
+</template>
+<style scoped>
+.weekly-page{max-width:1080px;margin:auto;padding:40px 24px;font-size:18px;line-height:1.7}h1{font-size:36px;margin:6px 0}h2{font-size:24px}h3{font-size:20px}.brand{color:#365da0;font-weight:700}.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:28px 0}.flow span,.card{background:white;border:1px solid #d9e2ef;border-radius:12px;padding:20px}.card{margin:20px 0}.card a{display:inline-block;margin:8px 18px 8px 0;color:#315da7}.error{background:#fff0ee;color:#9b2e21;padding:16px;border-radius:8px}label{display:grid;gap:6px;margin:16px 0;max-width:600px}select,input{font:inherit;padding:10px;border:1px solid #aebcd0;border-radius:6px}button{font:inherit;border:0;border-radius:8px;padding:10px 18px;background:#295d9b;color:white;margin:8px 12px 8px 0;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}.secondary{background:#e6ecf5;color:#23436b}.invite{padding:16px;background:#eff5ff;border-radius:8px}code{overflow-wrap:anywhere}li{display:grid;gap:4px;padding:18px 0;border-bottom:1px solid #d9e2ef}ul{padding:0;list-style:none}@media(max-width:700px){.flow{grid-template-columns:1fr 1fr}.weekly-page{padding:24px 16px}h1{font-size:30px}}
+</style>

@@ -132,5 +132,8 @@ describe('managed-site OpenAI-compatible AI planning', () => {
 
     const malformedPlanner = createOpenAiCompatibleAiPlannerAdapter({ client: createOpenAiCompatibleChatClient({ endpoint: 'https://api.openai.com/v1', apiKey: 'placeholder-secret', model: 'gpt-test', fetchImpl: vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'not JSON' } }] }), { status: 200 })) }) })
     await expect(malformedPlanner.plan({ intent: 'freeform_edit', request: '[UNTRUSTED_CUSTOMER_REQUEST]\ntest\n[/UNTRUSTED_CUSTOMER_REQUEST]', context: { page, approvedMedia: [], commandCatalog: ['update_text'], untrustedContentBoundary: true, maxOperations: 20 }, maxOutputTokens: 2000, timeoutMs: 30_000 })).rejects.toMatchObject({ code: 'malformed_output' })
+
+    const blankPlanner = createOpenAiCompatibleAiPlannerAdapter({ client: createOpenAiCompatibleChatClient({ endpoint: 'https://api.openai.com/v1', apiKey: 'placeholder-secret', model: 'gpt-test', fetchImpl: vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '   ' } }] }), { status: 200 })) }) })
+    await expect(blankPlanner.plan({ intent: 'freeform_edit', request: '[UNTRUSTED_CUSTOMER_REQUEST]\ntest\n[/UNTRUSTED_CUSTOMER_REQUEST]', context: { page, approvedMedia: [], commandCatalog: ['update_text'], untrustedContentBoundary: true, maxOperations: 20 }, maxOutputTokens: 2000, timeoutMs: 30_000 })).rejects.toMatchObject({ code: 'malformed_output' })
   })
 })

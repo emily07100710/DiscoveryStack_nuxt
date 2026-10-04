@@ -7,7 +7,7 @@ This server-only layer provides one injectable, SDK-free chat-completions transp
 Allowed HTTPS endpoints are limited to the exact chat-completions paths for:
 
 - `dashscope-intl.aliyuncs.com` and `dashscope.aliyuncs.com`;
-- workspace hosts in the approved Alibaba Model Studio regions, including `*.ap-southeast-1.maas.aliyuncs.com`;
+- workspace hosts with one `ws-<lowercase-alphanumeric-id>` label in `ap-southeast-1`, `us-east-1`, `cn-beijing`, `cn-hongkong`, `eu-central-1`, or `ap-northeast-1`; the six regional workspace URLs follow [Alibaba Cloud's OpenAI-compatible Chat reference, updated 2026-09-28](https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions). Ports, authentication, query/fragment components, arbitrary workspace labels, extra labels and noncanonical paths remain blocked; this allowlist is configuration validation, not a successful credential or provider-call proof.
 - `api.openai.com`.
 
 Base URLs ending in `/compatible-mode/v1` or `/v1` are normalized to their matching `/chat/completions` URL. Query strings, fragments, userinfo, explicit ports, lookalike hosts, cross-family paths, redirects, and unapproved regions fail closed.

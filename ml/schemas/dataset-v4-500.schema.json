@@ -25,7 +25,7 @@
     "targets": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["journeyStage", "secondaryStages", "stageCueTypes"],
+      "required": ["journeyStage", "secondaryStages", "stageCueTypes", "searchIntents", "contentTypes", "audienceRoles", "geoSignals", "citationReadiness", "technicalSeoSignals", "frictionSignals", "actionPriority"],
       "properties": {
         "journeyStage": {"enum": ["discovery", "understanding", "response", "progression", "conversion"]},
         "secondaryStages": {
@@ -37,7 +37,15 @@
           "type": "array",
           "uniqueItems": true,
           "items": {"type": "string", "minLength": 1}
-        }
+        },
+        "searchIntents": {"type": "array", "uniqueItems": true, "items": {"enum": ["commercial", "informational", "navigational", "transactional"]}},
+        "contentTypes": {"type": "array", "uniqueItems": true, "items": {"enum": ["comparison", "editorial", "faq", "home", "other", "pricing", "product", "service", "tool"]}},
+        "audienceRoles": {"type": "array", "uniqueItems": true, "items": {"enum": ["buyer", "decision_maker", "existing_customer", "local_visitor", "media_or_partner", "practitioner", "researcher", "technical_evaluator"]}},
+        "geoSignals": {"type": "array", "uniqueItems": true, "items": {"enum": ["city_or_local", "country", "global", "multilingual", "not_applicable", "region"]}},
+        "citationReadiness": {"type": "array", "uniqueItems": true, "items": {"enum": ["contact_or_location", "dated_or_current", "first_party_expertise", "insufficient_evidence", "named_author_or_owner", "source_links", "structured_data"]}},
+        "technicalSeoSignals": {"type": "array", "uniqueItems": true, "items": {"enum": ["canonical_present", "h1_present", "indexable", "internal_routing", "language_signal", "performance_not_observed", "structured_data", "title_present"]}},
+        "frictionSignals": {"type": "array", "uniqueItems": true, "items": {"enum": ["information_overload", "missing_contact_route", "missing_next_step", "missing_trust_signal", "no_material_friction_observed", "unclear_value", "weak_cta"]}},
+        "actionPriority": {"enum": ["critical", "high", "medium", "monitor"]}
       }
     },
     "stageEvidence": {

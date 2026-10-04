@@ -8,14 +8,14 @@ import type { ContentOperationClientInput, CreateCalendarInput, ExecuteContentOp
 const strictClient = z.object({
   displayName: z.string().trim().min(1).max(160),
   canonicalSiteOrigin: z.string().trim().min(1).max(2048),
-  framework: z.enum(['astro', 'nuxt']),
+  framework: z.enum(['astro', 'nuxt', 'nextjs']),
   publicationTransport: z.enum(['first_party_git', 'first_party_signed_api']),
   timeZone: z.string().trim().min(1).max(80),
   defaultCadenceDays: z.union([z.literal(3), z.literal(7), z.literal(15), z.literal(30)]),
   defaultPublishLocalTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   monthlyBudgetUnits: z.number().int().min(1).max(CONTENT_CALENDAR_LIMITS.maxBudgetUnits),
   idempotencyKey: z.string().trim().min(1).max(128),
-}).strict()
+}).strict().refine(value => value.framework !== 'nextjs' || value.publicationTransport === 'first_party_signed_api', { message: 'Next.js clients require the signed API receiver.' })
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -250,7 +250,7 @@ export function toPublicContentOperationsError(error: unknown, fallback = 'Conte
 
 const strictPublicationTarget = z.object({
   idempotencyKey: z.string().trim().min(1).max(128),
-  framework: z.enum(['astro', 'nuxt', 'wordpress', 'php_agent', 'generic_http', 'geoflow_local', 'static_site']),
+  framework: z.enum(['astro', 'nuxt', 'nextjs', 'wordpress', 'php_agent', 'generic_http', 'geoflow_local', 'static_site']),
   transport: z.enum(['first_party_git', 'first_party_signed_api', 'wordpress_rest', 'geoflow_agent', 'generic_http', 'geoflow_local']),
   targetOrigin: z.string().trim().min(1).max(2048),
   serviceReference: z.string().trim().min(1).max(128).nullable().optional(),
@@ -264,7 +264,7 @@ const strictPublicationTarget = z.object({
   allowedLanguages: z.array(z.string().trim().min(1).max(24)).min(1).max(32),
   maximumPayloadBytes: z.number().int().min(1).max(10_000_000),
   executionEnabled: z.boolean().optional().default(false),
-}).strict()
+}).strict().refine(value => value.framework !== 'nextjs' || (value.transport === 'first_party_signed_api' && value.allowedContentTypes.length === 1 && value.allowedContentTypes[0] === 'article' && value.allowedLanguages.length === 1 && value.allowedLanguages[0] === 'zh-hant'), { message: 'Next.js targets require the Traditional Chinese article signed API receiver.' })
 
 const strictPublicationTargetPatch = z.object({
   targetOrigin: z.string().trim().min(1).max(2048).optional(),

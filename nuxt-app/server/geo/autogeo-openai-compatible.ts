@@ -16,7 +16,7 @@ export class AutoGeoOpenAiCompatibleProviderError extends Error {
 function mappedIssue(error: OpenAiCompatibleProviderError): AutoGeoOpenAiCompatibleProviderIssue {
   if (error.code === 'timeout') return 'timeout'
   if (error.code === 'transport') return 'transport'
-  if (error.code === 'malformed_response') return 'malformed-response'
+  if (error.code === 'malformed_response' || error.code === 'empty_content') return 'malformed-response'
   return 'upstream'
 }
 

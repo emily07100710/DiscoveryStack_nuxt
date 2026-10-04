@@ -32,6 +32,28 @@ function duplicate(error: unknown): boolean {
   return candidate?.code === 'ER_DUP_ENTRY' || candidate?.errno === 1062 || /duplicate entry|unique constraint/iu.test(candidate?.message || '')
 }
 
+/** The caller must roll back its transaction before reading a concurrent inbox winner. */
+export class ManagedSitePaymentWebhookInboxClaimCollision extends Error {
+  constructor() { super('Payment webhook inbox was claimed concurrently.'); this.name = 'ManagedSitePaymentWebhookInboxClaimCollision' }
+}
+
+function paymentWebhookInboxEventDuplicate(error: unknown): boolean {
+  const seen = new Set<object>()
+  let current: unknown = error
+  for (let depth = 0; depth < 8 && current && typeof current === 'object' && !seen.has(current); depth++) {
+    seen.add(current)
+    const candidate = current as { code?: unknown; errno?: unknown; message?: unknown; sqlMessage?: unknown; cause?: unknown }
+    // Drizzle wraps the driver's code/errno in cause. Match only this named key,
+    // never the SQL/params in its outer message or another table's uniqueness rule.
+    if (candidate.code === 'ER_DUP_ENTRY' || candidate.errno === 1062) {
+      const message = typeof candidate.sqlMessage === 'string' ? candidate.sqlMessage : typeof candidate.message === 'string' ? candidate.message : ''
+      if (/\b(?:for key|constraint)\s+['"`](?:[^'"`]*\.)?managed_site_payment_inbox_provider_event_unique['"`]/iu.test(message)) return true
+    }
+    current = candidate.cause
+  }
+  return false
+}
+
 export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSiteLiveConnectorRepository {
   const repository: ManagedSiteLiveConnectorRepository = {
     async transaction<T>(work: (repository: ManagedSiteLiveConnectorRepository) => Promise<T>): Promise<T> {
@@ -242,10 +264,10 @@ export function makeManagedSiteLiveConnectorRepository(database: any): ManagedSi
         if (!row) throw createError({ statusCode: 500, statusMessage: 'Payment webhook inbox row could not be loaded.' })
         return row
       } catch (error) {
-        if (!duplicate(error)) throw error
-        const replay = await repository.findPaymentWebhookInbox(input.providerKey, input.providerEventId)
-        if (replay?.eventFingerprint === input.eventFingerprint) return replay
-        throw createError({ statusCode: 409, statusMessage: 'Payment webhook provider event collided with a different signed payload.' })
+        // A consistent-read snapshot may predate the winner's commit. Do not
+        // read or continue writes in this transaction after its insert loses.
+        if (paymentWebhookInboxEventDuplicate(error)) throw new ManagedSitePaymentWebhookInboxClaimCollision()
+        throw error
       }
     },
     async transitionPaymentWebhookInbox(inboxId, expectedStatus, expectedProcessingFingerprint, patch) {

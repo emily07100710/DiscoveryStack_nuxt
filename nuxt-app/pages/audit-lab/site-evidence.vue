@@ -1,4 +1,7 @@
 <script setup lang="ts">
+type SiteEvidenceFetch = <T = unknown>(path: `/api/site-evidence/scans${string}`, options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown>; query?: Record<string, number> }) => Promise<T>
+// Preserve the original Nuxt fetch and local response DTOs.
+const fetchSiteEvidence = $fetch as unknown as SiteEvidenceFetch
 type ScanStatus = 'pending' | 'running' | 'completed' | 'completed_partial' | 'failed'
 type Scan = { id: number, targetOrigin: string, targetHost: string, status: ScanStatus, maxPages: number, pagesDiscovered: number, pagesFetched: number, renderedCaptured: number, errorCode: string | null, limitations: string[] | null, heartbeatAt: string | null, startedAt: string | null, finishedAt: string | null, createdAt: string }
 type Finding = { id?: number, urlId: number | null, category: string, severity: 'info' | 'warning' | 'critical', status: 'detected' | 'unknown', evidence: Record<string, unknown> }
@@ -69,7 +72,7 @@ function beginPolling() {
 async function loadUrls(offset = 0) {
   if (!selectedScan.value) return
   try {
-    const page = await $fetch<UrlPage>(`/api/site-evidence/scans/${selectedScan.value.id}/urls`, { query: { limit: 50, offset } })
+    const page = await fetchSiteEvidence<UrlPage>(`/api/site-evidence/scans/${selectedScan.value.id}/urls`, { query: { limit: 50, offset } })
     urls.value = page
   } catch (error: unknown) {
     const status = (error as { statusCode?: number, status?: number }).statusCode ?? (error as { status?: number }).status
@@ -81,7 +84,7 @@ async function loadUrls(offset = 0) {
 async function loadScan(id: number, resetUrls = true) {
   loadingDetail.value = true
   try {
-    const detail = await $fetch<ScanDetail>(`/api/site-evidence/scans/${id}`)
+    const detail = await fetchSiteEvidence<ScanDetail>(`/api/site-evidence/scans/${id}`)
     selectedScan.value = detail.scan
     scans.value = [detail.scan, ...scans.value.filter(scan => scan.id !== detail.scan.id)]
     findings.value = detail.findings.items
@@ -93,7 +96,7 @@ async function loadScan(id: number, resetUrls = true) {
 async function loadScans() {
   state.value = 'loading'
   try {
-    const result = await $fetch<{ scans: Scan[] }>('/api/site-evidence/scans')
+    const result = await fetchSiteEvidence<{ scans: Scan[] }>('/api/site-evidence/scans')
     scans.value = result.scans
     state.value = 'ready'
     if (scans.value[0]) await loadScan(scans.value[0].id)
@@ -108,7 +111,7 @@ async function startScan() {
   if (hasActiveScan.value) return
   submitting.value = true; notice.value = ''; errorMessage.value = ''
   try {
-    const scan = await $fetch<Scan>('/api/site-evidence/scans', { method: 'POST', body: { targetUrl: form.targetUrl, maxPages: Number(form.maxPages), idempotencyKey: crypto.randomUUID() } })
+    const scan = await fetchSiteEvidence<Scan>('/api/site-evidence/scans', { method: 'POST', body: { targetUrl: form.targetUrl, maxPages: Number(form.maxPages), idempotencyKey: crypto.randomUUID() } })
     scans.value = [scan, ...scans.value.filter(item => item.id !== scan.id)]
     notice.value = '掃描已排入背景執行；本頁只會顯示已實際取得的證據與限制。'
     await loadScan(scan.id)

@@ -5,6 +5,7 @@ export const CAPABILITY_MATRIX = [
   { framework: 'astro', transport: 'first_party_signed_api', executor: 'first_party_signed_api', authority: 'discoverystack_first_party', projection: 'first_party', requiresPublicHttps: true, requiresServiceReference: false },
   { framework: 'nuxt', transport: 'first_party_git', executor: 'first_party_git', authority: 'discoverystack_first_party', projection: 'first_party', requiresPublicHttps: true, requiresServiceReference: false },
   { framework: 'nuxt', transport: 'first_party_signed_api', executor: 'first_party_signed_api', authority: 'discoverystack_first_party', projection: 'first_party', requiresPublicHttps: true, requiresServiceReference: false },
+  { framework: 'nextjs', transport: 'first_party_signed_api', executor: 'first_party_signed_api', authority: 'discoverystack_first_party', projection: 'first_party', requiresPublicHttps: true, requiresServiceReference: false },
   { framework: 'wordpress', transport: 'wordpress_rest', executor: 'wordpress_rest', authority: 'geoflow_content_engine', projection: 'geoflow', requiresPublicHttps: true, requiresServiceReference: false },
   { framework: 'php_agent', transport: 'geoflow_agent', executor: 'geoflow_agent', authority: 'geoflow_content_engine', projection: 'geoflow', requiresPublicHttps: true, requiresServiceReference: false },
   { framework: 'generic_http', transport: 'generic_http', executor: 'generic_http', authority: 'geoflow_content_engine', projection: 'geoflow', requiresPublicHttps: true, requiresServiceReference: false },
@@ -12,7 +13,7 @@ export const CAPABILITY_MATRIX = [
   { framework: 'static_site', transport: 'geoflow_agent', executor: 'geoflow_agent', authority: 'geoflow_content_engine', projection: 'geoflow', requiresPublicHttps: true, requiresServiceReference: false },
 ] as const satisfies readonly Capability[]
 
-export const FRAMEWORKS: readonly Framework[] = ['astro', 'nuxt', 'wordpress', 'php_agent', 'generic_http', 'geoflow_local', 'static_site']
+export const FRAMEWORKS: readonly Framework[] = ['astro', 'nuxt', 'nextjs', 'wordpress', 'php_agent', 'generic_http', 'geoflow_local', 'static_site']
 export const TRANSPORTS: readonly Transport[] = ['first_party_git', 'first_party_signed_api', 'wordpress_rest', 'geoflow_agent', 'generic_http', 'geoflow_local']
 export const EXECUTOR_AUTHORITIES: readonly ExecutorAuthority[] = ['discoverystack_first_party', 'geoflow_content_engine']
 
