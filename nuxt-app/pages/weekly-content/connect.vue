@@ -72,6 +72,13 @@ onBeforeUnmount(() => { invitation.value = ''; examinedInvitation = ''; context.
       <div class="brand"><img src="/brand/searchking-avatar-v1.png" alt="搜尋王" width="64" height="64"><span>搜尋王</span></div>
       <h1>連結公司與 LINE</h1>
       <p class="intro">連結後，我們會在這個 LINE 帳號送上每週文章。你看完並按「同意發布」，文章才會發到公司的網站。</p>
+      <aside class="data-notice" aria-labelledby="line-data-notice-title">
+        <h2 id="line-data-notice-title">LINE 資料與你的選擇</h2>
+        <p>啟用客戶服務後，我們會使用你的 LINE 識別碼確認受邀公司與網站、傳送文章送審通知，並保存綁定關係及你的審稿決定。</p>
+        <p>連結公司與同意接收通知，不代表同意任何一篇文章發佈；每篇仍需你另行同意。</p>
+        <p>如需解除綁定或停止通知，可透過服務窗口提出要求，核對身分後由服務人員處理。</p>
+        <p><a href="https://discoverystack-web.onrender.com/zh-hant/privacy" target="_blank" rel="noopener noreferrer">隱私與資料使用說明</a> · <a href="https://discoverystack-web.onrender.com/zh-hant#fit" target="_blank" rel="noopener noreferrer">聯絡服務窗口</a></p>
+      </aside>
       <p v-if="state === 'loading'" role="status">正在確認 LINE 登入…</p>
       <template v-else-if="state === 'login'"><p>先用 LINE 登入，再貼上服務人員提供的邀約碼。</p><button @click="login">用 LINE 登入</button></template>
       <p v-else-if="state === 'disabled'">客戶連結尚未開放，請聯絡服務人員。</p>
@@ -89,4 +96,5 @@ onBeforeUnmount(() => { invitation.value = ''; examinedInvitation = ''; context.
 
 <style scoped>
 .connect-page{min-height:100vh;background:#f6f4ef;color:#292e36;display:flex;justify-content:center;padding:48px 20px}.connect-card{width:100%;max-width:560px;padding:32px;background:#fff;border:1px solid #e3e1db;border-radius:18px}.brand{display:flex;align-items:center;gap:14px;color:#4d5dad;font-weight:700;letter-spacing:.12em}.brand img{border-radius:16px}h1{font-size:28px;line-height:1.3}h2{font-size:19px}.intro,p{line-height:1.8}form{display:grid;gap:12px;margin-top:24px}input:not([type=checkbox]){padding:12px;border:1px solid #bfc4ce;border-radius:8px;width:100%;box-sizing:border-box}button{background:#4d5dad;color:white;border:0;padding:12px 18px;border-radius:8px;font:inherit;font-weight:600;cursor:pointer}button:disabled{opacity:.5;cursor:default}.company-list article,.company-confirm{background:#f7f8fb;padding:18px;border-radius:12px;margin:20px 0}.company-confirm p,.company-list p{overflow-wrap:anywhere}.consent{display:flex;gap:10px;line-height:1.7;margin:20px 0}.notice{color:#864337}
+.data-notice{margin:20px 0;padding-top:16px;border-top:1px solid #e3e1db}.data-notice h2{font-size:17px}.data-notice p{font-size:14px}.data-notice a{color:#2c3e8f;text-underline-offset:3px}
 </style>
