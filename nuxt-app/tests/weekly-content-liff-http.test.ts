@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs'
 import {createApp,createRouter,defineEventHandler,send,setResponseStatus,toWebHandler,type EventHandler} from 'h3'
 import {afterAll,afterEach,beforeAll,beforeEach,describe,expect,it,vi} from 'vitest'
-import {activateWeeklyReviewConfig,issueLineBindingInvite} from '../server/weekly-content/service'
+import {issueLineBindingInvite} from '../server/weekly-content/service'
 import {WeeklyFixture,WEEKLY_NOW,WEEKLY_KEY} from './fixtures/weekly-content/repository'
 const seams=vi.hoisted(()=>({repository:vi.fn()}))
 vi.mock('../server/weekly-content/repository',async original=>({...await original<typeof import('../server/weekly-content/repository')>(),createWeeklyContentRepository:seams.repository}))
@@ -11,7 +11,7 @@ beforeAll(async()=>{vi.stubGlobal('defineEventHandler',defineEventHandler);confi
 beforeEach(async()=>{
  vi.clearAllMocks();vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(WEEKLY_NOW)
  for(const [key,value] of Object.entries({NUXT_WEEKLY_CONTENT_APPROVAL_ENABLED:'true',NUXT_WEEKLY_CONTENT_LIFF_ENABLED:'true',NUXT_WEEKLY_CONTENT_LIFF_ID:'2001234567-Abcd1234',NUXT_WEEKLY_CONTENT_LINE_LOGIN_CHANNEL_ID:'2001234567',NUXT_WEEKLY_CONTENT_TOKEN_KEY:WEEKLY_KEY,NUXT_WEEKLY_CONTENT_REVIEW_ORIGIN:ORIGIN}))vi.stubEnv(key,value)
- f=new WeeklyFixture();await activateWeeklyReviewConfig({ownerUserId:1,clientId:1,publicationTargetId:3,policyId:'policy-1',idempotencyKey:'activate'},f.deps());invitationToken=(await issueLineBindingInvite({ownerUserId:1,clientId:1},f.deps())).invitationToken;seams.repository.mockReturnValue(f.repository)
+ f=new WeeklyFixture();f.state.client.requireCustomerApproval=false;invitationToken=(await issueLineBindingInvite({ownerUserId:1,clientId:1},f.deps())).invitationToken;seams.repository.mockReturnValue(f.repository)
  provider=vi.fn(async()=>new Response(JSON.stringify({iss:'https://access.line.me',aud:'2001234567',sub:USER,iat:Math.floor(WEEKLY_NOW.getTime()/1000)-100,exp:Math.floor(WEEKLY_NOW.getTime()/1000)+3500}),{headers:{'content-type':'application/json'}}));vi.stubGlobal('fetch',provider)
 })
 afterEach(()=>{vi.useRealTimers();vi.unstubAllEnvs()})
@@ -26,7 +26,23 @@ describe('LIFF production HTTP routes with in-process synthetic provider/databas
  it.each(['text/plain','application/x-www-form-urlencoded','application/jsonp'])('rejects non-JSON %s before identity lookup',async contentType=>{expect((await http()(PATH,{idToken:TOKEN},{contentType})).res.status).toBe(403);expect(provider).not.toHaveBeenCalled();expect(seams.repository).not.toHaveBeenCalled()})
  it('bounds raw input at 12KiB and rejects malformed JSON before identity/storage',async()=>{const call=http();expect((await call(PATH,{idToken:TOKEN},{raw:JSON.stringify({idToken:TOKEN})+' '.repeat(12288)})).res.status).toBe(413);expect((await call(PATH,null,{raw:'{broken'})).res.status).toBe(422);expect(provider).not.toHaveBeenCalled();expect(seams.repository).not.toHaveBeenCalled()})
  it.each([{ownerUserId:1},{clientId:1},{lineUserId:USER},{webhookEventId:'synthetic'}])('rejects browser authority %j before provider/storage',async fields=>{expect((await http()(PATH,{idToken:TOKEN,...fields})).res.status).toBe(422);expect(provider).not.toHaveBeenCalled();expect(seams.repository).not.toHaveBeenCalled()})
- it('displays exact company then actual core confirm, with no private identity/token returned',async()=>{const call=http(),preview=await call(PATH,{idToken:TOKEN,invitationToken});expect(preview.res.status).toBe(200);expect(f.state.binding).toBeNull();const result=await call('/api/weekly-content/connect/confirm',{idToken:TOKEN,invitationToken,confirmationToken:preview.value.confirmationToken,consent:true});expect(result.res.status).toBe(200);expect(result.value).toEqual({status:'bound',company:{displayName:f.state.client.displayName,canonicalSiteOrigin:f.state.client.canonicalSiteOrigin}});expect(f.state.binding?.lineUserId).toBe(USER);for(const privateValue of [TOKEN,USER,WEEKLY_KEY,invitationToken])expect(JSON.stringify(result.value)).not.toContain(privateValue);expect(result.res.headers.get('referrer-policy')).toBe('no-referrer');expect(f.state.consents).toHaveLength(0)})
+ it('displays exact company then confirms identity without enabling weekly service or returning private identity/token',async()=>{
+  const call=http(),preview=await call(PATH,{idToken:TOKEN,invitationToken})
+  expect(preview.res.status).toBe(200);expect(preview.value.purpose).toBe('identity_binding');expect(f.state.binding).toBeNull()
+  const payload={idToken:TOKEN,invitationToken,confirmationToken:preview.value.confirmationToken,consent:true},result=await call('/api/weekly-content/connect/confirm',payload)
+  expect(result.res.status).toBe(200);expect(result.value).toEqual({status:'bound',purpose:'identity_binding',company:{displayName:f.state.client.displayName,canonicalSiteOrigin:f.state.client.canonicalSiteOrigin}});expect(f.state.binding?.lineUserId).toBe(USER)
+  for(const privateValue of [TOKEN,USER,WEEKLY_KEY,invitationToken])expect(JSON.stringify(result.value)).not.toContain(privateValue)
+  expect(result.res.headers.get('referrer-policy')).toBe('no-referrer');expect(f.state.config).toBeNull();expect(f.state.client.requireCustomerApproval).toBe(false);expect(f.state.consents).toHaveLength(0);expect(f.state.requests).toHaveLength(0);expect(f.state.outbox).toHaveLength(0);expect(f.state.queued).toBe(0)
+  expect(f.repository.getConfig).not.toHaveBeenCalled();expect(f.repository.getTargetPolicy).not.toHaveBeenCalled();expect(f.repository.saveConfig).not.toHaveBeenCalled();expect(f.repository.requireClientApproval).not.toHaveBeenCalled()
+  const replay=await call('/api/weekly-content/connect/confirm',payload)
+  expect(replay.res.status).toBe(200);expect(replay.value.status).toBe('replayed');expect(replay.value.purpose).toBe('identity_binding');expect(f.state.inbox).toHaveLength(1)
+  const own=await call(PATH,{idToken:TOKEN});expect(own.res.status).toBe(200);expect(own.value).toEqual({mode:'bindings',companies:[{displayName:f.state.client.displayName,canonicalSiteOrigin:f.state.client.canonicalSiteOrigin}]});expect(JSON.stringify(own.value)).not.toContain(USER)
+ })
+ it('does not consume an identity invitation without explicit consent, even after a valid company preview',async()=>{
+  const call=http(),preview=await call(PATH,{idToken:TOKEN,invitationToken})
+  const result=await call('/api/weekly-content/connect/confirm',{idToken:TOKEN,invitationToken,confirmationToken:preview.value.confirmationToken,consent:false})
+  expect(result.res.status).toBe(422);expect(f.state.binding).toBeNull();expect(f.state.invites[0]?.consumedAt).toBeNull();expect(f.state.inbox).toHaveLength(0);expect(f.state.config).toBeNull()
+ })
  it('does not expose provider error prose, raw tokens or internal codes',async()=>{provider.mockResolvedValue(new Response('private-provider-secret',{status:400}));const result=await http()(PATH,{idToken:TOKEN});expect(result.res.status).toBe(401);expect(result.value.statusMessage).toBe('LINE 登入已失效，請重新登入。');expect(JSON.stringify(result.value)).not.toContain('private-provider-secret');expect(JSON.stringify(result.value)).not.toContain('LINE_IDENTITY_INVALID');expect(seams.repository).not.toHaveBeenCalled()})
  it('page loads only official SDK after configuration and keeps auth/invite out of browser persistence/redirects',()=>{const page=readFileSync(new URL('../pages/weekly-content/connect.vue',import.meta.url),'utf8');expect(page).toContain('https://static.line-scdn.net/liff/edge/2/sdk.js');expect(page).toContain('sdk.login({ redirectUri: `${config.origin}/weekly-content/connect` })');expect(page).toContain('sdk?.getIDToken()');expect(page).not.toMatch(/localStorage|sessionStorage|getProfile|getDecodedIDToken|console\./);expect(page.indexOf('if (!result.enabled)')).toBeLessThan(page.indexOf('sdk = await loadSdk()'));expect(page).toContain('consent: true');expect(page).toContain('confirmationToken: context.value.confirmationToken');expect(page).toContain('/brand/searchking-avatar-v1.png');expect(page).toContain('alt="搜尋王"');expect(page).toContain("window.history.replaceState(null, '', '/weekly-content/connect')")})
 })

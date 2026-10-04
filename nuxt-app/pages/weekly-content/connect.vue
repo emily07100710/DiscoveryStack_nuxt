@@ -46,7 +46,7 @@ async function confirm() {
   if (busy.value || !consent.value || context.value?.mode !== 'invitation' || !examinedInvitation) return
   busy.value = true; message.value = ''
   try {
-    const result = await connectFetch<{ status: 'bound' | 'replayed'; company: WeeklyLiffCompany }>('/api/weekly-content/connect/confirm', { method: 'POST', body: { idToken: idToken(), invitationToken: examinedInvitation, confirmationToken: context.value.confirmationToken, consent: true } })
+    const result = await connectFetch<{ purpose: 'identity_binding'; status: 'bound' | 'replayed'; company: WeeklyLiffCompany }>('/api/weekly-content/connect/confirm', { method: 'POST', body: { idToken: idToken(), invitationToken: examinedInvitation, confirmationToken: context.value.confirmationToken, consent: true } })
     connectedCompany.value = result.company; invitation.value = ''; clearConfirmation(); state.value = 'success'
   } catch (cause) { message.value = publicMessage(cause); clearConfirmation() } finally { busy.value = false }
 }
@@ -71,10 +71,10 @@ onBeforeUnmount(() => { invitation.value = ''; examinedInvitation = ''; context.
     <section class="connect-card">
       <div class="brand"><img src="/brand/searchking-avatar-v1.png" alt="搜尋王" width="64" height="64"><span>搜尋王</span></div>
       <h1>連結公司與 LINE</h1>
-      <p class="intro">連結後，我們會在這個 LINE 帳號送上每週文章。你看完並按「同意發布」，文章才會發到公司的網站。</p>
+      <p class="intro">這一步只確認公司與 LINE 身分，不會啟用每週寫稿或授權發文。文章服務另行啟用後，仍需要你逐篇看稿並同意原稿，文章才會發到公司的網站。</p>
       <aside class="data-notice" aria-labelledby="line-data-notice-title">
         <h2 id="line-data-notice-title">LINE 資料與你的選擇</h2>
-        <p>啟用客戶服務後，我們會使用你的 LINE 識別碼確認受邀公司與網站、傳送文章送審通知，並保存綁定關係及你的審稿決定。</p>
+        <p>我們會使用你的 LINE 識別碼確認受邀公司與網站，並保存綁定關係。若之後啟用文章服務，也會傳送文章送審通知及保存你的審稿決定。</p>
         <p>連結公司與同意接收通知，不代表同意任何一篇文章發佈；每篇仍需你另行同意。</p>
         <p>如需解除綁定或停止通知，可透過服務窗口提出要求，核對身分後由服務人員處理。</p>
         <p><a href="https://discoverystack-web.onrender.com/zh-hant/privacy" target="_blank" rel="noopener noreferrer">隱私與資料使用說明</a> · <a href="https://discoverystack-web.onrender.com/zh-hant#fit" target="_blank" rel="noopener noreferrer">聯絡服務窗口</a></p>
@@ -86,9 +86,9 @@ onBeforeUnmount(() => { invitation.value = ''; examinedInvitation = ''; context.
         <div v-if="context?.mode === 'bindings' && context.companies.length" class="company-list"><h2>你已連結的公司</h2><article v-for="(company, index) in context.companies" :key="index"><strong>{{ company.displayName }}</strong><p>{{ company.canonicalSiteOrigin }}</p></article></div>
         <p>要連結新公司，請向服務人員索取邀約碼。這裡不提供客戶名單或自行選公司。</p>
         <form @submit.prevent="examine"><label for="invite">公司邀約碼</label><input id="invite" v-model="invitation" autocomplete="off" autocapitalize="off" :spellcheck="false" maxlength="36" placeholder="貼上 wli_ 開頭的邀約碼" :disabled="busy" @input="clearConfirmation"><button :disabled="busy">核對公司</button></form>
-        <div v-if="context?.mode === 'invitation'" class="company-confirm"><h2>請確認要連結的公司</h2><strong>{{ context.company.displayName }}</strong><p>{{ context.company.canonicalSiteOrigin }}</p><label class="consent"><input v-model="consent" type="checkbox" :disabled="busy">我確認這是我的公司，同意使用目前 LINE 帳號接收文章送審通知。</label><button :disabled="!consent || busy" @click="confirm">確認連結這家公司</button></div>
+        <div v-if="context?.mode === 'invitation'" class="company-confirm"><h2>請確認要連結的公司</h2><strong>{{ context.company.displayName }}</strong><p>{{ context.company.canonicalSiteOrigin }}</p><label class="consent"><input v-model="consent" type="checkbox" :disabled="busy">我確認這是我的公司，同意連結目前 LINE 帳號。文章服務另行啟用後，可透過此 LINE 接收送審通知。</label><p>連結身分不代表啟用文章服務，也不代表同意任何一篇文章發佈。</p><button :disabled="!consent || busy" @click="confirm">確認連結這家公司</button></div>
       </template>
-      <template v-else-if="state === 'success'"><h2>已連結 {{ connectedCompany?.displayName }}</h2><p>請加入「搜尋王」官方帳號並保持可接收訊息。文章準備好後會送到 LINE，仍需要你逐篇同意才會發布。</p><p>{{ connectedCompany?.canonicalSiteOrigin }}</p></template>
+      <template v-else-if="state === 'success'"><h2>已連結 {{ connectedCompany?.displayName }}</h2><p>這一步只完成身分連結，不會啟用每週寫稿或授權任何文章發佈。文章服務與費用範圍由服務人員另外確認。</p><p>請加入「搜尋王」官方帳號並保持可接收訊息。文章服務啟用且原稿完成後，才會送到 LINE，仍需要你逐篇同意原稿才會發佈。</p><p>{{ connectedCompany?.canonicalSiteOrigin }}</p></template>
       <p v-if="message" class="notice" role="alert">{{ message }}</p>
     </section>
   </main>

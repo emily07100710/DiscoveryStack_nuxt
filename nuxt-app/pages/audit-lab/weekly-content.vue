@@ -2,8 +2,8 @@
 // This page owns explicit response DTOs; the runtime remains Nuxt's same-origin fetch.
 const fetchWeekly=$fetch as <T=unknown>(path:string,options?:{method?:'GET'|'POST';body?:Record<string,unknown>})=>Promise<T>
 definePageMeta({i18n:false,layout:'owner'})
-useHead({title:'每週文章送審｜搜尋王'})
-type Client={id:number;displayName:string;canonicalSiteOrigin:string;status:string;requiresCustomerApproval:boolean}
+useHead({title:'客戶 LINE 與文章服務｜搜尋王'})
+type Client={id:number;displayName:string;canonicalSiteOrigin:string;status:string;lineBound:boolean;requiresCustomerApproval:boolean}
 type Config={clientId:number;status:string;lineBound:boolean;reviewTtlHours:number;publicationTargetId:number}
 type Policy={policyId:string;clientId:number;publicationTargetId:number;status:string;expiresAt:string;policyVersion:string}
 type Request={requestId:string;clientId:number;entryId:number;status:string;expiresAt:string;notificationStatus:string|null;notificationError:string|null;publicationStatus?:string|null;title?:string|null}
@@ -13,7 +13,8 @@ const {data,pending,error,refresh}=await useAsyncData('weekly-content-workspace'
 const workspace=computed(()=>data.value || empty)
 const selected=ref('');const policyId=ref('');const planId=ref('');const startDate=ref(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Taipei',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()))
 const publishLocalTime=ref('10:00');const monthlyArticleLimit=ref(4);const busy=ref(false);const notice=ref('');const failed=ref(false)
-const invitation=ref<{invitationToken:string;expiresAt:string;connectUrl:string}|null>(null)
+type Invitation={purpose:'identity_binding';invitationToken:string;expiresAt:string;connectUrl:string}
+const invitation=ref<Invitation|null>(null)
 const current=computed(()=>workspace.value.clients.find(c=>String(c.id)===selected.value))
 const config=computed(()=>workspace.value.configs.find(c=>String(c.clientId)===selected.value))
 const policies=computed(()=>workspace.value.policies.filter(p=>String(p.clientId)===selected.value && p.status==='enabled' && p.policyVersion==='governed-autopilot-policy-v4' && Date.parse(p.expiresAt)>Date.now()))
@@ -23,12 +24,12 @@ const name=(id:number)=>workspace.value.clients.find(c=>c.id===id)?.displayName 
 const time=(iso:string)=>new Date(iso).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})
 const requestStatus=(r:Request)=>['delivered','completed'].includes(r.publicationStatus || '')?'已發佈':r.status==='changes_requested'?'客戶要求修改':r.status==='revoked'?'送審已取消':Date.parse(r.expiresAt)<=Date.now()?'送審已過期':r.status==='approved'?'已同意，等待發佈':'等待客戶確認'
 const deliveryStatus=(r:Request)=>r.notificationStatus==='sent'?'LINE 已接受通知':r.notificationStatus==='failed'?'LINE 通知失敗':r.notificationStatus==='cancelled'?'通知已取消':'等待傳送'
-async function act(action:()=>Promise<unknown>,message:string){busy.value=true;failed.value=false;notice.value='';try{await action();notice.value=message;await refresh()}catch{failed.value=true;notice.value='這一步尚未完成。請檢查客戶的發文規則、網站設定與系統連線後再試。'}finally{busy.value=false}}
-async function addDo(){await act(async()=>{await fetchWeekly('/api/weekly-content/do-alignment',{method:'POST',body:{}})},'Do Alignment 已加入，可開始設定寫作規則。')}
+async function act(action:()=>Promise<unknown>,message:string,failureMessage='這一步尚未完成。請檢查客戶的發文規則、網站設定與系統連線後再試。'){busy.value=true;failed.value=false;notice.value='';try{await action();notice.value=message;await refresh()}catch{failed.value=true;notice.value=failureMessage}finally{busy.value=false}}
+async function addDo(){await act(async()=>{await fetchWeekly('/api/weekly-content/do-alignment',{method:'POST',body:{}})},'Do Alignment 已加入，可先核對網站並綁定 LINE。每週文章仍需另外核准設定。')}
 const activationKeys=new Map<string,string>()
 async function requireApproval(){if(!current.value)return;await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/require-approval`,{method:'POST',body:{consent:true}}),'已設定這位客戶每篇文章都要本人同意。接著可設定每週寫作與發文規則。')}
-async function activate(){const p=policies.value.find(p=>p.policyId===policyId.value);if(!p||!current.value)return;const key=`${current.value.id}:${p.policyId}`;let idempotencyKey=activationKeys.get(key);if(!idempotencyKey){idempotencyKey=crypto.randomUUID();activationKeys.set(key,idempotencyKey)}await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/activate`,{method:'POST',body:{publicationTargetId:p.publicationTargetId,policyId:p.policyId,reviewTtlHours:72,idempotencyKey}}),'每週文章送審已設定。下一步綁定收稿人的 LINE。')}
-async function invite(){if(!current.value)return;await act(async()=>{invitation.value=await fetchWeekly<{invitationToken:string;expiresAt:string;connectUrl:string}>(`/api/weekly-content/clients/${current.value!.id}/invitation`,{method:'POST',body:{}})},'請把下方綁定入口與一次性邀請碼交給這位客戶。')}
+async function activate(){const p=policies.value.find(p=>p.policyId===policyId.value);if(!p||!current.value)return;const key=`${current.value.id}:${p.policyId}`;let idempotencyKey=activationKeys.get(key);if(!idempotencyKey){idempotencyKey=crypto.randomUUID();activationKeys.set(key,idempotencyKey)}await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/activate`,{method:'POST',body:{publicationTargetId:p.publicationTargetId,policyId:p.policyId,reviewTtlHours:72,idempotencyKey}}),'每週文章送審已設定。寄稿仍需有效 LINE 綁定、核准選題與文章預算。')}
+async function invite(){if(!current.value||current.value.status!=='active')return;await act(async()=>{invitation.value=await fetchWeekly<Invitation>(`/api/weekly-content/clients/${current.value!.id}/invitation`,{method:'POST',body:{}})},'請把下方入口與一次性邀請碼私下交給這位客戶。這一步只綁定身分。','這一步尚未完成。請確認客戶仍有效，並檢查 LINE 連線與邀請設定後再試。')}
 async function createCalendar(){if(!current.value||!planId.value)return;await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/calendar`,{method:'POST',body:{productionPlanId:Number(planId.value),startDate:startDate.value,publishLocalTime:publishLocalTime.value,monthlyArticleLimit:monthlyArticleLimit.value}}),'每週寄稿時間已排好。系統會依序使用這份計畫中核准的選題。')}
 const reopenKeys=new Map<string,string>()
 const canReopen=(r:Request)=>!['delivered','completed','publishing'].includes(r.publicationStatus || '') && ['pending','approved'].includes(r.status) && (Date.parse(r.expiresAt)<=Date.now() || (r.status==='pending' && ['failed','cancelled'].includes(r.notificationStatus || '')))
@@ -37,16 +38,25 @@ async function pause(){if(!current.value)return;await act(()=>fetchWeekly(`/api/
 </script>
 <template>
   <div class="weekly-page">
-    <header><p class="brand">搜尋王 · 客戶內容服務</p><h1>每週文章送審</h1><p>AI 寫好文章，送到客戶 LINE。客戶看完按「同意發佈」，文章才會出現在自己的網站。</p></header>
+    <header><p class="brand">搜尋王 · 客戶內容服務</p><h1>客戶 LINE 與文章服務</h1><p>先核對公司與網站、連結客戶 LINE。每週文章服務需要另外設定與核准；每篇文章仍要客戶同意才會發佈。</p></header>
     <section class="flow" aria-label="文章流程"><span>1 每週選題與寫稿</span><span>2 內容與 SEO 檢查</span><span>3 LINE 客戶確認</span><span>4 發佈到客戶網站</span></section>
     <p v-if="pending" role="status">正在載入客戶設定…</p><p v-else-if="error" class="error" role="alert">目前無法讀取設定，請先登入後台並確認系統已完成部署。</p>
     <p v-if="notice" :class="{error:failed}" role="status">{{notice}}</p>
-    <section v-if="!workspace.readiness.enabled" class="card"><h2>還沒啟用正式服務</h2><p>每週文章功能預設關閉。完成版本部署、資料庫更新與 LINE 連線設定後，才能開始寄稿。</p><p>第一位客戶：Do Alignment。LINE 官方帳號：搜尋王（@453ojflc）。</p></section>
+    <section v-if="!workspace.readiness.enabled" class="card"><h2>客戶連結尚未開放</h2><p>完成版本部署、資料庫更新與 LINE 連線設定後，才能產生身分綁定邀請。綁定完成後，每週寫稿與發文仍需另外啟用及核准。</p><p>第一位客戶：Do Alignment。LINE 官方帳號：搜尋王（@453ojflc）。</p></section>
     <template v-else>
-      <section class="card"><h2>客戶與連線狀態</h2><p>{{workspace.readiness.lineConfigured?'LINE 連線設定已填妥，實際收發仍需驗收。':'LINE 連線設定尚未完成。'}} {{workspace.readiness.schedulerEnabled?'排程已啟用。':'每週排程尚未啟用。'}}</p><button :disabled="busy" @click="addDo">加入第一位客戶：Do Alignment</button><label>選擇客戶<select v-model="selected"><option value="">請選擇</option><option v-for="c in workspace.clients" :key="c.id" :value="String(c.id)">{{c.displayName}}</option></select></label></section>
-      <section v-if="current" class="card"><h2>{{current.displayName}} 的文章服務</h2><p>{{current.canonicalSiteOrigin}}</p><p v-if="config">{{config.status==='active'?'服務已啟用':'服務已暫停'}} · {{config.lineBound?'收稿 LINE 已綁定':'等待綁定收稿 LINE'}} · 客戶有 {{config.reviewTtlHours}} 小時確認文章</p>
-        <div v-if="!config || config.status!=='active'"><div v-if="!current.requiresCustomerApproval"><p>先設定這位客戶的文章要經本人確認。啟用後，所有發文入口都會要求有效的 LINE 同意。</p><button :disabled="busy" @click="requireApproval">我同意改用客戶確認後才發文</button></div><label>使用已核准的寫作與發文規則<select v-model="policyId"><option value="">請選擇</option><option v-for="p in policies" :key="p.policyId" :value="p.policyId">每週文章規則 · 有效至 {{time(p.expiresAt)}}</option></select></label><p v-if="!policies.length">還沒有有效的寫作規則。請先設定網站、可引用資料、品牌語氣和文章預算。</p><NuxtLink to="/audit-lab/content-operations/strategy">設定選題與品牌資料</NuxtLink><NuxtLink to="/audit-lab/content-operations">設定網站與發文規則</NuxtLink><button :disabled="busy || !policyId" @click="activate">啟用 LINE 送審</button></div>
-        <template v-else><button :disabled="busy" @click="invite">產生客戶 LINE 綁定邀請</button><div v-if="invitation" class="invite"><p>請客戶加入「搜尋王」好友（@453ojflc），開啟下方綁定入口，登入 LINE 後貼上邀請碼。確認公司名稱與網站正確，再同意綁定。邀請只對應這位客戶，有效十分鐘。</p><a :href="invitation.connectUrl" target="_blank" rel="noopener noreferrer">開啟 LINE 客戶綁定</a><p>一次性邀請碼（請私下交給指定客戶）：</p><code>{{invitation.invitationToken}}</code><p>有效至 {{time(invitation.expiresAt)}}</p></div>
+      <section class="card"><h2>客戶與連線狀態</h2><p>{{workspace.readiness.lineConfigured?'LINE 連線設定已填妥，實際收發仍需驗收。':'LINE 連線設定尚未完成。'}} {{workspace.readiness.schedulerEnabled?'文章排程開關已開啟；各客戶仍需有效規則及核准。':'每週文章排程尚未啟用。'}}</p><button :disabled="busy" @click="addDo">加入第一位客戶：Do Alignment</button><label>選擇客戶<select v-model="selected"><option value="">請選擇</option><option v-for="c in workspace.clients" :key="c.id" :value="String(c.id)">{{c.displayName}}</option></select></label></section>
+      <section v-if="current" class="card identity-card">
+        <h2>{{current.displayName}} 的 LINE 身分連結</h2><p>{{current.canonicalSiteOrigin}}</p>
+        <p v-if="current.status!=='active'">這位客戶目前未啟用，不能產生新邀請。</p>
+        <p v-else>{{current.lineBound?'客戶 LINE 已綁定（身分已連結）':'客戶 LINE 尚未綁定'}}</p>
+        <p>這一步只確認公司與 LINE 身分，不會啟用每週寫稿、安排寄稿或授權文章發佈。</p>
+        <button :disabled="busy || current.status!=='active'" @click="invite">產生客戶 LINE 綁定邀請</button>
+        <div v-if="invitation" class="invite"><p>請客戶加入「搜尋王」好友（@453ojflc），開啟下方入口，登入 LINE 後貼上邀請碼。確認公司名稱與網站正確，再同意連結身分。邀請只對應這位客戶，有效十分鐘。</p><a :href="invitation.connectUrl" target="_blank" rel="noopener noreferrer">開啟 LINE 客戶綁定</a><p>一次性邀請碼（請私下交給指定客戶）：</p><code>{{invitation.invitationToken}}</code><p>有效至 {{time(invitation.expiresAt)}}</p><p>綁定後，文章服務與費用範圍仍需另外核准；每篇原稿都需要客戶另行同意。</p></div>
+      </section>
+      <section v-if="current" class="card"><h2>{{current.displayName}} 的每週文章服務</h2>
+        <p v-if="config">{{config.status==='active'?'每週文章送審已啟用':'每週文章服務已暫停'}} · 客戶有 {{config.reviewTtlHours}} 小時確認文章</p><p v-else>每週文章服務尚未啟用。LINE 身分綁定不會代替文章規則或費用核准。</p>
+        <div v-if="!config || config.status!=='active'"><div v-if="!current.requiresCustomerApproval"><p>先設定這位客戶的文章要經本人確認。啟用後，所有發文入口都會要求有效的 LINE 同意。</p><button :disabled="busy || current.status!=='active'" @click="requireApproval">我同意改用客戶確認後才發文</button></div><label>使用已核准的寫作與發文規則<select v-model="policyId"><option value="">請選擇</option><option v-for="p in policies" :key="p.policyId" :value="p.policyId">每週文章規則 · 有效至 {{time(p.expiresAt)}}</option></select></label><p v-if="!policies.length">還沒有有效的寫作規則。請先設定網站、可引用資料、品牌語氣和文章預算。</p><NuxtLink to="/audit-lab/content-operations/strategy">設定選題與品牌資料</NuxtLink><NuxtLink to="/audit-lab/content-operations">設定網站與發文規則</NuxtLink><button :disabled="busy || !policyId || current.status!=='active'" @click="activate">啟用每週文章送審</button></div>
+        <template v-else>
           <form v-if="!hasCalendar" @submit.prevent="createCalendar"><h3>排好第一篇與之後的每週文章</h3><label>核准的選題計畫<select v-model="planId" required><option value="">請選擇</option><option v-for="p in workspace.plans" :key="p.id" :value="String(p.id)">{{p.title}}</option></select></label><label>第一篇日期<input v-model="startDate" type="date" required></label><label>寄稿時間<input v-model="publishLocalTime" type="time" required></label><label>每月最多文章數<input v-model.number="monthlyArticleLimit" type="number" min="1" max="5" required></label><button :disabled="busy || !planId" type="submit">安排每週寄稿</button></form>
           <p v-else>每週計畫已建立。一次只處理一篇；選題用完、資料過期或客戶要求修改時，會等待管理者處理。</p><button class="secondary" :disabled="busy" @click="pause">暫停這位客戶的文章服務</button>
         </template>

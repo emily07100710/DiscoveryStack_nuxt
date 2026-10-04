@@ -11,8 +11,13 @@ export default defineEventHandler(async event=>{try{
  if(!readiness.enabled)return {readiness,configs:[],clients:[],requests:[],plans:[],targets:[],policies:[],calendars:[]}
  const weekly=weeklyRuntimeDependencies();const ops=createContentOperationsRepository();const database=getDatabase()!
  const rows=await weekly.repository.listConfigs(owner)
- const configs=await Promise.all(rows.map(async row=>projectWeeklyOwnerConfig(row,(await weekly.repository.getBinding(owner,row.clientId))?.status==='active')))
- const clients=(await ops.listClients(owner)).map(c=>({id:c.id,displayName:c.displayName,canonicalSiteOrigin:c.canonicalSiteOrigin,status:c.status,requiresCustomerApproval:c.requireCustomerApproval===true}))
+ const clients=await Promise.all((await ops.listClients(owner)).filter(c=>c.ownerUserId===owner).map(async c=>{
+  const binding=c.status==='active'?await weekly.repository.getBinding(owner,c.id):null
+  const lineBound=binding?.status==='active' && binding.ownerUserId===owner && binding.clientId===c.id
+  return {id:c.id,displayName:c.displayName,canonicalSiteOrigin:c.canonicalSiteOrigin,status:c.status,lineBound,requiresCustomerApproval:c.requireCustomerApproval===true}
+ }))
+ const boundClients=new Set(clients.filter(c=>c.lineBound).map(c=>c.id))
+ const configs=rows.map(row=>projectWeeklyOwnerConfig(row,boundClients.has(row.clientId)))
  const targetRows=await ops.listPublicationTargets(owner)
  const targets=targetRows.map(t=>({id:t.id,clientId:t.clientId,targetId:t.targetId,status:t.status,executionEnabled:t.executionEnabled,framework:t.framework}))
  const policies=(await Promise.all(clients.map(c=>ops.listAutopilotPolicies(owner,c.id)))).flat().map(p=>({policyId:p.policyId,clientId:p.clientId,publicationTargetId:p.publicationTargetId,status:p.status,expiresAt:p.expiresAt.toISOString(),policyVersion:p.policyVersion}))

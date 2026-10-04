@@ -21,10 +21,11 @@ describe('LIFF connects only the verified sender and exact invited company',()=>
  it('explicit confirmation binds through actual core once and stable token-independent replay creates one inbox',async()=>{const value=await input();const results=await Promise.all([confirmWeeklyLiffConnection(value,deps),confirmWeeklyLiffConnection({...value,idToken:'new.header.signature'},deps)]);expect(results.map(row=>row.status).sort()).toEqual(['bound','replayed']);expect(f.state.binding?.lineUserId).toBe(USER);expect(f.state.inbox).toHaveLength(1);expect(f.state.consents).toHaveLength(0);expect(f.state.outbox).toHaveLength(0);expect(JSON.stringify(f.state.inbox)).not.toContain(TOKEN);expect(JSON.stringify(f.state.inbox)).not.toContain(USER);expect(f.state.inbox[0]!.resultCode).toBe('LINE_BOUND')})
  it.each([{ownerUserId:2},{clientId:2},{lineUserId:OTHER},{webhookEventId:'caller-event'},{company:{displayName:'caller'}}])('rejects all browser authority fields %j',async field=>{await expect(getWeeklyLiffConnectContext({idToken:TOKEN,invitationToken:raw,...field},deps)).rejects.toThrow();await expect(confirmWeeklyLiffConnection({...await input(),...field},deps)).rejects.toThrow();expect(f.state.binding).toBeNull()})
  it('requires exact true consent and server confirmation; preview is never binding',async()=>{const value=await input();for(const change of [{consent:false},{consent:'true'},{confirmationToken:'a'.repeat(43)}])await expect(confirmWeeklyLiffConnection({...value,...change},deps)).rejects.toThrow();expect(f.state.binding).toBeNull()})
- it.each(['name','origin','config','paused','expired','archived'] as const)('transaction rechecks %s before any core claim',async kind=>{const value=await input();if(kind==='name')f.state.client.displayName='Changed company';if(kind==='origin')f.state.client.canonicalSiteOrigin='https://different-company.taipei';if(kind==='config')f.state.config!.configurationFingerprint='b'.repeat(64);if(kind==='paused')f.state.config!.status='paused';if(kind==='expired')f.state.invites[0]!.expiresAt=WEEKLY_NOW;if(kind==='archived')f.state.client.status='archived';await expect(confirmWeeklyLiffConnection(value,deps)).rejects.toMatchObject({statusCode:409});expect(f.state.binding).toBeNull();expect(f.state.inbox).toHaveLength(0)})
+ it.each(['name','origin','expired','archived'] as const)('transaction rechecks %s before any core claim',async kind=>{const value=await input();if(kind==='name')f.state.client.displayName='Changed company';if(kind==='origin')f.state.client.canonicalSiteOrigin='https://different-company.taipei';if(kind==='expired')f.state.invites[0]!.expiresAt=WEEKLY_NOW;if(kind==='archived')f.state.client.status='archived';await expect(confirmWeeklyLiffConnection(value,deps)).rejects.toMatchObject({statusCode:409});expect(f.state.binding).toBeNull();expect(f.state.inbox).toHaveLength(0)})
+ it.each(['config','paused'] as const)('identity confirmation remains independent of article %s',async kind=>{const value=await input();if(kind==='config')f.state.config!.configurationFingerprint='b'.repeat(64);if(kind==='paused')f.state.config!.status='paused';const before=structuredClone(f.state.config);expect(await confirmWeeklyLiffConnection(value,deps)).toMatchObject({status:'bound',purpose:'identity_binding'});expect(f.state.config).toEqual(before);expect(f.state.consents).toHaveLength(0);expect(f.state.outbox).toHaveLength(0)})
  it('another verified sender cannot reuse the displayed company confirmation',async()=>{const value=await input();deps.fetchImpl=vi.fn(async()=>official(OTHER));await expect(confirmWeeklyLiffConnection(value,deps)).rejects.toMatchObject({statusCode:409});expect(f.state.binding).toBeNull()})
  it('no-invite context returns only this verified sender active bindings, never a customer directory',async()=>{expect(await getWeeklyLiffConnectContext({idToken:TOKEN},deps)).toEqual({mode:'bindings',companies:[]});await confirmWeeklyLiffConnection(await input(),deps);expect(await getWeeklyLiffConnectContext({idToken:TOKEN},deps)).toEqual({mode:'bindings',companies:[{displayName:f.state.client.displayName,canonicalSiteOrigin:f.state.client.canonicalSiteOrigin}]});deps.fetchImpl=vi.fn(async()=>official(OTHER));expect(await getWeeklyLiffConnectContext({idToken:TOKEN},deps)).toEqual({mode:'bindings',companies:[]})})
- it('filters stale or cross-owner binding records even at a synthetic repository seam',async()=>{await confirmWeeklyLiffConnection(await input(),deps);const valid={binding:f.state.binding!,client:f.state.client,config:f.state.config!};vi.mocked(f.repository.listActiveBindingsForLineUser).mockResolvedValue([valid,{...valid,binding:{...valid.binding,lineUserId:OTHER}},{...valid,config:{...valid.config,status:'paused'}},{...valid,client:{...valid.client,ownerUserId:2}}]);expect((await getWeeklyLiffConnectContext({idToken:TOKEN},deps))).toEqual({mode:'bindings',companies:[{displayName:f.state.client.displayName,canonicalSiteOrigin:f.state.client.canonicalSiteOrigin}]});expect(f.repository.listActiveBindingsForLineUser).toHaveBeenLastCalledWith(USER,20)})
+ it('filters stale or cross-owner binding records even at a synthetic repository seam',async()=>{await confirmWeeklyLiffConnection(await input(),deps);const valid={binding:f.state.binding!,client:f.state.client};vi.mocked(f.repository.listActiveIdentityBindingsForLineUser).mockResolvedValue([valid,{...valid,binding:{...valid.binding,lineUserId:OTHER}},{...valid,binding:{...valid.binding,status:'revoked'}},{...valid,client:{...valid.client,status:'archived'}},{...valid,client:{...valid.client,ownerUserId:2}},{...valid,client:{...valid.client,id:2}}]);expect((await getWeeklyLiffConnectContext({idToken:TOKEN},deps))).toEqual({mode:'bindings',companies:[{displayName:f.state.client.displayName,canonicalSiteOrigin:f.state.client.canonicalSiteOrigin}]});expect(f.repository.listActiveIdentityBindingsForLineUser).toHaveBeenLastCalledWith(USER,20)})
  it('does not disclose an already consumed invitation to another sender',async()=>{await confirmWeeklyLiffConnection(await input(),deps);deps.fetchImpl=vi.fn(async()=>official(OTHER));await expect(getWeeklyLiffConnectContext({idToken:TOKEN,invitationToken:raw},deps)).rejects.toMatchObject({statusCode:409})})
  it('verified ID token exp is rechecked after SQL lock waits before binding',async()=>{
    vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(WEEKLY_NOW);deps.now=undefined
@@ -45,9 +46,9 @@ describe('LIFF connects only the verified sender and exact invited company',()=>
    await expect(claimLineBindingInvite({lineUserId:USER,webhookEventId:'lock-wait-synthetic',semanticFingerprint:'a'.repeat(64),invitationToken:raw},{...f.deps(),now:undefined})).rejects.toThrow('WEEKLY_INVITATION_EXPIRED')
    expect(f.state.binding).toBeNull();expect(f.state.inbox).toHaveLength(0);expect(f.repository.consumeInvitation).not.toHaveBeenCalled()
  })
- it('issued invitation gets its whole ten-minute TTL after client/config locks complete',async()=>{
-   vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(WEEKLY_NOW);const later=new Date(WEEKLY_NOW.getTime()+45000),original=f.repository.getConfig
-   f.repository.getConfig=async(owner,client,lock)=>{if(lock)vi.setSystemTime(later);return original(owner,client,lock)}
+ it('issued invitation gets its whole ten-minute TTL after the company lock completes',async()=>{
+   vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(WEEKLY_NOW);const later=new Date(WEEKLY_NOW.getTime()+45000),original=f.repository.findClient
+   f.repository.findClient=async(owner,client,lock)=>{if(lock)vi.setSystemTime(later);return original(owner,client,lock)}
    const invite=await issueLineBindingInvite({ownerUserId:1,clientId:1},{...f.deps(),now:undefined})
    expect(Date.parse(invite.expiresAt)).toBe(later.getTime()+600000)
  })
@@ -62,18 +63,19 @@ describe('LIFF connects only the verified sender and exact invited company',()=>
    expect(f.state.consents).toHaveLength(0);expect(f.state.queued).toBe(0);expect(f.state.requests[0]!.status).toBe('pending');expect(f.state.inbox).toHaveLength(1)
  })
 
- it('production own-bindings query durably fences exact verified recipient, owner/client joins and active scopes',async()=>{
+ it('production identity query fences exact recipient, owner/client and active identity without requiring article configuration',async()=>{
    const predicates:SQL[]=[], limits:number[]=[]
    const query={from:(_table:unknown)=>query,innerJoin:(_table:unknown,condition:SQL)=>{predicates.push(condition);return query},where:(condition:SQL)=>{predicates.push(condition);return query},orderBy:(_value:unknown)=>query,limit:async(max:number)=>{limits.push(max);return []}}
    const repository=createWeeklyContentRepositoryFromDatabase({select:()=>query})
-   await repository.listActiveBindingsForLineUser(USER,50)
+   await repository.listActiveIdentityBindingsForLineUser(USER,50)
    const compiled=new MySqlDialect().sqlToQuery(sql.join(predicates,sql` AND `))
    expect(limits).toEqual([20]);expect(compiled.params).toContain(USER)
    expect(compiled.sql).toContain('`weeklyContentBindings`.`lineUserId` = ?')
    expect(compiled.sql).toContain('`contentOperationClients`.`ownerUserId` = `weeklyContentBindings`.`ownerUserId`')
-   expect(compiled.sql).toContain('`weeklyContentConfigs`.`ownerUserId` = `weeklyContentBindings`.`ownerUserId`')
-   expect(compiled.sql).toContain('`contentOperationClients`.`requireCustomerApproval` = ?')
-   expect(compiled.params.filter(value=>value==='active')).toHaveLength(3)
+   expect(compiled.sql).toContain('`contentOperationClients`.`id` = `weeklyContentBindings`.`clientId`')
+   expect(compiled.sql).not.toContain('weeklyContentConfigs')
+   expect(compiled.sql).not.toContain('requireCustomerApproval')
+   expect(compiled.params.filter(value=>value==='active')).toHaveLength(2)
  })
 
 })

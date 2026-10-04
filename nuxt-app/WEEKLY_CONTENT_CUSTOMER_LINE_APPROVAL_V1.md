@@ -4,14 +4,15 @@
 
 ## 真正的順序
 
-1. Owner 選擇一個已啟用的客戶、發布目標及 V4 機器政策；每週頻率、來源、語言、模型、修訂上限及費用預算仍由既有政策決定。
-2. Owner 私下交付十分鐘有效的一次性綁定碼。LIFF 已啟用時，客戶開啟固定 `/weekly-content/connect` 入口，以 LINE 登入後貼上 `wli_...`，核對公司與網站並明確同意，伺服器才綁定；在 LINE 聊天貼碼只引導到確認頁，不直接綁定。僅保留的 LIFF 關閉模式可由通過 LINE 簽章、官方帳號 destination 核對的 active 一對一 sender 私訊完整碼直接綁定。兩種模式都拒絕群組、過期或另一人已使用的碼，成功綁定後其他人無法改綁。
-3. 每週排程使用 owner 已核准計畫中尚未使用的選題，完成 AI 草稿、品質與風險檢查，僅排入發布佇列（`queueOnly`）。一位客戶同時只能有一份待完成的審稿；來源過期、選題用完、預算用完或配置暫停時停止。
-4. Durable outbox 傳送私密預覽網址及 LINE「同意發布／需要修改」按鈕。預覽 read token 只允許閱讀，不具同意權；action token 只出現在 LINE postback。
-5. 按鈕 HTTP 回覆只寫入同意／修改紀錄與發布佇列。它不呼叫 AI、LINE push 或發布器。簽章 sender 必須等於原綁定人；同意精確綁定 job、draft ID/version、文章 hash、類型、語言、來源、目標、政策、配置與 recipient binding。
-6. 發文前以目前的政策、來源、風險、品質及原稿重新核對。純本機重驗可 CAS 續租同一機器授權記錄的十五分鐘短租約；不產生新授權 ID、不改文章、不重新 AI 修訂，不恢復 revoked/executing 的授權。正常發布仍必須持有未過期的完整 V4 授權。
-7. 所有正式發布路徑共用 job-lock reservation 交易，並在新增 planned attempt 前重驗最新客戶同意。預先唯讀檢查也會在 lease／publication budget 扣除前攔下未同意文章。客戶同意不會略過原先 owner 政策、來源、風險、品質或正式回執檢查。
-8. 發文後保留成功 run、append-only delivered attempt、回執與 public URL。歷史 V4 `published` 權威可供既有 GEO/SEO 回收識別；它不因執行短租約過期而消失，也不能再次當作新發布的權限。
+1. Owner 先核對或建立自己名下的 active 客戶及公司網站，即可發出身分綁定邀請；此步不要求已有每週文章配置、發布目標或 V4 政策。
+2. Owner 私下交付十分鐘有效的一次性綁定碼。LIFF 已啟用時，客戶開啟固定 `/weekly-content/connect` 入口，以 LINE 登入後貼上 `wli_...`，核對公司與網站並明確同意，伺服器才綁定；在 LINE 聊天貼碼只引導到確認頁，不直接綁定。僅保留的 LIFF 關閉模式可由通過 LINE 簽章、官方帳號 destination 核對的 active 一對一 sender 私訊完整碼直接綁定。兩種模式都拒絕群組、過期或另一人已使用的碼，成功綁定後其他人無法改綁。此步的 `purpose` 為 `identity_binding`，只確認公司與 LINE 身分；不新增文章配置、費用預算、逐篇同意或發布佇列，也不啟用文章服務。未啟用或已暫停文章服務的 active 客戶，仍可完成身分綁定。
+3. 後續由 owner 另行核准發布目標、V4 機器政策、來源及選題計畫，再啟用每週文章送審。每週頻率、語言、模型、修訂上限及費用預算仍由既有政策決定；介面的預設預算值及身分綁定均不代表已核准支出。客戶仍須同意每篇原稿，才能進入正式發布。
+4. 每週排程使用 owner 已核准計畫中尚未使用的選題，完成 AI 草稿、品質與風險檢查，僅排入發布佇列（`queueOnly`）。一位客戶同時只能有一份待完成的審稿；來源過期、選題用完、預算用完或配置暫停時停止。
+5. Durable outbox 傳送私密預覽網址及 LINE「同意發布／需要修改」按鈕。預覽 read token 只允許閱讀，不具同意權；action token 只出現在 LINE postback。
+6. 按鈕 HTTP 回覆只寫入同意／修改紀錄與發布佇列。它不呼叫 AI、LINE push 或發布器。簽章 sender 必須等於原綁定人；同意精確綁定 job、draft ID/version、文章 hash、類型、語言、來源、目標、政策、配置與 recipient binding。
+7. 發文前以目前的政策、來源、風險、品質及原稿重新核對。純本機重驗可 CAS 續租同一機器授權記錄的十五分鐘短租約；不產生新授權 ID、不改文章、不重新 AI 修訂，不恢復 revoked/executing 的授權。正常發布仍必須持有未過期的完整 V4 授權。
+8. 所有正式發布路徑共用 job-lock reservation 交易，並在新增 planned attempt 前重驗最新客戶同意。預先唯讀檢查也會在 lease／publication budget 扣除前攔下未同意文章。客戶同意不會略過原先 owner 政策、來源、風險、品質或正式回執檢查。
+9. 發文後保留成功 run、append-only delivered attempt、回執與 public URL。歷史 V4 `published` 權威可供既有 GEO/SEO 回收識別；它不因執行短租約過期而消失，也不能再次當作新發布的權限。
 
 ## 失效與明確重開
 
@@ -33,12 +34,14 @@
 
 ## LIFF 平台與瀏覽器邊界
 
+身分綁定版使用 `weekly-liff-identity-confirm-v1` 的公司確認 HMAC，包含邀約、到期時間、公司、owner/client、Login channel 與已驗證 recipient；不再依賴每週配置。舊版 `weekly-liff-confirm-v1` 的 confirmation token 不沿用，升級前已開啟的確認頁須重新取得 context 並再次核對公司。邀約格式、十分鐘時效、既有綁定及 `weekly-liff-bind-v1` durable replay 邊界不變；這兩種 confirmation purpose 不是同時可接受的替代授權。
+
 Login／LIFF 與 Messaging API 必須使用同一 LINE Provider，並核對連結至同一「搜尋王」官方帳號；實際平台連結尚未驗收。LIFF scope 僅選 `openid`；公司綁定不是加好友、解除封鎖、推播額度或文章同意的證據。持續每週收稿前需先加入官方帳號好友並保持未封鎖；LINE API 接受通知或 outbox 標成 `sent`，也不代表客戶已收到或閱讀，真實驗收須確認卡片出現在客戶 LINE。[LINE 官方推播限制](https://developers.line.biz/en/reference/messaging-api/nojs/#send-push-message)
 
 應用程式不將邀約或 ID token 寫入 localStorage、sessionStorage、資料表、事件或 log；ID token 只由 LIFF SDK 取得後送至同源伺服器驗證。官方 SDK 自身可能管理登入 token／context 與瀏覽器儲存，本機測試沒有稽核第三方 SDK 的實際儲存，不能宣稱整個瀏覽器「零 token 儲存」。SDK 初始化完成後才清理 OAuth URL；不能在初始化前刪除 SDK 需要的參數。[LINE 官方 SDK 初始化規則](https://developers.line.biz/en/reference/liff/#liff-init)、[官方 context 儲存紀錄](https://developers.line.biz/en/docs/liff/release-notes/)
 
 ## 證據界線
 
-本機測試涵蓋 disabled 零 I/O、owner/sender 隔離、簽章至真服務同意、read-only 預覽、並行重送、版本／類型／語言／來源／政策／風險變更、暫停、精確 TTL、同意撤回、過期重開、不可變 outbox、SQL 租約條件與 V4 原稿續租。
+本機測試涵蓋 disabled 零 I/O、owner/sender 隔離、未配置文章服務的身分綁定、公司明確確認與 own-company 清單、綁定不寫文章設定或同意、簽章至真服務同意、read-only 預覽、並行重送、版本／類型／語言／來源／政策／風險變更、暫停、精確 TTL、同意撤回、過期重開、不可變 outbox、SQL 租約條件與 V4 原稿續租。
 
 真實 LINE 官方帳號、資料庫 migration、正式 AI 成本、Do 接收器部署、真實客戶推播／同意／自動發布，以及 Google/AI 搜尋成效尚需分別設定、核准及實測；本機／mock PASS 不代表以上已完成。

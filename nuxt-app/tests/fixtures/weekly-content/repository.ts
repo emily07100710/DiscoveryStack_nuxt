@@ -35,11 +35,10 @@ export class WeeklyFixture {
       findInvitation:vi.fn(async(hash)=>this.state.invites.find(value=>value.tokenHash===hash)||null),
       consumeInvitation:vi.fn(async(id,fingerprint,eventHash,at)=>{const invite=this.state.invites.find(value=>value.id===id);if(!invite||invite.consumedAt||invite.expiresAt<=at)return false;Object.assign(invite,{bindingFingerprint:fingerprint,eventHash,consumedAt:at});return true}),
       getBinding:vi.fn(async(owner,client)=>owner===1&&client===1?this.state.binding:null),
-      listActiveBindingsForLineUser:vi.fn(async(user:string):ReturnType<WeeklyContentRepository['listActiveBindingsForLineUser']>=>{
+      listActiveIdentityBindingsForLineUser:vi.fn(async(user:string):ReturnType<WeeklyContentRepository['listActiveIdentityBindingsForLineUser']>=>{
         const binding=this.state.binding
-        const config=this.state.config
-        if(!binding || binding.lineUserId!==user || binding.status!=='active' || !config || config.status!=='active' || this.state.client.status!=='active')return []
-        return [{binding,client:this.state.client,config}]
+        if(!binding || binding.lineUserId!==user || binding.status!=='active' || this.state.client.status!=='active' || binding.ownerUserId!==this.state.client.ownerUserId || binding.clientId!==this.state.client.id)return []
+        return [{binding,client:this.state.client}]
       }),
       saveBinding:vi.fn(async(value)=>this.state.binding={...row(value),id:this.state.binding?.id||this.state.nextId}),
       getRequest:vi.fn(async(id)=>this.state.requests.find(value=>value.requestId===id)||null),

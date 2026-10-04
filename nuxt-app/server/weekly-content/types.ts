@@ -3,6 +3,8 @@ import type { ContentOperationClientRow, ContentOperationPublicationTargetRow, C
 export type WeeklyConfig = typeof weeklyContentConfigs.$inferSelect
 export type LineBindingInvitation = typeof weeklyContentInvitations.$inferSelect
 export type PrivateLineBinding = typeof weeklyContentBindings.$inferSelect
+/** Verified recipient identity; article authority remains in config/policy/request/consent records. */
+export type WeeklyIdentityBinding = { binding: PrivateLineBinding; client: ContentOperationClientRow }
 export type WeeklyReviewRequest = typeof weeklyContentReviewRequests.$inferSelect
 export type WeeklyConsent = typeof weeklyContentConsents.$inferSelect
 export type WeeklyOutbox = typeof weeklyContentOutbox.$inferSelect
