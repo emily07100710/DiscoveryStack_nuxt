@@ -24,6 +24,7 @@
 - 驗收基準:GEO_ENGINEERING_SPEC_v2.0,標準是「完整商業產品,不是 MVP」;完成度細節看 PROJECT_MAP.md §8
 
 ## 進度
+- 2026-10-05 本期已選方向：**首頁／建站定位 + Roadmap 一起調整**，以持續觀察、受控改動與結果驗證的網站營運層為定位；網站生成是入口。後續 P0 為跨引擎 `InterventionEnvelope`（Before／Intervention／After／Confidence），再排 measurement surface、citation lifecycle、多模態／agent readiness 與受控 AI 風格 renderer。詳見 [本期規劃與程式證據](nuxt-app/DISCOVERY_OPERATING_LAYER_ROADMAP_2026_10_05.md)。此列是規劃，**不代表後端已實作或真實外部驗收已完成**；本輪公開前端／全站動效的完成狀態另見交付報告，以下歷史紀錄保留。
 - 目標:讓老闆以付費客戶身分把一鍵建站完整走一遍(付款 → 開站 → 用一句話改網站);09-06 客戶自助下單漏斗也併進 main、0037–0042 全套上正式資料庫,剩老闆在 Render 設環境變數 + 真跑一次測試付款才能親自走完;現在開出來的是 *.pages.dev 網址,自動買網域整條 09-08 也併進 main(Fresh Review B、a786d76,順帶修好排程互蓋)
 - 🔵 進行中:客戶完整走一遍 — 自助下單漏斗(9 步:選模組→選風格→AI 一句話建站預覽→Stripe 測試結帳→付款後自動開站與各模組開通)已在 main 上線、0037–0042 全套上(老闆按 Run、drizzle-kit「applied successfully!」);剩老闆在 Render 設環境變數(換新的 Cloudflare 金鑰、百煉 key + AI 開關 5 個變數、Stripe 測試金鑰,照 nuxt-app/MANAGED_SITE_INTERNAL_BROKER_SETUP_V1.md、LLM_PROVIDER_OPENAI_COMPATIBLE_V1.md、STRIPE_PAYMENTS_RUNTIME_V1.md)、跑一次 DNS TXT 所有權驗證(NOT RUN)、真 Stripe 測試模式跑一次(pnpm test:real-stripe,NOT RUN),PM 給逐步試跑清單;付款後自動買網域整條(Porkbun 查價/採購→Cloudflare 掛 DNS/HTTPS→正式部署→客戶網址驗過才交付)也已在 main 上,真買網域一樣要 Render 設 Porkbun/Cloudflare 授權才會動;排程互蓋 bug(付款後自動開站、AI 改網站的背景工作原本沒在跑)已隨 a786d76 一起修好併進 main
 - 🟡 待驗收:GA4 收數 — 09-01 PM 真瀏覽器實測追蹤碼會發送(程式載入+page_view 送出;先前抓原始碼的檢法不適用動態載入);等老闆開 GA4 即時報表看到數字回報,就點亮

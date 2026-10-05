@@ -293,6 +293,15 @@ export async function listVisibilityWorkspace(ownerUserId: number) {
   return { projects, queries: queries.map(query => ({ ...query, promptVersion: currentVersionByQuery.get(query.id) || null })), competitors: competitors.map(competitorProjection), recentObservations: recent.map(row => ({ ...row, verifiedByOwner: approved.has(row.id) && !revoked.has(row.id), reviewStatus: revoked.has(row.id) ? 'revoked' : approved.has(row.id) ? 'approved' : 'pending' })), limitations: VISIBILITY_LIMITATIONS, projection: 'traceable_model_observations_v1' }
 }
 
+/** Customer reporting binds to one exact, active domain within the authenticated owner. */
+export async function listActiveVisibilityProjectsForDomain(ownerUserId: number, canonicalDomain: string) {
+  const database = requireVisibilityDatabase()
+  return database.select({ id: llmVisibilityProjects.id, canonicalDomain: llmVisibilityProjects.canonicalDomain })
+    .from(llmVisibilityProjects)
+    .where(and(eq(llmVisibilityProjects.ownerUserId, ownerUserId), eq(llmVisibilityProjects.canonicalDomain, canonicalDomain), eq(llmVisibilityProjects.status, 'active')))
+    .limit(2)
+}
+
 export async function getVisibilityProjectSummary(ownerUserId: number, projectId: number, now = new Date()) {
   const database = requireVisibilityDatabase()
   const [project] = await database.select().from(llmVisibilityProjects).where(and(eq(llmVisibilityProjects.id, projectId), eq(llmVisibilityProjects.ownerUserId, ownerUserId))).limit(1)

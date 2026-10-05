@@ -146,7 +146,6 @@ export function stepCompletion(step: number, answers: FunnelAnswersView, consent
     if (typeof answers.existingSite?.hasSite !== 'boolean') missing.push('目前是否有網站')
     else if (answers.existingSite.hasSite) {
       if (!normalizedHttpsUrl(answers.existingSite.url, 2048)) missing.push('現有網站網址')
-      if (!answers.existingSite.snapshot) missing.push('網站分析結果')
     }
   }
   if (step === 2) {

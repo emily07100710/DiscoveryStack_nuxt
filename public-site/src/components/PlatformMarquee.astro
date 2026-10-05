@@ -1,66 +1,69 @@
 ---
 import { platformDirectory, platformDirectoryCount, platformDirectoryGroups } from '../lib/platform-directory'
 import type { IntegrationLocale } from '../lib/integration-platforms'
+import '../styles/platform-carousel.css'
 interface Props { locale?: IntegrationLocale }
 const { locale = 'zh-hant' } = Astro.props
 const isZh = locale === 'zh-hant'
+const brands = platformDirectoryGroups.flatMap(group => group.brands.map(key => ({ key, ...platformDirectory[key] })))
 ---
 
-<section class="platform-marquee" aria-label={isZh ? '可規劃 API 串接的平台' : 'Platforms available for API integration planning'}>
+<section class="platform-marquee" data-platform-carousel data-locale={locale} aria-label={isZh ? '可規劃 API 串接的平台' : 'Platforms available for API integration planning'}>
   <div class="platform-marquee-heading">
     <p>CONNECTED TO YOUR EVERYDAY / {platformDirectoryCount}</p>
     <h2>{isZh ? '你每天用的平台，該一起幫你做生意。' : 'Make the platforms you use work together.'}</h2>
-    <p class="platform-marquee-intro">{isZh ? `從 ${platformDirectoryCount} 個平台，挑出你的生意真正需要的串接方向。訊息、訂單、出貨到客戶管理，一步接上下一步。` : `Explore ${platformDirectoryCount} API-capable platforms and plan the connections your business needs, from messages and orders to shipping and customer management.`}</p>
+    <p class="platform-marquee-intro">{isZh ? '40 個平台，放在同一個生意裡。指向一個 Logo，看看你的下一步能接上什麼。' : 'Forty platforms in one connected business. Point at a logo to explore the next connection.'}</p>
   </div>
-  <div class="platform-directory">
-    {platformDirectoryGroups.map((group, groupIndex) => <div class="platform-group">
-      <h3><span>0{groupIndex + 1}</span>{group.title[locale]}<small>{group.brands.length.toString().padStart(2, '0')}</small></h3>
-      <ul class="platform-grid">
-        {group.brands.map(key => { const brand = platformDirectory[key]; return <li>
-          <a class={`platform-logo platform-logo-${key}`} href={brand.website} target="_blank" rel="noopener noreferrer" aria-label={isZh ? `${brand.name} 官方網站` : `${brand.name} official website`}>
-            <span class={`platform-mark platform-mark-${key}`} aria-hidden="true">{brand.asset ? <img src={brand.asset} alt="" width={key === 'line' ? 44 : 36} height={key === 'line' ? 44 : 36} loading="lazy" decoding="async" /> : <span class="platform-monogram">{'mark' in brand ? brand.mark : key.slice(0, 2).toUpperCase()}</span>}</span>
-            <strong>{brand.name}</strong><span class="platform-arrow" aria-hidden="true">↗</span>
+  <div class="platform-carousel-shell">
+    <div class="platform-directory" data-platform-stage aria-label={isZh ? '可旋轉的四十個平台 Logo' : 'Rotating cloud of forty platform logos'}>
+      <div class="platform-cloud-orbit platform-cloud-orbit--one" aria-hidden="true"></div>
+      <div class="platform-cloud-orbit platform-cloud-orbit--two" aria-hidden="true"></div>
+      <span class="platform-cloud-core" aria-hidden="true">DISCOVERY<br />STACK</span>
+      <ul class="platform-grid" data-platform-cloud>
+        {brands.map((brand, index) => <li data-platform-card data-brand-index={index} data-brand-name={brand.name}>
+          <a class={`platform-logo platform-logo-${brand.key}`} href={brand.website} target="_blank" rel="noopener noreferrer" draggable="false" aria-label={isZh ? `${brand.name} 官方網站` : `${brand.name} official website`}>
+            <span class={`platform-mark platform-mark-${brand.key}`} aria-hidden="true">{brand.asset ? <img src={brand.asset} alt="" width={brand.key === 'line' ? 44 : 36} height={brand.key === 'line' ? 44 : 36} loading="lazy" decoding="async" draggable="false" /> : <span class="platform-monogram">{'mark' in brand ? brand.mark : ''}</span>}</span>
+            <strong>{brand.name}</strong>
           </a>
-        </li> })}
+        </li>)}
       </ul>
-    </div>)}
+      <span class="platform-cloud-caption" aria-hidden="true">{isZh ? '網站・訊息・物流・金流・客戶管理' : 'WEB · MESSAGING · SHIPPING · PAYMENTS · CRM'}</span>
+    </div>
+    <div class="platform-carousel-controls">
+      <p class="platform-carousel-current"><span>{isZh ? '指向 Logo 暫停轉動' : 'HOVER TO PAUSE'}</span><strong data-platform-name>{isZh ? '40 個平台，一起運作' : 'Forty platforms, one connected world'}</strong></p>
+      <button type="button" class="platform-carousel-pause" data-platform-pause aria-pressed="false" data-pause-label={isZh ? '暫停轉動' : 'Pause rotation'} data-resume-label={isZh ? '繼續轉動' : 'Resume rotation'}><span aria-hidden="true">Ⅱ</span><span data-platform-pause-text>{isZh ? '暫停轉動' : 'Pause rotation'}</span></button>
+    </div>
+    <span class="platform-carousel-status" data-platform-status aria-live="polite" aria-atomic="true"></span>
   </div>
   <div class="platform-next-step"><p>{isZh ? '你正在用哪些平台？告訴我們，直接規劃怎麼接。' : 'Which platforms do you use? Tell us and plan the next connection.'}</p><a href={isZh ? '/zh-hant#fit' : '/en#fit'}>{isZh ? '談我的整合需求' : 'Discuss my integrations'}<span aria-hidden="true">↗</span></a></div>
 </section>
 
+<script>
+  import { initPlatformCarousel } from '../lib/platform-carousel'
+  const setup = () => {
+    document.querySelectorAll<HTMLElement>('[data-platform-carousel]').forEach(root => {
+      if (root.dataset.carouselReady) return
+      const cleanup = initPlatformCarousel(root)
+      document.addEventListener('astro:before-swap', cleanup, { once: true })
+    })
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup, { once: true })
+  else setup()
+  document.addEventListener('astro:page-load', setup)
+</script>
+
 <style>
   .platform-marquee { padding: clamp(3rem, 6vw, 5.5rem) 0; border-top: 1px solid rgba(23,26,50,.12); color: var(--premium-navy); background: var(--premium-paper); }
-  .platform-marquee-heading, .platform-directory, .platform-next-step { max-width: 1440px; margin-inline: auto; padding-inline: var(--gutter); }
+  .platform-marquee-heading, .platform-carousel-shell, .platform-next-step { max-width: 1440px; margin-inline: auto; padding-inline: var(--gutter); }
   .platform-marquee-heading > p:first-child { margin: 0 0 1rem; color: #746d60; font: .58rem/1.5 var(--font-mono, monospace); letter-spacing: .15em; }
   .platform-marquee-heading h2 { margin: 0; font: 400 clamp(1.5rem, 2.6vw, 2.65rem)/1.35 var(--font-display, sans-serif); letter-spacing: -.04em; }
   .platform-marquee-intro { max-width: 42rem; margin: 1rem 0 0; color: #716d68; font: .85rem/1.8 var(--font-body, sans-serif); }
-  .platform-directory { display: grid; gap: 2.2rem; margin-top: 3.2rem; }
-  .platform-group h3 { display: flex; align-items: center; gap: 1rem; margin: 0 0 .65rem; color: var(--premium-navy); font: 500 clamp(.85rem, 1.2vw, 1rem)/1.4 var(--font-display, sans-serif); }
-  .platform-group h3 > span { color: #827866; font: .62rem/1 var(--font-mono, monospace); }
-  .platform-group h3 > small { margin-left: auto; color: #827866; font: .56rem/1 var(--font-mono, monospace); }
-  .platform-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 1.5rem; margin: 0; padding: 0; list-style: none; }
-  .platform-grid li { min-width: 0; border-top: 1px solid rgba(23,26,50,.15); }
-  .platform-logo { position: relative; display: flex; align-items: center; gap: .75rem; min-height: 5.25rem; padding: .8rem .45rem .8rem .1rem; color: inherit; text-decoration: none; transition: background var(--motion-feedback, 200ms), padding-left var(--motion-feedback, 200ms); }
-  .platform-logo::before { content: ''; position: absolute; inset: -1px 0 auto; height: 1px; background: var(--premium-metal, #b9a477); transform: scaleX(0); transform-origin: left; transition: transform var(--motion-panel, 360ms) var(--motion-ease, ease-out); }
-  .platform-logo:hover, .platform-logo:focus-visible { background: rgba(183,168,143,.09); padding-left: .5rem; }
-  .platform-logo:hover::before, .platform-logo:focus-visible::before { transform: scaleX(1); }
-  .platform-logo:focus-visible { outline: 2px solid var(--premium-navy); outline-offset: 2px; }
-  .platform-mark { display: grid; place-items: center; flex: 0 0 42px; width: 42px; height: 42px; }
-  .platform-mark img { display: block; width: 36px; height: 36px; object-fit: contain; }
-  .platform-mark-line img { width: 44px; height: 44px; }
-  .platform-mark-dhl { flex-basis: 60px; width: 60px; height: 36px; background: #ffcc00; }
-  .platform-mark-dhl img { width: 56px; height: 34px; }
-  .platform-monogram { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid rgba(23,26,50,.4); color: var(--premium-navy); font: 600 .66rem/1 var(--font-mono, monospace); letter-spacing: -.04em; }
-  .platform-logo strong { min-width: 0; font: 500 .81rem/1.25 var(--font-body, sans-serif); overflow-wrap: anywhere; }
-  .platform-arrow { margin-left: auto; color: #89806f; font-size: .9rem; transition: transform var(--motion-feedback, 200ms); }
-  .platform-logo:hover .platform-arrow, .platform-logo:focus-visible .platform-arrow { transform: translate(3px, -3px); }
   .platform-next-step { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; margin-top: 2.6rem; padding-top: 1.5rem; border-top: 1px solid rgba(23,26,50,.2); }
   .platform-next-step p { margin: 0; font: 500 clamp(.85rem, 1.25vw, 1.1rem)/1.5 var(--font-body, sans-serif); }
   .platform-next-step a { display: inline-flex; align-items: center; gap: 1.75rem; flex-shrink: 0; color: var(--premium-navy); font: 500 .8rem/1.4 var(--font-body, sans-serif); text-decoration: none; border-bottom: 1px solid currentColor; padding-block: .5rem; }
   .platform-next-step a span { transition: transform var(--motion-feedback, 200ms); }
   .platform-next-step a:hover span, .platform-next-step a:focus-visible span { transform: translate(3px, -3px); }
   .platform-next-step a:focus-visible { outline: 2px solid var(--premium-navy); outline-offset: 3px; }
-  @media (max-width: 1100px) { .platform-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  @media (max-width: 700px) { .platform-directory { gap: 1.8rem; margin-top: 2.4rem; } .platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 .75rem; } .platform-logo { min-height: 4.75rem; gap: .45rem; } .platform-mark { flex-basis: 36px; width: 36px; height: 36px; } .platform-mark img { width: 31px; height: 31px; } .platform-mark-line img { width: 40px; height: 40px; } .platform-mark-dhl { flex-basis: 44px; width: 44px; height: 29px; } .platform-mark-dhl img { width: 42px; height: 27px; } .platform-logo strong { font-size: .68rem; } .platform-arrow { display: none; } .platform-next-step { align-items: flex-start; flex-direction: column; } }
-  @media (prefers-reduced-motion: reduce) { .platform-logo, .platform-logo::before, .platform-arrow, .platform-next-step a span { transition-duration: 0ms; } }
+  @media (max-width: 700px) { .platform-next-step { align-items: flex-start; flex-direction: column; } }
+  @media (prefers-reduced-motion: reduce) { .platform-next-step a span { transition-duration: 0ms; } }
 </style>

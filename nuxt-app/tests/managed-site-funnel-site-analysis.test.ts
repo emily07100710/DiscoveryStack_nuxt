@@ -67,6 +67,37 @@ async function routeRequest(
 }
 
 describe('managed-site funnel server site analysis', () => {
+  it('accepts and restores a real existing-site reference without fetching a diagnosis', async () => {
+    const memory = createFunnelSessionMemoryRepository()
+    const created = await createFunnelSession(memory.repository, () => now)
+    const response = await routeRequest(memory.repository, `/api/managed-sites/funnel/sessions/${created.sessionId}`, {
+      step: 1,
+      answers: { existingSite: { hasSite: true, url: 'https://example.test' } },
+    }, { token: created.sessionToken, method: 'PATCH' })
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as any
+    expect(payload.currentStep).toBe(2)
+    expect(payload.answers.existingSite).toEqual({ hasSite: true, url: 'https://example.test/' })
+    const restored = await loadFunnelSession(created.sessionId, created.sessionToken, memory.repository, () => now)
+    expect((restored.answers as FunnelAnswers).existingSite).toEqual({ hasSite: true, url: 'https://example.test/' })
+    expect(analysePublicHomepageMock).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, '', 'not-a-url', 'http://example.test/', 'https://user:pass@example.test/'])('rejects an existing-site answer without a valid HTTPS URL: %s', async url => {
+    const memory = createFunnelSessionMemoryRepository()
+    const created = await createFunnelSession(memory.repository, () => now)
+    const response = await routeRequest(memory.repository, `/api/managed-sites/funnel/sessions/${created.sessionId}`, {
+      step: 1,
+      answers: { existingSite: { hasSite: true, ...(url === undefined ? {} : { url }) } },
+    }, { token: created.sessionToken, method: 'PATCH' })
+
+    expect(response.status).toBe(422)
+    const restored = await loadFunnelSession(created.sessionId, created.sessionToken, memory.repository, () => now)
+    expect((restored.answers as FunnelAnswers).existingSite).toBeUndefined()
+    expect(analysePublicHomepageMock).not.toHaveBeenCalled()
+  })
+
   it('persists only the server-computed snapshot and rejects body smuggling', async () => {
     const memory = createFunnelSessionMemoryRepository()
     const created = await createFunnelSession(memory.repository, () => now)

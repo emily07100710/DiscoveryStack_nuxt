@@ -54,6 +54,20 @@ describe('managed-site funnel wizard core', () => {
     }
   })
 
+  it('accepts an existing-site reference without making diagnosis a building prerequisite', () => {
+    const complete = { ...completeAnswers(), existingSite: { hasSite: true, url: 'https://example.test/' } }
+    expect(stepCompletion(1, complete, { accepted: false })).toEqual({ complete: true, missing: [] })
+    expect(firstIncompleteStep({ existingSite: complete.existingSite }, { accepted: false })).toBe(2)
+    expect(canAdvance(9, complete, { accepted: true })).toBe(true)
+  })
+
+  it.each([undefined, '', 'not-a-url', 'http://example.test/', 'https://user:pass@example.test/'])('still requires a valid HTTPS reference for an existing site: %s', url => {
+    const complete = { ...completeAnswers(), existingSite: { hasSite: true, ...(url === undefined ? {} : { url }) } }
+    expect(stepCompletion(1, complete, { accepted: true }).missing).toContain('現有網站網址')
+    expect(canAdvance(1, complete, { accepted: true })).toBe(false)
+    expect(canAdvance(9, complete, { accepted: true })).toBe(false)
+  })
+
   it('formats zero-decimal TWD without changing the unit', () => {
     expect(formatTwd(12000)).toBe('NT$12,000')
     expect(formatTwd(0)).toBe('NT$0')

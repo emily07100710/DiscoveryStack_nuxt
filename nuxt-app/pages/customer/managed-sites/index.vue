@@ -1,9 +1,16 @@
 <script setup lang="ts">
-type CustomerPortalFetch = <T = unknown>(path: '/api/managed-sites/customer/session' | '/api/managed-sites/customer/modules' | '/api/system-factory/customer/status' | '/api/managed-sites/customer/assistant', options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown> }) => Promise<T>
+type CustomerPortalFetch = <T = unknown>(path: '/api/managed-sites/customer/session' | '/api/managed-sites/customer/modules' | '/api/managed-sites/customer/content-admin' | '/api/managed-sites/customer/visibility' | '/api/system-factory/customer/status' | '/api/managed-sites/customer/assistant', options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown> }) => Promise<T>
 // Preserve the same Nuxt requests, session checks and customer response DTOs.
 const fetchCustomerPortal = $fetch as unknown as CustomerPortalFetch
 
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+
+type ContentProgress = {
+  entries: Array<{ id: number; title?: string | null; topic?: string | null; status: string; plannedLocalDate: string }>
+  readiness: { schedulerEnabled: boolean; generationExecutorAvailable: boolean }
+  siteReadiness: { hasContentCalendar: boolean; hasExecutablePublicationTarget: boolean; hasCurrentOwnerPolicy: boolean; customerApprovalRequired: boolean }
+}
+type VisibilityReport = { status: 'ready' | 'insufficient_data'; domain: string; trackedQueries: number; observedQueries: number; sampleCount: number; brandMentionRate: number | null; citationRate: number | null; exactCitationRate: number | null; observations: Array<{ query: string; provider: string; observedAt: string | Date; brandMentioned: boolean; citationUrls: string[] }>; limitations: string[] } | { status: 'not_configured'; message: string }
 
 useHead({ meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 
@@ -12,10 +19,19 @@ const errorMessage = ref('')
 const requiresReaccess = ref(false)
 const projection = ref<any>(null)
 const moduleWorkspace = ref<any>(null)
+const contentProgress = ref<ContentProgress | null>(null)
+const visibilityReport = ref<VisibilityReport | null>(null)
+const contentProgressNote = ref('')
+const visibilityNote = ref('')
 const systemStatus = ref<any>(null)
 const assistantQuestion = ref('')
 const assistantResult = ref<any>(null)
 const assistantLoading = ref(false)
+const recentContent = computed(() => [...(contentProgress.value?.entries || [])].sort((a, b) => b.plannedLocalDate.localeCompare(a.plannedLocalDate)).slice(0, 5))
+const percentage = (value: number | null | undefined) => typeof value === 'number' ? `${Math.round(value * 100)}%` : '資料不足'
+const displayDate = (value: string | Date) => new Intl.DateTimeFormat('zh-Hant-TW', { dateStyle: 'medium' }).format(new Date(value))
+const contentStatus = (status: string) => ({ planned: '已排程', draft: '草稿中', ready_to_publish: '待確認／發布', delivered: '已發布', blocked: '暫停處理', failed: '需要處理' } as Record<string, string>)[status] || status
+const sectionLoadNote = (error: any) => [403, 409, 422].includes(error?.statusCode || error?.status || error?.response?.status) ? '目前方案或網站設定尚未啟用此功能。' : '暫時無法載入，請稍後重新整理。'
 
 async function loadCustomerSite() {
   loading.value = true
@@ -24,6 +40,8 @@ async function loadCustomerSite() {
   try {
     projection.value = await fetchCustomerPortal('/api/managed-sites/customer/session')
     try { moduleWorkspace.value = await fetchCustomerPortal('/api/managed-sites/customer/modules') } catch { moduleWorkspace.value = null }
+    try { contentProgress.value = await fetchCustomerPortal<ContentProgress>('/api/managed-sites/customer/content-admin'); contentProgressNote.value = '' } catch (error) { contentProgress.value = null; contentProgressNote.value = sectionLoadNote(error) }
+    try { visibilityReport.value = await fetchCustomerPortal<VisibilityReport>('/api/managed-sites/customer/visibility'); visibilityNote.value = '' } catch (error) { visibilityReport.value = null; visibilityNote.value = sectionLoadNote(error) }
     try { systemStatus.value = await fetchCustomerPortal('/api/system-factory/customer/status') } catch { systemStatus.value = null }
   } catch (error: any) {
     projection.value = null
@@ -100,6 +118,28 @@ onMounted(loadCustomerSite)
         <p class="muted">{{ moduleWorkspace.canonicalContentOperations.message }}</p>
         <div class="module-list"><div v-for="module in moduleWorkspace.modules" :key="module.moduleKey"><strong>{{ module.moduleKey }}</strong><span>{{ module.status }} · {{ module.externalCalls ? '外部執行' : '尚未外部執行' }}</span></div></div>
       </article>
+      <article class="card card--wide" aria-labelledby="customer-content-title">
+        <p class="card__label">CONTENT OPERATIONS</p><h2 id="customer-content-title">文章與發布進度</h2>
+        <p v-if="!contentProgress" class="muted">{{ contentProgressNote || '尚無內容營運資料。' }}</p>
+        <template v-else>
+          <p class="muted">以下是這個網站的內容流程條件；單一條件完成不代表文章已自動產生或發布。</p>
+          <div class="operation-status"><span>內容日曆 <strong>{{ contentProgress.siteReadiness.hasContentCalendar ? '已建立' : '尚未建立' }}</strong></span><span>排程服務 <strong>{{ contentProgress.readiness.schedulerEnabled ? '已啟用' : '尚未啟用' }}</strong></span><span>AI 產稿設定 <strong>{{ contentProgress.readiness.generationExecutorAvailable ? '已設定' : '尚未設定' }}</strong></span><span>此站發布通道 <strong>{{ contentProgress.siteReadiness.hasExecutablePublicationTarget ? '已設定' : '尚未設定' }}</strong></span><span>此站營運授權 <strong>{{ contentProgress.siteReadiness.hasCurrentOwnerPolicy ? '有效' : '尚未完成' }}</strong></span><span>發文前確認 <strong>{{ contentProgress.siteReadiness.customerApprovalRequired ? '需要客戶確認' : '依方案規則' }}</strong></span></div>
+          <p v-if="!recentContent.length" class="muted">目前沒有排程中的文章；設定內容方案與發布目標後，進度會顯示在這裡。</p>
+          <ul v-else class="report-list"><li v-for="entry in recentContent" :key="entry.id"><div><strong>{{ entry.title || entry.topic || '待命名內容' }}</strong><small>預定 {{ entry.plannedLocalDate }}</small></div><span>{{ contentStatus(entry.status) }}</span></li></ul>
+        </template>
+      </article>
+      <article class="card card--wide" aria-labelledby="customer-visibility-title">
+        <p class="card__label">AI CITATION REPORT</p><h2 id="customer-visibility-title">AI 如何提到你的品牌</h2>
+        <p v-if="!visibilityReport" class="muted">{{ visibilityNote || '尚無引用觀測資料。' }}</p>
+        <p v-else-if="visibilityReport.status === 'not_configured'" class="muted">{{ visibilityReport.message }}</p>
+        <template v-else>
+          <p class="muted">{{ visibilityReport.domain }} · 最近 30 天已核准的人工觀測；資料不足時不推算成效。</p>
+          <div class="report-metrics"><div><small>追蹤問題</small><strong>{{ visibilityReport.trackedQueries }}</strong></div><div><small>核實樣本</small><strong>{{ visibilityReport.sampleCount }}</strong></div><div><small>品牌提及率</small><strong>{{ percentage(visibilityReport.brandMentionRate) }}</strong></div><div><small>網站引用率</small><strong>{{ percentage(visibilityReport.exactCitationRate) }}</strong></div></div>
+          <p v-if="!visibilityReport.observations.length" class="muted">目前沒有可顯示的核實觀測。建立並核准觀測後，問題、平台與引用網址會出現在這裡。</p>
+          <ul v-else class="report-list"><li v-for="(observation, index) in visibilityReport.observations" :key="`${observation.provider}-${observation.observedAt}-${index}`"><div><strong>{{ observation.query }}</strong><small>{{ observation.provider }} · {{ displayDate(observation.observedAt) }}</small><a v-for="url in observation.citationUrls" :key="url" :href="url" target="_blank" rel="noopener noreferrer">查看引用頁面 ↗</a></div><span>{{ observation.citationUrls.length ? '引用網站' : observation.brandMentioned ? '提到品牌' : '未提及' }}</span></li></ul>
+          <p class="report-limitation">{{ visibilityReport.limitations[0] }}</p>
+        </template>
+      </article>
       <article class="card card--wide">
         <p class="card__label">BOUNDED AI ASSISTANT</p>
         <h2>問問你的網站助手</h2>
@@ -142,11 +182,25 @@ dt { color: #777d8b; font-size: .78rem; } dd { margin: .25rem 0 0; overflow-wrap
 .module-list div { display: grid; gap: .2rem; padding: .7rem; border: 1px solid #eeeae2; border-radius: .55rem; }
 .module-list strong { font-size: .75rem; }
 .module-list span { color: #777d8b; font-size: .68rem; }
+.operation-status, .report-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; margin: 1rem 0; }
+.operation-status span, .report-metrics div { display: grid; gap: .35rem; padding: .85rem; border: 1px solid #e7e2d8; border-radius: .55rem; background: #f7f5ef; font-size: .75rem; }
+.operation-status strong { color: #17233b; }
+.report-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.report-metrics small { color: #777d8b; }
+.report-metrics strong { color: #17233b; font-size: 1.3rem; }
+.report-list { list-style: none; margin: 1rem 0 0; padding: 0; }
+.report-list li { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; padding: .8rem 0; border-top: 1px solid #e7e2d8; }
+.report-list li > div { display: grid; gap: .25rem; min-width: 0; }
+.report-list li strong { overflow-wrap: anywhere; }
+.report-list li small, .report-list li > span { color: #777d8b; font-size: .72rem; }
+.report-list li > span { flex: 0 0 auto; }
+.report-list a { color: #17233b; font-size: .72rem; overflow-wrap: anywhere; }
+.report-limitation { margin: 1rem 0 0; color: #777d8b; font-size: .72rem; line-height: 1.6; }
 .assistant-form { display: grid; gap: .7rem; margin-top: 1rem; }
 .assistant-form textarea { width: 100%; border: 1px solid #e7e2d8; border-radius: .55rem; padding: .8rem; resize: vertical; }
 .assistant-form .button { justify-self: start; }
 .assistant-result { margin-top: 1rem; padding: .8rem; border-radius: .55rem; background: #edf6ef; color: #236241; }
 .assistant-result--blocked { background: #fff4e5; color: #875215; }
 .assistant-result p { margin: .35rem 0 0; line-height: 1.6; }
-@media (max-width: 42rem) { .managed-site-portal { padding: 2rem 1rem; } .managed-site-portal__header { display: block; } .button { margin-top: 1rem; } .managed-site-portal__grid { grid-template-columns: 1fr; } .card--wide { grid-column: auto; } dl { grid-template-columns: 1fr; } .module-list { grid-template-columns: 1fr; } }
+@media (max-width: 42rem) { .managed-site-portal { padding: 2rem 1rem; } .managed-site-portal__header { display: block; } .button { margin-top: 1rem; } .managed-site-portal__grid { grid-template-columns: 1fr; } .card--wide { grid-column: auto; } dl { grid-template-columns: 1fr; } .module-list, .operation-status, .report-metrics { grid-template-columns: 1fr; } }
 </style>

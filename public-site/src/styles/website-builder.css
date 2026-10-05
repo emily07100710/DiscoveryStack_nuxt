@@ -357,6 +357,15 @@
 .handoff-dialog-path span { color: var(--builder-primary); font-size: .63rem; font-weight: 800; }
 .handoff-dialog-path i { color: var(--builder-accent); font-style: normal; }
 .handoff-saved { margin-top: 1rem; padding: .7rem; color: #2d6d50; background: #e7f2e9; font-size: .67rem; line-height: 1.6; }
+.handoff-contact { display: grid; gap: 1rem; margin-top: 1.4rem; }
+.handoff-contact-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.handoff-contact-grid label { display: grid; gap: .4rem; color: var(--builder-ink); font-size: .66rem; font-weight: 600; }
+.handoff-contact-grid input { width: 100%; min-width: 0; min-height: 2.9rem; padding: .65rem .75rem; border: 1px solid var(--builder-line); border-radius: .1rem; background: rgba(255,255,255,.68); color: var(--builder-ink); }
+.handoff-contact-grid input:focus-visible { border-color: var(--studio-navy); }
+.handoff-consent { display: flex; align-items: flex-start; gap: .55rem; color: var(--builder-ink); font-size: .64rem; line-height: 1.65; }
+.handoff-consent input { flex: 0 0 auto; width: 1rem; height: 1rem; margin-top: .12rem; accent-color: var(--studio-navy); }
+.handoff-consent a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.handoff-honeypot { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .handoff-dialog-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.6rem; }
 
 /* Selection rows and restrained input surfaces. */
@@ -570,6 +579,7 @@
   .step-footer > p { display: none; }
   .step-footer .builder-primary, .step-footer .builder-secondary { flex: 1; min-height: 2.8rem; font-size: .64rem; }
   .handoff-dialog-actions { display: grid; grid-template-columns: 1fr; }
+  .handoff-contact-grid { grid-template-columns: 1fr; }
   .handoff-dialog-path span { font-size: .56rem; }
   .handoff-dialog-path i { font-size: .6rem; }
 }

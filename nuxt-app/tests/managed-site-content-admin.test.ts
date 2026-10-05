@@ -3,6 +3,7 @@ import { createManagedSitePreview, createManagedSiteQuote, createManagedSiteDraf
 import { convertPaidOrderToManagedProject } from '../server/managed-sites/conversion-service'
 import { linkManagedSiteContentOperations } from '../server/managed-sites/modules-service'
 import { createCalendarFromProductionPlan } from '../server/content-operations/service'
+import { createOwnerPublicationTarget } from '../server/content-operations/orchestrator'
 import { getManagedSiteContentAdminWorkspace, recordManagedContentReview, requestManagedContentRevision } from '../server/managed-sites/content-admin-service'
 import type { PaymentEventVerifier } from '../server/managed-sites/ordering-types'
 import { createManagedSiteMemoryRepository } from './fixtures/managed-site/repository'
@@ -41,6 +42,21 @@ describe('managed Content Admin boundary', () => {
     expect(reviewer.capabilities).toMatchObject({ canRequestRevision: false, canReview: true })
     expect(owner.capabilities).toMatchObject({ canRequestRevision: true, canReview: true, canExport: true })
     expect(editor.capabilities.canonicalEngine).toBe('existing-content-operations-only')
+    expect(owner.siteReadiness).toMatchObject({ hasContentCalendar: true, hasExecutablePublicationTarget: false, hasCurrentOwnerPolicy: false })
+  })
+
+  it('does not present another client’s publication target as ready for this site', async () => {
+    const line = await makeLine()
+    const otherClient = line.content.addClient(1)
+    await createOwnerPublicationTarget(1, otherClient.id, {
+      idempotencyKey: 'other-client-target', framework: 'nuxt', transport: 'first_party_git', targetOrigin: 'https://api.github.com',
+      contentRoot: 'content', defaultBranch: 'main', repositoryOwner: 'another-owner', repositoryName: 'another-repo', endpointPath: null,
+      credentialReference: 'other-server-ref', allowedContentTypes: ['article'], allowedLanguages: ['en'], maximumPayloadBytes: 1000000, executionEnabled: true,
+    }, line.content.repository)
+    const workspace = await getManagedSiteContentAdminWorkspace(1, line.project.id, 'owner', line.managed.repository, line.content.repository)
+    expect(workspace.publicationTargets).toHaveLength(0)
+    expect(workspace.siteReadiness.hasExecutablePublicationTarget).toBe(false)
+    expect(workspace.siteReadiness.hasCurrentOwnerPolicy).toBe(false)
   })
 
   it('allows editor revision request, keeps it idempotent, and denies analyst/reviewer writes', async () => {

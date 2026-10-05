@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import BuilderServiceOverview from './BuilderServiceOverview.vue'
+import { publicApiFetch } from '../lib/publicApi'
 import {
   builderPhases,
   builderSteps,
@@ -66,6 +67,9 @@ const domainError = ref('')
 const reviewConfirmed = ref(false)
 const showHandoff = ref(false)
 const handoffSaved = ref(false)
+const handoffSubmitting = ref(false)
+const handoffError = ref('')
+const handoffContact = reactive({ name: '', email: '', company: '', website: '', privacyConsent: false, recontactConsent: false, companyFax: '' })
 const handoffCloseButton = ref<HTMLButtonElement | null>(null)
 const handoffDialog = ref<HTMLElement | null>(null)
 const handoffStepTrigger = ref<HTMLButtonElement | null>(null)
@@ -441,6 +445,8 @@ function submitReview(event?: MouseEvent) {
 
 async function openHandoff(preserveTrigger = false) {
   if (!preserveTrigger) lastHandoffTrigger.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  if (!handoffContact.company.trim()) handoffContact.company = brandName.value.trim()
+  handoffError.value = ''
   showHandoff.value = true
   await nextTick()
   handoffCloseButton.value?.focus()
@@ -454,7 +460,7 @@ function closeHandoff() {
 function trapHandoff(event: KeyboardEvent) {
   if (event.key !== 'Tab') return
   const dialog = event.currentTarget as HTMLElement
-  const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
+  const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]):not([tabindex="-1"]), a[href], [tabindex]:not([tabindex="-1"])'))
   if (!focusable.length) return
   const first = focusable[0]
   const last = focusable[focusable.length - 1]
@@ -468,6 +474,45 @@ function trapHandoff(event: KeyboardEvent) {
 }
 
 async function confirmHandoff() {
+  if (handoffSubmitting.value) return
+  if (!handoffSaved.value) {
+    handoffError.value = ''
+    if (handoffContact.name.trim().length < 2 || handoffContact.company.trim().length < 2 || !handoffContact.email.includes('@') || !handoffContact.privacyConsent) {
+      handoffError.value = '請填寫姓名、工作 Email、公司／品牌，並同意資料處理。'
+      return
+    }
+    handoffSubmitting.value = true
+    try {
+      const description = [
+        '來源：一鍵建站互動預覽',
+        `品牌：${brandName.value.trim().slice(0, 160) || '未命名'}`,
+        `網站類型：${currentSiteType.value.label}`,
+        `服務摘要：${businessBrief.value.trim().slice(0, 320) || '未填寫'}`,
+        `目標客群：${audience.value.trim().slice(0, 160) || '未填寫'}`,
+        `風格：${currentTheme.value.label}；${selectedStyleLabels.value.join('、') || '未選擇'}`,
+        `動畫：${currentMotion.value.label}`,
+        `功能：${selectedModuleLabels.value.join('、') || '未選擇'}`,
+        `方案：${currentPlan.value.label}；文章節奏：${plan.value === 'launch' ? '未選擇' : `每 ${cadence.value} 天`}`,
+        `網域方向：${domainMode.value === 'new' ? '新網域' : '既有網域'}；${domainInput.value.trim().slice(0, 120)}`,
+        `預估：一次性 NT$ ${formatMoney(oneTimeEstimate.value)}；每月 NT$ ${formatMoney(monthlyEstimate.value)}`,
+      ].join('\n').slice(0, 1900)
+      const result = await publicApiFetch<{ received: boolean; duplicate: boolean }>('/api/leads', { body: {
+        name: handoffContact.name.trim(), email: handoffContact.email.trim(), company: handoffContact.company.trim(), website: handoffContact.website.trim(),
+        packageInterest: plan.value === 'launch' ? 'clarify' : 'grow', language: 'zh-hant', message: description,
+        privacyConsent: handoffContact.privacyConsent, recontactConsent: handoffContact.recontactConsent, companyFax: handoffContact.companyFax,
+      } })
+      if (!result.received) throw new Error('handoff not received')
+      if (result.duplicate) {
+        handoffError.value = '這個聯絡方式近期已送出需求。新調整尚未更新，請 15 分鐘後再送一次。'
+        return
+      }
+    } catch {
+      handoffError.value = '目前無法送出，請檢查資料後再試一次。你的選擇仍留在此頁。'
+      return
+    } finally {
+      handoffSubmitting.value = false
+    }
+  }
   handoffSaved.value = true
   showHandoff.value = false
   setStep('handoff')
@@ -606,7 +651,7 @@ onBeforeUnmount(() => {
 
         <section v-else-if="currentStep === 'review_order'" class="builder-step review-step" aria-labelledby="review-title"><div class="step-heading"><p class="builder-eyebrow">REVIEW BEFORE HANDOFF</p><h2 id="review-title" tabindex="-1">這是你要保存的方向嗎？</h2><p>最後看一次規格、預估費用與尚未執行的外部操作。這不是正式訂單。</p></div><div class="review-layout"><div class="review-list"><article><span>品牌</span><strong>{{ brandName || '尚未命名' }}</strong><button type="button" @click="setStep('diagnosis_or_brief')">修改</button></article><article><span>網站架構</span><strong>{{ currentSiteType.label }} · {{ currentSiteType.pages.join('／') }}</strong><button type="button" @click="setStep('site_architecture')">修改</button></article><article><span>風格與功能</span><strong>{{ currentTheme.label }} · {{ selectedModuleLabels.join('、') || '尚未選擇模組' }}</strong><button type="button" @click="setStep('style_and_modules')">修改</button></article><article><span>動畫節奏</span><strong>{{ currentMotion.label }}</strong><button type="button" @click="setStep('style_and_modules')">修改</button></article><article v-if="styleDescription.trim()"><span>風格描述</span><strong class="review-style-description">{{ styleDescription }}</strong><button type="button" @click="setStep('style_and_modules')">修改</button></article><article><span>GEO 方案</span><strong>{{ currentPlan.label }}{{ plan !== 'launch' ? ` · 每 ${cadence} 天` : '' }}</strong><button type="button" @click="setStep('plan_and_cadence')">修改</button></article><article><span>網域方向</span><strong>{{ domainMode === 'new' ? '新網域規劃' : '使用現有網域' }} · {{ currentDomain }}</strong><button type="button" @click="setStep('domain_and_launch')">修改</button></article></div><aside class="review-price"><p>ESTIMATED PROJECT SUMMARY</p><h3>{{ brandName || '你的品牌' }}</h3><div><span>一次性網站建置預估</span><strong>NT$ {{ formatMoney(oneTimeEstimate) }}</strong></div><div v-if="monthlyEstimate"><span>每月 GEO 訂閱預估</span><strong>NT$ {{ formatMoney(monthlyEstimate) }}</strong></div><small>網域與人工串接另行報價；規劃中功能只記錄需求。以上均為示意或預估。</small><label><input v-model="reviewConfirmed" type="checkbox"> 我理解這是互動式預覽，不是已付款、已購買網域或已部署的正式成品。</label></aside></div><div class="ownership-note"><span>CLIENT OWNED DOMAIN</span><p>網域原則上歸客戶所有；DiscoveryStack 代管程式碼、部署與長期維護。V1 不提供完整原始碼下載。</p></div><div class="step-footer"><p>不會建立真實訂單，也不會呼叫付款、網域或部署服務。</p><button ref="reviewHandoffTrigger" class="builder-primary" type="button" :disabled="!reviewConfirmed" @click="submitReview">保存這份預覽，聯絡我們確認 <span>→</span></button></div></section>
 
-        <section v-else class="builder-step handoff-step" aria-labelledby="handoff-step-title"><div class="handoff-success-mark" aria-hidden="true">✓</div><div class="step-heading"><p class="builder-eyebrow">PREVIEW HANDOFF</p><h2 id="handoff-step-title" tabindex="-1">方向已經整理好了。</h2><p>下一步，與我們確認規格、費用與上線安排。</p></div><div class="handoff-next-grid"><article v-for="(item, index) in ['確認規格與付款', '重新確認網域與服務費', '完成授權後設定 DNS／SSL', '部署上線，依方案安排後續營運']" :key="item"><span>0{{ index + 1 }}</span><strong>{{ item }}</strong></article></div><div class="handoff-honesty"><span>NOT A PRODUCTION ORDER</span><p>本概念頁沒有送出真實訂單、沒有保存聯絡資料，也沒有呼叫私人 API。正式版會由確認後的受控流程接手。</p></div><div class="step-footer"><button type="button" class="builder-secondary" @click="setStep('review_order')">返回摘要</button><button ref="handoffStepTrigger" type="button" class="builder-primary" @click="openHandoff">開啟交接說明 <span>↗</span></button></div></section>
+        <section v-else class="builder-step handoff-step" aria-labelledby="handoff-step-title"><div class="handoff-success-mark" aria-hidden="true">✓</div><div class="step-heading"><p class="builder-eyebrow">PREVIEW HANDOFF</p><h2 id="handoff-step-title" tabindex="-1">網站方向已送出。</h2><p>我們已收到你送出當時的聯絡資料與預覽選擇，接下來確認規格、費用與正式上線安排。</p></div><div class="handoff-next-grid"><article v-for="(item, index) in ['確認規格與付款', '重新確認網域與服務費', '完成授權後設定 DNS／SSL', '部署上線，依方案安排後續營運']" :key="item"><span>0{{ index + 1 }}</span><strong>{{ item }}</strong></article></div><div class="handoff-honesty"><span>REQUEST RECEIVED / NOT AN ORDER</span><p>已送出合作需求；目前尚未付款、購買網域或部署網站。若之後在預覽中修改選擇，已送出的版本不會自動更新。</p></div><div class="step-footer"><button type="button" class="builder-secondary" @click="setStep('review_order')">返回摘要</button><button ref="handoffStepTrigger" type="button" class="builder-primary" @click="openHandoff">查看交接詳情 <span>↗</span></button></div></section>
         </Transition>
         </div>
       </section>
@@ -634,6 +679,6 @@ onBeforeUnmount(() => {
 
     <BuilderServiceOverview />
 
-    <div v-if="showHandoff" class="handoff-layer" role="presentation" @click.self="closeHandoff"><section ref="handoffDialog" class="handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-dialog-title" tabindex="-1" @keydown.esc="closeHandoff" @keydown="trapHandoff"><button ref="handoffCloseButton" class="dialog-close" type="button" aria-label="關閉交接說明" @click="closeHandoff">×</button><p class="builder-eyebrow">HANDOFF / NO EXTERNAL WRITE</p><h2 id="handoff-dialog-title">準備好，讓這個方向成真。</h2><div class="handoff-dialog-path"><span>保存預覽方向</span><i>→</i><span>人工確認規格</span><i>→</i><span>付款與授權</span><i>→</i><span>部署上線</span></div><p>這份預覽整理了品牌、頁面、風格與服務方向。正式建置前，我們會與你確認範圍、費用與所需授權。</p><div v-if="handoffSaved" class="handoff-saved" role="status">已在本次瀏覽中記住你的確認意圖；沒有送出訂單或保存任何個人資料。</div><div class="handoff-dialog-actions"><button type="button" class="builder-secondary" @click="closeHandoff">返回繼續調整</button><button type="button" class="builder-primary" @click="confirmHandoff">{{ handoffSaved ? '確認完成' : '我了解，保存這份預覽' }} <span>→</span></button></div></section></div>
+    <div v-if="showHandoff" class="handoff-layer" role="presentation" @click.self="closeHandoff"><section ref="handoffDialog" class="handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-dialog-title" tabindex="-1" @keydown.esc="closeHandoff" @keydown="trapHandoff"><button ref="handoffCloseButton" class="dialog-close" type="button" aria-label="關閉交接說明" @click="closeHandoff">×</button><p class="builder-eyebrow">PREVIEW HANDOFF</p><h2 id="handoff-dialog-title">讓這個方向成真。</h2><div class="handoff-dialog-path"><span>送出網站方向</span><i>→</i><span>確認規格</span><i>→</i><span>付款與授權</span><i>→</i><span>部署上線</span></div><p>留下聯絡方式，我們會連同你選好的頁面、風格與方案一起收到。送出需求不會建立訂單或扣款。</p><div v-if="handoffSaved" class="handoff-saved" role="status">網站方向與聯絡資料已送出。正式建站仍待規格、費用與授權確認。</div><form v-else class="handoff-contact" @submit.prevent="confirmHandoff"><div class="handoff-contact-grid"><label>姓名<input v-model="handoffContact.name" name="name" autocomplete="name" minlength="2" maxlength="120" required></label><label>工作 Email<input v-model="handoffContact.email" name="email" type="email" autocomplete="email" maxlength="320" required></label></div><div class="handoff-contact-grid"><label>公司／品牌<input v-model="handoffContact.company" name="company" autocomplete="organization" minlength="2" maxlength="160" required></label><label>現有網站（選填）<input v-model="handoffContact.website" name="website" type="url" inputmode="url" maxlength="2048" placeholder="https://"></label></div><label class="handoff-consent"><input v-model="handoffContact.privacyConsent" type="checkbox" required><span>我同意 DiscoveryStack 為回覆本次建站需求而處理這些資料。<a href="/zh-hant/privacy" target="_blank" rel="noopener noreferrer">閱讀隱私政策</a></span></label><label class="handoff-consent"><input v-model="handoffContact.recontactConsent" type="checkbox"><span>可在本次諮詢以外，寄送後續相關資訊給我（選填）。</span></label><div class="handoff-honeypot" aria-hidden="true"><label>公司傳真<input v-model="handoffContact.companyFax" tabindex="-1" autocomplete="off"></label></div><p v-if="handoffError" class="field-error" role="alert">{{ handoffError }}</p><div class="handoff-dialog-actions"><button type="button" class="builder-secondary" @click="closeHandoff">返回繼續調整</button><button type="submit" class="builder-primary" :disabled="handoffSubmitting">{{ handoffSubmitting ? '正在送出…' : '送出我的網站方向' }} <span>→</span></button></div></form><div v-if="handoffSaved" class="handoff-dialog-actions"><button type="button" class="builder-primary" @click="closeHandoff">完成 <span>→</span></button></div></section></div>
   </main>
 </template>

@@ -66,6 +66,17 @@ export async function getManagedSiteContentAdminWorkspace(ownerUserId: number, p
   const calendarIds = new Set(calendars.map(calendar => calendar.id))
   const entries = workspace.entries.filter(entry => calendarIds.has(entry.calendarId))
   const entryIds = new Set(entries.map(entry => entry.id))
+  const publicationTargets = workspace.publicationTargets.filter(target => target.clientId === clientId)
+  const executableTargets = publicationTargets.filter(target => target.status === 'active' && target.executionEnabled && target.credentialConfigured)
+  const executableTargetIds = new Set(executableTargets.map(target => target.id))
+  const now = Date.now()
+  const currentOwnerPolicy = workspace.governance.policies.some(policy => policy.ownerUserId === ownerUserId
+    && policy.clientId === clientId
+    && executableTargetIds.has(policy.publicationTargetId)
+    && policy.authorizedByOwnerUserId === ownerUserId
+    && policy.status === 'enabled'
+    && policy.revokedAt === null
+    && policy.expiresAt.getTime() > now)
   return {
     projectId,
     role,
@@ -74,9 +85,18 @@ export async function getManagedSiteContentAdminWorkspace(ownerUserId: number, p
     entries,
     runs: workspace.runs.filter(run => entryIds.has(run.entryId)),
     outcomeAssessments: workspace.outcomeAssessments.filter(outcome => entryIds.has(outcome.entryId)),
-    publicationTargets: workspace.publicationTargets.filter(target => target.clientId === clientId),
+    publicationTargets,
     capabilities: { canRead: true, canRequestRevision: roleAllows(role, 'content:write'), canReview: roleAllows(role, 'content:review'), canExport: roleAllows(role, 'data:export'), canonicalEngine: 'existing-content-operations-only' as const },
-    readiness: workspace.readiness,
+    readiness: {
+      schedulerEnabled: workspace.readiness.schedulerEnabled,
+      generationExecutorAvailable: workspace.readiness.generationExecutorAvailable,
+    },
+    siteReadiness: {
+      hasContentCalendar: calendars.some(calendar => ['ready', 'partial'].includes(calendar.status)),
+      hasExecutablePublicationTarget: executableTargets.length > 0,
+      hasCurrentOwnerPolicy: currentOwnerPolicy,
+      customerApprovalRequired: workspace.clients.some(client => client.id === clientId && client.requireCustomerApproval === true),
+    },
     limitations: [...workspace.limitations, 'Content Admin is a scoped façade over canonical Content Operations; it does not create a second calendar, draft, review, risk-gate, publication, measurement, or learning engine.'],
   }
 }

@@ -95,9 +95,9 @@ describe('SEO/GEO three-layer V1 contract', () => {
     expect(pageSource).toContain('/api/seo-geo/production-plans')
     expect(pageSource).toContain('進階單筆操作（需要 technical IDs；主要 guided flow 不使用此區）')
     expect(pageSource).not.toContain('approvedEvidenceContext:')
-    expect(homeSource).toContain('AUTOGEO STRATEGY')
-    expect(homeSource).toContain('Production Plan')
-    expect(homeSource).toContain('不代表排名、流量、轉換或 ROI')
+    expect(homeSource).toContain('<SearchDiscoveryExplainer locale={locale} />')
+    expect(homeSource).toContain('<LearningEngine locale={locale} />')
+    expect(homeSource).toContain('<AutomaticSiteAnalysis client:visible locale={locale} />')
   })
 
   it('limits the guided Diagnosis picker to submit-compatible source approvals', () => {
