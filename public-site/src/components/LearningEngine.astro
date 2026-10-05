@@ -3,29 +3,29 @@ interface Props { locale: 'en' | 'zh-hant' }
 const { locale } = Astro.props
 const isZh = locale === 'zh-hant'
 const label = isZh ? {
-  title: '上線之後，', accent: '每一步都有依據。',
-  intro: '自主研發 SEO／GEO 機器學習',
-  body: '網站上線，只是開始。從搜尋與 AI 的觀察，研究值得先改的內容，再檢查前後差別。我們正在把觀測、修改與驗證連起來，讓下一次改善有依據。',
-  principle: '更多資料，能帶來更多線索。更好的判斷，還要經過驗證。',
-  rule: '我們的研發原則：資料足夠、驗證更好，才更新判斷。',
+  title: '亞洲唯一 GEO 機器學習。', accent: '讓品牌越做越強。',
+  intro: '不只看報表，更要找到下一步。',
+  body: '對手不會等你。DiscoveryStack 把搜尋與 AI 的觀察帶進機器學習，找出值得先改的內容；網站改了，再看結果。每一次改善，都為下一次搶先被看見累積線索。',
+  principle: '市場每天都在變，你的網站不能做完就停。',
+  rule: '看見訊號 → 找出機會 → 改善網站 → 驗證結果。',
   map: '學習流程示意', source: '搜尋訊號', model: '學習差別', verify: '新資料驗證', website: '改善網站',
   description: '搜尋與 AI 的可驗證觀察進入學習模型，再用未參與學習的新資料驗證。通過驗證的方向才值得用於網站改善，之後繼續觀察。這是流程示意，並非即時模型或客戶數據。',
   controls: '探索學習流程', pause: '暫停動畫', play: '播放動畫', explore: '了解 SEO／GEO',
 } : {
-  title: 'After launch.', accent: 'Keep improving with evidence.',
-  intro: 'Our own SEO / GEO machine learning',
-  body: 'Launch is a beginning. We study search and AI observations, identify changes worth exploring, and compare what follows. Our development connects observation, reviewed changes and validation to inform the next improvement.',
-  principle: 'More evidence offers more clues. Better judgement still needs to be tested.',
-  rule: 'Our development principle: enough evidence, better validation, then a new judgement.',
+  title: "Asia's only GEO machine learning.", accent: 'Built to keep your brand ahead.',
+  intro: 'Go beyond another report. Find the next move.',
+  body: 'Competitors are not waiting. DiscoveryStack brings search and AI observations into machine learning to identify the content worth improving. Make the change, check what followed, and turn each observation into a head start on the next move.',
+  principle: 'The market keeps moving. Your website should, too.',
+  rule: 'Observe → Find the opportunity → Improve → Verify.',
   map: 'Illustrative learning flow', source: 'Search signals', model: 'Learn differences', verify: 'Fresh-data validation', website: 'Website improvements',
   description: 'Verifiable search and AI observations enter a learning model. Fresh data that was not used for learning tests its judgement. Validated directions can inform website improvements and further observations. This is a process illustration, not live model or customer data.',
   controls: 'Explore the learning flow', pause: 'Pause animation', play: 'Play animation', explore: 'Explore SEO / GEO',
 }
 const steps = isZh ? [
-  { title: '看見', body: '記錄哪些內容被找到、被引用，並確認觀察能被查證。' },
-  { title: '學習', body: '比較不同內容的表現，學習哪些差別值得注意。' },
-  { title: '驗證', body: '用沒有學過的新資料重做檢查，避免只會記住舊答案。' },
-  { title: '改善', body: '把通過驗證的方向帶回網站，再觀察下一次的變化。' },
+  { title: '搶先看見', body: '觀察搜尋與 AI 如何提到你的品牌，找到正在流失的機會。' },
+  { title: '找出差距', body: '比較內容表現，讓機器學習找出值得優先處理的差別。' },
+  { title: '驗證方向', body: '用新資料檢查判斷，不讓網站只憑感覺一直改。' },
+  { title: '持續超前', body: '把值得做的方向帶回網站，再看下一次的變化。' },
 ] : [
   { title: 'Observe', body: 'Record discovery and citation with evidence that can be checked.' },
   { title: 'Learn', body: 'Compare content outcomes and learn which differences deserve attention.' },

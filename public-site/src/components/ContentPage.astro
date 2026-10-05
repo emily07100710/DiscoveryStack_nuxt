@@ -29,7 +29,7 @@ const isZh = data.locale === 'zh-hant'
         <span>{isZh ? '摘要答案' : 'Answer first'}</span>
         <p>{data.summaryAnswer}</p>
       </aside>
-      <p class="content-meta">{isZh ? '最後更新' : 'Last updated'} · {data.updatedAt} · {data.evidenceStatus}</p>
+      <p class="content-meta">{isZh ? '最後更新' : 'Last updated'} · {data.updatedAt}</p>
     </header>
     <div class="content-body"><Content /></div>
     <script is:inline>

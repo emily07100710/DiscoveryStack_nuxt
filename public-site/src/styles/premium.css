@@ -211,7 +211,7 @@ body.premium-site {
   color: var(--premium-khaki);
 }
 html[lang="en-US"] .premium-hero h1 {
-  font-size: clamp(4rem, 7.4vw, 7.8rem);
+  font-size: clamp(3.4rem, 5.3vw, 5.5rem);
   line-height: 1.05;
   letter-spacing: -0.06em;
 }
@@ -1265,7 +1265,7 @@ html[lang="en-US"] .premium-hero h1 {
     font-size: clamp(3.1rem, 10.3vw, 5.2rem);
   }
   html[lang="en-US"] .premium-hero h1 {
-    font-size: clamp(3.8rem, 13vw, 6rem);
+    font-size: clamp(2.4rem, 9vw, 4.5rem);
   }
   .premium-hero-deck {
     font-size: 0.8rem;
@@ -1712,7 +1712,12 @@ html[data-motion-paused="true"] :is([data-ambient], .premium-home, .builder-expe
 .premium-service, .premium-price-list > details { position: relative; }
 .premium-service::before, .premium-price-list > details::before { content: ''; position: absolute; height: 1px; inset: -1px 0 auto; background: linear-gradient(90deg, var(--premium-metal-light), var(--premium-khaki), transparent); transform: scaleX(var(--reveal-line-progress, 1)); transform-origin: left; opacity: .55; pointer-events: none; }
 
-.premium-site .content-page { padding-top: calc(var(--header-height) + 2rem); }
+.premium-site .content-page {
+  box-sizing: border-box;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding: calc(var(--header-height) + 2rem) var(--gutter) 5rem;
+}
 
 /* The handoff occupies no document height and never intercepts a control. */
 .scene-seam { position: relative; height: 0; z-index: 3; pointer-events: none; --seam-strength: 0; --seam-fill: var(--premium-deep); }
