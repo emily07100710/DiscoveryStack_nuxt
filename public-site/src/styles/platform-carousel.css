@@ -1,0 +1,121 @@
+/* The full directory stays readable when JavaScript or motion is unavailable. */
+.platform-marquee .platform-directory { position: relative; margin-top: clamp(2rem, 4vw, 3.5rem); }
+.platform-marquee .platform-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .55rem; margin: 0; padding: 0; list-style: none; }
+.platform-marquee .platform-grid li { min-width: 0; }
+.platform-marquee .platform-logo { display: flex; align-items: center; gap: .6rem; min-height: 3.5rem; padding: .4rem .65rem; border: 1px solid color-mix(in srgb, var(--premium-navy) 18%, transparent); color: var(--premium-navy); text-decoration: none; }
+.platform-marquee .platform-logo:hover { border-color: var(--premium-metal); }
+.platform-marquee .platform-logo:focus-visible, .platform-carousel-pause:focus-visible { outline: 2px solid var(--premium-metal-light); outline-offset: 3px; }
+.platform-marquee .platform-logo strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 .7rem/1.2 var(--font-body, sans-serif); }
+.platform-marquee .platform-mark { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; }
+.platform-marquee .platform-mark img { display: block; max-width: 32px; max-height: 30px; width: auto; height: auto; object-fit: contain; }
+.platform-marquee .platform-mark-line img { max-width: 36px; max-height: 36px; }
+.platform-marquee .platform-mark-dhl { flex-basis: 42px; width: 42px; background: #ffcc00; }
+.platform-marquee .platform-mark-dhl img { max-width: 40px; max-height: 25px; }
+.platform-marquee .platform-monogram { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid currentColor; font: 600 .56rem/1 var(--font-mono, monospace); }
+.platform-cloud-orbit, .platform-cloud-core, .platform-cloud-caption, .platform-carousel-controls, .platform-carousel-status { display: none; }
+
+.platform-marquee[data-carousel-ready] .platform-directory {
+  display: block;
+  height: clamp(350px, 39vw, 520px);
+  overflow: hidden;
+  isolation: isolate;
+  touch-action: pan-y;
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--premium-khaki) 17%, var(--premium-paper)), var(--premium-paper) 48%);
+}
+.platform-marquee[data-carousel-ready] .platform-directory::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at center, color-mix(in srgb, var(--premium-metal) 11%, transparent), transparent 42%);
+}
+.platform-marquee[data-carousel-ready] .platform-cloud-orbit {
+  display: block;
+  position: absolute;
+  left: 50%; top: 50%;
+  width: min(67%, 460px);
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--premium-metal) 26%, transparent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.platform-marquee[data-carousel-ready] .platform-cloud-orbit--two { width: min(75%, 540px); height: min(47%, 245px); aspect-ratio: auto; transform: translate(-50%, -50%) rotate(-22deg); border-color: color-mix(in srgb, var(--premium-metal) 17%, transparent); }
+.platform-marquee[data-carousel-ready] .platform-cloud-core {
+  display: none;
+}
+.platform-marquee[data-carousel-ready] .platform-grid { display: block; position: absolute; inset: 0; }
+.platform-marquee[data-carousel-ready] .platform-grid li {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 116px;
+  height: 55px;
+  margin: 0;
+  will-change: transform;
+}
+.platform-marquee[data-carousel-ready] .platform-logo {
+  justify-content: center;
+  width: 100%; height: 100%; min-height: 0;
+  padding: .35rem .5rem;
+  color: var(--premium-navy);
+  border-color: color-mix(in srgb, var(--premium-metal) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, white 75%, var(--premium-paper));
+  box-shadow: 0 8px 25px color-mix(in srgb, var(--premium-navy) 13%, transparent);
+  transition: transform var(--motion-panel, 360ms) var(--motion-ease, ease-out), background var(--motion-panel, 360ms), border-color var(--motion-panel, 360ms), box-shadow var(--motion-panel, 360ms);
+}
+.platform-marquee[data-carousel-ready] .platform-logo:hover,
+.platform-marquee[data-carousel-ready] [data-active] .platform-logo,
+.platform-marquee[data-carousel-ready] .platform-logo:focus-visible {
+  transform: scale(1.48);
+  background: white;
+  border-color: var(--premium-metal-light);
+  box-shadow: 0 20px 42px color-mix(in srgb, var(--premium-navy) 22%, transparent), 0 0 0 1px color-mix(in srgb, var(--premium-metal) 40%, transparent), 0 0 32px color-mix(in srgb, var(--premium-metal) 18%, transparent);
+}
+.platform-marquee[data-carousel-ready][data-active-brand] .platform-grid li:not([data-active]) .platform-logo { opacity: .74; }
+.platform-marquee[data-carousel-ready] .platform-logo strong { font-size: .67rem; }
+.platform-marquee[data-carousel-ready] .platform-mark { flex-basis: 26px; width: 26px; height: 26px; }
+.platform-marquee[data-carousel-ready] .platform-mark img { max-width: 26px; max-height: 25px; }
+.platform-marquee[data-carousel-ready] .platform-mark-dhl { flex-basis: 32px; width: 32px; height: 22px; }
+.platform-marquee[data-carousel-ready] .platform-mark-dhl img { max-width: 32px; max-height: 21px; }
+.platform-marquee[data-carousel-ready] .platform-monogram { width: 24px; height: 24px; color: var(--premium-navy); }
+/* The supplied LINE mark is intentionally not scaled or animated; the moving cloud uses type. */
+.platform-marquee[data-carousel-ready] .platform-mark-line img { display: none; }
+.platform-marquee[data-carousel-ready] .platform-mark-line::after { content: 'LINE'; font: 700 .5rem/1 var(--font-body, sans-serif); color: var(--premium-navy); }
+.platform-marquee[data-carousel-ready] .platform-cloud-caption { display: none; }
+.platform-marquee[data-carousel-ready][data-dragging] .platform-directory { cursor: grabbing; }
+.platform-marquee[data-carousel-ready] .platform-carousel-controls { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 5rem; padding: .9rem 0; border-bottom: 1px solid color-mix(in srgb, var(--premium-navy) 16%, transparent); }
+.platform-carousel-current { display: grid; gap: .35rem; margin: 0; }
+.platform-carousel-current span { color: #817969; font: .55rem/1 var(--font-mono, monospace); letter-spacing: .12em; }
+.platform-carousel-current strong { font: 500 clamp(.95rem, 1.4vw, 1.2rem)/1.2 var(--font-display, sans-serif); }
+.platform-carousel-pause { display: inline-flex; align-items: center; justify-content: center; gap: .55rem; min-height: 44px; padding: .55rem .8rem; color: var(--premium-navy); background: transparent; border: 1px solid color-mix(in srgb, var(--premium-navy) 22%, transparent); border-radius: 999px; font: .69rem/1.2 var(--font-body, sans-serif); cursor: pointer; transition: background var(--motion-feedback, 200ms), color var(--motion-feedback, 200ms), transform var(--motion-feedback, 200ms); }
+.platform-carousel-pause:hover, .platform-carousel-pause[aria-pressed="true"] { background: var(--premium-navy); color: var(--premium-paper); }
+.platform-carousel-pause:active { transform: scale(.96); }
+.platform-carousel-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+@media (max-width: 850px) {
+  .platform-marquee .platform-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .platform-marquee[data-carousel-ready] .platform-directory { height: 410px; }
+  .platform-marquee[data-carousel-ready] .platform-grid li { width: 102px; height: 49px; }
+  .platform-marquee[data-carousel-ready] .platform-logo strong { font-size: .56rem; }
+}
+@media (max-width: 600px) {
+  .platform-marquee .platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-marquee[data-carousel-ready] .platform-directory { height: 390px; }
+  .platform-marquee[data-carousel-ready] .platform-grid li { width: 83px; height: 42px; }
+  .platform-marquee[data-carousel-ready] .platform-logo { gap: .24rem; padding: .25rem; }
+  .platform-marquee[data-carousel-ready] .platform-logo strong { font-size: .48rem; }
+  .platform-marquee[data-carousel-ready] .platform-mark { flex-basis: 20px; width: 20px; height: 20px; }
+  .platform-marquee[data-carousel-ready] .platform-mark img { max-width: 20px; max-height: 20px; }
+  .platform-marquee[data-carousel-ready] .platform-mark-dhl { flex-basis: 23px; width: 23px; height: 18px; }
+  .platform-marquee[data-carousel-ready] .platform-mark-dhl img { max-width: 23px; max-height: 16px; }
+  .platform-marquee[data-carousel-ready] .platform-monogram { width: 19px; height: 19px; font-size: .45rem; }
+  .platform-marquee[data-carousel-ready] .platform-carousel-controls { align-items: flex-start; }
+  .platform-carousel-current strong { max-width: 13rem; }
+  .platform-carousel-pause { flex-shrink: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .platform-marquee[data-carousel-ready] .platform-logo, .platform-carousel-pause { transition-duration: 0ms; }
+  .platform-marquee[data-carousel-ready] .platform-carousel-pause { display: none; }
+}

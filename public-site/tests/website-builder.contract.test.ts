@@ -8,13 +8,15 @@ const model = readFileSync(resolve(process.cwd(), 'src/lib/website-builder-model
 const styles = readFileSync(resolve(process.cwd(), 'src/styles/website-builder.css'), 'utf8')
 
 describe('website builder safety and presentation contracts', () => {
-  it('keeps public diagnosis on the homepage and starts the builder without API calls or persistence', () => {
-    expect(component).not.toMatch(/publicApiFetch|\bfetch\s*\(|\/api\//)
+  it('keeps diagnosis on the homepage and sends only a consented handoff through the existing public lead API', () => {
+    expect(component).toContain("publicApiFetch<{ received: boolean; duplicate: boolean }>('/api/leads'")
+    expect(component).not.toMatch(/\bfetch\s*\(|\/api\/(?!leads)/)
     expect(component).not.toMatch(/runDiagnosis|analysisResult|entryMode|builder-existing-url/)
     expect(component).toContain("const currentStep = ref<BuilderStep>('diagnosis_or_brief')")
     expect(component).not.toMatch(/(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)|document\.cookie\s*=|v-model[^\n]*(?:password|api[_-]?key|access[_-]?token)/i)
     expect(component).toContain('不收集密碼、身分證、付款資料或 API key')
-    expect(component).toContain('沒有保存聯絡資料')
+    expect(component).toContain('privacyConsent: handoffContact.privacyConsent')
+    expect(component).toContain('送出需求不會建立訂單或扣款')
   })
 
   it('keeps preview-only claims explicit and never presents simulated domain/Shopify/payment actions as completed', () => {
@@ -24,7 +26,7 @@ describe('website builder safety and presentation contracts', () => {
     expect(component).toContain('尚未確認可購買')
     expect(component).toContain('SHOPIFY READY / NOT CONNECTED')
     expect(component).toContain('這份預覽不會建立 Shopify 商店')
-    expect(component).toContain('NOT A PRODUCTION ORDER')
+    expect(component).toContain('REQUEST RECEIVED / NOT AN ORDER')
     expect(component).toContain('不是已付款、已購買網域或已部署的正式成品')
   })
 
@@ -59,7 +61,7 @@ describe('website builder safety and presentation contracts', () => {
     expect(component).toContain('motion-choice')
     expect(component).toContain(':data-motion="motionPreference"')
     expect(component).toContain('此預覽尚未連接 AI 風格判讀')
-    expect(component).not.toMatch(/publicApiFetch|\bfetch\s*\(|\/api\//)
+    expect(component).toContain("publicApiFetch<{ received: boolean; duplicate: boolean }>('/api/leads'")
   })
 
   it('keeps primary CTA label and arrow readable across enabled and disabled states', () => {

@@ -2,62 +2,140 @@
 interface Props { locale: 'en' | 'zh-hant' }
 const { locale } = Astro.props
 const isZh = locale === 'zh-hant'
-const cards = isZh ? [
-  { key: 'seo', acronym: 'SEO', full: '搜尋引擎最佳化', title: '讓客戶在搜尋結果找到你', detail: '整理網站內容與結構，讓人搜尋時更容易找到你的頁面。', path: ['搜尋', '搜尋結果', '你的網站'] },
-  { key: 'geo', acronym: 'GEO', full: '生成式引擎最佳化', title: '讓 AI 看懂並引用你', detail: '把品牌資訊與可信的內容說清楚，增加出現在 AI 回答中的機會。', path: ['提問', 'AI 回答', '品牌與來源'] },
-] : [
-  { key: 'seo', acronym: 'SEO', full: 'Search Engine Optimisation', title: 'Be found in search results', detail: 'Make your pages easier to find when customers search.', path: ['Search', 'Results', 'Your site'] },
-  { key: 'geo', acronym: 'GEO', full: 'Generative Engine Optimisation', title: 'Be understood by AI', detail: 'Give AI clear, credible information it can use and cite in an answer.', path: ['Question', 'AI answer', 'Brand & source'] },
-]
+const adobeSource = 'https://business.adobe.com/blog/generative-ai-powered-shopping-rises-with-traffic-to-retail-sites'
 ---
 
-<div class="discovery-difference" aria-labelledby={`discovery-difference-title-${locale}`}>
+<div class="discovery-difference" data-discovery-demo aria-labelledby={`discovery-difference-title-${locale}`}>
   <div class="discovery-difference__heading" data-reveal data-reveal-kind="soft">
-    <p class="discovery-difference__eyebrow">SEO × GEO / DISCOVERY, EXPLAINED</p>
-    <h3 id={`discovery-difference-title-${locale}`}>{isZh ? '搜尋得到你，AI 也要看得懂你。' : 'Found in search. Understood by AI.'}</h3>
+    <p class="discovery-difference__eyebrow">SEO × GEO / THE NEW DISCOVERY</p>
+    <h3 id={`discovery-difference-title-${locale}`}>{isZh ? '以前客戶打開 Google、Yahoo。現在，他先問 AI。' : 'Customers used to open Google or Yahoo. Now they ask AI first.'}</h3>
+    <p>{isZh ? '同樣是找一家餐廳，客戶從「自己翻搜尋結果」，變成「先聽 AI 整理推薦」。你的品牌，要能出現在這段對話裡。' : 'Finding a restaurant used to mean scanning search results. Now people ask an AI to narrow the choices. Your brand needs to be understandable in that conversation.'}</p>
   </div>
+
+  <div class="discovery-difference__stat" data-reveal data-reveal-kind="line">
+    <div class="discovery-difference__stat-value"><span aria-hidden="true">↗</span><strong>+4,700%</strong></div>
+    <div class="discovery-difference__stat-copy"><strong>{isZh ? 'AI 帶來的購物網站流量，一年暴增 4,700%。' : 'AI-driven visits to retail sites surged 4,700% in a year.'}</strong><p>{isZh ? 'Adobe 觀察美國零售網站：2025 年 7 月，來自生成式 AI 的導流量，較 2024 年 7 月成長 4,700%。這是「導流成長」，不是使用 AI 的人口比例。' : 'Adobe measured traffic referred by generative AI to U.S. retail sites in July 2025 versus July 2024. This is growth in referred visits, not the share of people using AI.'}</p><a href={adobeSource} target="_blank" rel="noopener noreferrer">{isZh ? '查看 Adobe 原始數據 ↗' : 'Read Adobe’s original data ↗'}</a></div>
+  </div>
+
   <div class="discovery-difference__grid" data-reveal-stagger>
-    {cards.map(card => <article class={`discovery-difference__card discovery-difference__card--${card.key}`} data-reveal data-reveal-kind="card">
-      <div class="discovery-difference__top">
-        <span class="discovery-difference__icon" aria-hidden="true">
-          {card.key === 'seo' ? <svg viewBox="0 0 64 64" fill="none"><circle cx="29" cy="28" r="16" /><path d="m41 40 14 14M21 26h16M21 33h11" /></svg> : <svg viewBox="0 0 64 64" fill="none"><path d="M12 15h40v30H30L19 54v-9h-7V15Z" /><path d="m32 21 2.4 7.6L42 31l-7.6 2.4L32 41l-2.4-7.6L22 31l7.6-2.4L32 21Z" /></svg>}
-        </span>
-        <span class="discovery-difference__name"><strong>{card.acronym}</strong><small>{card.full}</small></span>
+    <article class="discovery-difference__card discovery-difference__card--seo" data-reveal data-reveal-kind="card">
+      <div class="discovery-difference__top"><span class="discovery-difference__icon" aria-hidden="true"><svg viewBox="0 0 64 64" fill="none"><circle cx="29" cy="28" r="16" /><path d="m41 40 14 14M21 26h16M21 33h11" /></svg></span><span class="discovery-difference__name"><small>{isZh ? '以前的入口' : 'THE CLASSIC PATH'}</small><strong>SEO</strong></span></div>
+      <h4>{isZh ? '讓搜尋結果找得到你。' : 'Be found in search results.'}</h4>
+      <div class="discovery-difference__search" aria-label={isZh ? '傳統搜尋情境示意' : 'Illustrative search example'}>
+        <div class="discovery-difference__search-bar"><span aria-hidden="true">⌕</span><span>{isZh ? '台北約會餐廳' : 'romantic restaurants in Taipei'}</span><span aria-hidden="true">↵</span></div>
+        <div class="discovery-difference__result"><small>SEARCH RESULTS / 01</small><strong>{isZh ? '台北適合約會的餐廳推薦' : 'Restaurants for a date in Taipei'}</strong><span>{isZh ? '網站標題、內容、地點與連結…' : 'Page titles, content, locations and links…'}</span></div>
+        <div class="discovery-difference__result discovery-difference__result--ghost" aria-hidden="true"></div>
       </div>
-      <h4>{card.title}</h4>
-      <p>{card.detail}</p>
-      <ol class="discovery-difference__path" aria-label={isZh ? `${card.acronym} 流程` : `${card.acronym} path`}>
-        {card.path.map((step, index) => <li><span class="discovery-difference__path-dot" aria-hidden="true"></span><span>{step}</span>{index < card.path.length - 1 && <span class="discovery-difference__path-arrow" aria-hidden="true">→</span>}</li>)}
-      </ol>
-    </article>)}
+      <p class="discovery-difference__caption">{isZh ? '客戶自己點進搜尋結果，才看見你的網站。' : 'The customer clicks a result before seeing your website.'}</p>
+    </article>
+    <article class="discovery-difference__card discovery-difference__card--geo" data-reveal data-reveal-kind="card">
+      <div class="discovery-difference__top"><span class="discovery-difference__icon" aria-hidden="true"><svg viewBox="0 0 64 64" fill="none"><path d="M12 15h40v30H30L19 54v-9h-7V15Z" /><path d="m32 21 2.4 7.6L42 31l-7.6 2.4L32 41l-2.4-7.6L22 31l7.6-2.4L32 21Z" /></svg></span><span class="discovery-difference__name"><small>{isZh ? '現在的新入口' : 'THE NEW PATH'}</small><strong>GEO</strong></span></div>
+      <h4>{isZh ? '讓 AI 回答時，想得到你。' : 'Be considered in the AI answer.'}</h4>
+      <div class="discovery-difference__chat" aria-label={isZh ? 'AI 問答情境示意，非即時回覆' : 'Illustrative AI conversation, not a live response'}>
+        <div class="discovery-difference__chat-head"><span><i aria-hidden="true"></i>{isZh ? 'AI 問答情境示意' : 'ILLUSTRATIVE AI CONVERSATION'}</span><button type="button" data-demo-replay aria-label={isZh ? '重播問答動畫' : 'Replay conversation animation'}>{isZh ? '重播 ↺' : 'REPLAY ↺'}</button></div>
+        <p class="discovery-difference__bubble discovery-difference__bubble--user" data-demo-user>{isZh ? '台北有適合約會、能線上訂位的餐廳嗎？' : 'Where can I book a romantic dinner in Taipei?'}</p>
+        <div class="discovery-difference__thinking" data-demo-thinking aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="discovery-difference__bubble discovery-difference__bubble--answer" data-demo-answer><span class="discovery-difference__avatar" aria-hidden="true">✳</span><p>{isZh ? '可以先看看「海岸小館」（示意）：提供雙人套餐、鄰近捷運，也有線上訂位。比較前，建議再確認菜單與營業時間。' : 'You could look at “Coast House” (example): dinner for two, near transit, with online booking. Check its menu and hours before choosing.'}</p></div>
+        <p class="discovery-difference__sources" data-demo-sources>{isZh ? '參考資訊：菜單 · 營業時間 · 訂位頁' : 'Information used: menu · opening hours · booking page'}</p>
+      </div>
+      <p class="discovery-difference__caption">{isZh ? 'GEO：把品牌與可信資訊整理好，增加被 AI 理解、引用與納入比較的機會。' : 'GEO organises clear, credible brand information so AI can understand, cite and compare it.'}</p>
+    </article>
   </div>
-  <p class="discovery-difference__takeaway" data-reveal data-reveal-kind="line"><span aria-hidden="true">↗</span>{isZh ? 'SEO 幫人找到你的網站；GEO 幫 AI 正確理解你的品牌。兩者一起做，才不會只守著一種入口。' : 'SEO helps people find your site. GEO helps AI understand your brand. Together, they cover both paths to discovery.'}</p>
+  <p class="discovery-difference__takeaway" data-reveal data-reveal-kind="line"><span aria-hidden="true">↗</span>{isZh ? 'SEO 讓人找到你的網站；GEO 讓 AI 在回答問題時看得懂你。客戶在哪裡找答案，你就該在哪裡被看見。' : 'SEO helps people find your site. GEO helps AI understand your brand when answering. Be visible where customers look for answers.'}</p>
 </div>
+
+<script>
+  const setupDemo = () => {
+    document.querySelectorAll<HTMLElement>('[data-discovery-demo]').forEach(root => {
+      if (root.dataset.demoReady) return
+      root.dataset.demoReady = 'true'
+      const abort = new AbortController()
+      const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')
+      const play = () => {
+        if (reduced?.matches || document.documentElement.dataset.motionPaused === 'true') return
+        delete root.dataset.demoActive
+        requestAnimationFrame(() => { if (root.isConnected) root.dataset.demoActive = 'true' })
+      }
+      const observer = typeof IntersectionObserver !== 'undefined' ? new IntersectionObserver(entries => {
+        if (!entries[0]?.isIntersecting) return
+        play()
+        observer?.disconnect()
+      }, { threshold: .35 }) : undefined
+      if (observer) observer.observe(root)
+      else play()
+      root.querySelector('[data-demo-replay]')?.addEventListener('click', play, { signal: abort.signal })
+      document.addEventListener('astro:before-swap', () => { abort.abort(); observer?.disconnect() }, { once: true })
+    })
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupDemo, { once: true })
+  else setupDemo()
+  document.addEventListener('astro:page-load', setupDemo)
+</script>
 
 <style>
   .discovery-difference { margin: 0 0 clamp(3.5rem, 6vw, 5.5rem); }
-  .discovery-difference__heading { display: grid; grid-template-columns: 1fr 2.1fr; gap: 2rem; align-items: end; margin-bottom: 1.7rem; }
-  .discovery-difference__eyebrow { color: var(--premium-khaki); font: .58rem/1.6 var(--font-mono); letter-spacing: .13em; }
-  .discovery-difference__heading h3 { margin: 0; font: 400 clamp(1.28rem, 2.2vw, 2.05rem)/1.4 var(--font-display); letter-spacing: -.035em; }
-  .discovery-difference__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: rgba(183,168,143,.35); border: 1px solid rgba(183,168,143,.35); }
-  .discovery-difference__card { position: relative; min-width: 0; min-height: 20rem; padding: clamp(1.4rem, 3vw, 2.5rem); background: var(--premium-deep); overflow: hidden; }
-  .discovery-difference__card::before { content: ''; position: absolute; inset: 0 0 auto; height: 2px; background: linear-gradient(90deg, var(--premium-metal-light), transparent 75%); transform: scaleX(0); transform-origin: left; transition: transform var(--motion-panel) var(--motion-ease); }
-  .discovery-difference__card:hover::before { transform: scaleX(1); }
-  .discovery-difference__card--geo { background: #1d203a; }
-  .discovery-difference__top { display: flex; align-items: center; gap: 1rem; }
-  .discovery-difference__icon { display: grid; place-items: center; flex: 0 0 3.5rem; width: 3.5rem; height: 3.5rem; border: 1px solid rgba(183,168,143,.6); border-radius: 50%; color: var(--premium-metal-light); }
-  .discovery-difference__icon svg { width: 2.2rem; height: 2.2rem; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-  .discovery-difference__name { display: grid; gap: .25rem; }
-  .discovery-difference__name strong { color: var(--premium-paper); font: 500 1.2rem/1.1 var(--font-display); letter-spacing: .04em; }
-  .discovery-difference__name small { color: var(--premium-khaki); font: .6rem/1.5 var(--font-body); }
-  .discovery-difference__card h4 { margin: 2.6rem 0 .65rem; font: 400 clamp(1.25rem, 2vw, 1.8rem)/1.35 var(--font-display); letter-spacing: -.04em; }
-  .discovery-difference__card > p { max-width: 27rem; min-height: 3.4rem; margin: 0; color: rgba(238,233,223,.7); font: .84rem/1.85 var(--font-body); }
-  .discovery-difference__path { display: flex; flex-wrap: wrap; gap: .2rem .5rem; align-items: center; margin: 2rem 0 0; padding: 1.15rem 0 0; border-top: 1px solid rgba(183,168,143,.24); list-style: none; }
-  .discovery-difference__path li { display: inline-flex; align-items: center; gap: .35rem; color: var(--premium-paper); font: .7rem/1.5 var(--font-body); white-space: nowrap; }
-  .discovery-difference__path-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--premium-metal-light); }
-  .discovery-difference__path-arrow { margin-left: .3rem; color: var(--premium-khaki); }
-  .discovery-difference__takeaway { display: flex; align-items: start; gap: .8rem; margin: 1.4rem 0 0; color: rgba(238,233,223,.75); font: .77rem/1.8 var(--font-body); }
+  .discovery-difference__heading { display: grid; grid-template-columns: minmax(150px, .65fr) 2.1fr; column-gap: 2rem; align-items: end; margin-bottom: 1.75rem; }
+  .discovery-difference__eyebrow { grid-row: span 2; color: var(--premium-khaki); font: .58rem/1.6 var(--font-mono); letter-spacing: .13em; }
+  .discovery-difference__heading h3 { max-width: 52rem; margin: 0; font: 400 clamp(1.55rem, 2.9vw, 2.8rem)/1.35 var(--font-display); letter-spacing: -.045em; }
+  .discovery-difference__heading > p:last-child { max-width: 43rem; margin: 1rem 0 0; color: rgba(238,233,223,.66); font: .84rem/1.8 var(--font-body); }
+  .discovery-difference__stat { display: grid; grid-template-columns: minmax(220px, .9fr) 1.1fr; gap: clamp(1.5rem, 4vw, 4.5rem); align-items: center; margin-bottom: 1.5rem; padding: clamp(1.3rem, 2.4vw, 2.3rem); background: linear-gradient(105deg, color-mix(in srgb, var(--premium-khaki) 16%, transparent), color-mix(in srgb, var(--premium-metal) 5%, transparent)); border: 1px solid color-mix(in srgb, var(--premium-khaki) 35%, transparent); }
+  .discovery-difference__stat-value { display: flex; align-items: flex-start; gap: .3rem; color: var(--premium-metal-light); }
+  .discovery-difference__stat-value span { margin-top: .4rem; font: 1.3rem/1 var(--font-body); }
+  .discovery-difference__stat-value strong { font: 400 clamp(3.8rem, 8vw, 7.2rem)/.95 var(--font-display); letter-spacing: -.07em; white-space: nowrap; }
+  .discovery-difference__stat-copy strong { display: block; max-width: 33rem; font: 400 clamp(1.1rem, 1.8vw, 1.6rem)/1.5 var(--font-display); }
+  .discovery-difference__stat-copy p { max-width: 36rem; margin: .8rem 0; color: rgba(238,233,223,.73); font: .75rem/1.7 var(--font-body); }
+  .discovery-difference__stat-copy a { display: inline-block; padding-block: .2rem; color: var(--premium-metal-light); font: .62rem/1.4 var(--font-body); text-decoration-color: color-mix(in srgb, var(--premium-metal-light) 50%, transparent); text-underline-offset: .25rem; }
+  .discovery-difference__stat-copy a:focus-visible { outline: 2px solid var(--premium-metal-light); outline-offset: 3px; }
+  .discovery-difference__grid { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 1px; background: color-mix(in srgb, var(--premium-khaki) 35%, transparent); border: 1px solid color-mix(in srgb, var(--premium-khaki) 35%, transparent); }
+  .discovery-difference__card { position: relative; min-width: 0; padding: clamp(1.2rem, 2.5vw, 2.2rem); background: var(--premium-deep); }
+  .discovery-difference__card--geo { background: color-mix(in srgb, var(--premium-navy) 93%, var(--premium-khaki)); }
+  .discovery-difference__top { display: flex; align-items: center; gap: .8rem; }
+  .discovery-difference__icon { display: grid; place-items: center; flex: 0 0 2.5rem; width: 2.5rem; height: 2.5rem; border: 1px solid color-mix(in srgb, var(--premium-khaki) 58%, transparent); border-radius: 50%; color: var(--premium-metal-light); }
+  .discovery-difference__icon svg { width: 1.7rem; height: 1.7rem; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  .discovery-difference__name { display: grid; gap: .1rem; }
+  .discovery-difference__name strong { color: var(--premium-paper); font: 500 1.05rem/1.1 var(--font-display); }
+  .discovery-difference__name small { color: var(--premium-khaki); font: .54rem/1.5 var(--font-body); }
+  .discovery-difference__card h4 { margin: 1.3rem 0 1.25rem; font: 400 clamp(1.05rem, 1.65vw, 1.45rem)/1.35 var(--font-display); }
+  .discovery-difference__search, .discovery-difference__chat { min-height: 15rem; border: 1px solid color-mix(in srgb, var(--premium-khaki) 24%, transparent); background: color-mix(in srgb, var(--premium-paper) 4%, var(--premium-deep)); }
+  .discovery-difference__search { padding: clamp(1rem, 2vw, 1.7rem); }
+  .discovery-difference__search-bar { display: flex; align-items: center; gap: .7rem; min-height: 3.2rem; padding: 0 1rem; border: 1px solid color-mix(in srgb, var(--premium-khaki) 50%, transparent); border-radius: 999px; color: var(--premium-paper); font: .74rem/1.3 var(--font-body); }
+  .discovery-difference__search-bar span:first-child { font-size: 1.5rem; }
+  .discovery-difference__search-bar span:last-child { margin-left: auto; color: var(--premium-khaki); }
+  .discovery-difference__result { display: grid; gap: .25rem; margin-top: 1.3rem; padding-left: .65rem; border-left: 2px solid var(--premium-metal-light); }
+  .discovery-difference__result small { color: var(--premium-khaki); font: .5rem/1.2 var(--font-mono); letter-spacing: .1em; }
+  .discovery-difference__result strong { font: 500 .78rem/1.4 var(--font-body); }
+  .discovery-difference__result span { color: rgba(238,233,223,.58); font: .65rem/1.5 var(--font-body); }
+  .discovery-difference__result--ghost { width: 72%; height: 2.2rem; margin-top: 1.2rem; border-left-color: color-mix(in srgb, var(--premium-khaki) 25%, transparent); background: linear-gradient(color-mix(in srgb, var(--premium-paper) 20%, transparent) 0 0) left 15% / 55% 2px no-repeat, linear-gradient(color-mix(in srgb, var(--premium-paper) 12%, transparent) 0 0) left 65% / 85% 2px no-repeat; }
+  .discovery-difference__chat { padding: 0; overflow: hidden; }
+  .discovery-difference__chat-head { display: flex; justify-content: space-between; align-items: center; gap: .8rem; min-height: 2.8rem; padding: .3rem 1rem; border-bottom: 1px solid color-mix(in srgb, var(--premium-khaki) 20%, transparent); color: var(--premium-khaki); font: .55rem/1.3 var(--font-mono); letter-spacing: .07em; }
+  .discovery-difference__chat-head span { display: inline-flex; align-items: center; gap: .4rem; }
+  .discovery-difference__chat-head i { width: 5px; height: 5px; border-radius: 50%; background: var(--premium-metal-light); }
+  .discovery-difference__chat-head button { min-height: 2.75rem; padding: .2rem .35rem; border: 0; background: transparent; color: var(--premium-metal-light); font: inherit; cursor: pointer; }
+  .discovery-difference__chat-head button:hover { text-decoration: underline; }
+  .discovery-difference__chat-head button:focus-visible { outline: 2px solid var(--premium-metal-light); }
+  .discovery-difference__bubble { max-width: 85%; margin: .9rem 1rem; padding: .75rem .9rem; border-radius: 1rem; font: .78rem/1.6 var(--font-body); }
+  .discovery-difference__bubble--user { width: fit-content; margin-left: auto; border-bottom-right-radius: .25rem; background: color-mix(in srgb, var(--premium-khaki) 25%, var(--premium-navy)); }
+  .discovery-difference__bubble--answer { display: flex; gap: .7rem; align-items: flex-start; max-width: 93%; margin-top: .3rem; border: 1px solid color-mix(in srgb, var(--premium-metal) 30%, transparent); border-bottom-left-radius: .25rem; background: color-mix(in srgb, var(--premium-metal) 9%, var(--premium-deep)); }
+  .discovery-difference__bubble--answer p { margin: 0; }
+  .discovery-difference__avatar { display: grid; place-items: center; flex: 0 0 1.25rem; width: 1.25rem; height: 1.25rem; color: var(--premium-metal-light); }
+  .discovery-difference__thinking { display: flex; gap: .22rem; width: fit-content; margin-left: 1rem; }
+  .discovery-difference__thinking span { width: 4px; height: 4px; border-radius: 50%; background: var(--premium-metal-light); }
+  .discovery-difference__sources { margin: .7rem 1rem 1rem; color: var(--premium-khaki); font: .65rem/1.4 var(--font-body); }
+  .discovery-difference__caption { margin: 1.1rem 0 0; color: rgba(238,233,223,.72); font: .77rem/1.65 var(--font-body); }
+  .discovery-difference__takeaway { display: flex; align-items: start; gap: .8rem; margin: 1.2rem 0 0; color: rgba(238,233,223,.77); font: .76rem/1.8 var(--font-body); }
   .discovery-difference__takeaway > span { color: var(--premium-khaki); font-size: 1rem; }
-  @media (max-width: 760px) { .discovery-difference__heading { grid-template-columns: 1fr; gap: .75rem; } .discovery-difference__grid { grid-template-columns: 1fr; } .discovery-difference__card { min-height: 0; padding: 1.5rem; } .discovery-difference__card h4 { margin-top: 1.7rem; } .discovery-difference__card > p { min-height: 0; } .discovery-difference__path { margin-top: 1.3rem; } }
-  @media (prefers-reduced-motion: reduce) { .discovery-difference__card::before { transition-duration: 0ms; } }
+  .discovery-difference[data-demo-active] [data-demo-user] { animation: geo-question .6s .2s both; }
+  .discovery-difference[data-demo-active] [data-demo-thinking] { animation: geo-thinking 1.6s .75s both; }
+  .discovery-difference[data-demo-active] [data-demo-thinking] span { animation: geo-dot .5s .75s 3 alternate; }
+  .discovery-difference[data-demo-active] [data-demo-thinking] span:nth-child(2) { animation-delay: .86s; }
+  .discovery-difference[data-demo-active] [data-demo-thinking] span:nth-child(3) { animation-delay: .97s; }
+  .discovery-difference[data-demo-active] [data-demo-answer] { animation: geo-answer .8s 1.7s both; }
+  .discovery-difference[data-demo-active] [data-demo-sources] { animation: geo-answer .55s 2.45s both; }
+  @keyframes geo-question { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
+  @keyframes geo-thinking { 0%, 15% { opacity: 0; } 25%, 70% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes geo-dot { from { transform: translateY(0); } to { transform: translateY(-4px); } }
+  @keyframes geo-answer { from { opacity: 0; clip-path: inset(0 0 100% 0); transform: translateY(10px); } to { opacity: 1; clip-path: inset(0 0 0 0); transform: none; } }
+  @media (max-width: 800px) { .discovery-difference__heading { grid-template-columns: 1fr; } .discovery-difference__eyebrow { grid-row: auto; } .discovery-difference__stat { grid-template-columns: 1fr; gap: 1rem; } .discovery-difference__grid { grid-template-columns: 1fr; } }
+  @media (max-width: 500px) { .discovery-difference__stat-value strong { font-size: clamp(3.4rem, 15vw, 5.5rem); } .discovery-difference__bubble { font-size: .74rem; } }
+  @media (prefers-reduced-motion: reduce) { .discovery-difference [data-demo-user], .discovery-difference [data-demo-thinking], .discovery-difference [data-demo-answer], .discovery-difference [data-demo-sources], .discovery-difference [data-demo-thinking] span { animation: none !important; } }
 </style>

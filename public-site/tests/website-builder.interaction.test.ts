@@ -108,7 +108,8 @@ describe('website builder experience', () => {
     delete document.documentElement.dataset.motionPaused
   })
 
-  it('completes the brand-first path through handoff without calling any API', async () => {
+  it('sends the chosen website direction through the public lead API only after contact consent', async () => {
+    mockedPublicApiFetch.mockResolvedValueOnce({ received: true, duplicate: true }).mockResolvedValueOnce({ received: true, duplicate: false })
     const wrapper = mountBuilder()
     await reachPreview(wrapper, 'one-page')
     await wrapper.findAll('.builder-primary').find((node) => node.text().includes('我喜歡這個方向'))!.trigger('click')
@@ -125,11 +126,22 @@ describe('website builder experience', () => {
     await flushPromises()
 
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
-    await wrapper.find('.handoff-dialog .builder-primary').trigger('click')
-    await flushPromises()
-    expect(wrapper.text()).toContain('方向已經整理好了')
+    await wrapper.get('.handoff-contact').trigger('submit.prevent')
     expect(mockedPublicApiFetch).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('沒有送出真實訂單')
+    expect(wrapper.get('.handoff-contact [role="alert"]').text()).toContain('同意資料處理')
+    await wrapper.get('.handoff-contact input[name="name"]').setValue('王小姐')
+    await wrapper.get('.handoff-contact input[name="email"]').setValue('owner@example.tw')
+    await wrapper.get('.handoff-contact input[name="company"]').setValue('山嶼牙醫診所')
+    await wrapper.get('.handoff-consent input[type="checkbox"]').setValue(true)
+    await wrapper.get('.handoff-contact').trigger('submit.prevent')
+    await flushPromises()
+    expect(wrapper.get('.handoff-contact [role="alert"]').text()).toContain('新調整尚未更新')
+    expect(wrapper.text()).not.toContain('網站方向已送出')
+    await wrapper.get('.handoff-contact').trigger('submit.prevent')
+    await flushPromises()
+    expect(mockedPublicApiFetch).toHaveBeenCalledWith('/api/leads', expect.objectContaining({ body: expect.objectContaining({ email: 'owner@example.tw', privacyConsent: true, message: expect.stringContaining('shanyu-dental.tw') }) }))
+    expect(wrapper.text()).toContain('網站方向已送出')
+    expect(wrapper.text()).toContain('尚未付款')
   })
 
   it('starts with a short brand brief and three customer-facing phases', () => {
