@@ -83,10 +83,23 @@ function close() {
   if (hasSavedChoice.value) visible.value = false
 }
 
+function enterPanel(element: Element) {
+  if (!(element instanceof HTMLElement)) return
+  element.inert = false
+  element.removeAttribute('aria-hidden')
+}
+
+function leavePanel(element: Element) {
+  if (!(element instanceof HTMLElement)) return
+  element.inert = true
+  element.setAttribute('aria-hidden', 'true')
+}
+
 defineExpose({ open })
 </script>
 
 <template>
+  <Transition name="cookie-panel" @before-enter="enterPanel" @before-leave="leavePanel" @leave-cancelled="enterPanel">
     <section
       v-if="visible"
       class="cookie-consent"
@@ -135,6 +148,7 @@ defineExpose({ open })
         </div>
       </template>
     </section>
+  </Transition>
 </template>
 
 <style scoped>
@@ -145,10 +159,10 @@ defineExpose({ open })
   bottom: clamp(1rem, 2.5vw, 2.5rem);
   width: min(42rem, calc(100vw - 2rem));
   padding: clamp(1.25rem, 2.5vw, 2rem);
-  border: 1px solid rgba(23, 26, 24, .24);
-  background: rgba(247, 243, 234, .97);
-  color: #171a18;
-  box-shadow: 0 1.5rem 5rem rgba(23, 26, 24, .18);
+  border: 1px solid color-mix(in srgb, var(--premium-navy) 24%, transparent);
+  background: color-mix(in srgb, var(--premium-paper) 97%, transparent);
+  color: var(--premium-navy, #171a32);
+  box-shadow: 0 1.5rem 5rem color-mix(in srgb, var(--premium-navy) 18%, transparent);
   backdrop-filter: blur(18px);
 }
 
@@ -166,7 +180,7 @@ defineExpose({ open })
 }
 
 .cookie-copy > p:first-child {
-  color: #2946c7;
+  color: var(--premium-navy, #171a32);
   font: 500 .62rem/1.3 var(--font-mono);
   letter-spacing: .14em;
 }
@@ -197,16 +211,16 @@ defineExpose({ open })
 .cookie-button {
   min-height: 2.8rem;
   padding: .75rem 1.05rem;
-  border: 1px solid #2946c7;
+  border: 1px solid var(--premium-navy, #171a32);
   font: 500 .67rem/1.2 var(--font-mono);
   letter-spacing: .06em;
   cursor: pointer;
 }
 
-.cookie-button-primary { background: #2946c7; color: #f7f3ea; }
-.cookie-button-secondary { background: transparent; color: #2946c7; }
+.cookie-button-primary { background: var(--premium-navy, #171a32); color: var(--premium-paper, #eee9df); }
+.cookie-button-secondary { background: transparent; color: var(--premium-navy, #171a32); }
 .cookie-button:hover,
-.cookie-button:focus-visible { outline: 2px solid #d3e567; outline-offset: 2px; }
+.cookie-button:focus-visible { outline: 2px solid var(--premium-khaki, #b7a88f); outline-offset: 2px; }
 
 .cookie-settings-link,
 .cookie-back {
@@ -214,7 +228,7 @@ defineExpose({ open })
   border: 0;
   border-bottom: 1px solid currentColor;
   background: transparent;
-  color: #2946c7;
+  color: var(--premium-navy, #171a32);
   font: 500 .65rem/1.2 var(--font-mono);
   cursor: pointer;
 }
@@ -224,7 +238,7 @@ defineExpose({ open })
 .cookie-options {
   display: grid;
   margin-top: 1.25rem;
-  border-top: 1px solid rgba(23, 26, 24, .18);
+  border-top: 1px solid color-mix(in srgb, var(--premium-navy) 18%, transparent);
 }
 
 .cookie-option {
@@ -233,17 +247,17 @@ defineExpose({ open })
   gap: 1.25rem;
   align-items: center;
   padding-block: 1rem;
-  border-bottom: 1px solid rgba(23, 26, 24, .18);
+  border-bottom: 1px solid color-mix(in srgb, var(--premium-navy) 18%, transparent);
 }
 
 .cookie-option strong { font-family: var(--font-display); font-size: 1rem; }
 .cookie-option p { margin-top: .3rem; color: #68665e; font-size: .8rem; line-height: 1.5; }
 .cookie-option > span { color: #68665e; font: 500 .6rem/1.2 var(--font-mono); letter-spacing: .06em; }
-.cookie-option input { width: 2.7rem; height: 1.35rem; accent-color: #2946c7; cursor: pointer; }
+.cookie-option input { width: 2.7rem; height: 1.35rem; accent-color: var(--premium-navy, #171a32); cursor: pointer; }
 .cookie-actions-custom { justify-content: flex-end; }
 
 .cookie-panel-enter-active,
-.cookie-panel-leave-active { transition: opacity .3s ease, transform .45s cubic-bezier(.22, 1, .36, 1); }
+.cookie-panel-leave-active { transition: opacity var(--motion-feedback, 200ms), transform var(--motion-panel, 360ms) var(--motion-ease, cubic-bezier(.22, 1, .36, 1)); }
 .cookie-panel-enter-from,
 .cookie-panel-leave-to { opacity: 0; transform: translateY(1.5rem); }
 
@@ -259,4 +273,9 @@ defineExpose({ open })
   .cookie-panel-enter-active,
   .cookie-panel-leave-active { transition: none; }
 }
+</style>
+
+<style scoped>
+:global(html[data-motion-paused="true"]) .cookie-panel-enter-active, :global(html[data-motion-paused="true"]) .cookie-panel-leave-active { transition: none; }
+.cookie-panel-leave-active { pointer-events: none; }
 </style>

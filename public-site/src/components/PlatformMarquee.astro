@@ -1,0 +1,106 @@
+---
+import { platformBelt, platformBrands, type IntegrationLocale } from '../lib/integration-platforms'
+interface Props { locale?: IntegrationLocale }
+const { locale = 'zh-hant' } = Astro.props
+const isZh = locale === 'zh-hant'
+const line = platformBrands.line
+---
+
+<section class="platform-marquee" aria-label={isZh ? '平台串接範例' : 'Platform integration examples'} data-platform-marquee data-ambient>
+  <div class="platform-marquee-heading">
+    <div><p>CONNECTED TO YOUR EVERYDAY</p><h2>{isZh ? '你熟悉的平台。你的營運節奏。' : 'Familiar platforms. Your way of working.'}</h2></div>
+    <button type="button" class="platform-motion-toggle" data-platform-motion-toggle aria-pressed="false" data-pause-label={isZh ? '暫停動畫' : 'Pause motion'} data-play-label={isZh ? '播放動畫' : 'Play motion'}><span aria-hidden="true">Ⅱ</span><span data-motion-label>{isZh ? '暫停動畫' : 'Pause motion'}</span></button>
+  </div>
+  <div class="platform-marquee-body">
+    <!-- LINE remains fixed: its brand guidelines prohibit adding animation or effects to its logo. -->
+    <a class="platform-line-anchor" href={line.website} target="_blank" rel="noopener noreferrer" aria-label={isZh ? 'LINE 官方網站' : 'LINE official website'}><img src={line.asset} alt="" width="40" height="40" loading="lazy" decoding="async" /><span>{line.name}</span></a>
+    <div class="platform-marquee-window">
+      <div class="platform-marquee-track">
+        <ul class="platform-logo-group">
+          {platformBelt.map(key => { const brand = platformBrands[key]; return <li><a class={`platform-logo platform-logo-${key}`} href={brand.website} target="_blank" rel="noopener noreferrer" aria-label={isZh ? `${brand.name} 官方網站` : `${brand.name} official website`}><span class={`platform-mark platform-mark-${key}`}><img src={brand.asset} alt="" width="32" height="32" loading="lazy" decoding="async" /></span><span>{brand.name}</span></a></li> })}
+        </ul>
+        <ul class="platform-logo-group platform-logo-copy" aria-hidden="true" inert>
+          {platformBelt.map(key => { const brand = platformBrands[key]; return <li><span class={`platform-logo platform-logo-${key}`}><span class={`platform-mark platform-mark-${key}`}><img src={brand.asset} alt="" width="32" height="32" loading="lazy" decoding="async" /></span><span>{brand.name}</span></span></li> })}
+        </ul>
+      </div>
+    </div>
+  </div>
+  <p class="platform-brand-note">{isZh ? '品牌標誌僅供平台識別，不代表合作關係或品牌背書。' : 'Brand marks identify platforms and do not imply partnership or endorsement.'}</p>
+</section>
+
+<script>
+  function initialisePlatformMarquees() {
+    document.querySelectorAll<HTMLElement>('[data-platform-marquee]').forEach(root => {
+      if (root.dataset.platformMotionReady) return
+      root.dataset.platformMotionReady = 'true'
+      const button = root.querySelector<HTMLButtonElement>('[data-platform-motion-toggle]')
+      const label = button?.querySelector<HTMLElement>('[data-motion-label]')
+      button?.addEventListener('click', () => {
+        const paused = root.classList.toggle('is-paused')
+        button.setAttribute('aria-pressed', String(paused))
+        if (label) label.textContent = (paused ? button.dataset.playLabel : button.dataset.pauseLabel) ?? ''
+      })
+    })
+  }
+  initialisePlatformMarquees()
+  document.addEventListener('astro:page-load', initialisePlatformMarquees)
+</script>
+
+<style>
+  .platform-marquee { padding: 3rem 0 1.8rem; border-top: 1px solid rgba(23,26,50,.12); color: var(--premium-navy, #171a32); background: var(--premium-paper, #eee9df); overflow: clip; --ambient-play-state: paused; }
+  .platform-marquee-heading { display: flex; align-items: end; justify-content: space-between; gap: 2rem; max-width: 1440px; margin-inline: auto; padding-inline: var(--gutter, clamp(1.5rem, 5.7vw, 7rem)); }
+  .platform-marquee-heading p { margin: 0 0 .8rem; color: #837b6b; font: .53rem/1.6 var(--font-mono, monospace); letter-spacing: .12em; }
+  .platform-marquee-heading h2 { margin: 0; font: 400 clamp(1rem, 1.4vw, 1.35rem)/1.6 var(--font-display, sans-serif); letter-spacing: -.025em; }
+  .platform-motion-toggle { display: flex; align-items: center; gap: .65rem; min-height: 2.75rem; padding: .5rem 0; border: 0; color: #726a5c; background: transparent; font: .63rem/1 var(--font-body, sans-serif); white-space: nowrap; cursor: pointer; }
+  .platform-motion-toggle > span:first-child { font: .75rem/1 var(--font-mono, monospace); color: var(--premium-navy, #171a32); }
+  .platform-motion-toggle:focus-visible { outline: 1px solid var(--premium-navy, #171a32); outline-offset: 5px; }
+  .platform-marquee-body { display: grid; grid-template-columns: 11rem minmax(0, 1fr); align-items: center; max-width: 1440px; margin: 2rem auto 0; padding-left: var(--gutter, clamp(1.5rem, 5.7vw, 7rem)); }
+  .platform-line-anchor { display: flex; align-items: center; justify-content: center; gap: .9rem; min-height: 5rem; margin-right: 1.2rem; padding-right: 1.2rem; border-right: 1px solid rgba(23,26,50,.14); color: var(--premium-navy, #171a32); text-decoration: none; font: 500 .9rem/1 var(--font-body, sans-serif); }
+  .platform-line-anchor img { display: block; width: 40px; height: 40px; object-fit: contain; }
+  .platform-line-anchor:focus-visible { outline: 1px solid var(--premium-navy, #171a32); outline-offset: 5px; }
+  .platform-marquee-window { overflow: hidden; min-width: 0; mask-image: linear-gradient(to right, transparent, #000 3rem, #000 calc(100% - 4rem), transparent); }
+  .platform-marquee-track { display: flex; width: max-content; animation: platform-belt 34s linear infinite; animation-play-state: var(--ambient-play-state); }
+  .platform-logo-group { display: flex; align-items: center; flex: 0 0 auto; gap: 2.8rem; margin: 0; padding: 1rem 2.8rem 1rem 0; list-style: none; }
+  .platform-logo-group li { flex: 0 0 auto; }
+  .platform-logo { display: flex; align-items: center; justify-content: center; gap: .85rem; min-width: 8.5rem; min-height: 3rem; color: var(--premium-navy, #171a32); text-decoration: none; font: 500 .9rem/1.4 var(--font-body, sans-serif); white-space: nowrap; }
+  .platform-logo:focus-visible { outline: 1px solid var(--premium-navy, #171a32); outline-offset: 7px; }
+  .platform-mark { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 40px; height: 40px; }
+  .platform-mark img { display: block; width: 32px; height: 32px; object-fit: contain; }
+  .platform-mark-dhl { width: 68px; background: #ffcc00; }
+  .platform-mark-dhl img { width: 64px; height: 64px; }
+  .platform-logo-dhl > span:last-child { display: none; }
+  .platform-logo-sf { min-width: 9rem; }
+  .platform-brand-note { max-width: 1440px; margin: 1.4rem auto 0; padding-inline: var(--gutter, clamp(1.5rem, 5.7vw, 7rem)); color: #837b6b; font: .57rem/1.8 var(--font-body, sans-serif); }
+  .platform-marquee:hover .platform-marquee-track, .platform-marquee.is-paused .platform-marquee-track { animation-play-state: paused; }
+  .platform-marquee:focus-within .platform-marquee-window { overflow: visible; mask-image: none; }
+  .platform-marquee:focus-within .platform-marquee-track { width: auto; transform: none; animation: none; }
+  .platform-marquee:focus-within .platform-logo-group { flex: 1 1 100%; width: 100%; min-width: 0; flex-wrap: wrap; justify-content: flex-start; padding-right: var(--gutter, 1.5rem); gap: 1.2rem 2rem; }
+  .platform-marquee:focus-within .platform-logo-copy { display: none; }
+  @keyframes platform-belt { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  @media (max-width: 40rem) {
+    .platform-marquee { padding-block: 2rem 1.5rem; }
+    .platform-marquee-heading { align-items: start; gap: 1rem; }
+    .platform-marquee-heading p { font-size: .46rem; margin-bottom: .6rem; }
+    .platform-marquee-heading h2 { max-width: 13rem; font-size: .92rem; line-height: 1.8; }
+    .platform-motion-toggle { min-height: 2.2rem; gap: .35rem; font-size: .52rem; }
+    .platform-marquee-body { grid-template-columns: 6.5rem minmax(0, 1fr); margin-top: 1.5rem; }
+    .platform-line-anchor { flex-direction: column; gap: .5rem; margin-right: .7rem; padding-right: .7rem; font-size: .62rem; }
+    .platform-logo-group { gap: 2rem; padding-right: 2rem; }
+    .platform-logo { min-width: 7.5rem; gap: .65rem; font-size: .76rem; }
+    .platform-marquee-window { mask-image: linear-gradient(to right, transparent, #000 1rem, #000 calc(100% - 2rem), transparent); }
+    .platform-brand-note { font-size: .53rem; }
+    .platform-marquee:focus-within .platform-marquee-body { grid-template-columns: 1fr; padding-right: var(--gutter, 1.5rem); }
+    .platform-marquee:focus-within .platform-line-anchor { flex-direction: row; border-right: 0; border-bottom: 1px solid rgba(23,26,50,.12); margin-right: 0; padding: 0 0 1rem; }
+    .platform-marquee:focus-within .platform-logo-group { justify-content: space-between; gap: 1rem; padding-right: 0; }
+    .platform-marquee:focus-within .platform-logo { justify-content: start; min-width: 8rem; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .platform-motion-toggle { display: none; }
+    .platform-marquee-body { grid-template-columns: 1fr; padding-right: var(--gutter, 1.5rem); }
+    .platform-line-anchor { border-right: 0; border-bottom: 1px solid rgba(23,26,50,.12); padding: 0 0 1rem; margin-right: 0; flex-direction: row; }
+    .platform-marquee-window { overflow: visible; mask-image: none; }
+    .platform-marquee-track { width: auto; transform: none; animation: none; }
+    .platform-logo-group { flex: 1 1 100%; width: 100%; min-width: 0; flex-wrap: wrap; justify-content: center; gap: 1rem 2rem; padding-right: 0; }
+    .platform-logo-copy { display: none; }
+  }
+</style>

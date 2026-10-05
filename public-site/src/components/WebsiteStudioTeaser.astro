@@ -1,0 +1,119 @@
+---
+interface Props { locale: 'en' | 'zh-hant' }
+const { locale } = Astro.props
+const isZh = locale === 'zh-hant'
+const builder = '/zh-hant/website-builder-preview'
+const steps = isZh ? ['說說你的品牌', '看見網站預覽', '挑選適合的方案'] : ['Tell your story', 'See your preview', 'Choose your plan']
+---
+<section id="website-studio" class="studio-teaser" data-ambient data-progress data-scroll-story>
+  <div class="studio-section-top shell"><p class="premium-kicker">02 / YOUR BUSINESS STARTS HERE</p><span>{isZh ? '一鍵建站 · 從品牌到預覽' : 'WEBSITE STUDIO · BRIEF TO PREVIEW'}</span></div>
+  <div class="shell studio-layout">
+    <div class="studio-copy">
+      <span class="studio-entry-label" data-reveal><i aria-hidden="true"></i>{isZh ? '把想法，變成你的網站' : 'TURN YOUR IDEA INTO A WEBSITE'}</span>
+      <h2 data-reveal data-reveal-kind="title">{isZh ? '一鍵建站。' : 'Your website.'}<br /><span>{isZh ? '好生意，' : 'Your next'}<br />{isZh ? '從這裡開始。' : 'big move.'}</span></h2>
+      <p data-reveal>{isZh ? '不用先懂技術。選擇喜歡的風格，說說你的生意，先看見一個真正像你的網站預覽。' : 'You do not need to speak tech. Find your style, tell us about your business, and see a website that feels like you.'}</p>
+      <div class="studio-primary-action" data-reveal>
+        <a href={builder} class="premium-button premium-button-dark studio-cta" data-magnetic><span>{isZh ? '開始建立我的網站' : 'Start my website'}</span><span aria-hidden="true">↗</span></a>
+        <span class="studio-action-note">{isZh ? '先看預覽，再選方案 · 無需信用卡' : 'Preview first. Choose a plan later. No card required.'}</span>
+      </div>
+      <ol class="studio-path" data-reveal-stagger data-reveal-kind="soft" aria-label={isZh ? '建站開始方式' : 'Getting started'}>{steps.map((step, i) => <li><span>{String(i + 1).padStart(2, '0')}</span><strong>{step}</strong></li>)}</ol>
+    </div>
+    <div class="studio-visual" data-parallax="0.05" data-fluid-assembly>
+      <svg class="studio-orbit" viewBox="0 0 600 600" fill="none" aria-hidden="true"><ellipse cx="300" cy="300" rx="278" ry="200" /><ellipse cx="300" cy="300" rx="230" ry="286" /><circle cx="300" cy="22" r="3" /></svg>
+      <div class="studio-floating-note studio-note-top" data-story-layer="-18"><span aria-hidden="true">✳</span><div><small>MADE AROUND YOU</small><strong>{isZh ? '你的品牌，你的風格。' : 'Your brand. Your style.'}</strong></div></div>
+      <a class="studio-preview" href={builder} data-tilt aria-label={isZh ? '進入一鍵建站，建立我的網站預覽' : 'Enter the studio and create my website preview'}>
+        <div class="premium-browser-bar"><div aria-hidden="true"><i></i><i></i><i></i></div><span>YOUR NEXT CHAPTER</span><span aria-hidden="true">↗</span></div>
+        <div class="premium-study-page">
+          <div class="premium-study-nav"><b>FORMA<span>—</span></b><span>OBJECTS & SPACES</span><span>MENU &nbsp; +</span></div>
+          <div class="premium-study-art" aria-hidden="true"><svg viewBox="0 0 500 440" data-story-layer="24" data-story-rotate="3"><defs><linearGradient id="studioStone" x1="0" x2="1" y1="0" y2=".6"><stop stop-color="#d2c7b5"/><stop offset=".5" stop-color="#f3eee5"/><stop offset="1" stop-color="#a89b84"/></linearGradient><linearGradient id="studioStoneSide"><stop stop-color="#8b7e69"/><stop offset="1" stop-color="#c1b49e"/></linearGradient><filter id="studioStoneShadow"><feGaussianBlur stdDeviation="13"/></filter></defs><ellipse cx="275" cy="389" rx="142" ry="17" fill="#1a1d32" opacity=".25" filter="url(#studioStoneShadow)"/><path d="M145 387V190C145 23 391 23 391 190V387H328V192C328 108 209 108 209 192V387Z" fill="url(#studioStoneSide)"/><path d="M114 365V173C114 12 360 12 360 173V365H297V178C297 94 178 94 178 178V365Z" fill="url(#studioStone)"/><path d="M114 365L145 387H209L178 365M297 365L328 387H391L360 365" fill="#a89b84"/><path d="M114 173C114 12 360 12 360 173" fill="none" stroke="#efe9df" stroke-opacity=".6"/></svg></div>
+          <div class="premium-study-title">A quieter kind<br />of <em>presence.</em></div>
+          <div class="premium-study-foot"><span>CONSIDERED DESIGN.<br />LASTING IMPRESSIONS.</span><span class="premium-study-circle" aria-hidden="true">↗</span></div>
+        </div>
+        <div class="premium-study-label"><span>{isZh ? '風格示意 / 非客戶案例' : 'DESIGN STUDY / ILLUSTRATIVE CONCEPT'}</span><span>DESIGNED AROUND YOU</span></div>
+      </a>
+      <div class="studio-floating-note studio-note-bottom" data-story-layer="18"><div class="studio-note-glyph" aria-hidden="true"><i></i><i></i><i></i></div><div><small>YOUR BUSINESS, CONNECTED</small><strong>{isZh ? '從網站，到日常營運。' : 'From your site to daily operations.'}</strong></div><span aria-hidden="true">↗</span></div>
+    </div>
+  </div>
+  <div class="studio-bottom shell"><span>{isZh ? '網站是起點。依方案，接續觀察與改善。' : 'A website is your starting point. Plan the next improvements with us.'}</span><a href="#integrations">{isZh ? '看看能整合什麼' : 'Explore the connections'}<span aria-hidden="true">↓</span></a></div>
+</section>
+<style>
+  .studio-teaser { position: relative; overflow: hidden; color: var(--premium-navy); background: var(--premium-paper); padding: 3rem 0 0; --ambient-play-state: paused; }
+  .studio-teaser::before { content: ""; position: absolute; width: 650px; height: 650px; border: 1px solid rgba(23,26,50,.05); border-radius: 50%; right: -100px; top: 0; }
+  .studio-section-top { display: flex; justify-content: space-between; gap: 2rem; padding-bottom: 2rem; border-bottom: 1px solid rgba(23,26,50,.16); }
+  .studio-section-top p, .studio-section-top > span { color: #716752; font: 400 .55rem var(--font-mono); letter-spacing: .08em; }
+  .studio-layout { display: grid; grid-template-columns: .95fr 1.1fr; gap: clamp(2rem,5vw,5rem); align-items: center; padding-block: clamp(4rem,6vw,7rem); }
+  .studio-entry-label { display: inline-flex; align-items: center; gap: .6rem; font-size: .7rem; color: #6d6453; }
+  .studio-entry-label i { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--premium-navy); box-shadow: 0 0 0 4px rgba(23,26,50,.06); }
+  .studio-copy h2 { font-size: clamp(3rem,4.6vw,5.2rem); line-height: 1.22; letter-spacing: -.055em; margin-top: 1.6rem; }
+  .studio-copy h2 > span { color: #81745e; }
+  .studio-copy > p { max-width: 30rem; font-size: .88rem; line-height: 1.95; margin-top: 2rem; color: #5a544a; }
+  .studio-primary-action { margin-top: 2rem; }
+  .studio-cta { min-height: 66px; padding-inline: 1.6rem; gap: clamp(2rem,5vw,5rem); font-size: 1rem; box-shadow: 0 15px 25px -15px rgba(23,26,50,.4); }
+  .studio-action-note { display: block; margin-top: 1rem; font-size: .62rem; color: #716752; }
+  .studio-path { display: flex; gap: 1.1rem; list-style: none; padding: 0; margin-top: 3rem; }
+  .studio-path li { flex: 1; position: relative; min-width: 0; padding-top: .8rem; border-top: 1px solid rgba(23,26,50,.2); }
+  .studio-path li::before { content: ""; position: absolute; height: 1px; inset: -1px 0 auto; background: var(--premium-navy); transform: scaleX(var(--section-progress, 0)); transform-origin: left; }
+  .studio-path span { display: block; font: 400 .48rem var(--font-mono); color: #8c7f69; margin-bottom: .6rem; }
+  .studio-path strong { font: 400 .62rem/1.6 var(--font-body); }
+  .studio-visual { position: relative; padding: 3rem 0; perspective: 1200px; }
+  .studio-orbit { position: absolute; inset: 0; width: 100%; height: 100%; stroke: rgba(23,26,50,.16); stroke-width: .6; transform-origin: center; animation: studio-orbit 40s linear infinite; animation-play-state: var(--ambient-play-state); }
+  .studio-orbit ellipse:nth-child(2) { stroke-dasharray: 2 7; }
+  .studio-orbit circle { fill: var(--premium-navy); }
+  .studio-preview { display: block; position: relative; z-index: 1; width: 100%; border: 1px solid #bdb19d; box-shadow: 0 40px 65px -30px rgba(23,26,50,.36); transform: rotate(-3deg); --tilt-active: 0; clip-path: inset(0 var(--assembly-inset, 0%) round var(--assembly-radius, 0px)); }
+  .studio-preview:focus-visible { clip-path: none !important; }
+  .studio-preview::after { content: ""; pointer-events: none; position: absolute; inset: 0; background: radial-gradient(circle at var(--tilt-x,50%) var(--tilt-y,50%),rgba(255,255,255,.35),transparent 60%); opacity: var(--tilt-active); transition: opacity var(--motion-panel, 360ms) var(--motion-ease, ease); }
+  .studio-preview .premium-study-page { min-height: clamp(390px,36vw,510px); padding: 1.7rem 1.9rem; }
+  .studio-preview .premium-study-art { top: 12%; right: -7%; width: 70%; translate: 0 var(--assembly-y, 0px); scale: var(--assembly-scale, 1); animation: studio-art 7s ease-in-out infinite alternate; animation-play-state: var(--ambient-play-state); }
+  .studio-preview .premium-study-art > svg { transform: translateY(var(--story-y, 0px)) rotate(var(--story-rotate, 0deg)); transform-origin: 50% 70%; }
+  .studio-preview .premium-study-title { font-size: clamp(2.5rem,3.5vw,4rem); margin-top: 6rem; }
+  .studio-floating-note { position: absolute; z-index: 2; display: flex; align-items: center; gap: .9rem; border: 1px solid rgba(23,26,50,.2); background: #f4f0e8; padding: 1rem 1.25rem; box-shadow: 0 15px 30px -20px rgba(23,26,50,.3); pointer-events: none; translate: 0 var(--story-y, 0px); animation: studio-float 6s ease-in-out infinite alternate; animation-play-state: var(--ambient-play-state); }
+  .studio-floating-note small { display: block; font: 400 .4rem var(--font-mono); letter-spacing: .12em; color: #8c7f69; margin-bottom: .4rem; }
+  .studio-floating-note strong { display: block; font: 400 .68rem var(--font-body); }
+  .studio-note-top { top: 0; right: 0; transform: rotate(2deg); }
+  .studio-note-top > span { color: #8c7f69; font-size: 1.8rem; }
+  .studio-note-bottom { bottom: 0; left: -1.5rem; animation-delay: -3s; }
+  .studio-note-bottom > span { margin-left: 1rem; }
+  .studio-note-glyph { display: flex; align-items: end; gap: 3px; width: 24px; height: 24px; }
+  .studio-note-glyph i { background: var(--premium-navy); width: 5px; height: 9px; }
+  .studio-note-glyph i:nth-child(2) { height: 16px; }
+  .studio-note-glyph i:nth-child(3) { height: 23px; }
+  .studio-bottom { display: flex; align-items: center; justify-content: space-between; gap: 2rem; border-top: 1px solid rgba(23,26,50,.16); padding-block: 1.8rem; font-size: .73rem; }
+  .studio-bottom > span { color: #6d6453; }
+  .studio-bottom a { display: flex; align-items: center; gap: 3rem; }
+  .studio-teaser :focus-visible { outline-color: var(--premium-navy); }
+  @keyframes studio-orbit { to { transform: rotate(360deg); } }
+  @keyframes studio-art { to { transform: translateY(-12px) rotate(-6deg); } }
+  @keyframes studio-float { from { translate: 0 var(--story-y, 0px); } to { translate: 0 calc(var(--story-y, 0px) - 9px); } }
+  @media (max-width: 900px) {
+    .studio-layout { grid-template-columns: 1fr 1fr; gap: 2rem; }
+    .studio-copy h2 { font-size: 3.1rem; }
+    .studio-path { gap: .6rem; }
+    .studio-preview .premium-study-page { min-height: 385px; }
+    .studio-preview .premium-study-title { font-size: 2.5rem; }
+  }
+  @media (max-width: 760px) {
+    .studio-section-top { gap: 1rem; padding-bottom: 1.5rem; }
+    .studio-section-top > span { display: none; }
+    .studio-layout { grid-template-columns: 1fr; gap: 3rem; padding-block: 3rem; }
+    .studio-copy h2 { font-size: clamp(2.9rem,11.7vw,4.8rem); margin-top: 1.25rem; }
+    .studio-copy > p { font-size: .85rem; margin-top: 1.4rem; }
+    .studio-cta { width: 100%; justify-content: space-between; min-height: 60px; }
+    .studio-path { gap: .8rem; margin-top: 2rem; }
+    .studio-path strong { font-size: .6rem; }
+    .studio-visual { width: calc(100% - .8rem); margin-inline: auto; padding-block: 2.5rem; }
+    .studio-preview .premium-study-page { min-height: 340px; padding: 1.5rem; }
+    .studio-preview .premium-study-title { font-size: 2.7rem; margin-top: 5rem; }
+    .studio-preview .premium-study-art { top: 16%; width: 77%; right: -12%; }
+    .studio-floating-note { padding: .8rem 1rem; }
+    .studio-note-bottom { left: -.8rem; }
+    .studio-floating-note strong { font-size: .6rem; }
+    .studio-bottom { flex-direction: column; align-items: start; gap: 1.2rem; font-size: .7rem; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .studio-orbit, .studio-preview .premium-study-art, .studio-floating-note { animation: none; }
+    .studio-path li::before { transform: scaleX(1); }
+    .studio-preview { transform: none; }
+    .studio-preview .premium-study-art > svg, .studio-floating-note { translate: none; transform: none; }
+  }
+  :global(html[data-motion-paused="true"]) .studio-orbit, :global(html[data-motion-paused="true"]) .premium-study-art, :global(html[data-motion-paused="true"]) .studio-floating-note { animation-play-state: paused !important; }
+</style>

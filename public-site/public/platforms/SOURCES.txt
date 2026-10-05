@@ -1,0 +1,40 @@
+Platform identification assets — downloaded 2026-10-05.
+These marks identify third-party platforms. Their presence does not establish endorsement,
+commercial partnership, a current API connection, or production acceptance.
+
+Cloudflare, WhatsApp, DHL, Stripe, PayPal and HubSpot SVG paths:
+  Simple Icons project https://github.com/simple-icons/simple-icons
+  Pinned revision: 98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d
+  Download URL pattern:
+  https://raw.githubusercontent.com/simple-icons/simple-icons/98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d/icons/{slug}.svg
+  Project license: CC0-1.0. See SIMPLE_ICONS_LICENSE.md and SIMPLE_ICONS_DISCLAIMER.md.
+  CC0 does not grant trademark rights or replace each brand's usage rules.
+  Paths are unchanged. Root fill is set to the published identifying brand color,
+  except DHL uses its official red (#D40511) on a yellow (#FFCC00) backplate.
+
+LINE: unmodified official PNG from official brand kit:
+  https://www.line.me/static/logo/top/LINE_Brand_icon.zip (LINE_Brand_icon.png)
+  Guidelines: https://www.line.me/en/logo
+  LINE is fixed, full-color, at least 40px high. It is excluded from the moving belt.
+  No recoloring, grayscale, scaling animation, rotation, or visual effects are applied to its logo.
+
+SF Express: unmodified official SF Express Hong Kong website PNG:
+  https://hk.sf-express.com/_next/static/media/ic-black-logo.c86816fe.png
+  Source page: https://hk.sf-express.com/hk/tc
+  Official downloadable usage license was not found; trademark rights remain with SF Express.
+
+Google Calendar: unmodified official Google product SVG:
+  https://fonts.gstatic.com/s/i/productlogos/calendar_2020q4/v8/192px.svg
+  Trademark rights remain with Google.
+
+Guidelines/source records:
+  Cloudflare https://www.cloudflare.com/logo/ and https://www.cloudflare.com/trademark/
+  WhatsApp https://about.meta.com/brand/resources/whatsapp/whatsapp-brand/
+  DHL https://www.dpdhl-brands.com/dhl/en/guides/design-basics/logo-and-claim.html
+  Stripe https://stripe.com/newsroom/information
+  PayPal https://newsroom.paypal-corp.com/media-resources
+  HubSpot https://www.hubspot.com/style-guide
+
+DHL's Developer Portal Terms of Use do not grant permission to use DHL marks in marketing.
+No permission or partnership is inferred from the existence of a public API.
+Source and availability verification are not proof of current integration or trademark clearance.

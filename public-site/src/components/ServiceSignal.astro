@@ -1,0 +1,33 @@
+---
+interface Props { index: string }
+const { index } = Astro.props
+const paths: Record<string, string> = {
+  '01': 'M43 49h54v43H43z M43 61h54 M51 55h1 M57 55h1 M63 55h1 M53 71h17 M53 78h27 M53 85h21',
+  '02': 'M66 47a19 19 0 1 0 0 38a19 19 0 1 0 0-38 M80 80l16 16 M54 68h24 M66 56v24',
+  '03': 'M44 87V73h12v14 M64 87V60h12v27 M84 87V46h12v41 M43 96h56 M44 62l24-19 16 7 15-17',
+  '04': 'M58 44h24v24H58z M39 92h24V78H39z M77 92h24V78H77z M70 68v5 M51 78v-5h38v5',
+  '05': 'M70 42l6 19 20 9-20 8-6 20-7-20-19-8 19-9z M98 38v13 M92 44h13 M41 91v12 M35 97h12',
+}
+---
+<div class="service-signal" data-ambient aria-hidden="true">
+  <svg viewBox="0 0 140 140" fill="none">
+    <circle class="signal-orbit" cx="70" cy="70" r="64" stroke-dasharray="2 9" />
+    <circle class="signal-orbit signal-orbit-inner" cx="70" cy="70" r="51" stroke-dasharray="70 250" />
+    <path class="signal-glyph" d={paths[index] ?? paths['01']} />
+    <circle class="signal-pulse" cx="70" cy="6" r="3" />
+    <circle class="signal-point" cx="134" cy="70" r="2" />
+  </svg>
+  <span>DS / {index}</span>
+</div>
+<style>
+  .service-signal { width: clamp(90px, 11vw, 154px); color: var(--premium-khaki); --ambient-play-state: paused; }
+  svg { display: block; width: 100%; overflow: visible; stroke: currentColor; stroke-width: .7; }
+  .signal-orbit { opacity: .4; transform-origin: 70px 70px; animation: signal-turn 28s linear infinite; animation-play-state: var(--ambient-play-state); }
+  .signal-orbit-inner { opacity: .75; animation-direction: reverse; animation-duration: 14s; }
+  .signal-glyph { stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
+  .signal-pulse { fill: currentColor; stroke: none; transform-origin: 70px 70px; animation: signal-turn 12s linear infinite; animation-play-state: var(--ambient-play-state); }
+  .signal-point { fill: currentColor; stroke: none; }
+  span { display: block; margin-top: 1rem; text-align: center; font: 400 .5rem var(--font-mono); letter-spacing: .15em; opacity: .5; }
+  @keyframes signal-turn { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>

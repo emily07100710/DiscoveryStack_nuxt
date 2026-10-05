@@ -1,0 +1,299 @@
+---
+interface Props { locale: 'en' | 'zh-hant' }
+const { locale } = Astro.props
+const isZh = locale === 'zh-hant'
+const label = isZh ? {
+  title: '上線之後，', accent: '每一步都有依據。',
+  intro: '自主研發 SEO／GEO 機器學習',
+  body: '網站上線，只是開始。從搜尋與 AI 的觀察，研究值得先改的內容，再檢查前後差別。我們正在把觀測、修改與驗證連起來，讓下一次改善有依據。',
+  principle: '更多資料，能帶來更多線索。更好的判斷，還要經過驗證。',
+  rule: '我們的研發原則：資料足夠、驗證更好，才更新判斷。',
+  map: '學習流程示意', source: '搜尋訊號', model: '學習差別', verify: '新資料驗證', website: '改善網站',
+  description: '搜尋與 AI 的可驗證觀察進入學習模型，再用未參與學習的新資料驗證。通過驗證的方向才值得用於網站改善，之後繼續觀察。這是流程示意，並非即時模型或客戶數據。',
+  controls: '探索學習流程', pause: '暫停動畫', play: '播放動畫', explore: '了解 SEO／GEO',
+} : {
+  title: 'After launch.', accent: 'Keep improving with evidence.',
+  intro: 'Our own SEO / GEO machine learning',
+  body: 'Launch is a beginning. We study search and AI observations, identify changes worth exploring, and compare what follows. Our development connects observation, reviewed changes and validation to inform the next improvement.',
+  principle: 'More evidence offers more clues. Better judgement still needs to be tested.',
+  rule: 'Our development principle: enough evidence, better validation, then a new judgement.',
+  map: 'Illustrative learning flow', source: 'Search signals', model: 'Learn differences', verify: 'Fresh-data validation', website: 'Website improvements',
+  description: 'Verifiable search and AI observations enter a learning model. Fresh data that was not used for learning tests its judgement. Validated directions can inform website improvements and further observations. This is a process illustration, not live model or customer data.',
+  controls: 'Explore the learning flow', pause: 'Pause animation', play: 'Play animation', explore: 'Explore SEO / GEO',
+}
+const steps = isZh ? [
+  { title: '看見', body: '記錄哪些內容被找到、被引用，並確認觀察能被查證。' },
+  { title: '學習', body: '比較不同內容的表現，學習哪些差別值得注意。' },
+  { title: '驗證', body: '用沒有學過的新資料重做檢查，避免只會記住舊答案。' },
+  { title: '改善', body: '把通過驗證的方向帶回網站，再觀察下一次的變化。' },
+] : [
+  { title: 'Observe', body: 'Record discovery and citation with evidence that can be checked.' },
+  { title: 'Learn', body: 'Compare content outcomes and learn which differences deserve attention.' },
+  { title: 'Validate', body: 'Test with unseen data, rather than remembering yesterday’s answers.' },
+  { title: 'Improve', body: 'Bring validated directions back to the website, then observe again.' },
+]
+const nodes = [
+  { x: 307, y: 208 }, { x: 300, y: 260 }, { x: 327, y: 306 },
+  { x: 358, y: 170 }, { x: 365, y: 224 }, { x: 371, y: 281 }, { x: 387, y: 330 },
+  { x: 422, y: 173 }, { x: 428, y: 226 }, { x: 433, y: 281 }, { x: 445, y: 324 },
+  { x: 474, y: 208 }, { x: 487, y: 257 }, { x: 478, y: 301 },
+]
+const connections = [[0, 3], [0, 4], [0, 5], [1, 4], [1, 5], [1, 6], [2, 4], [2, 5], [2, 6], [3, 7], [3, 8], [4, 7], [4, 8], [4, 9], [5, 8], [5, 9], [5, 10], [6, 9], [6, 10], [7, 11], [7, 12], [8, 11], [8, 12], [8, 13], [9, 11], [9, 12], [9, 13], [10, 12], [10, 13]]
+---
+<section id="learning-engine" class="learning-engine" data-learning-engine data-stage="0" data-locale={locale} aria-labelledby="learning-engine-title">
+  <div class="shell">
+    <header class="learning-engine__header">
+      <div><p class="learning-engine__kicker" data-reveal data-reveal-kind="soft">04 / BUILT TO LEARN</p><h2 id="learning-engine-title" data-reveal data-reveal-kind="title">{label.title}<br /><span>{label.accent}</span></h2></div>
+      <div class="learning-engine__intro" data-reveal data-reveal-kind="soft"><p class="learning-engine__claim">{label.intro}</p><p>{label.body}</p></div>
+    </header>
+
+    <div class="learning-engine__scene" data-le-scene>
+      <div class="learning-engine__scene-top"><span><i aria-hidden="true"></i>{label.map}</span><button class="learning-engine__play" data-le-play data-pause-label={label.pause} data-play-label={label.play} type="button" aria-pressed="false" hidden><span data-le-play-icon aria-hidden="true">Ⅱ</span><span data-le-play-label>{label.pause}</span></button></div>
+      <svg class="learning-engine__svg" viewBox="0 0 840 470" role="img" aria-labelledby="learning-engine-map-title learning-engine-map-description">
+        <title id="learning-engine-map-title">{label.map}</title><desc id="learning-engine-map-description">{label.description}</desc>
+        <defs><radialGradient id={`le-aura-${locale}`}><stop stop-color="#b7a88f" stop-opacity=".12" /><stop offset="1" stop-color="#b7a88f" stop-opacity="0" /></radialGradient><linearGradient id={`le-edge-${locale}`}><stop stop-color="#b7a88f" stop-opacity=".3" /><stop offset=".5" stop-color="#eee9df" stop-opacity=".7" /><stop offset="1" stop-color="#b7a88f" stop-opacity=".3" /></linearGradient></defs>
+        <circle cx="394" cy="250" r="210" fill={`url(#le-aura-${locale})`} />
+        <g class="le-orbits" fill="none" stroke="#b7a88f"><ellipse cx="394" cy="250" rx="154" ry="127" /><ellipse cx="394" cy="250" rx="155" ry="61" transform="rotate(-35 394 250)" /><ellipse cx="394" cy="250" rx="155" ry="61" transform="rotate(35 394 250)" /></g>
+        <g class="le-flow-paths" fill="none"><path data-le-flow="0" d="M126 247C179 247 249 248 300 248" /><path data-le-flow="1" d="M300 248C343 169 442 175 487 248C450 329 344 331 300 248" /><path data-le-flow="2" d="M487 248C548 248 572 247 626 247" /><path data-le-flow="3" d="M682 291C714 315 735 344 735 379C675 439 186 449 116 306" /></g>
+        <g class="le-source" data-le-part="source" fill="none"><path d="M54 179L82 207M49 250H76M64 320L86 294" /><circle cx="108" cy="247" r="43" /><circle cx="108" cy="247" r="59" class="le-halo" /><circle cx="54" cy="179" r="3" /><circle cx="49" cy="250" r="3" /><circle cx="64" cy="320" r="3" /><circle cx="104" cy="241" r="13" /><path d="M114 251L127 264" /></g>
+        <g class="le-network" data-le-part="network">
+          <g class="le-connections" stroke={`url(#le-edge-${locale})`} fill="none">{connections.map(([from, to]) => { const a = nodes[from!]!; const b = nodes[to!]!; return <path d={`M${a.x} ${a.y}C${(a.x + b.x) * .5} ${a.y} ${(a.x + b.x) * .5} ${b.y} ${b.x} ${b.y}`} /> })}</g>
+          {nodes.map((node, index) => <g class="le-neuron" style={`--node-delay:${index * -.23}s`}><circle class="le-neuron__halo" cx={node.x} cy={node.y} r="12" /><circle cx={node.x} cy={node.y} r={index === 4 || index === 8 || index === 9 ? 4 : 2.6} /></g>)}
+        </g>
+        <g class="le-verify" data-le-part="verify" fill="none"><circle cx="668" cy="247" r="43" /><circle class="le-halo" cx="668" cy="247" r="59" /><path d="M650 247L662 259L686 234" /><circle cx="668" cy="176" r="3" /><path d="M668 179V188" /></g>
+        <g class="le-website" data-le-part="website" fill="none"><rect x="671" y="339" width="128" height="81" rx="2" /><path d="M671 353H799M681 346H687M692 346H698M703 346H709" /><path d="M684 367H727M684 375H720M684 383H710" /><rect x="751" y="367" width="33" height="35" /><path d="M684 396H706" /></g>
+        <g class="le-travellers" aria-hidden="true">{Array.from({ length: 4 }, (_, index) => <circle data-le-traveller r={index === 0 ? 3.5 : 2} cx="126" cy="247" />)}</g>
+        <g class="le-map-labels"><text x="108" y="339">{label.source}</text><text x="395" y="376">{label.model}</text><text x="668" y="319">{label.verify}</text><text x="735" y="447">{label.website}</text></g>
+      </svg>
+      <div class="learning-engine__scene-bottom"><span>OBSERVE · LEARN · VALIDATE · REFINE</span><span aria-hidden="true">↺</span></div>
+    </div>
+
+    <div class="learning-engine__steps" data-reveal-stagger data-reveal-kind="card" role="group" aria-label={label.controls}>{steps.map((step, index) => <button type="button" data-le-step={index} aria-pressed={index === 0 ? 'true' : 'false'}><span class="learning-engine__step-number">0{index + 1}</span><span class="learning-engine__step-copy"><strong>{step.title}</strong><span>{step.body}</span></span><span class="learning-engine__step-arrow" aria-hidden="true">↗</span></button>)}</div>
+    <footer class="learning-engine__footer" data-reveal data-reveal-kind="soft"><div><p>{label.principle}</p><small>{label.rule}</small></div><a href={`/${locale}/services/seo-geo-growth-system`}>{label.explore}<span aria-hidden="true">↗</span></a></footer>
+  </div>
+</section>
+
+<script>
+  const mounted = new Map<HTMLElement, () => void>()
+  function initLearningEngines() {
+    document.querySelectorAll<HTMLElement>('[data-learning-engine]').forEach(scope => {
+      if (mounted.has(scope)) return
+      const buttons = [...scope.querySelectorAll<HTMLButtonElement>('[data-le-step]')]
+      const paths = [...scope.querySelectorAll<SVGPathElement>('[data-le-flow]')]
+      const travellers = [...scope.querySelectorAll<SVGCircleElement>('[data-le-traveller]')]
+      const control = scope.querySelector<HTMLButtonElement>('[data-le-play]')
+      const scene = scope.querySelector<HTMLElement>('[data-le-scene]')
+      if (buttons.length !== 4 || paths.length !== 4 || !control || !scene) return
+      // Cache the geometry once: animated frames never ask SVG for layout.
+      let samples: { x: number, y: number }[][]
+      let lengths: number[]
+      try {
+        lengths = paths.map(path => path.getTotalLength())
+        samples = paths.map((path, index) => Array.from({ length: 193 }, (_, sample) => {
+          const point = path.getPointAtLength(lengths[index]! * sample / 192)
+          return { x: point.x, y: point.y }
+        }))
+      } catch { return }
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)')
+      const events = new AbortController()
+      let stage = 0, elapsed = 0, previous = 0, frameId = 0
+      let inView = false, paused = false, manual = false, suspended = false, disposed = false
+      let scrollProgress = 0, manualProgress = 0, generation = 0
+      let cleanupMotion: (() => void) | undefined
+      let pauseEntrance: ((paused: boolean) => void) | undefined
+      const globalPaused = () => document.documentElement.dataset.motionPaused === 'true'
+      const setStage = (next: number) => {
+        const nextStage = (next + 4) % 4
+        if (stage === nextStage) return
+        stage = nextStage
+        elapsed = 0
+        scope.dataset.stage = String(stage)
+        buttons.forEach((button, index) => button.setAttribute('aria-pressed', String(index === stage)))
+      }
+      const canAnimate = () => !disposed && inView && !document.hidden && !suspended && !paused && !reduced.matches && !globalPaused()
+      const frame = (time: number) => {
+        frameId = 0
+        if (!canAnimate()) return
+        elapsed += previous ? Math.min(time - previous, 64) : 0
+        previous = time
+        const points = samples[stage]!
+        travellers.forEach((dot, index) => {
+          const progress = ((elapsed / 3200 + index * .17) % 1)
+          const position = progress * 192
+          const base = Math.min(191, Math.floor(position)), fraction = position - base
+          const from = points[base]!, to = points[base + 1]!
+          dot.setAttribute('cx', String(from.x + (to.x - from.x) * fraction))
+          dot.setAttribute('cy', String(from.y + (to.y - from.y) * fraction))
+          dot.style.opacity = String(Math.sin(progress * Math.PI) * (index === 0 ? .95 : .42))
+        })
+        frameId = requestAnimationFrame(frame)
+      }
+      const sync = () => {
+        control.hidden = reduced.matches
+        scope.classList.toggle('is-running', canAnimate())
+        scope.style.setProperty('--le-play-state', canAnimate() ? 'running' : 'paused')
+        pauseEntrance?.(!canAnimate())
+        if (canAnimate()) {
+          if (!frameId) { previous = 0; frameId = requestAnimationFrame(frame) }
+        } else {
+          cancelAnimationFrame(frameId)
+          frameId = 0
+          previous = 0
+          travellers.forEach(dot => { dot.style.opacity = '0' })
+        }
+      }
+      const configureMotion = async () => {
+        const request = ++generation
+        cleanupMotion?.()
+        cleanupMotion = undefined
+        pauseEntrance = undefined
+        if (disposed || reduced.matches || globalPaused() || paused) return
+        try {
+          const [{ gsap }, { ScrollTrigger }] = await Promise.all([import('gsap'), import('gsap/ScrollTrigger')])
+          if (disposed || request !== generation || reduced.matches || globalPaused() || paused) return
+          gsap.registerPlugin(ScrollTrigger)
+          const context = gsap.context(() => {}, scope)
+          cleanupMotion = () => context.revert()
+          context.add(() => {
+            const token = getComputedStyle(scope).getPropertyValue('--motion-reveal').trim()
+            const duration = Math.min(.9, Math.max(.5, (parseFloat(token) || 720) / (token.endsWith('s') && !token.endsWith('ms') ? 1 : 1000)))
+            paths.forEach((path, index) => {
+              const tween = gsap.fromTo(path, { strokeDasharray: lengths[index], strokeDashoffset: lengths[index] }, {
+                strokeDashoffset: 0, duration, delay: index * .04, ease: 'power2.out',
+                scrollTrigger: { trigger: scene, start: 'top 86%', once: true },
+              })
+              const previousPause = pauseEntrance
+              pauseEntrance = value => { previousPause?.(value); tween.paused(value) }
+            })
+            const neurons = gsap.from(scope.querySelectorAll('.le-neuron'), {
+              opacity: .15, duration: Math.min(.55, duration), stagger: .02, ease: 'power2.out',
+              scrollTrigger: { trigger: scene, start: 'top 80%', once: true },
+            })
+            const pathPause = pauseEntrance
+            pauseEntrance = value => { pathPause?.(value); neurons.paused(value) }
+            ScrollTrigger.create({
+              trigger: scope, start: 'top 45%', end: 'bottom 68%',
+              onUpdate: trigger => {
+                scrollProgress = trigger.progress
+                if (disposed || paused || reduced.matches || globalPaused() || document.hidden || suspended) return
+                // A direct selection stays selected until a deliberate further scroll.
+                if (manual && Math.abs(scrollProgress - manualProgress) < .18) return
+                manual = false
+                setStage(Math.min(3, Math.floor(scrollProgress * 4)))
+              },
+            })
+          })
+          sync()
+        } catch {
+          cleanupMotion?.()
+          cleanupMotion = undefined
+          pauseEntrance = undefined
+        }
+      }
+      buttons.forEach((button, index) => {
+        button.addEventListener('click', () => { manual = true; manualProgress = scrollProgress; setStage(index); sync() }, { signal: events.signal })
+        button.addEventListener('keydown', event => {
+          const destinations: Record<string, number> = { ArrowRight: index + 1, ArrowDown: index + 1, ArrowLeft: index - 1, ArrowUp: index - 1, Home: 0, End: 3 }
+          if (!(event.key in destinations)) return
+          event.preventDefault()
+          manual = true
+          manualProgress = scrollProgress
+          setStage(destinations[event.key]!)
+          buttons[stage]?.focus()
+          sync()
+        }, { signal: events.signal })
+      })
+      control.addEventListener('click', () => {
+        paused = !paused
+        control.setAttribute('aria-pressed', String(paused))
+        const text = control.querySelector('[data-le-play-label]')
+        const icon = control.querySelector('[data-le-play-icon]')
+        if (text) text.textContent = (paused ? control.dataset.playLabel : control.dataset.pauseLabel) || ''
+        if (icon) icon.textContent = paused ? '▷' : 'Ⅱ'
+        sync()
+        void configureMotion()
+      }, { signal: events.signal })
+      const observer = new IntersectionObserver(entries => {
+        inView = entries.some(entry => entry.isIntersecting)
+        sync()
+      }, { threshold: .08 })
+      observer.observe(scene)
+      document.addEventListener('visibilitychange', sync, { signal: events.signal })
+      const preferences = () => { sync(); void configureMotion() }
+      document.addEventListener('discoverystack:motion-change', preferences, { signal: events.signal })
+      window.addEventListener('pagehide', () => { suspended = true; sync() }, { signal: events.signal })
+      window.addEventListener('pageshow', () => { suspended = false; sync() }, { signal: events.signal })
+      reduced.addEventListener('change', preferences)
+      sync()
+      void configureMotion()
+      mounted.set(scope, () => {
+        disposed = true
+        generation += 1
+        cancelAnimationFrame(frameId)
+        observer.disconnect()
+        events.abort()
+        reduced.removeEventListener('change', preferences)
+        cleanupMotion?.()
+        scope.classList.remove('is-running')
+        scope.style.setProperty('--le-play-state', 'paused')
+        travellers.forEach(dot => { dot.style.opacity = '0' })
+      })
+    })
+  }
+  initLearningEngines()
+  document.addEventListener('astro:page-load', initLearningEngines)
+  document.addEventListener('astro:before-swap', () => { mounted.forEach(cleanup => cleanup()); mounted.clear() })
+</script>
+
+<style>
+  .learning-engine { --le-paper: #eee9df; --le-khaki: #b7a88f; --le-line: rgba(183, 168, 143, .2); padding-block: clamp(5rem, 10vw, 9rem); background: #101326; color: var(--le-paper); overflow: clip; }
+  .learning-engine__header { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr); align-items: end; gap: clamp(2rem, 5vw, 6rem); }
+  .learning-engine__kicker { margin: 0 0 1.5rem !important; color: var(--le-khaki); font: 400 .61rem/1.5 var(--font-mono, monospace); letter-spacing: .12em; }
+  .learning-engine h2 { margin: 0; font-size: clamp(1.8rem, 3.6vw, 3.5rem); font-weight: 400; line-height: 1.5; letter-spacing: -.06em; }
+  .learning-engine h2 > span { color: var(--le-khaki); }
+  .learning-engine__intro { padding-bottom: .45rem; }
+  .learning-engine__claim { margin: 0 0 .8rem !important; color: var(--le-paper); font-size: .88rem; }
+  .learning-engine__intro > p:last-child { margin: 0; max-width: 31rem; color: #a7a5ae; font-size: .8rem; font-weight: 300; line-height: 1.95; }
+  .learning-engine__scene { position: relative; margin-top: clamp(2.5rem, 5vw, 4.5rem); border-block: 1px solid var(--le-line); }
+  .learning-engine__scene-top { position: absolute; z-index: 1; inset: 1.15rem 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .learning-engine__scene-top > span { display: flex; align-items: center; gap: .6rem; color: #a89c87; font-size: .64rem; }
+  .learning-engine__scene-top i { width: 4px; height: 4px; border-radius: 50%; background: var(--le-khaki); }
+  .learning-engine__play { display: flex; min-height: 44px; align-items: center; gap: .65rem; border: 0; padding: .4rem 0 .4rem .6rem; background: transparent; color: #a7a5ae; cursor: pointer; font: 400 .64rem/1.5 var(--font-body, sans-serif); }
+  .learning-engine__play[hidden] { display: none; }
+  .learning-engine__play > span:first-child { display: grid; width: 1.75rem; height: 1.75rem; place-items: center; border: 1px solid var(--le-line); border-radius: 50%; color: var(--le-khaki); font-size: .7rem; }
+  .learning-engine__svg { display: block; width: min(100%, 70rem); height: auto; margin: 0 auto; overflow: visible; }
+  .le-orbits { stroke-width: .75; opacity: .22; }
+  .le-flow-paths path { stroke: #b7a88f; stroke-width: .85; opacity: .23; transition: opacity var(--motion-panel, 360ms) var(--motion-ease, ease), stroke-width var(--motion-panel, 360ms) var(--motion-ease, ease); }
+  .le-source, .le-verify, .le-website { stroke: #b7a88f; stroke-width: 1; opacity: .45; transition: opacity var(--motion-panel, 360ms) var(--motion-ease, ease); }
+  .le-halo { stroke-dasharray: 2 9; opacity: .45; }
+  .le-connections { stroke-width: .65; opacity: .42; transition: opacity var(--motion-panel, 360ms) var(--motion-ease, ease); }
+  .le-neuron { fill: #b7a88f; }
+  .le-neuron__halo { fill: none; stroke: #b7a88f; stroke-width: .65; opacity: .08; }
+  .le-travellers { fill: #eee9df; }
+  .le-travellers circle { opacity: 0; }
+  .le-map-labels { fill: #b7a88f; font: 400 12px var(--font-body, sans-serif); text-anchor: middle; letter-spacing: .03em; }
+  .learning-engine[data-stage="0"] [data-le-part="source"], .learning-engine[data-stage="1"] .le-connections, .learning-engine[data-stage="2"] [data-le-part="verify"], .learning-engine[data-stage="3"] [data-le-part="website"] { opacity: 1; }
+  .learning-engine[data-stage="0"] [data-le-flow="0"], .learning-engine[data-stage="1"] [data-le-flow="1"], .learning-engine[data-stage="2"] [data-le-flow="2"], .learning-engine[data-stage="3"] [data-le-flow="3"] { opacity: .8; stroke-width: 1.3; }
+  .learning-engine[data-stage="1"] .le-neuron__halo { animation: le-neuron-pulse 2.8s ease-in-out infinite; animation-delay: var(--node-delay); animation-play-state: var(--le-play-state, paused); }
+  .learning-engine__scene-bottom { position: absolute; inset: auto 0 1rem; display: flex; justify-content: space-between; color: #696776; font: 400 .48rem/1.5 var(--font-mono, monospace); letter-spacing: .12em; }
+  .learning-engine__scene-bottom > span:last-child { color: var(--le-khaki); font-size: 1rem; }
+  .learning-engine__steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 1.25rem; gap: 1.5rem; }
+  .learning-engine__steps > button { display: flex; position: relative; min-width: 0; min-height: 44px; align-items: baseline; gap: .8rem; border: 0; border-top: 1px solid transparent; padding: 1.25rem 0; background: transparent; color: #9693a1; cursor: pointer; text-align: left; transition: color .3s ease, border-color .3s ease; }
+  .learning-engine__steps > button[aria-pressed="true"] { border-color: var(--le-khaki); color: var(--le-paper); }
+  .learning-engine__step-number { flex: 0 0 auto; color: #8c806b; font: 400 .6rem/1.5 var(--font-mono, monospace); }
+  .learning-engine__step-copy { display: grid; gap: .75rem; min-width: 0; }
+  .learning-engine__step-copy strong { font-size: 1.04rem; font-weight: 400; }
+  .learning-engine__step-copy > span { color: #94919e; font-size: .72rem; line-height: 1.8; font-weight: 300; }
+  .learning-engine__step-arrow { margin-left: auto; color: #8d806d; font-size: .78rem; }
+  .learning-engine__footer { display: flex; align-items: center; justify-content: space-between; gap: 2rem; padding-top: 2.7rem; margin-top: 1.75rem; border-top: 1px solid var(--le-line); }
+  .learning-engine__footer p { margin: 0 0 .6rem !important; color: #c4c0bb; font-size: .85rem; line-height: 1.8; }
+  .learning-engine__footer small { color: #87838d; font-size: .67rem; line-height: 1.8; }
+  .learning-engine__footer a { display: inline-flex; flex: 0 0 auto; min-height: 44px; align-items: center; gap: 1.5rem; border-bottom: 1px solid #81765f; color: var(--le-khaki); font-size: .75rem; text-decoration: none; }
+  .learning-engine button:focus-visible, .learning-engine a:focus-visible { outline: 2px solid var(--le-khaki); outline-offset: 5px; }
+  @media (hover: hover) { .learning-engine__steps > button:hover { color: var(--le-paper); border-color: #7b715e; } .learning-engine__play:hover { color: var(--le-paper); } }
+  @media (max-width: 63.99rem) { .learning-engine__header { grid-template-columns: 1fr; gap: 1.5rem; } .learning-engine__intro > p:last-child { max-width: 40rem; } .learning-engine__scene-top { top: .6rem; } .learning-engine__steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem 2rem; } .learning-engine__footer { align-items: start; } }
+  @media (max-width: 39.99rem) { .learning-engine { padding-block: 4.5rem; } .learning-engine h2 { font-size: clamp(1.65rem, 6.2vw, 2.3rem); line-height: 1.55; letter-spacing: -.045em; } .learning-engine__kicker { font-size: .53rem; } .learning-engine__claim { font-size: .8rem; } .learning-engine__intro > p:last-child { font-size: .75rem; } .learning-engine__scene { margin-top: 2rem; padding-top: 2rem; padding-bottom: 1.5rem; } .learning-engine__scene-top > span { font-size: .57rem; } .learning-engine__play { font-size: .56rem; } .learning-engine__svg { width: calc(100% + 1rem); max-width: none; margin-left: -.5rem; } .le-map-labels { font-size: 17px; } .learning-engine__scene-bottom { bottom: .65rem; font-size: .35rem; letter-spacing: .05em; } .learning-engine__steps { gap: .5rem 1.25rem; } .learning-engine__steps > button { gap: .55rem; padding-block: 1rem; } .learning-engine__step-copy { gap: .5rem; } .learning-engine__step-copy strong { font-size: .94rem; } .learning-engine__step-copy > span { font-size: .65rem; } .learning-engine__step-arrow { display: none; } .learning-engine__footer { display: grid; gap: 1.5rem; margin-top: 1rem; padding-top: 1.75rem; } .learning-engine__footer p { font-size: .76rem; } .learning-engine__footer small { font-size: .61rem; } .learning-engine__footer a { justify-self: start; } }
+  @media (prefers-reduced-motion: reduce) { .learning-engine *, .learning-engine *::before, .learning-engine *::after { animation: none !important; transition: none !important; } .le-travellers { display: none; } }
+  :global(html[data-motion-paused="true"]) .learning-engine *, :global(html[data-motion-paused="true"]) .learning-engine *::before { animation-play-state: paused !important; transition: none !important; }
+  @keyframes le-neuron-pulse { 0%, 100% { opacity: .07; } 50% { opacity: .38; } }
+</style>

@@ -1,0 +1,11 @@
+---
+interface Props { target: string; tone: 'khaki' | 'paper' | 'deep'; direction?: number }
+const { target, tone, direction = 1 } = Astro.props
+---
+<div class={`scene-seam scene-seam--${tone}`} data-scene-seam data-scene-target={target} data-scene-direction={direction} aria-hidden="true">
+  <svg viewBox="0 0 1440 120" preserveAspectRatio="none" focusable="false">
+    <path data-seam-surface d="M0 119C240 119 480 119 720 119S1200 119 1440 119V120H0Z" />
+    <path data-seam-thread d="M0 119C240 119 480 119 720 119S1200 119 1440 119" />
+    <g data-seam-flecks>{Array.from({ length: 14 }, (_, index) => <circle cx={90 + index * 96} cy="119" r={index % 3 === 0 ? '1.5' : '.8'} />)}</g>
+  </svg>
+</div>

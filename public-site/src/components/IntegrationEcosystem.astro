@@ -1,0 +1,213 @@
+---
+import { integrationCategories, platformBrands, type IntegrationLocale } from '../lib/integration-platforms'
+interface Props { locale?: IntegrationLocale }
+const { locale = 'zh-hant' } = Astro.props
+const isZh = locale === 'zh-hant'
+const headingId = `ecosystem-heading-${locale}`
+---
+
+<section id="integrations" class="integration-ecosystem" aria-labelledby={headingId} data-integration-ecosystem data-selected="domain" data-ambient>
+  <div class="ecosystem-shell">
+    <header class="ecosystem-heading" data-reveal data-reveal-kind="title">
+      <div><p class="ecosystem-kicker">03 / CONNECT YOUR BUSINESS</p><h2 id={headingId}>{isZh ? '從網站到營運，' : 'From website to business,'}<br /><em>{isZh ? '一起接好。' : 'connected with care.'}</em></h2></div>
+      <p class="ecosystem-intro">{isZh ? '網域、訊息、金流與物流。' : 'Domains, messaging, payments and shipping.'}<br />{isZh ? '把每天的工作，接成順手的流程。' : 'Bring your daily work into one considered flow.'}</p>
+    </header>
+
+    <div class="ecosystem-map" data-reveal data-reveal-kind="image">
+      <svg class="ecosystem-connections" viewBox="0 0 1000 650" aria-hidden="true" focusable="false">
+        <circle class="map-orbit" cx="500" cy="325" r="250" />
+        <ellipse class="map-orbit map-orbit-inner" cx="500" cy="325" rx="325" ry="175" />
+        {integrationCategories.map(item => <g class={`connection connection-${item.id}`}><path class="connection-base" d={item.path} /><path class="connection-flow" d={item.path} style={`--flow-delay: -${integrationCategories.indexOf(item) * 1.4}s`} /></g>)}
+        <g class="map-coordinates"><path d="M488 20h24m-12-12v24M488 630h24m-12-12v24" /><text x="528" y="24">01 — BUSINESS ECOSYSTEM</text><text x="528" y="634">DESIGNED TO WORK TOGETHER</text></g>
+      </svg>
+      <div class="ecosystem-center">
+        <div class="center-browser" aria-hidden="true"><span></span><span></span><span></span><i></i></div>
+        <p>YOUR WEBSITE</p>
+        <strong>{isZh ? '品牌的中心。' : 'The heart of your brand.'}</strong>
+        <div class="center-signature"><span>DiscoveryStack</span><span>↗</span></div>
+      </div>
+      <div class="ecosystem-nodes" role="group" aria-label={isZh ? '探索平台串接方向' : 'Explore integration categories'}>
+        {integrationCategories.map((item, index) => <button type="button" class={`ecosystem-node node-${item.id}`} data-integration-category={item.id} aria-pressed={index === 0 ? 'true' : 'false'} aria-controls={`integration-detail-${locale}`} aria-describedby={`integration-description-${item.id}-${locale}`} style={`--node-x: ${item.x}%; --node-y: ${item.y}%`}>
+          <span class="node-number">0{index + 1}</span>
+          <span class="node-brands">{item.brands.map(key => { const brand = platformBrands[key]; return <span class={`brand-plate brand-${key}`}><img src={brand.asset} alt={brand.name} width={key === 'line' ? 40 : 32} height={key === 'line' ? 40 : 32} loading="lazy" decoding="async" /></span> })}</span>
+          <span class="node-title">{item.title[locale]}</span>
+          <span class="node-subtitle">{item.subtitle}</span>
+          <span class="node-arrow" aria-hidden="true">↗</span>
+        </button>)}
+      </div>
+    </div>
+
+    <div class="ecosystem-detail" id={`integration-detail-${locale}`}>
+      <span class="detail-index">PLATFORM INTEGRATIONS</span>
+      <div class="detail-copy">{integrationCategories.map((item, index) => <p id={`integration-description-${item.id}-${locale}`} data-integration-description={item.id} hidden={index !== 0}><strong>{item.title[locale]}</strong><span>{item.description[locale]}</span></p>)}</div>
+      <a href={isZh ? '/zh-hant#fit' : '/en#fit'}>{isZh ? '聊聊你的串接需求' : 'Discuss your integrations'}<span aria-hidden="true">↗</span></a>
+    </div>
+    <p class="ecosystem-scope">{isZh ? '依選用方案與平台授權確認串接。' : 'Integration scope is confirmed with your plan and platform authorisations.'}</p>
+  <noscript><style is:inline>.integration-ecosystem .detail-copy [data-integration-description][hidden] { display: flex !important; margin-top: 1rem; }</style></noscript>
+  </div>
+</section>
+
+<script>
+  import { readMotionTokens } from '../lib/motion-tokens'
+  let cleanupEcosystems: (() => void) | undefined
+  function initialiseEcosystems() {
+    cleanupEcosystems?.()
+    const cleanups: (() => void)[] = []
+    document.querySelectorAll<HTMLElement>('[data-integration-ecosystem]').forEach(root => {
+      const buttons = [...root.querySelectorAll<HTMLButtonElement>('[data-integration-category]')]
+      const detail = root.querySelector<HTMLElement>('.detail-copy')
+      let selected = buttons.find(button => button.getAttribute('aria-pressed') === 'true')?.dataset.integrationCategory ?? 'domain'
+      let displayed = root.dataset.selected ?? selected
+      let animation: Animation | undefined
+      const timing = readMotionTokens(root)
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
+      const stop = () => { animation?.cancel(); animation = undefined }
+      const display = (id: string) => {
+        if (id === displayed) return
+        displayed = id
+        stop()
+        root.dataset.selected = id
+        root.querySelectorAll<HTMLElement>('[data-integration-description]').forEach(description => { description.hidden = description.dataset.integrationDescription !== id })
+        if (!detail || reduced.matches || document.documentElement.dataset.motionPaused === 'true') return
+        try { animation = detail.animate([{ opacity: .25, transform: 'translateY(8px)', clipPath: 'inset(0 0 30% 0)' }, { opacity: 1, transform: 'translateY(0)', clipPath: 'inset(0)' }], { duration: timing.panel, easing: timing.ease }) } catch { stop() }
+      }
+      display(selected)
+      buttons.forEach(button => {
+        const id = button.dataset.integrationCategory ?? 'domain'
+        const select = () => {
+          selected = id
+          display(id)
+          buttons.forEach(item => item.setAttribute('aria-pressed', String(item === button)))
+        }
+        const preview = (event: PointerEvent) => { if (event.pointerType !== 'touch') display(id) }
+        const restore = () => display(selected)
+        button.addEventListener('click', select)
+        button.addEventListener('focus', select)
+        button.addEventListener('pointerenter', preview)
+        button.addEventListener('pointerleave', restore)
+        cleanups.push(() => {
+          button.removeEventListener('click', select)
+          button.removeEventListener('focus', select)
+          button.removeEventListener('pointerenter', preview)
+          button.removeEventListener('pointerleave', restore)
+        })
+      })
+      reduced.addEventListener('change', stop)
+      document.addEventListener('discoverystack:motion-change', stop)
+      cleanups.push(() => { display(selected); stop(); reduced.removeEventListener('change', stop); document.removeEventListener('discoverystack:motion-change', stop) })
+    })
+    cleanupEcosystems = () => { cleanups.forEach(cleanup => cleanup()); cleanupEcosystems = undefined }
+  }
+  initialiseEcosystems()
+  document.addEventListener('astro:page-load', initialiseEcosystems)
+  document.addEventListener('astro:before-swap', () => cleanupEcosystems?.())
+  window.addEventListener('pagehide', () => cleanupEcosystems?.())
+  window.addEventListener('pageshow', event => { if (event.persisted) initialiseEcosystems() })
+</script>
+
+<style>
+  .integration-ecosystem { color: var(--premium-paper, #eee9df); background: var(--premium-deep, #101326); overflow: clip; padding-block: clamp(5rem, 8vw, 8rem) 3.5rem; --ambient-play-state: paused; }
+  .ecosystem-shell { width: 100%; max-width: 1440px; margin-inline: auto; padding-inline: var(--gutter, clamp(1.5rem, 5.7vw, 7rem)); }
+  .ecosystem-heading { display: grid; grid-template-columns: 1.4fr 1fr; gap: 3rem; align-items: end; }
+  .ecosystem-kicker { margin: 0 0 1.7rem; color: var(--premium-khaki, #b7a88f); font: .63rem/1.5 var(--font-mono, monospace); letter-spacing: .14em; }
+  .ecosystem-heading h2 { margin: 0; font: 400 clamp(2rem, 3.5vw, 3.6rem)/1.45 var(--font-display, sans-serif); letter-spacing: -.045em; }
+  .ecosystem-heading h2 em { color: var(--premium-khaki, #b7a88f); font-style: normal; }
+  .ecosystem-intro { justify-self: end; margin: 0 0 .5rem; color: rgba(238,233,223,.5); font: .84rem/2 var(--font-body, sans-serif); }
+  .ecosystem-map { position: relative; width: 100%; max-width: 1180px; aspect-ratio: 1000 / 650; margin: 3rem auto 2.5rem; isolation: isolate; }
+  .ecosystem-connections { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; z-index: -1; }
+  .map-orbit { fill: none; stroke: rgba(183,168,143,.07); stroke-width: .65; }
+  .map-orbit-inner { stroke-dasharray: 2 9; }
+  .connection-base { fill: none; stroke: rgba(183,168,143,.2); stroke-width: 1; transition: stroke .4s; }
+  .connection-flow { fill: none; stroke: #b7a88f; stroke-width: 1.8; stroke-linecap: round; stroke-dasharray: 3 90; animation: connection-flow 9s linear infinite; animation-delay: var(--flow-delay); animation-play-state: var(--ambient-play-state); opacity: .38; }
+  .map-coordinates { fill: rgba(183,168,143,.4); stroke: rgba(183,168,143,.25); stroke-width: .75; font: 6px var(--font-mono, monospace); letter-spacing: 1.7px; }
+  .map-coordinates text { stroke: none; }
+  .ecosystem-center { position: absolute; left: 50%; top: 50%; width: 23%; min-width: 180px; padding: 1rem 1.15rem 1.15rem; transform: translate(-50%, -50%); border: 1px solid rgba(183,168,143,.4); background: linear-gradient(150deg, #252840, #171a32 70%); box-shadow: 0 1.5rem 5rem rgba(0,0,0,.15); }
+  .ecosystem-center::before { content: ''; position: absolute; inset: -1.1rem; pointer-events: none; border: 1px solid rgba(183,168,143,.08); }
+  .center-browser { display: flex; align-items: center; gap: 3px; height: 1.55rem; border-bottom: 1px solid rgba(238,233,223,.1); }
+  .center-browser > span { width: 3px; height: 3px; border: 1px solid rgba(183,168,143,.4); border-radius: 50%; }
+  .center-browser i { height: 3px; width: 40%; margin-left: auto; background: rgba(183,168,143,.13); }
+  .ecosystem-center > p { margin: 1.9rem 0 .7rem; color: var(--premium-khaki, #b7a88f); font: .55rem/1.5 var(--font-mono, monospace); letter-spacing: .13em; }
+  .ecosystem-center > strong { font: 400 clamp(.95rem, 1.5vw, 1.5rem)/1.5 var(--font-display, sans-serif); letter-spacing: -.035em; }
+  .center-signature { display: flex; justify-content: space-between; align-items: center; margin-top: 1.9rem; padding-top: .8rem; border-top: 1px solid rgba(238,233,223,.09); color: rgba(238,233,223,.4); font: .5rem/1 var(--font-body, sans-serif); }
+  .center-signature span:last-child { color: var(--premium-khaki, #b7a88f); font-size: 1rem; }
+  .ecosystem-node { position: absolute; top: var(--node-y); left: var(--node-x); display: grid; justify-items: center; gap: .6rem; width: 17%; min-width: 142px; padding: 1rem .4rem; transform: translate(-50%, -50%); border: 0; border-bottom: 1px solid rgba(183,168,143,.15); color: var(--premium-paper, #eee9df); background: var(--premium-deep, #101326); cursor: pointer; transition: border-color .3s, background .3s; font-family: var(--font-body, sans-serif); }
+  .ecosystem-node:hover, .ecosystem-node[aria-pressed=true] { border-color: var(--premium-khaki, #b7a88f); background: #15192d; }
+  .ecosystem-node:focus-visible { outline: 1px solid var(--premium-khaki, #b7a88f); outline-offset: 7px; }
+  .node-number { position: absolute; top: .15rem; left: .3rem; color: rgba(183,168,143,.35); font: .5rem/1 var(--font-mono, monospace); }
+  .node-brands { display: flex; align-items: center; justify-content: center; gap: .6rem; min-height: 3.25rem; }
+  .brand-plate { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px; border-radius: 50%; background: #f6f3ec; }
+  .brand-plate img { display: block; width: 32px; height: 32px; object-fit: contain; }
+  .brand-line { border-radius: 0; background: transparent; width: 56px; height: 56px; }
+  .brand-line img { width: 40px; height: 40px; }
+  .brand-dhl { border-radius: 2px; width: 60px; background: #ffcc00; }
+  .brand-dhl img { width: 52px; height: 52px; }
+  .node-title { font-size: .84rem; font-weight: 400; letter-spacing: .015em; }
+  .node-subtitle { color: rgba(238,233,223,.3); font: .4rem/1.5 var(--font-mono, monospace); letter-spacing: .08em; }
+  .node-arrow { position: absolute; right: .3rem; top: .1rem; font-size: .75rem; color: rgba(183,168,143,.35); }
+  .ecosystem-detail { display: grid; grid-template-columns: 11rem minmax(0, 1fr) auto; align-items: center; gap: 2rem; padding-block: 1.6rem; border-top: 1px solid rgba(183,168,143,.2); border-bottom: 1px solid rgba(183,168,143,.2); }
+  .detail-index { color: var(--premium-khaki, #b7a88f); font: .5rem/1.5 var(--font-mono, monospace); letter-spacing: .1em; }
+  .detail-copy { min-height: 3.6rem; display: grid; align-items: center; }
+  .detail-copy p { margin: 0; }
+  .detail-copy p[hidden] { display: none; }
+  .detail-copy strong { display: block; margin-bottom: .5rem; font-size: .8rem; font-weight: 400; }
+  .detail-copy p > span { color: rgba(238,233,223,.5); font: .7rem/1.9 var(--font-body, sans-serif); }
+  .ecosystem-detail a { display: flex; align-items: center; justify-content: space-between; gap: 2rem; color: var(--premium-khaki, #b7a88f); font: .72rem/1.7 var(--font-body, sans-serif); text-decoration: none; white-space: nowrap; }
+  .ecosystem-detail a > span { font-size: 1.1rem; }
+  .ecosystem-detail a:focus-visible { outline: 1px solid var(--premium-khaki, #b7a88f); outline-offset: 7px; }
+  .ecosystem-scope { margin: 1rem 0 0; color: rgba(238,233,223,.35); font: .58rem/1.8 var(--font-body, sans-serif); }
+  [data-selected=domain] .connection-domain .connection-base,
+  [data-selected=messaging] .connection-messaging .connection-base,
+  [data-selected=logistics] .connection-logistics .connection-base,
+  [data-selected=payment] .connection-payment .connection-base,
+  [data-selected=crm] .connection-crm .connection-base,
+  [data-selected=booking] .connection-booking .connection-base { stroke: #b7a88f; }
+  @keyframes connection-flow { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -186; } }
+  @media (max-width: 64rem) {
+    .ecosystem-heading { grid-template-columns: 1fr; gap: 1.7rem; }
+    .ecosystem-intro { justify-self: start; font-size: .78rem; }
+    .ecosystem-detail { grid-template-columns: 1fr auto; gap: 1rem 1.5rem; }
+    .detail-index { grid-column: 1 / -1; }
+    .ecosystem-map { margin-top: 2rem; }
+    .ecosystem-node { min-width: 125px; }
+    .node-subtitle { font-size: .34rem; }
+    .node-title { font-size: .72rem; }
+    .brand-plate { width: 46px; height: 46px; }
+    .brand-line { width: 56px; height: 56px; }
+    .brand-dhl { width: 54px; }
+    .brand-dhl img { width: 48px; height: 48px; }
+    .ecosystem-center { min-width: 165px; padding-inline: 1rem; }
+  }
+  @media (max-width: 45rem) {
+    .integration-ecosystem { padding-block: 4.5rem 2.5rem; }
+    .ecosystem-kicker { margin-bottom: 1.4rem; font-size: .5rem; }
+    .ecosystem-heading h2 { font-size: clamp(1.9rem, 7.7vw, 2.6rem); line-height: 1.5; }
+    .ecosystem-intro { font-size: .75rem; }
+    .ecosystem-map { aspect-ratio: auto; margin-block: 3rem 1.5rem; }
+    .ecosystem-connections { display: none; }
+    .ecosystem-center { position: relative; top: auto; left: auto; width: calc(100% - 2rem); min-width: 0; margin: 0 0 2rem 2rem; transform: none; padding: .7rem 1rem 1rem; }
+    .ecosystem-center::before { inset: -.6rem; }
+    .ecosystem-center > p { margin-top: 1rem; }
+    .ecosystem-center > strong { font-size: 1.15rem; }
+    .center-signature { margin-top: 1rem; }
+    .ecosystem-nodes { position: relative; display: grid; padding-left: 2rem; }
+    .ecosystem-nodes::before { content: ''; position: absolute; top: -2rem; bottom: 2.75rem; left: .55rem; width: 1px; background: rgba(183,168,143,.2); }
+    .ecosystem-node { position: relative; left: auto; top: auto; width: 100%; min-width: 0; min-height: 6rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; justify-items: start; align-content: center; gap: .45rem 1rem; transform: none; padding: .9rem 0 .9rem .5rem; border-bottom-color: rgba(183,168,143,.13); }
+    .ecosystem-node::before { content: ''; position: absolute; top: 50%; left: -1.45rem; width: 1.45rem; height: 1px; background: rgba(183,168,143,.2); }
+    .node-number { position: static; grid-column: 1; grid-row: 1; font-size: .47rem; }
+    .node-title { grid-column: 1; grid-row: 2; font-size: .85rem; }
+    .node-subtitle { display: none; }
+    .node-brands { grid-column: 2; grid-row: 1 / 3; gap: .5rem; padding-right: .7rem; }
+    .node-arrow { top: .6rem; right: 0; font-size: .7rem; }
+    .brand-plate { width: 46px; height: 46px; }
+    .brand-line { width: 56px; height: 56px; }
+    .ecosystem-detail { grid-template-columns: 1fr; gap: 1rem; padding-block: 1.2rem; }
+    .detail-copy { min-height: 5rem; }
+    .detail-copy p > span { font-size: .72rem; }
+    .ecosystem-detail a { width: max-content; padding-block: .4rem; font-size: .7rem; }
+    .ecosystem-scope { font-size: .58rem; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .connection-flow { animation: none; stroke-dasharray: none; opacity: .14; }
+    .connection-base, .ecosystem-node { transition: none; }
+  }
+</style>

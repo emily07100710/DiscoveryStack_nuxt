@@ -6,6 +6,8 @@ import '../styles/redesign.css'
 import '../styles/immersive.css'
 import '../styles/hybrid-refresh.css'
 import '../styles/site-shell.css'
+import 'lenis/dist/lenis.css'
+import '../styles/premium.css'
 
 interface Props {
   locale: 'en' | 'zh-hant'
@@ -23,14 +25,14 @@ const englishPath = routeForLocale(canonicalPath, 'en')
 const chinesePath = routeForLocale(canonicalPath, 'zh-hant')
 const xDefaultPath = canonicalPath.startsWith('/zh-hant') ? englishPath : canonicalPath.startsWith('/en') ? canonicalPath : '/en'
 const robots = noindex || isPlaceholderSiteUrl(publicSiteOrigin) ? 'noindex, nofollow, noarchive' : 'index, follow'
-const favicon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%234d5dad%22/%3E%3Cpath d=%22M8 23V16h4v7H8Zm6 0V10h4v13h-4Zm6 0V6h4v17h-4Z%22 fill=%22%23f5f2eb%22/%3E%3C/svg%3E'
+const favicon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%223%22 fill=%22%23171a32%22/%3E%3Cpath d=%22M8 23V16h4v7H8Zm6 0V10h4v13h-4Zm6 0V6h4v17h-4Z%22 fill=%22%23b7a88f%22/%3E%3C/svg%3E'
 ---
 <!doctype html>
 <html lang={isZh ? 'zh-Hant' : 'en-US'} dir="ltr">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#4d5dad" />
+    <meta name="theme-color" content="#171a32" />
     <meta name="format-detection" content="telephone=no" />
     <meta name="description" content={description} />
     <meta name="robots" content={robots} />
@@ -38,7 +40,7 @@ const favicon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%2
     <link rel="icon" type="image/svg+xml" href={favicon} />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700;900&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" />
     <link rel="canonical" href={canonical} />
     <link rel="alternate" hreflang="en" href={absoluteUrl(englishPath, publicSiteOrigin)} />
     <link rel="alternate" hreflang="zh-Hant" href={absoluteUrl(chinesePath, publicSiteOrigin)} />
@@ -51,20 +53,30 @@ const favicon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%2
     <meta name="twitter:card" content="summary" />
     {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
   </head>
-  <body>
+  <body class="premium-site">
+    <noscript>
+      <style is:inline>
+        @media (max-width: 900px) {
+          .premium-site .site-header { position: relative; height: auto; background: var(--premium-deep); }
+          .premium-site .header-inner { flex-wrap: wrap; padding-block: 1.2rem; }
+          .premium-site .site-nav { display: flex; position: static; width: 100%; order: 3; visibility: visible; opacity: 1; transform: none; pointer-events: auto; padding: 0; }
+          .premium-site :is(.nav-toggle, .site-motion-toggle) { display: none; }
+        }
+      </style>
+    </noscript>
+    <a class="sr-only skip-link" href="#top">{isZh ? '跳到主要內容' : 'Skip to content'}</a>
     <div class="route-rail" aria-hidden="true"></div>
     <header class="site-header" id="siteHeader">
       <div class="shell header-inner">
-        <a href={isZh ? '/zh-hant' : '/en'} class="brand">DISCOVERYSTACK<span>.</span></a>
-        <nav class="site-nav" id="siteNav" aria-label={isZh ? '主要導覽' : 'Primary navigation'}>
-          <a href={`${isZh ? '/zh-hant' : '/en'}#departments`}>{isZh ? '五個部門' : 'Departments'}</a>
-          <a href={`${isZh ? '/zh-hant' : '/en'}#analysis`}>{isZh ? '免費分析' : 'Free analysis'}</a>
-          <a href={`${isZh ? '/zh-hant' : '/en'}#journey`}>{isZh ? '合作流程' : 'Process'}</a>
-          <a href={isZh ? '/zh-hant/services/seo-geo-growth-system' : '/en/services/seo-geo-growth-system'}>SEO／GEO</a>
-          <a href={`${isZh ? '/zh-hant' : '/en'}#pricing`}>{isZh ? '合作預算' : 'Pricing'}</a>
-          <a href={`${isZh ? '/zh-hant' : '/en'}#fit`}>{isZh ? '合作諮詢' : 'Fit Review'}</a>
+        <a href={isZh ? '/zh-hant' : '/en'} class="brand" aria-label="DiscoveryStack"><svg class="brand-mark" viewBox="0 0 24 28" fill="none" aria-hidden="true"><path d="M2 23V16H7V23H2ZM10 23V10H15V23H10ZM18 23V4H23V23H18Z" fill="currentColor" /></svg>DiscoveryStack<span aria-hidden="true">.</span></a>
+        <nav class="site-nav" id="siteNav" data-lenis-prevent aria-label={isZh ? '主要導覽' : 'Primary navigation'}>
+          <a href={`${isZh ? '/zh-hant' : '/en'}#departments`}>{isZh ? '我們的專業' : 'Expertise'}</a>
+          <a href="/zh-hant/website-builder-preview">{isZh ? '一鍵建站' : 'Website studio'}</a>
+          <a href={`${isZh ? '/zh-hant' : '/en'}#journey`}>{isZh ? '合作方式' : 'Approach'}</a>
+          <a href={`${isZh ? '/zh-hant' : '/en'}#fit`} class="header-cta">{isZh ? '開始對話' : 'Let’s talk'} <span aria-hidden="true">↗</span></a>
         </nav>
-        <div style="display:flex; align-items:center; gap:0.75rem;">
+        <div class="header-tools">
+          <button class="site-motion-toggle" id="site-motion-toggle" type="button" aria-pressed="false" aria-label={isZh ? '暫停動態' : 'Pause motion'} data-pause-label={isZh ? '暫停動態' : 'Pause motion'} data-play-label={isZh ? '播放動態' : 'Play motion'}><span aria-hidden="true" data-motion-icon>Ⅱ</span><span data-motion-label>{isZh ? '暫停動態' : 'Pause motion'}</span></button>
           <a class="lang-switch" href={isZh ? '/en' : '/zh-hant'} aria-label={isZh ? 'Switch to English' : '切換至繁體中文'}>{isZh ? 'EN' : '繁'}</a>
           <button class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="siteNav" data-open-label={isZh ? '關閉' : 'Close'} data-closed-label={isZh ? '選單' : 'Menu'}>{isZh ? '選單' : 'Menu'}</button>
         </div>
@@ -73,7 +85,7 @@ const favicon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%2
     <main id="top"><slot /></main>
     <footer class="site-footer">
       <div class="shell">
-        <p class="footer-statement">{isZh ? '需求不是消失；它在路徑裡失去推進力。' : 'Demand does not vanish. It loses momentum on the route.'}</p>
+        <p class="footer-statement">{isZh ? '為值得被看見的品牌，打造下一步。' : 'A considered presence. A lasting impression.'}</p>
         <div class="footer-cols">
           <div class="footer-col"><h3>{isZh ? '服務' : 'Services'}</h3><ul><li><a href={isZh ? '/zh-hant/services/seo-geo-growth-system' : '/en/services/seo-geo-growth-system'}>{isZh ? 'SEO／GEO 成長系統' : 'SEO/GEO Growth System'}</a></li><li><a href={`${isZh ? '/zh-hant' : '/en'}#fit`}>{isZh ? '需求路徑診斷' : 'Demand Path Diagnosis'}</a></li></ul></div>
           <div class="footer-col"><h3>{isZh ? '方法' : 'Methodology'}</h3><ul><li><a href={isZh ? '/zh-hant/methodology/journey-intelligence' : '/en/methodology/journey-intelligence'}>{isZh ? '需求路徑情報' : 'Journey Intelligence'}</a></li><li><a href={isZh ? '/zh-hant/methodology/bounded-ai-assistant' : '/en/methodology/bounded-ai-assistant'}>{isZh ? '有邊界的 AI 助理' : 'Bounded AI Assistant'}</a></li></ul></div>
@@ -84,36 +96,11 @@ const favicon = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%2
       </div>
     </footer>
     <CookieConsent client:load locale={locale} />
-    <script is:inline>
-      const nav = document.getElementById('siteNav');
-      const toggle = document.getElementById('navToggle');
-      const header = document.getElementById('siteHeader');
-      const rail = document.querySelector('.route-rail');
-      let scrollFrame = 0;
-      const updateScroll = () => {
-        header?.classList.toggle('is-stuck', window.scrollY > 12);
-        if (rail) {
-          const max = document.documentElement.scrollHeight - window.innerHeight;
-          rail.setAttribute('style', `--route-progress: ${max > 0 ? (window.scrollY / max) * 100 : 0}%`);
-        }
-        scrollFrame = 0;
-      };
-      const queueScrollUpdate = () => {
-        if (scrollFrame) return;
-        scrollFrame = window.requestAnimationFrame(updateScroll);
-      };
-      toggle?.addEventListener('click', () => {
-        const open = nav?.classList.toggle('is-open') ?? false;
-        toggle?.setAttribute('aria-expanded', String(open));
-        if (toggle) toggle.textContent = open ? (toggle.dataset.openLabel || 'Close') : (toggle.dataset.closedLabel || 'Menu');
-      });
-      nav?.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => {
-        nav.classList.remove('is-open');
-        toggle?.setAttribute('aria-expanded', 'false');
-      }));
-      window.addEventListener('scroll', queueScrollUpdate, { passive: true });
-      window.addEventListener('resize', queueScrollUpdate);
-      updateScroll();
+    <script>
+      import { initPremiumMotion } from '../lib/premium-motion'
+      initPremiumMotion()
+      import { initShellMotion } from '../lib/shell-motion'
+      initShellMotion()
       document.getElementById('cookie-settings')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('discoverystack:open-cookie-settings')));
     </script>
   </body>

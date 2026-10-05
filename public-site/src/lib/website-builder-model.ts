@@ -1,5 +1,4 @@
 export type BuilderStep =
-  | 'entry'
   | 'diagnosis_or_brief'
   | 'site_architecture'
   | 'style_and_modules'
@@ -10,15 +9,15 @@ export type BuilderStep =
   | 'review_order'
   | 'handoff'
 
-export type EntryMode = 'existing' | 'new'
 export type SiteType = 'one-page' | 'brand-blog' | 'commerce'
+export type BuilderPhaseKey = 'create' | 'plan' | 'launch'
+export type MotionKey = 'none' | 'refined' | 'expressive'
 export type ThemeKey = 'mineral' | 'forest' | 'sunset'
 export type PlanKey = 'launch' | 'growth' | 'autopilot'
 export type Viewport = 'desktop' | 'tablet' | 'mobile'
 export type PreviewPage = 'home' | 'services' | 'about' | 'content' | 'products'
 
 export const builderSteps: Array<{ id: BuilderStep; label: string; shortLabel: string }> = [
-  { id: 'entry', label: '從哪裡開始', shortLabel: '開始' },
   { id: 'diagnosis_or_brief', label: '理解你的品牌', shortLabel: '品牌' },
   { id: 'site_architecture', label: '安排網站結構', shortLabel: '結構' },
   { id: 'style_and_modules', label: '選擇風格與功能', shortLabel: '風格' },
@@ -28,6 +27,24 @@ export const builderSteps: Array<{ id: BuilderStep; label: string; shortLabel: s
   { id: 'domain_and_launch', label: '規劃網域與上線', shortLabel: '上線' },
   { id: 'review_order', label: '確認這個方向', shortLabel: '確認' },
   { id: 'handoff', label: '交接給 DiscoveryStack', shortLabel: '交接' },
+]
+
+export const builderPhases: Array<{ id: BuilderPhaseKey; label: string; steps: BuilderStep[] }> = [
+  {
+    id: 'create',
+    label: '建立網站',
+    steps: ['diagnosis_or_brief', 'site_architecture', 'style_and_modules', 'generating', 'interactive_preview'],
+  },
+  { id: 'plan', label: '選擇方案', steps: ['plan_and_cadence'] },
+  { id: 'launch', label: '確認上線', steps: ['domain_and_launch', 'review_order', 'handoff'] },
+]
+
+export const phaseForStep = (step: BuilderStep) => builderPhases.find(phase => phase.steps.includes(step)) ?? builderPhases[0]!
+
+export const motionOptions: Array<{ id: MotionKey; label: string; description: string }> = [
+  { id: 'none', label: '靜態簡潔', description: '閱讀優先，畫面保持安定。' },
+  { id: 'refined', label: '輕盈細節', description: '柔和進場、按鈕回饋，細節有感。' },
+  { id: 'expressive', label: '互動層次', description: '加上視差與浮動，讓畫面更有張力。' },
 ]
 
 export const siteTypes: Array<{ id: SiteType; label: string; eyebrow: string; description: string; bestFor: string; pages: string[] }> = [
@@ -58,18 +75,18 @@ export const siteTypes: Array<{ id: SiteType; label: string; eyebrow: string; de
 ]
 
 export const moduleOptions: Array<{ id: string; label: string; outcome: string; note: string; requiresHandoff?: boolean }> = [
-  { id: 'admin', label: '內容後台', outcome: '你可以管理文章、案例與網站內容。', note: '核心配置' },
-  { id: 'ai', label: 'AI 問答助手', outcome: '讓訪客先得到常見問題的即時答案。', note: '概念互動' },
-  { id: 'booking', label: 'Google 預約', outcome: '把想諮詢的人帶到清楚的預約入口。', note: '付款後協助授權', requiresHandoff: true },
-  { id: 'payment', label: '線上金流', outcome: '為正式方案預留安全付款與結帳流程。', note: '付款後協助授權', requiresHandoff: true },
-  { id: 'invoice', label: '電子發票', outcome: '讓正式交易後的開立流程更完整。', note: '付款後協助授權', requiresHandoff: true },
-  { id: 'line', label: 'LINE 導入', outcome: '讓台灣客戶能用熟悉的方式聯絡品牌。', note: '付款後協助授權', requiresHandoff: true },
+  { id: 'admin', label: '內容後台', outcome: '你可以管理文章、案例與網站內容。', note: '正式方案核心配置' },
+  { id: 'ai', label: 'AI 問答助手', outcome: '讓訪客先得到常見問題的即時答案。', note: '規劃中・互動示範' },
+  { id: 'booking', label: 'Google 預約', outcome: '把想諮詢的人帶到清楚的預約入口。', note: '規劃中・先記錄需求', requiresHandoff: true },
+  { id: 'payment', label: '線上金流', outcome: '可評估 Stripe／Shopify 的正式結帳設定。', note: '需另外確認與人工設定', requiresHandoff: true },
+  { id: 'invoice', label: '電子發票', outcome: '讓正式交易後的開立流程更完整。', note: '規劃中・先記錄需求', requiresHandoff: true },
+  { id: 'line', label: 'LINE 導入', outcome: '讓台灣客戶能用熟悉的方式聯絡品牌。', note: '規劃中・先記錄需求', requiresHandoff: true },
   { id: 'member', label: '會員系統', outcome: '為回訪客戶保留登入與專屬內容空間。', note: '建議人工規劃', requiresHandoff: true },
   { id: 'app', label: 'PWA／App', outcome: '把常用服務延伸成可安裝的行動體驗。', note: '建議人工規劃', requiresHandoff: true },
 ]
 
 export const themes: Array<{ id: ThemeKey; label: string; descriptor: string; colors: [string, string, string]; texture: string }> = [
-  { id: 'mineral', label: '理性清晰', descriptor: '精準、安靜、可信', colors: ['#15213a', '#e7edf3', '#ee7658'], texture: 'blueprint' },
+  { id: 'mineral', label: '理性清晰', descriptor: '精準、安靜、可信', colors: ['#171a32', '#eee9df', '#b7a88f'], texture: 'blueprint' },
   { id: 'forest', label: '自然信任', descriptor: '溫和、專業、踏實', colors: ['#153d35', '#e9f0e7', '#d2a458'], texture: 'grain' },
   { id: 'sunset', label: '溫暖精品', descriptor: '有品味、親近、細膩', colors: ['#5d3040', '#f5e5da', '#c86b4c'], texture: 'glow' },
 ]

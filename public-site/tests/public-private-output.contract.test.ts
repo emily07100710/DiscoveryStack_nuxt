@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const publicRoot = join(process.cwd(), 'dist')
 const readableExtensions = new Set(['.html', '.js', '.txt', '.xml', '.json'])
-const allowedPublicApiPaths = new Set(['/api/leads', '/api/site-analysis', '/api/managed-sites/previews'])
+const allowedPublicApiPaths = new Set(['/api/leads', '/api/site-analysis'])
 const route = (...parts: string[]) => `/${parts.join('/')}`
 const compound = (...parts: string[]) => parts.join('-')
 const privateRoutePatterns = [

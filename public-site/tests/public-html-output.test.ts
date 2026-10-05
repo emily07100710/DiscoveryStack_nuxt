@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -40,5 +41,20 @@ describe('Astro public static output', () => {
     expect(existsSync(join(publicRoot, 'en', 'audit-lab'))).toBe(false)
     expect(existsSync(join(publicRoot, 'zh-hant', 'audit-lab'))).toBe(false)
     expect(existsSync(join(publicRoot, 'api'))).toBe(false)
+  })
+
+  it('offers public website diagnosis on the homepage and starts the builder with the brand brief', () => {
+    for (const route of ['/zh-hant', '/en']) {
+      const document = new DOMParser().parseFromString(htmlFor(route), 'text/html')
+      const diagnosisInput = document.querySelector('#analysis-url')
+      expect(diagnosisInput, `${route} has a visible diagnosis entry`).not.toBeNull()
+      expect(diagnosisInput?.closest('details')).toBeNull()
+      expect(document.querySelectorAll('#analysis')).toHaveLength(1)
+    }
+    const builder = new DOMParser().parseFromString(htmlFor('/zh-hant/website-builder-preview'), 'text/html')
+    expect(builder.querySelector('#builder-brand')).not.toBeNull()
+    expect(builder.querySelector('#builder-url')).toBeNull()
+    expect(builder.body.textContent).not.toContain('開始公開診斷')
+    expect(builder.body.textContent).not.toContain('你現在有網站嗎？')
   })
 })
