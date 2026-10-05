@@ -2,7 +2,8 @@ Platform identification assets — downloaded 2026-10-05.
 These marks identify third-party platforms. Their presence does not establish endorsement,
 commercial partnership, a current API connection, or production acceptance.
 
-Cloudflare, WhatsApp, DHL, Stripe, PayPal and HubSpot SVG paths:
+Cloudflare, WhatsApp, DHL, Stripe, PayPal, HubSpot, and the additional
+directory SVG paths listed below:
   Simple Icons project https://github.com/simple-icons/simple-icons
   Pinned revision: 98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d
   Download URL pattern:
@@ -11,6 +12,15 @@ Cloudflare, WhatsApp, DHL, Stripe, PayPal and HubSpot SVG paths:
   CC0 does not grant trademark rights or replace each brand's usage rules.
   Paths are unchanged. Root fill is set to the published identifying brand color,
   except DHL uses its official red (#D40511) on a yellow (#FFCC00) backplate.
+
+Additional directory icons downloaded from the same pinned Simple Icons revision
+on 2026-10-05, with paths and root markup unchanged:
+  Shopify, WooCommerce, WordPress, Webflow, Wix, Squarespace, Telegram,
+  Messenger, Instagram, Discord, FedEx, UPS, Adyen, Paddle, Square,
+  Mailchimp, Zoho, Airtable, Notion, Calendly, Zoom, Google Analytics,
+  Google Search Console, YouTube, Google Maps.
+  Slack, Twilio, Shippo, Salesforce, Klaviyo and Microsoft Outlook use
+  typographic initials in the site instead of downloaded brand marks.
 
 LINE: unmodified official PNG from official brand kit:
   https://www.line.me/static/logo/top/LINE_Brand_icon.zip (LINE_Brand_icon.png)

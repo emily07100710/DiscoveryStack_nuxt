@@ -4,6 +4,7 @@ import FitReviewFormIsland from './FitReviewFormIsland.vue'
 import ParticleSculpture from './ParticleSculpture.vue'
 import IntegrationEcosystem from './IntegrationEcosystem.astro'
 import PlatformMarquee from './PlatformMarquee.astro'
+import SearchDiscoveryExplainer from './SearchDiscoveryExplainer.astro'
 import LearningEngine from './LearningEngine.astro'
 import ServiceSignal from './ServiceSignal.astro'
 import WebsiteStudioTeaser from './WebsiteStudioTeaser.astro'
@@ -16,8 +17,8 @@ const { locale } = Astro.props
 const isZh = locale === 'zh-hant'
 const base = `/${locale}`
 const builder = '/zh-hant/website-builder-preview'
-const title = isZh ? '亞洲唯一 GEO 機器學習，讓品牌成為首選' : "Asia's only GEO machine learning engine for brands ready to lead"
-const description = isZh ? '客戶正在問 Google，也正在問 AI。DiscoveryStack 以亞洲唯一 GEO 機器學習串起品牌網站、搜尋觀察與持續改善，讓你的品牌先被看見、再被選擇。' : 'Customers ask Google and AI before they choose. DiscoveryStack connects websites, search observations and continuous improvement through Asia’s only GEO machine learning engine.'
+const title = isZh ? '亞洲唯一 GEO 機器學習，讓品牌成為首選' : 'GEO machine learning with 100,000+ real-world data points'
+const description = isZh ? '客戶正在問 Google，也正在問 AI。DiscoveryStack 以亞洲唯一 GEO 機器學習串起品牌網站、搜尋觀察與持續改善，讓你的品牌先被看見、再被選擇。' : 'GEO machine learning built on more than 100,000 real-world data points. DiscoveryStack connects websites, search observations and continuous improvement so your brand can be found and understood.'
 const services = isZh ? [
   { n: '01', name: '品牌與網站', en: 'BRAND & WEB', line: '客戶只看幾秒，就決定要不要找你。', text: '網站看不懂、手機不好用，客戶就會點開下一家。你的對手，可能只差一個更好用的網站，就接走這筆生意。', risk: '你不把價值說清楚，客戶就只能比價格。', solution: '把服務、可信的證據與詢問入口排好，讓客戶看懂你，也知道下一步怎麼找你。', tags: ['看得懂服務', '信得過品牌', '找得到你'], cta: '開始打造我的網站', target: builder },
   { n: '02', name: '搜尋與成長', en: 'SEARCH & GROWTH', line: 'AI 正在推薦品牌。下一個是你，還是對手？', text: '客戶把需求丟給 Google 與 AI，答案裡沒有你，對手就先被看見。別再等排名掉了、詢問少了，才回頭補救。', risk: '你不先把品牌放進答案裡，對手就會先占住位置。', solution: '用亞洲唯一 GEO 機器學習連接搜尋訊號、內容與網站改善，找出下一步最值得搶的機會。', tags: ['亞洲唯一 GEO 機器學習', 'SEO / GEO', '持續觀察與改善'], cta: '看我們如何搶先一步', target: '#learning-engine' },
@@ -26,7 +27,7 @@ const services = isZh ? [
   { n: '05', name: 'AI 與自動化', en: 'AI & AUTOMATION', line: '同樣一天 24 小時，對手已經開始省時間。', text: '常見問題一直回答、資料一直整理，重要的客戶卻等不到你。把重複工作交給合適的工具，你才有時間把生意做好。', risk: '不是誰用更多 AI，而是誰更早把時間省下來。', solution: '從客服知識、內容整理到日常流程，先做真正用得到的自動化，讓人員保留最後的決定權。', tags: ['知識問答', '內容整理', '工作流程'], cta: '聊聊能省下哪些工作', target: '#fit' },
 ] : [
   { n: '01', name: 'Brand & Web', en: 'BRAND & WEB', line: 'A few seconds can decide who gets the enquiry.', text: 'If your website is confusing or difficult on a phone, the next business is one click away. A clearer experience can make your competitor the easier choice.', risk: 'When your value is unclear, price becomes the comparison.', solution: 'Make services, real evidence and the next step easy to understand, so visitors know why to choose you.', tags: ['Clear services', 'Credible proof', 'Easy enquiries'], cta: 'Build my website', target: builder },
-  { n: '02', name: 'Search & Growth', en: 'SEARCH & GROWTH', line: 'AI is naming brands. Will yours be next?', text: 'Customers ask Google and AI before they choose. If your brand is missing from the answer, a competitor gets seen first. Do not wait for enquiries to fall before you act.', risk: 'Give AI a reason to understand your brand before competitors own the conversation.', solution: 'Our GEO machine learning connects search signals, content and website improvements to find the next opportunity worth pursuing.', tags: ["Asia's only GEO machine learning", 'SEO / GEO', 'Continuous improvement'], cta: 'See how we move first', target: '#learning-engine' },
+  { n: '02', name: 'Search & Growth', en: 'SEARCH & GROWTH', line: 'AI is naming brands. Will yours be next?', text: 'Customers ask Google and AI before they choose. If your brand is missing from the answer, a competitor gets seen first. Do not wait for enquiries to fall before you act.', risk: 'Give AI a reason to understand your brand before competitors own the conversation.', solution: 'Our GEO machine learning connects search signals, content and website improvements to find the next opportunity worth pursuing.', tags: ['100,000+ real-world data points', 'SEO / GEO', 'Continuous improvement'], cta: 'See how we move first', target: '#learning-engine' },
   { n: '03', name: 'Marketing & Strategy', en: 'MARKETING & STRATEGY', line: 'Clicks arrive. Enquiries go somewhere else?', text: 'Bringing people in is only the beginning. A competitor may win with the same budget simply by making the next step clearer.', risk: 'Attention can be bought. Trust has to be earned.', solution: 'Connect campaigns, content and enquiry paths. Find where people leave, then improve that moment.', tags: ['Direction', 'Campaigns & content', 'Enquiry paths'], cta: 'Find the friction', target: '#fit' },
   { n: '04', name: 'Systems & Integration', en: 'SYSTEMS & INTEGRATION', line: 'Your business is growing. Your admin should keep up.', text: 'Scattered messages, duplicate entry and slow replies cost time. Your competitor may already have the workflow connected while you are still finding the information.', risk: 'One fewer missed order. One less reason to leave.', solution: 'Confirm platforms, authorisations and available features, then plan the connections around your business.', tags: ['Membership & booking', 'Payments & orders', 'Customer management'], cta: 'Explore integrations', target: '#integrations' },
   { n: '05', name: 'AI & Automation', en: 'AI & AUTOMATION', line: 'The same 24 hours. A smarter use of them.', text: 'Repeated questions and manual organisation leave less time for customers. Put the repeatable work into useful tools and keep people in charge of the decisions.', risk: 'The advantage is time saved, not the number of AI tools.', solution: 'Start with practical knowledge tools, content preparation and daily workflows that your team can actually use.', tags: ['Knowledge', 'Content preparation', 'Daily workflows'], cta: 'Find time worth saving', target: '#fit' },
@@ -56,8 +57,8 @@ const prices = isZh ? [
       <div class="premium-hero-art"><ParticleSculpture client:load locale={locale} /></div>
       <div class="shell premium-hero-inner">
         <div class="premium-hero-copy">
-          <p class="premium-kicker" data-reveal><span class="premium-signal"></span> ASIA’S ONLY GEO MACHINE LEARNING</p>
-          <h1 id="heroTitle"><span class="premium-title-line"><span data-hero-line>{isZh ? '亞洲唯一' : "Asia's only"}</span></span><span class="premium-title-line"><span class="premium-title-accent" data-hero-line>{isZh ? 'GEO 機器學習' : 'GEO that learns'}</span></span></h1>
+          <p class="premium-kicker" data-reveal><span class="premium-signal"></span> {isZh ? 'ASIA’S ONLY GEO MACHINE LEARNING' : 'GEO MACHINE LEARNING / REAL-WORLD DATA'}</p>
+          <h1 id="heroTitle">{isZh ? <><span class="premium-title-line"><span data-hero-line>亞洲唯一</span></span><span class="premium-title-line"><span class="premium-title-accent" data-hero-line>GEO 機器學習</span></span></> : <><span class="premium-title-line"><span data-hero-line>100,000+ real-world</span></span><span class="premium-title-line"><span data-hero-line>data points.</span></span><span class="premium-title-line"><span class="premium-title-accent" data-hero-line>GEO machine learning.</span></span></>}</h1>
           <p class="premium-hero-deck" data-reveal>{isZh ? '客戶已經開始問 AI，對手也正搶著出現在答案裡。' : 'Customers are asking AI. Your competitors want to be the answer.'}<br />{isZh ? '把網站、搜尋與機器學習接起來，讓你的品牌先被看見、再被選擇。' : 'Connect your website, search and machine learning so your brand gets seen and chosen.'}</p>
           <div class="premium-actions" data-reveal><a class="premium-button" href={builder} data-magnetic>{isZh ? '開始一鍵建站' : 'Start my website'}<span aria-hidden="true">↗</span></a><a class="premium-link" href="#analysis">{isZh ? '免費找出網站弱點' : 'Find my website’s weak spots'}<span aria-hidden="true">→</span></a></div>
         </div>
@@ -67,6 +68,7 @@ const prices = isZh ? [
     <div class="premium-discipline-band" aria-label={isZh ? '整合服務' : 'Our disciplines'}><div class="shell"><span>STRATEGY</span><i aria-hidden="true">✳</i><span>DESIGN</span><i aria-hidden="true">✳</i><span>TECHNOLOGY</span><i aria-hidden="true">✳</i><span>GROWTH</span></div></div>
     <section class="premium-services shell" id="departments">
       <header class="premium-section-header"><p class="premium-kicker" data-reveal>01 / YOUR NEXT ADVANTAGE</p><div data-reveal data-reveal-kind="title"><h2>{isZh ? '客戶不會等你準備好。' : 'Customers will not wait.'}<br /><span>{isZh ? '你的對手，也不會。' : 'Neither will your competitors.'}</span></h2><p>{isZh ? '點開看看，哪一步正在讓你的生意錯過客戶。' : 'Open a discipline. Find the opportunity your business could be missing.'}</p></div></header>
+      <SearchDiscoveryExplainer locale={locale} />
       <div class="premium-service-list">{services.map((service, index) => <details class="premium-service" name="premium-services" open={index === 0} data-service data-reveal data-reveal-kind="line">
         <summary><span class="premium-service-number">{service.n}</span><h3>{service.name}</h3><span class="premium-service-en">{service.en}</span><span class="premium-service-toggle" aria-hidden="true">+</span></summary>
         <div class="premium-service-detail">

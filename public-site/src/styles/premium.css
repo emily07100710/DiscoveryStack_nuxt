@@ -211,7 +211,7 @@ body.premium-site {
   color: var(--premium-khaki);
 }
 html[lang="en-US"] .premium-hero h1 {
-  font-size: clamp(3.4rem, 5.3vw, 5.5rem);
+  font-size: clamp(2.8rem, 4.25vw, 4.65rem);
   line-height: 1.05;
   letter-spacing: -0.06em;
 }
@@ -1265,7 +1265,7 @@ html[lang="en-US"] .premium-hero h1 {
     font-size: clamp(3.1rem, 10.3vw, 5.2rem);
   }
   html[lang="en-US"] .premium-hero h1 {
-    font-size: clamp(2.4rem, 9vw, 4.5rem);
+    font-size: clamp(1.65rem, 7.1vw, 3.5rem);
   }
   .premium-hero-deck {
     font-size: 0.8rem;

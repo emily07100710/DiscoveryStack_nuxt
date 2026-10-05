@@ -1,6 +1,6 @@
 ---
-title: "Asia's only GEO machine learning"
-description: "Customers are asking AI while competitors fight to be the answer. DiscoveryStack connects websites, search signals and continuous improvement through Asia's only GEO machine learning."
+title: "GEO machine learning with 100,000+ real-world data points"
+description: "Customers are asking AI while competitors fight to be the answer. DiscoveryStack connects websites, search signals and continuous improvement through GEO machine learning built on more than 100,000 real-world data points."
 locale: en
 translationKey: seo-geo-growth-system
 route: /en/services/seo-geo-growth-system
@@ -10,7 +10,7 @@ contentRole: pillar
 updatedAt: 2026-10-05
 authorStatus: editorial-team
 evidenceStatus: approved-knowledge
-summaryAnswer: "DiscoveryStack connects search and AI observations, content improvements and outcome checks through Asia's only GEO machine learning to help brands compete for their next discovery opportunity."
+summaryAnswer: "DiscoveryStack connects search and AI observations, content improvements and outcome checks through GEO machine learning built on more than 100,000 real-world data points to help brands compete for their next discovery opportunity."
 relatedRoutes:
   - /en/methodology/journey-intelligence
   - /en/glossary/seo

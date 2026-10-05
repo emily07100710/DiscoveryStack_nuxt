@@ -57,4 +57,26 @@ describe('Astro public static output', () => {
     expect(builder.body.textContent).not.toContain('開始公開診斷')
     expect(builder.body.textContent).not.toContain('你現在有網站嗎？')
   })
+
+  it('renders the full API platform list with shipped marks and explains SEO versus GEO', () => {
+    for (const route of ['/zh-hant', '/en']) {
+      const document = new DOMParser().parseFromString(htmlFor(route), 'text/html')
+      const platforms = [...document.querySelectorAll<HTMLAnchorElement>('.platform-grid a')]
+      const marks = [...document.querySelectorAll<HTMLImageElement>('.platform-grid img')]
+      expect(platforms, `${route} lists dozens of API-capable platforms`).toHaveLength(40)
+      expect(new Set(platforms.map(platform => platform.getAttribute('aria-label'))).size).toBe(40)
+      expect(marks.length, `${route} ships most platforms with identifying marks`).toBeGreaterThanOrEqual(30)
+      for (const mark of marks) {
+        const source = mark.getAttribute('src') ?? ''
+        expect(source.startsWith('/platforms/')).toBe(true)
+        expect(existsSync(join(publicRoot, source.slice(1))), `${source} is shipped`).toBe(true)
+      }
+      expect(document.querySelectorAll('.discovery-difference__card')).toHaveLength(2)
+      expect(document.querySelector('.discovery-difference')?.textContent).toContain('SEO')
+      expect(document.querySelector('.discovery-difference')?.textContent).toContain('GEO')
+    }
+    const english = htmlFor('/en')
+    expect(english).toContain('100,000+ real-world')
+    expect(english).not.toMatch(/Asia(?:'s|’s) only|ASIA’S ONLY/i)
+  })
 })

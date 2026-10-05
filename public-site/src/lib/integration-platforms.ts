@@ -14,7 +14,6 @@ export const platformBrands = {
 } as const
 
 export type PlatformBrandKey = keyof typeof platformBrands
-export const platformBelt: PlatformBrandKey[] = ['cloudflare', 'whatsapp', 'dhl', 'sf', 'stripe', 'paypal', 'hubspot', 'calendar']
 
 export const integrationCategories: Array<{
   id: string

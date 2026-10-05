@@ -1,0 +1,63 @@
+---
+interface Props { locale: 'en' | 'zh-hant' }
+const { locale } = Astro.props
+const isZh = locale === 'zh-hant'
+const cards = isZh ? [
+  { key: 'seo', acronym: 'SEO', full: '搜尋引擎最佳化', title: '讓客戶在搜尋結果找到你', detail: '整理網站內容與結構，讓人搜尋時更容易找到你的頁面。', path: ['搜尋', '搜尋結果', '你的網站'] },
+  { key: 'geo', acronym: 'GEO', full: '生成式引擎最佳化', title: '讓 AI 看懂並引用你', detail: '把品牌資訊與可信的內容說清楚，增加出現在 AI 回答中的機會。', path: ['提問', 'AI 回答', '品牌與來源'] },
+] : [
+  { key: 'seo', acronym: 'SEO', full: 'Search Engine Optimisation', title: 'Be found in search results', detail: 'Make your pages easier to find when customers search.', path: ['Search', 'Results', 'Your site'] },
+  { key: 'geo', acronym: 'GEO', full: 'Generative Engine Optimisation', title: 'Be understood by AI', detail: 'Give AI clear, credible information it can use and cite in an answer.', path: ['Question', 'AI answer', 'Brand & source'] },
+]
+---
+
+<div class="discovery-difference" aria-labelledby={`discovery-difference-title-${locale}`}>
+  <div class="discovery-difference__heading" data-reveal data-reveal-kind="soft">
+    <p class="discovery-difference__eyebrow">SEO × GEO / DISCOVERY, EXPLAINED</p>
+    <h3 id={`discovery-difference-title-${locale}`}>{isZh ? '搜尋得到你，AI 也要看得懂你。' : 'Found in search. Understood by AI.'}</h3>
+  </div>
+  <div class="discovery-difference__grid" data-reveal-stagger>
+    {cards.map(card => <article class={`discovery-difference__card discovery-difference__card--${card.key}`} data-reveal data-reveal-kind="card">
+      <div class="discovery-difference__top">
+        <span class="discovery-difference__icon" aria-hidden="true">
+          {card.key === 'seo' ? <svg viewBox="0 0 64 64" fill="none"><circle cx="29" cy="28" r="16" /><path d="m41 40 14 14M21 26h16M21 33h11" /></svg> : <svg viewBox="0 0 64 64" fill="none"><path d="M12 15h40v30H30L19 54v-9h-7V15Z" /><path d="m32 21 2.4 7.6L42 31l-7.6 2.4L32 41l-2.4-7.6L22 31l7.6-2.4L32 21Z" /></svg>}
+        </span>
+        <span class="discovery-difference__name"><strong>{card.acronym}</strong><small>{card.full}</small></span>
+      </div>
+      <h4>{card.title}</h4>
+      <p>{card.detail}</p>
+      <ol class="discovery-difference__path" aria-label={isZh ? `${card.acronym} 流程` : `${card.acronym} path`}>
+        {card.path.map((step, index) => <li><span class="discovery-difference__path-dot" aria-hidden="true"></span><span>{step}</span>{index < card.path.length - 1 && <span class="discovery-difference__path-arrow" aria-hidden="true">→</span>}</li>)}
+      </ol>
+    </article>)}
+  </div>
+  <p class="discovery-difference__takeaway" data-reveal data-reveal-kind="line"><span aria-hidden="true">↗</span>{isZh ? 'SEO 幫人找到你的網站；GEO 幫 AI 正確理解你的品牌。兩者一起做，才不會只守著一種入口。' : 'SEO helps people find your site. GEO helps AI understand your brand. Together, they cover both paths to discovery.'}</p>
+</div>
+
+<style>
+  .discovery-difference { margin: 0 0 clamp(3.5rem, 6vw, 5.5rem); }
+  .discovery-difference__heading { display: grid; grid-template-columns: 1fr 2.1fr; gap: 2rem; align-items: end; margin-bottom: 1.7rem; }
+  .discovery-difference__eyebrow { color: var(--premium-khaki); font: .58rem/1.6 var(--font-mono); letter-spacing: .13em; }
+  .discovery-difference__heading h3 { margin: 0; font: 400 clamp(1.28rem, 2.2vw, 2.05rem)/1.4 var(--font-display); letter-spacing: -.035em; }
+  .discovery-difference__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: rgba(183,168,143,.35); border: 1px solid rgba(183,168,143,.35); }
+  .discovery-difference__card { position: relative; min-width: 0; min-height: 20rem; padding: clamp(1.4rem, 3vw, 2.5rem); background: var(--premium-deep); overflow: hidden; }
+  .discovery-difference__card::before { content: ''; position: absolute; inset: 0 0 auto; height: 2px; background: linear-gradient(90deg, var(--premium-metal-light), transparent 75%); transform: scaleX(0); transform-origin: left; transition: transform var(--motion-panel) var(--motion-ease); }
+  .discovery-difference__card:hover::before { transform: scaleX(1); }
+  .discovery-difference__card--geo { background: #1d203a; }
+  .discovery-difference__top { display: flex; align-items: center; gap: 1rem; }
+  .discovery-difference__icon { display: grid; place-items: center; flex: 0 0 3.5rem; width: 3.5rem; height: 3.5rem; border: 1px solid rgba(183,168,143,.6); border-radius: 50%; color: var(--premium-metal-light); }
+  .discovery-difference__icon svg { width: 2.2rem; height: 2.2rem; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  .discovery-difference__name { display: grid; gap: .25rem; }
+  .discovery-difference__name strong { color: var(--premium-paper); font: 500 1.2rem/1.1 var(--font-display); letter-spacing: .04em; }
+  .discovery-difference__name small { color: var(--premium-khaki); font: .6rem/1.5 var(--font-body); }
+  .discovery-difference__card h4 { margin: 2.6rem 0 .65rem; font: 400 clamp(1.25rem, 2vw, 1.8rem)/1.35 var(--font-display); letter-spacing: -.04em; }
+  .discovery-difference__card > p { max-width: 27rem; min-height: 3.4rem; margin: 0; color: rgba(238,233,223,.7); font: .84rem/1.85 var(--font-body); }
+  .discovery-difference__path { display: flex; flex-wrap: wrap; gap: .2rem .5rem; align-items: center; margin: 2rem 0 0; padding: 1.15rem 0 0; border-top: 1px solid rgba(183,168,143,.24); list-style: none; }
+  .discovery-difference__path li { display: inline-flex; align-items: center; gap: .35rem; color: var(--premium-paper); font: .7rem/1.5 var(--font-body); white-space: nowrap; }
+  .discovery-difference__path-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--premium-metal-light); }
+  .discovery-difference__path-arrow { margin-left: .3rem; color: var(--premium-khaki); }
+  .discovery-difference__takeaway { display: flex; align-items: start; gap: .8rem; margin: 1.4rem 0 0; color: rgba(238,233,223,.75); font: .77rem/1.8 var(--font-body); }
+  .discovery-difference__takeaway > span { color: var(--premium-khaki); font-size: 1rem; }
+  @media (max-width: 760px) { .discovery-difference__heading { grid-template-columns: 1fr; gap: .75rem; } .discovery-difference__grid { grid-template-columns: 1fr; } .discovery-difference__card { min-height: 0; padding: 1.5rem; } .discovery-difference__card h4 { margin-top: 1.7rem; } .discovery-difference__card > p { min-height: 0; } .discovery-difference__path { margin-top: 1.3rem; } }
+  @media (prefers-reduced-motion: reduce) { .discovery-difference__card::before { transition-duration: 0ms; } }
+</style>

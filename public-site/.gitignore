@@ -10,3 +10,5 @@ visual-baseline/
 *.png
 *.jpg
 *.jpeg
+!public/platforms/line.png
+!public/platforms/sf-express.png
