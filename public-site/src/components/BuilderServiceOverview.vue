@@ -126,7 +126,7 @@ onBeforeUnmount(() => {
 
     <footer class="service-overview-note">
       <span class="service-overview-status"><i aria-hidden="true"></i>目前為互動預覽</span>
-      <p>正式建置依確認方案安排；延伸需求依上列狀態評估。品牌標誌僅供識別，不代表合作關係或背書。</p>
+      <p>正式建置依確認方案安排；延伸需求依上列狀態評估。</p>
     </footer>
   </section>
 </template>

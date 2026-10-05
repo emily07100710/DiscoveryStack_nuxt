@@ -9,8 +9,8 @@ const isZh = locale === 'zh-hant'
 <section class="platform-marquee" aria-label={isZh ? '可規劃 API 串接的平台' : 'Platforms available for API integration planning'}>
   <div class="platform-marquee-heading">
     <p>CONNECTED TO YOUR EVERYDAY / {platformDirectoryCount}</p>
-    <h2>{isZh ? '你熟悉的平台，都在這裡。' : 'The platforms you already know.'}</h2>
-    <p class="platform-marquee-intro">{isZh ? `從網站、訊息到物流、金流與客戶管理，探索 ${platformDirectoryCount} 個可規劃 API 串接的平台。` : `Explore ${platformDirectoryCount} platforms available for API integration planning, from websites and messaging to shipping, payments and customer relationships.`}</p>
+    <h2>{isZh ? '你每天用的平台，該一起幫你做生意。' : 'Make the platforms you use work together.'}</h2>
+    <p class="platform-marquee-intro">{isZh ? `從 ${platformDirectoryCount} 個平台，挑出你的生意真正需要的串接方向。訊息、訂單、出貨到客戶管理，一步接上下一步。` : `Explore ${platformDirectoryCount} API-capable platforms and plan the connections your business needs, from messages and orders to shipping and customer management.`}</p>
   </div>
   <div class="platform-directory">
     {platformDirectoryGroups.map((group, groupIndex) => <div class="platform-group">
@@ -25,12 +25,12 @@ const isZh = locale === 'zh-hant'
       </ul>
     </div>)}
   </div>
-  <p class="platform-brand-note">{isZh ? '以上為可規劃的 API 串接方向，實際串接依授權、地區與專案範圍確認。品牌標誌與名稱僅供平台識別，不代表合作關係或品牌背書；部分平台以名稱縮寫呈現。' : 'These are API integration options for project scoping; availability depends on access, region and scope. Brand marks and names identify platforms and do not imply partnership or endorsement. Some are shown with initials.'}</p>
+  <div class="platform-next-step"><p>{isZh ? '你正在用哪些平台？告訴我們，直接規劃怎麼接。' : 'Which platforms do you use? Tell us and plan the next connection.'}</p><a href={isZh ? '/zh-hant#fit' : '/en#fit'}>{isZh ? '談我的整合需求' : 'Discuss my integrations'}<span aria-hidden="true">↗</span></a></div>
 </section>
 
 <style>
   .platform-marquee { padding: clamp(3rem, 6vw, 5.5rem) 0; border-top: 1px solid rgba(23,26,50,.12); color: var(--premium-navy); background: var(--premium-paper); }
-  .platform-marquee-heading, .platform-directory, .platform-brand-note { max-width: 1440px; margin-inline: auto; padding-inline: var(--gutter); }
+  .platform-marquee-heading, .platform-directory, .platform-next-step { max-width: 1440px; margin-inline: auto; padding-inline: var(--gutter); }
   .platform-marquee-heading > p:first-child { margin: 0 0 1rem; color: #746d60; font: .58rem/1.5 var(--font-mono, monospace); letter-spacing: .15em; }
   .platform-marquee-heading h2 { margin: 0; font: 400 clamp(1.5rem, 2.6vw, 2.65rem)/1.35 var(--font-display, sans-serif); letter-spacing: -.04em; }
   .platform-marquee-intro { max-width: 42rem; margin: 1rem 0 0; color: #716d68; font: .85rem/1.8 var(--font-body, sans-serif); }
@@ -54,8 +54,13 @@ const isZh = locale === 'zh-hant'
   .platform-logo strong { min-width: 0; font: 500 .81rem/1.25 var(--font-body, sans-serif); overflow-wrap: anywhere; }
   .platform-arrow { margin-left: auto; color: #89806f; font-size: .9rem; transition: transform var(--motion-feedback, 200ms); }
   .platform-logo:hover .platform-arrow, .platform-logo:focus-visible .platform-arrow { transform: translate(3px, -3px); }
-  .platform-brand-note { margin-top: 2.6rem; color: #777168; font: .64rem/1.7 var(--font-body, sans-serif); }
+  .platform-next-step { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; margin-top: 2.6rem; padding-top: 1.5rem; border-top: 1px solid rgba(23,26,50,.2); }
+  .platform-next-step p { margin: 0; font: 500 clamp(.85rem, 1.25vw, 1.1rem)/1.5 var(--font-body, sans-serif); }
+  .platform-next-step a { display: inline-flex; align-items: center; gap: 1.75rem; flex-shrink: 0; color: var(--premium-navy); font: 500 .8rem/1.4 var(--font-body, sans-serif); text-decoration: none; border-bottom: 1px solid currentColor; padding-block: .5rem; }
+  .platform-next-step a span { transition: transform var(--motion-feedback, 200ms); }
+  .platform-next-step a:hover span, .platform-next-step a:focus-visible span { transform: translate(3px, -3px); }
+  .platform-next-step a:focus-visible { outline: 2px solid var(--premium-navy); outline-offset: 3px; }
   @media (max-width: 1100px) { .platform-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  @media (max-width: 700px) { .platform-directory { gap: 1.8rem; margin-top: 2.4rem; } .platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 .75rem; } .platform-logo { min-height: 4.75rem; gap: .45rem; } .platform-mark { flex-basis: 36px; width: 36px; height: 36px; } .platform-mark img { width: 31px; height: 31px; } .platform-mark-line img { width: 40px; height: 40px; } .platform-mark-dhl { flex-basis: 44px; width: 44px; height: 29px; } .platform-mark-dhl img { width: 42px; height: 27px; } .platform-logo strong { font-size: .68rem; } .platform-arrow { display: none; } .platform-brand-note { font-size: .58rem; } }
-  @media (prefers-reduced-motion: reduce) { .platform-logo, .platform-logo::before, .platform-arrow { transition-duration: 0ms; } }
+  @media (max-width: 700px) { .platform-directory { gap: 1.8rem; margin-top: 2.4rem; } .platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 .75rem; } .platform-logo { min-height: 4.75rem; gap: .45rem; } .platform-mark { flex-basis: 36px; width: 36px; height: 36px; } .platform-mark img { width: 31px; height: 31px; } .platform-mark-line img { width: 40px; height: 40px; } .platform-mark-dhl { flex-basis: 44px; width: 44px; height: 29px; } .platform-mark-dhl img { width: 42px; height: 27px; } .platform-logo strong { font-size: .68rem; } .platform-arrow { display: none; } .platform-next-step { align-items: flex-start; flex-direction: column; } }
+  @media (prefers-reduced-motion: reduce) { .platform-logo, .platform-logo::before, .platform-arrow, .platform-next-step a span { transition-duration: 0ms; } }
 </style>

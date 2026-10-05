@@ -10,11 +10,11 @@ const steps = isZh ? ['說說你的品牌', '看見網站預覽', '挑選適合�
   <div class="shell studio-layout">
     <div class="studio-copy">
       <span class="studio-entry-label" data-reveal><i aria-hidden="true"></i>{isZh ? '把想法，變成你的網站' : 'TURN YOUR IDEA INTO A WEBSITE'}</span>
-      <h2 data-reveal data-reveal-kind="title">{isZh ? '一鍵建站。' : 'Your website.'}<br /><span>{isZh ? '好生意，' : 'Your next'}<br />{isZh ? '從這裡開始。' : 'big move.'}</span></h2>
-      <p data-reveal>{isZh ? '不用先懂技術。選擇喜歡的風格，說說你的生意，先看見一個真正像你的網站預覽。' : 'You do not need to speak tech. Find your style, tell us about your business, and see a website that feels like you.'}</p>
+      <h2 data-reveal data-reveal-kind="title">{isZh ? '一鍵建站。' : 'Your website.'}<br /><span>{isZh ? '約 10 分鐘，' : 'Your first preview'}<br />{isZh ? '看見第一版。' : 'in about 10 minutes.'}</span></h2>
+      <p data-reveal>{isZh ? '選風格、動畫與功能，說說你的生意，親手操作你的第一版網站預覽。喜歡這個方向，再談正式上線。' : 'Choose your style, motion and features. Tell us about your business, then explore an interactive first preview before planning the launch.'}</p>
       <div class="studio-primary-action" data-reveal>
-        <a href={builder} class="premium-button premium-button-dark studio-cta" data-magnetic><span>{isZh ? '開始建立我的網站' : 'Start my website'}</span><span aria-hidden="true">↗</span></a>
-        <span class="studio-action-note">{isZh ? '先看預覽，再選方案 · 無需信用卡' : 'Preview first. Choose a plan later. No card required.'}</span>
+        <a href={builder} class="premium-button premium-button-dark studio-cta" data-magnetic><span>{isZh ? '免費做我的網站預覽' : 'Create my free website preview'}</span><span aria-hidden="true">↗</span></a>
+        <span class="studio-action-note">{isZh ? '約 10 分鐘看到第一版預覽 · 無需信用卡' : 'See a first preview in about 10 minutes · No card required'}</span>
       </div>
       <ol class="studio-path" data-reveal-stagger data-reveal-kind="soft" aria-label={isZh ? '建站開始方式' : 'Getting started'}>{steps.map((step, i) => <li><span>{String(i + 1).padStart(2, '0')}</span><strong>{step}</strong></li>)}</ol>
     </div>

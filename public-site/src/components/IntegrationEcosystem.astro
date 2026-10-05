@@ -9,8 +9,8 @@ const headingId = `ecosystem-heading-${locale}`
 <section id="integrations" class="integration-ecosystem" aria-labelledby={headingId} data-integration-ecosystem data-selected="domain" data-ambient>
   <div class="ecosystem-shell">
     <header class="ecosystem-heading" data-reveal data-reveal-kind="title">
-      <div><p class="ecosystem-kicker">03 / CONNECT YOUR BUSINESS</p><h2 id={headingId}>{isZh ? '從網站到營運，' : 'From website to business,'}<br /><em>{isZh ? '一起接好。' : 'connected with care.'}</em></h2></div>
-      <p class="ecosystem-intro">{isZh ? '網域、訊息、金流與物流。' : 'Domains, messaging, payments and shipping.'}<br />{isZh ? '把每天的工作，接成順手的流程。' : 'Bring your daily work into one considered flow.'}</p>
+      <div><p class="ecosystem-kicker">03 / CONNECT YOUR BUSINESS</p><h2 id={headingId}>{isZh ? '網站接了生意，' : 'Your website gets the customer.'}<br /><em>{isZh ? '後面也要接得住。' : 'Your operations keep them.'}</em></h2></div>
+      <p class="ecosystem-intro">{isZh ? '網域、訊息、金流、物流與客戶管理。' : 'Domains, messaging, payments, shipping and CRM.'}<br />{isZh ? '少一點手動轉貼，多一點時間接住訂單。' : 'Less manual handoff. More time for the next order.'}</p>
     </header>
 
     <div class="ecosystem-map" data-reveal data-reveal-kind="image">
@@ -40,9 +40,9 @@ const headingId = `ecosystem-heading-${locale}`
     <div class="ecosystem-detail" id={`integration-detail-${locale}`}>
       <span class="detail-index">PLATFORM INTEGRATIONS</span>
       <div class="detail-copy">{integrationCategories.map((item, index) => <p id={`integration-description-${item.id}-${locale}`} data-integration-description={item.id} hidden={index !== 0}><strong>{item.title[locale]}</strong><span>{item.description[locale]}</span></p>)}</div>
-      <a href={isZh ? '/zh-hant#fit' : '/en#fit'}>{isZh ? '聊聊你的串接需求' : 'Discuss your integrations'}<span aria-hidden="true">↗</span></a>
+      <a href={isZh ? '/zh-hant#fit' : '/en#fit'}>{isZh ? '規劃我的營運串接' : 'Plan my integrations'}<span aria-hidden="true">↗</span></a>
     </div>
-    <p class="ecosystem-scope">{isZh ? '依選用方案與平台授權確認串接。' : 'Integration scope is confirmed with your plan and platform authorisations.'}</p>
+    <p class="ecosystem-scope">{isZh ? '從你正在用的平台開始，挑出第一個值得接通的流程。' : 'Start with the platforms you use and choose the first workflow worth connecting.'}</p>
   <noscript><style is:inline>.integration-ecosystem .detail-copy [data-integration-description][hidden] { display: flex !important; margin-top: 1rem; }</style></noscript>
   </div>
 </section>

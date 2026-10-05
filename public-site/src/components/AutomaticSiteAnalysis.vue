@@ -62,11 +62,11 @@ const copy = computed(() =>
   isZh.value
     ? {
         eyebrow: "先試，再決定 / TRY IT FIRST",
-        title: "免費測一次。看見網站的盲點。",
-        intro: "客戶看完就離開？先從網站結構、搜尋與內容，找出值得改善的方向。",
+        title: "免費檢查。看看網站卡在哪一步。",
+        intro: "輸入網址，馬上檢查公開首頁的 SEO、GEO、內容與行動入口。找出客戶看完卻沒有找你的可能原因。",
         label: "公開網站網址",
         placeholder: "https://your-company.com",
-        submit: "免費診斷我的網站",
+        submit: "立即免費檢查",
         scanning: "正在整理公開首頁訊號",
         invalid: "請輸入完整的 http:// 或 https:// 公開網址。",
         scanFailed:
@@ -405,7 +405,7 @@ onBeforeUnmount(clearTimers);
           </div>
         </div>
         <h2>
-          <template v-if="isZh">免費測一次。<br />看見網站的盲點。</template>
+          <template v-if="isZh">免費檢查。<br />看看網站卡在哪一步。</template>
           <template v-else>{{ copy.title }}</template>
         </h2>
         <p>{{ copy.intro }}</p>
@@ -447,7 +447,7 @@ onBeforeUnmount(clearTimers);
             </svg>
             <span class="analysis-art-caption">{{
               isZh
-                ? "先看公開首頁，找到下一步。"
+                ? "先看公開首頁，找出可能卡點。"
                 : "START WITH WHAT YOUR HOMEPAGE SHOWS."
             }}</span>
           </div>
@@ -467,7 +467,7 @@ onBeforeUnmount(clearTimers);
           <p class="analysis-entry-note">
             {{
               isZh
-                ? "只讀取公開首頁。診斷失敗不會補造結果。"
+                ? "只需公開網址，不用帳號、密碼或信用卡。"
                 : "Public homepage only. No invented results if a check fails."
             }}
           </p>

@@ -74,6 +74,8 @@ describe('Astro public static output', () => {
       expect(document.querySelectorAll('.discovery-difference__card')).toHaveLength(2)
       expect(document.querySelector('.discovery-difference')?.textContent).toContain('SEO')
       expect(document.querySelector('.discovery-difference')?.textContent).toContain('GEO')
+      expect(document.querySelector('.platform-next-step a')?.getAttribute('href')).toBe(`${route}#fit`)
+      expect(document.querySelector('.platform-marquee')?.textContent).not.toMatch(/不代表合作關係|do not imply partnership/i)
     }
     const english = htmlFor('/en')
     expect(english).toContain('100,000+ real-world')
