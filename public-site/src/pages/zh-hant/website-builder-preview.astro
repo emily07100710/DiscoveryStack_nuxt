@@ -1,6 +1,7 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro'
 import WebsiteBuilderConcept from '../../components/WebsiteBuilderConcept.vue'
+import { customerManagedSiteStartUrl } from '../../lib/publicDestinations'
 
 const title = '一鍵建站｜約 10 分鐘看見網站預覽'
 const description = '預留約 10 分鐘，填寫品牌資料、選擇風格與動畫，建立第一版網站預覽。看清楚可用功能，再確認方案與正式上線安排。'
@@ -12,6 +13,7 @@ const description = '預留約 10 分鐘，填寫品牌資料、選擇風格與�
   description={description}
   canonicalPath="/zh-hant/website-builder-preview"
   noindex={true}
+  localizedAlternates={false}
 >
-  <WebsiteBuilderConcept client:load />
+  <WebsiteBuilderConcept customerStartUrl={customerManagedSiteStartUrl} client:load />
 </BaseLayout>

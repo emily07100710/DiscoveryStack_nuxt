@@ -93,6 +93,7 @@ describe('managed-site customer self-serve re-access', () => {
     expect(result.diagnostics).toMatchObject({ outcome: 'sent', issued: 1 })
     expect(transport.messages).toHaveLength(1)
     expect(transport.messages[0]!.to).toBe(CUSTOMER)
+    expect(transport.messages[0]!.idempotencyKey).toMatch(/^managed-site-reaccess:[a-f0-9]{64}$/u)
     expect(transport.messages[0]!.text).toContain(`${PORTAL_ORIGIN}${MANAGED_SITE_REACCESS_PATH}?token=`)
 
     // Re-access re-issues a link; it must never widen who has access.

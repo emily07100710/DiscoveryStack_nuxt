@@ -1,12 +1,22 @@
 import { createError } from 'h3'
-import { projectManagedSiteCatalogQuote } from '../ordering-service'
+import { getManagedSitePriceCatalog, projectManagedSiteCatalogQuote } from '../ordering-service'
 import { managedSiteQuoteLineBilling } from '../quote-line-billing'
 import { buildSiteSpec, type SiteBriefInput, type SiteSpec } from '../site-spec'
 import type { QuoteInput } from '../ordering-types'
 import type { FunnelAnswers } from './session-service'
+import { DESIGN_CARE_POLICY } from '../customer-runtime'
 
 function incomplete(message: string): never {
   throw createError({ statusCode: 409, statusMessage: message })
+}
+
+/** Public self-serve catalog. Owner/manual ordering keeps the complete catalog unchanged. */
+export function projectFunnelPriceCatalog() {
+  const catalog = getManagedSitePriceCatalog()
+  return {
+    ...catalog,
+    domainOptions: catalog.domainOptions.filter((option): option is 'new' => option === 'new'),
+  }
 }
 
 export function funnelPreviewInput(answers: FunnelAnswers, sessionId: number): SiteBriefInput {
@@ -24,6 +34,7 @@ export function funnelPreviewInput(answers: FunnelAnswers, sessionId: number): S
     brief: [company.whatWeDo, `主要服務：${company.mainOffer}`, existingSiteContext, previewContext, style.stylePreset ? `風格偏好：${style.stylePreset}` : ''].filter(Boolean).join('\n'),
     businessGoals: company.conversionGoals as SiteBriefInput['businessGoals'],
     siteType,
+    ...(style.customerSitePreset ? { customerSitePreset: style.customerSitePreset } : {}),
     selectedModules: [...(answers.modules || [])] as SiteBriefInput['selectedModules'],
     styleReferences: style.referenceUrls.map(url => ({ url, selectedPreferences: ['color', 'typography_mood', 'whitespace_density', 'homepage_structure', 'image_ratio', 'animation_rhythm'] })),
   }
@@ -66,5 +77,6 @@ export function projectFunnelQuote(answers: FunnelAnswers, sessionId = 1) {
     manualServiceModules: projection.manualServiceModules,
     manualSetupModules: projection.manualSetupModules,
     comingSoonModules: projection.comingSoonModules,
+    designCare: DESIGN_CARE_POLICY,
   }
 }

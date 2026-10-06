@@ -26,6 +26,8 @@ import { canonicalContentOperationRunIdentity } from './run-identity'
 import { evaluateCanonicalGeoContentQuality } from './quality-evaluation'
 import { autonomousRiskSnapshotMatches, canonicalAutonomousRiskSnapshot } from './autonomous-risk'
 import { contentFingerprint } from '../seo-geo-core/riskGate'
+import { executeManagedSiteNativePublicationIfConfigured } from '../managed-sites/page-editor/native-publication'
+import { notifyLearningLoopPublicationDelivered, publicationLearningSnapshot, type PublicationBridgeDependencies } from '../learning-loop/publication-bridge'
 
 const MAX_ATTEMPTS = 3
 const DEFAULT_LEASE_MS = 5 * 60 * 1000
@@ -69,6 +71,15 @@ export type ContentOperationOrchestratorDependencies = {
   nonceProvider?: NonceProvider
   clock?: OrchestratorClock
   leaseMs?: number
+  publicationBridge?: PublicationBridgeDependencies
+}
+
+function learningSnapshot(input: Parameters<typeof publicationLearningSnapshot>[0]) {
+  try { return publicationLearningSnapshot(input) } catch { return null }
+}
+async function postDelivery(ownerUserId: number, entryId: number, repository: ContentOperationsRepository, dependencies: ContentOperationOrchestratorDependencies) {
+  // Publication is already committed. Metadata bridge outages are recovered later, never re-thrown.
+  try { await notifyLearningLoopPublicationDelivered(ownerUserId, entryId, repository, dependencies.publicationBridge) } catch { /* durable delivered attempts remain the recovery authority */ }
 }
 
 function badRequest(message: string): never { throw createError({ statusCode: 422, statusMessage: message }) }
@@ -447,6 +458,16 @@ async function defaultFetch(url: string, init: Parameters<typeof fetch>[1]): Pro
 function defaultPublisher(dependencies: ContentOperationOrchestratorDependencies): FirstPartyPublicationExecutor {
   return async input => {
     const runtime = input.mode === 'execute' ? getContentOperationsRuntimeDependencies() : undefined
+    if (input.mode === 'execute') {
+      const validatedTarget = validateFirstPartyPublishTarget(input.target)
+      if (validatedTarget.status === 'valid') {
+        const now = new Date(input.now)
+        if (Number.isFinite(now.getTime())) {
+          const native = await executeManagedSiteNativePublicationIfConfigured({ target: validatedTarget.target, publication: input.publication, now })
+          if (native) return native
+        }
+      }
+    }
     return executeFirstPartyPublication({
       target: input.target,
       publication: input.publication,
@@ -478,7 +499,7 @@ function publicationFromLineage(ownerUserId: number, entry: ContentOperationCale
     reviewDecision: governed ? 'governed_autopilot' : 'approved_for_delivery',
     riskGateStatus: 'passed',
     evidenceSnapshotHash: entry.evidenceSnapshotHash,
-    contentHash: draft.contentHash,
+    contentHash: createHash('sha256').update(draft.body, 'utf8').digest('hex'),
     title: draft.title,
     body: draft.body,
     slug: identity.slug,
@@ -751,8 +772,17 @@ async function executeMultiChannelPublicationPath(ownerUserId: number, entry: Co
         } else if (requestedMode === 'dry_run' && !await transaction.findPublicationAttemptByIdempotency(ownerUserId, dispatch.idempotencyKey)) {
           await transaction.insertPublicationAttempt({ ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, websiteId: target.websiteId || null, routingPlanId: plan.planFingerprint, routeId: route.routeId, executorRunId: dispatch.executorRunId, authorityReference, publicationUrl: null, receiptFingerprint: result.receiptFingerprint, mode: requestedMode, attemptNumber: dispatch.attempt, idempotencyKey: dispatch.idempotencyKey, inputFingerprint: requestFingerprint, publicationId: identityForRoute.publicationId, publicationSlug: identityForRoute.slug, publicationPath: identityForRoute.path, contentHash: draft.contentHash, publicationContentHash: bodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, artifactFingerprint: finalization.artifactFingerprint, status: 'dry_run_succeeded', remoteState: 'dry_run', receiptLedger: [], remoteRevision: null, errorCode: null, errorSummary: null, startedAt: now, completedAt: now })
         }
-        const routeEvent = event(ownerUserId, entry, leased.id, `publication_route_${result.status}`, entry.status, aggregateStatus === 'delivered' ? 'delivered' : aggregateStatus === 'retryable_failure' ? 'ready_to_publish' : entry.status, { routeId: route.routeId, targetId: target.id, status: result.status, replay: result.replay, receiptFingerprint: result.receiptFingerprint, reason: result.reasons[0] || null }, { entryId: entry.id, planFingerprint: plan.planFingerprint, routeId: route.routeId, attempt: result.attempt, status: result.status })
-        await transaction.appendEvent({ ...routeEvent, clientId: lineage.client.id, websiteId: target.websiteId || null, deliverableId: entry.productionDeliverableId, draftId: draft.id, routingPlanId: plan.planFingerprint, routeId: route.routeId, executorRunId: dispatch.executorRunId, contentHash: bodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, authorityReference: targetMachineAuthorizations.get(target.id)?.authorizationFingerprint || authorityReference })
+        const routeAuthorityReference = reservation?.attempt.authorityReference || targetMachineAuthorizations.get(target.id)?.authorizationFingerprint || authorityReference
+        const deliveredLineage = result.status === 'delivered' && reservation ? {
+          schemaVersion: 'content-publication-delivered-lineage-v1', attemptId: reservation.attempt.id,
+          publicationId: identityForRoute.publicationId, publicationSlug: identityForRoute.slug, publicationPath: identityForRoute.path,
+          jobId: job.id, draftId: draft.id, reviewId: routeAuthorityReference ? null : latestReview?.id || null,
+          riskGateId: gate.id, contentType: entry.contentType, language: entry.language,
+          productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId,
+          learningSnapshot: learningSnapshot({ draftId: draft.id, draftVersion: draft.version, draftContentHash: draft.contentHash, title: draft.title, body: draft.body, targetId: target.id, publicationContentHash: bodyHash, receiptFingerprint: result.receiptFingerprint || '' }),
+        } : {}
+        const routeEvent = event(ownerUserId, entry, leased.id, `publication_route_${result.status}`, entry.status, aggregateStatus === 'delivered' ? 'delivered' : aggregateStatus === 'retryable_failure' ? 'ready_to_publish' : entry.status, { routeId: route.routeId, targetId: target.id, status: result.status, replay: result.replay, receiptFingerprint: result.receiptFingerprint, reason: result.reasons[0] || null, ...deliveredLineage }, { entryId: entry.id, planFingerprint: plan.planFingerprint, routeId: route.routeId, attempt: result.attempt, status: result.status })
+        await transaction.appendEvent({ ...routeEvent, clientId: lineage.client.id, websiteId: target.websiteId || null, deliverableId: entry.productionDeliverableId, draftId: draft.id, routingPlanId: plan.planFingerprint, routeId: route.routeId, executorRunId: dispatch.executorRunId, contentHash: bodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, authorityReference: routeAuthorityReference })
       }
       const nextStatus = aggregateStatus === 'delivered' ? 'delivered' : aggregateStatus === 'retryable_failure' ? 'ready_to_publish' : aggregateStatus === 'dry_run_succeeded' ? entry.status : 'blocked'
       const updated = await transaction.updateEntry(ownerUserId, entry.id, { status: nextStatus, contentHash: draft.contentHash, publicationContentHash: bodyHash, publicationTargetId: targets[0]!.id, publicationSlug: identity.slug, publicationPath: identity.path, publicationIdentityFingerprint: identity.identityFingerprint, publicationRoutingPlanId: plan.planFingerprint, publicationAuthorityReference: authorityReference, publicationTargetCount: targets.length })
@@ -761,6 +791,7 @@ async function executeMultiChannelPublicationPath(ownerUserId: number, entry: Co
       if (!completed) badRequest('Multi-channel publication lease could not be completed.')
       return { updated, completed }
     })
+    if (aggregateStatus === 'delivered') await postDelivery(ownerUserId, entry.id, repository, dependencies)
     return { entryId: entry.id, entry: finalized.updated, previousStatus: entry.status, resultingStatus: finalized.updated.status, runId: finalized.completed.id, stage: 'publication', outcome: aggregateStatus === 'delivered' ? 'delivered' : aggregateStatus === 'dry_run_succeeded' ? 'dry_run_succeeded' : aggregateStatus === 'retryable_failure' ? 'retry_wait' : 'blocked', retryAt: aggregateStatus === 'retryable_failure' ? retryDate(now, batchAttempt) : null, limitations: aggregateStatus === 'delivered' ? ['all target routes delivered with exact remote identity and body hash; each target has an independent append-only attempt'] : aggregateStatus === 'retryable_failure' ? ['only unresolved retryable target routes are eligible for the next batch attempt; delivered routes replay from verified receipts'] : ['multi-channel publication did not complete; no unvalidated target is treated as delivered'] }
   } catch (error) {
     for (const authorization of claimedMachineAuthorizations.values()) await repository.transitionMachineAuthorization(ownerUserId, authorization.authorizationFingerprint, 'executing', 'authorized', now).catch(() => null)
@@ -858,14 +889,15 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
   if (!identityResult.ok) badRequest(`Publication identity is invalid: ${identityResult.reason}`)
   const identity = identityResult.identity
   if (hasPersistedIdentity && entry.publicationTargetId !== target.id) badRequest('Persisted publication identity is bound to a different target row.')
-  const needsLineagePatch = !hasPersistedIdentity || entry.publicationAuthorityReference !== authorityReference || entry.publicationContentHash !== draft.contentHash
-  const persistedEntry = needsLineagePatch ? await repository.transaction(async transaction => transaction.updateEntry(ownerUserId, entry.id, { publicationTargetId: target.id, publicationSlug: identity.slug, publicationPath: identity.path, publicationIdentityFingerprint: identity.identityFingerprint, publicationAuthorityReference: authorityReference, publicationContentHash: draft.contentHash })) : entry
+  const publicationBodyHash = createHash('sha256').update(draft.body, 'utf8').digest('hex')
+  const needsLineagePatch = !hasPersistedIdentity || entry.publicationAuthorityReference !== authorityReference || entry.publicationContentHash !== publicationBodyHash
+  const persistedEntry = needsLineagePatch ? await repository.transaction(async transaction => transaction.updateEntry(ownerUserId, entry.id, { publicationTargetId: target.id, publicationSlug: identity.slug, publicationPath: identity.path, publicationIdentityFingerprint: identity.identityFingerprint, publicationAuthorityReference: authorityReference, publicationContentHash: publicationBodyHash })) : entry
   if (input.mode === 'execute' && !target.executionEnabled) badRequest('Execute mode is disabled for this publication target; use dry_run explicitly.')
   const stageRun = await ensureRun(repository, ownerUserId, persistedEntry, 'publication', { jobId: job.id, draftId: draft.id, evidenceSnapshotHash: entry.evidenceSnapshotHash })
   if (expectedRunId !== undefined && stageRun.id !== expectedRunId) badRequest('The expected publication run is stale or does not match the current publication run.')
   if (stageRun.state === 'succeeded' && entry.status === 'delivered') return { entryId: entry.id, entry: persistedEntry, previousStatus: entry.status, resultingStatus: 'delivered', runId: stageRun.id, stage: 'publication', outcome: 'replayed', retryAt: null, limitations: ['replayed from durable publication identity'] }
   const requestedMode = input.mode || 'dry_run'
-  const requestFingerprint = stableFingerprint({ entryId: entry.id, mode: requestedMode, identityFingerprint: identity.identityFingerprint, contentHash: draft.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash })
+  const requestFingerprint = stableFingerprint({ entryId: entry.id, mode: requestedMode, identityFingerprint: identity.identityFingerprint, contentHash: draft.contentHash, publicationContentHash: publicationBodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash })
   const attempts = await repository.listPublicationAttempts(ownerUserId, entry.id)
   const recovered = attempts.find(attempt => attempt.runId === stageRun.id && attempt.status === 'planned' && attempt.inputFingerprint === requestFingerprint)
   const attemptKey = recovered?.idempotencyKey || input.idempotencyKey
@@ -900,14 +932,14 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
   const attemptNumber = mode === 'dry_run' ? Math.max(1, attempts.filter(attempt => attempt.mode === 'dry_run').reduce((max, attempt) => Math.max(max, attempt.attemptNumber), 0) + 1) : Math.max(1, stageRun.attemptNumber + 1)
   if (mode !== 'dry_run') {
     try {
-      reservation = await repository.reservePublicationAttempt({ ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, mode, attemptNumber, idempotencyKey: attemptKey, inputFingerprint: requestFingerprint, publicationId: identity.publicationId, publicationSlug: identity.slug, publicationPath: identity.path, contentHash: draft.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, startedAt: now, leaseToken: token, jobId: job.id, draftId: draft.id, reviewId: authorityReference ? null : latestReview?.id || null, riskGateId: gate.id, authorityReference })
+      reservation = await repository.reservePublicationAttempt({ ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, mode, attemptNumber, idempotencyKey: attemptKey, inputFingerprint: requestFingerprint, publicationId: identity.publicationId, publicationSlug: identity.slug, publicationPath: identity.path, contentHash: draft.contentHash, publicationContentHash: publicationBodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, startedAt: now, leaseToken: token, jobId: job.id, draftId: draft.id, reviewId: authorityReference ? null : latestReview?.id || null, riskGateId: gate.id, authorityReference })
     } catch (error) {
       const released = await repository.releaseRunLease(ownerUserId, leased.id, 'blocked', token, now, { code: 'ATTEMPT_RESERVATION_FAILED', summary: sanitizeErrorSummary(error) })
       if (!released) badRequest('Publication reservation failure lease could not be completed.')
       return { entryId: entry.id, entry: persistedEntry, previousStatus: entry.status, resultingStatus: entry.status, runId: released.id, stage: 'publication', outcome: 'blocked', retryAt: null, limitations: ['publication attempt was not reserved; no external request was made'] }
     }
   }
-  const attemptBase = { ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, attemptNumber, mode, idempotencyKey: attemptKey, inputFingerprint: requestFingerprint, publicationId: identity.publicationId, publicationSlug: identity.slug, publicationPath: identity.path, contentHash: draft.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash }
+  const attemptBase = { ownerUserId, clientId: lineage.client.id, entryId: entry.id, runId: leased.id, targetId: target.id, attemptNumber, mode, idempotencyKey: attemptKey, inputFingerprint: requestFingerprint, publicationId: identity.publicationId, publicationSlug: identity.slug, publicationPath: identity.path, contentHash: draft.contentHash, publicationContentHash: publicationBodyHash, evidenceSnapshotHash: entry.evidenceSnapshotHash }
   let result: FirstPartyExecutionResult
   try {
     const executor = dependencies.publicationExecutor || defaultPublisher(dependencies)
@@ -946,16 +978,30 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
         }
         badRequest('Publication delivered result could not be finalized from planned state.')
       }
-      const updated = await transaction.updateEntry(ownerUserId, entry.id, { status: 'delivered', contentHash: result.contentHash, publicationTargetId: target.id, publicationSlug: identity.slug, publicationPath: identity.path, publicationIdentityFingerprint: identity.identityFingerprint })
+      const updated = await transaction.updateEntry(ownerUserId, entry.id, { status: 'delivered', contentHash: draft.contentHash, publicationContentHash: result.contentHash, publicationTargetId: target.id, publicationSlug: identity.slug, publicationPath: identity.path, publicationIdentityFingerprint: identity.identityFingerprint })
       const completed = await transaction.releaseRunLease(ownerUserId, leased.id, 'succeeded', token, now)
       if (!completed) badRequest('Publication success lease could not be completed.')
       if (machineAuthorization) {
         const published = await transaction.transitionMachineAuthorization(ownerUserId, machineAuthorization.authorizationFingerprint, 'executing', 'published', now)
         if (!published) badRequest('Machine authorization publication CAS failed.')
       }
-      await transaction.appendEvent(event(ownerUserId, entry, completed.id, 'publication_delivered', entry.status, updated.status, { attemptId: stored.id, attemptNumber, publicationId: result.publicationId, remoteState: result.remoteState, remoteRevision: result.remoteRevision }, { entryId: entry.id, attemptKey, event: 'publication_delivered' }))
+      await transaction.appendEvent({
+        ...event(ownerUserId, entry, completed.id, 'publication_delivered', entry.status, updated.status, {
+          schemaVersion: 'content-publication-delivered-lineage-v1', attemptId: stored.id, attemptNumber,
+          publicationId: result.publicationId, publicationSlug: identity.slug, publicationPath: identity.path, targetId: target.id,
+          jobId: job.id, draftId: draft.id, reviewId: authorityReference ? null : latestReview?.id || null,
+          riskGateId: gate.id, contentType: entry.contentType, language: entry.language,
+          productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId,
+          remoteState: result.remoteState, remoteRevision: result.remoteRevision,
+          learningSnapshot: learningSnapshot({ draftId: draft.id, draftVersion: draft.version, draftContentHash: draft.contentHash, title: draft.title, body: draft.body, targetId: target.id, publicationContentHash: result.contentHash, receiptFingerprint }),
+        }, { entryId: entry.id, attemptKey, event: 'publication_delivered' }),
+        clientId: lineage.client.id, websiteId: target.websiteId || null, deliverableId: entry.productionDeliverableId,
+        draftId: draft.id, contentHash: result.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash,
+        authorityReference,
+      })
       return { stored, updated, completed }
     })
+    await postDelivery(ownerUserId, entry.id, repository, dependencies)
     return { entryId: entry.id, entry: delivered.updated, previousStatus: entry.status, resultingStatus: 'delivered', runId: delivered.completed.id, stage: 'publication', outcome: 'delivered', retryAt: null, limitations: ['delivery result was accepted only after formal publisher identity validation', ...(publicPage.configured ? [] : [publicPage.code])] }
   }
   const status = result.status === 'retryable_failure' && attemptNumber < MAX_ATTEMPTS ? 'retryable_failure' : result.status === 'retryable_failure' ? 'permanent_failure' : result.status === 'permanent_failure' ? 'permanent_failure' : 'blocked'

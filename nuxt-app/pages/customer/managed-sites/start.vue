@@ -37,7 +37,7 @@ type PriceCatalog = {
   modules: { key: string; buildMinor: number; monthlyMinor: number; activation: 'automatic' | 'manual_service'; readiness: 'available' | 'manual_setup' | 'coming_soon'; labelZh: string; descriptionZh: string }[]
   plans: { key: 'site_only' | 'site_geo' | 'site_geo_autopost'; monthlyMinor: number | null; labelZh: string; descriptionZh: string }[]
   cadence: { days: 3 | 7 | 15 | 30; monthlyMinor: number }[]
-  domainOptions: ('existing' | 'new' | 'assisted')[]
+  domainOptions: 'new'[]
   domainTlds: { tld: string; annualMinor: number }[]
   assistedDomainSetupMinor: number
 }
@@ -99,6 +99,22 @@ type WizardAnswers = FunnelAnswersView & {
 }
 
 const STORAGE_KEY = 'discoverystack.managed-site-funnel'
+const runtimeConfig = useRuntimeConfig()
+
+function publicFitReviewUrl(rawOrigin: unknown): string {
+  try {
+    const url = new URL('/zh-hant', String(rawOrigin || '').trim())
+    const isLocalDevelopment = url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(url.hostname)
+    const isPlaceholder = url.hostname === 'example.com' || url.hostname.endsWith('.example.com') || url.hostname.endsWith('.test')
+    if ((!isLocalDevelopment && url.protocol !== 'https:') || url.username || url.password || isPlaceholder) return ''
+    url.hash = 'fit'
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
+const manualEnquiryUrl = publicFitReviewUrl(runtimeConfig.public.discoveryStackPublicSiteOrigin)
 const loading = ref(true)
 const bootstrapError = ref('')
 const catalog = ref<PriceCatalog | null>(null)
@@ -181,12 +197,11 @@ const navigationBusy = computed(() => saveStatus.value === 'saving' || buildStat
 const designerTier = computed(() => catalog.value?.designTiers.find(item => item.key === 'designer'))
 const hasManualSetupModules = computed(() => Boolean(quote.value?.manualSetupModules.length))
 const contactModuleSelected = computed(() => (answers.value.modules || []).includes('contact_lead_capture'))
+const selfServeDomainSupported = computed(() => answers.value.domain?.option === 'new')
 const resendSeconds = computed(() => contactInbox.value.resendAvailableAt ? Math.max(0, Math.ceil((Date.parse(contactInbox.value.resendAvailableAt) - countdownNow.value) * 0.001)) : 0)
 const inboxBusy = computed(() => inboxBindingStatus.value !== 'idle')
-const domainOptionCopy: Record<'existing' | 'new' | 'assisted', { label: string; help: string }> = {
-  existing: { label: '我有自己的網域', help: '結帳後協助把你現有的網址連到新網站。' },
+const domainOptionCopy: Record<'new', { label: string; help: string }> = {
   new: { label: '幫我註冊新網域', help: '先選想要的名稱與結尾，結帳後由我們代為註冊，並自動連接到建好的網站。' },
-  assisted: { label: '請你們代辦', help: '由我們代為註冊與設定，另收設定費。' },
 }
 
 function requestFailureMessage(error: any, fallback: string): string {
@@ -547,9 +562,9 @@ function updateShortAgreementState() {
   if (agreementPane.value && isScrolledToBottom(agreementPane.value)) consentScrolledToBottom.value = true
 }
 
-function selectDomainOption(option: 'existing' | 'new' | 'assisted') {
+function selectDomainOption(option: 'new') {
   if (answers.value.domain?.option === option) return
-  answers.value.domain = option === 'new' ? { option, name: '', tld: catalog.value?.domainTlds[0]?.tld } : { option }
+  answers.value.domain = { option, name: '', tld: catalog.value?.domainTlds[0]?.tld }
   resetDomainAvailability()
   if (!domainRegistrant.value.firstName) domainRegistrant.value.firstName = answers.value.contact.contactName
   if (!domainRegistrant.value.email) domainRegistrant.value.email = answers.value.contact.email
@@ -858,6 +873,16 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
 
         <div v-else-if="currentStep === 3" class="step-body">
           <fieldset>
+            <legend>品牌版型方向</legend>
+            <p>先挑選喜歡的視覺方向；商品、文章與預約內容會換成你的品牌資料，不會複製示範品牌。</p>
+            <div class="preset-grid">
+              <button v-for="preset in [{ key: 'atelier', label: '精品選品', help: '酒紅、米白、編輯式留白，適合精緻電商。' }, { key: 'bloom', label: '溫柔生活', help: '柔粉、霧白、親近的商品與故事編排。' }, { key: 'alignment', label: '安靜練習', help: '深綠、瓷白、服務預約與長文閱讀。' }]" :key="preset.key" type="button" :aria-pressed="answers.style.customerSitePreset === preset.key" :class="{ selected: answers.style.customerSitePreset === preset.key }" @click="answers.style.customerSitePreset = preset.key as 'atelier' | 'bloom' | 'alignment'">
+                <strong>{{ preset.label }}</strong><span>{{ preset.help }}</span>
+              </button>
+            </div>
+            <small>正式交付後 30 天，原功能範圍內的排版、色彩、字體與圖片配置調整免費。新增功能、資料搬遷、新串接與第三方費用另行確認。</small>
+          </fieldset>
+          <fieldset>
             <legend>選一種喜歡的風格</legend>
             <div class="preset-grid">
               <button v-for="preset in STYLE_PRESETS" :key="preset.key" type="button" role="radio" :aria-checked="answers.style.stylePreset === preset.key" :class="{ selected: answers.style.stylePreset === preset.key }" @click="answers.style.stylePreset = preset.key">
@@ -964,8 +989,19 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
             <div class="card-grid">
               <button v-for="option in catalog.domainOptions" :key="option" type="button" role="radio" :aria-checked="answers.domain?.option === option" class="option-card" :class="{ selected: answers.domain?.option === option }" @click="selectDomainOption(option)">
                 <strong>{{ domainOptionCopy[option].label }}</strong><span>{{ domainOptionCopy[option].help }}</span>
-                <b v-if="option === 'assisted'">{{ formatTwd(catalog.assistedDomainSetupMinor) }}</b>
               </button>
+              <article class="manual-domain-card">
+                <strong>我有自己的網域</strong>
+                <span>需要先確認網域擁有權與 DNS 連接方式，目前不提供自助付款。</span>
+                <a v-if="manualEnquiryUrl" class="manual-domain-card__link" :href="manualEnquiryUrl" target="_blank" rel="noopener noreferrer">前往合作諮詢表單 <span aria-hidden="true">↗</span></a>
+                <small v-else>合作諮詢網址尚未設定，請由 DiscoveryStack 公開官網的「開始對話」聯絡我們。</small>
+              </article>
+              <article class="manual-domain-card">
+                <strong>需要人工代辦</strong>
+                <span>團隊會先確認名稱、註冊資料與實際費用，目前不在這裡選擇或付款。</span>
+                <a v-if="manualEnquiryUrl" class="manual-domain-card__link" :href="manualEnquiryUrl" target="_blank" rel="noopener noreferrer">前往合作諮詢表單 <span aria-hidden="true">↗</span></a>
+                <small v-else>合作諮詢網址尚未設定，請由 DiscoveryStack 公開官網的「開始對話」聯絡我們。</small>
+              </article>
             </div>
           </fieldset>
           <section v-if="answers.domain?.option === 'new'" class="domain-builder" aria-labelledby="new-domain-title">
@@ -1031,6 +1067,7 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
           <p v-if="quoteStatus === 'loading'" class="state" role="status">正在向伺服器取得最新報價…</p>
           <section v-else-if="quoteError" class="state state--error" role="alert"><p>{{ quoteError }}</p><button type="button" class="button button--secondary" @click="loadQuote">重新取得報價</button></section>
           <template v-else-if="quote">
+            <p v-if="!selfServeDomainSupported" class="notice" role="status">這個網域方案需要團隊先人工確認；以下僅保留先前的估價，不會建立付款頁面。</p>
             <section class="quote" aria-labelledby="quote-title">
               <h3 id="quote-title">費用明細</h3>
               <div v-for="group in [{ key: 'one_time' as const, label: '一次性建置費用' }, { key: 'monthly' as const, label: '每月服務費' }, { key: 'annual' as const, label: '網域年費' }]" :key="group.key" class="quote-group">
@@ -1038,7 +1075,7 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
                 <p v-if="!quoteLines(group.key).length" class="muted">這一類目前沒有費用。</p>
                 <dl v-else><div v-for="line in quoteLines(group.key)" :key="line.lineKey"><dt>{{ line.description }}</dt><dd>{{ formatTwd(line.lineAmountMinor) }}</dd></div></dl>
               </div>
-              <div class="quote-total"><span>今天要付</span><strong>{{ formatTwd(quote.totals.dueTodayMinor) }}</strong></div>
+              <div class="quote-total"><span>{{ selfServeDomainSupported ? '今天要付' : '先前估算' }}</span><strong>{{ formatTwd(quote.totals.dueTodayMinor) }}</strong></div>
               <dl class="future-charges"><div><dt>之後每月費用</dt><dd>{{ formatTwd(quote.totals.recurringMonthlyMinor) }}</dd></div><div><dt>網域每年續用費</dt><dd>{{ formatTwd(quote.totals.domainRenewalAnnualMinor) }}</dd></div></dl>
             </section>
             <section v-if="!builtPreviewUrl" class="checkout-action">
@@ -1053,7 +1090,7 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
                 <p v-if="moduleFulfilments.some(row => row.status === 'recorded_intent_unbilled')" class="notice">即將推出模組只記錄需求，尚未開通，本次也沒有收費。</p>
                 <p v-if="moduleFulfilments.some(row => row.status === 'pending_manual_setup')" class="notice">已付款的人工設定模組仍待我們為你設定，完成前不會顯示為已開通。</p>
               </section>
-              <template v-if="!paymentVerified">
+              <template v-if="!paymentVerified && selfServeDomainSupported">
               <button type="button" class="button button--wide" :disabled="checkoutStatus === 'loading'" @click="startCheckout">{{ checkoutStatus === 'loading' ? '正在前往付款…' : '確認並付款' }}</button>
               <p v-if="checkoutError" class="inline-error" role="alert">{{ checkoutError }}</p>
               <p v-if="sessionProjection.testMode === true" class="notice">這是測試模式付款</p>
@@ -1061,10 +1098,17 @@ onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
               <p v-if="hasManualSetupModules" class="notice">你選擇的人工設定模組已列入費用，付款後由我們為你設定開通；完成前不會顯示為已開通。</p>
               <p v-if="contactModuleSelected && contactInbox.status !== 'bound'" class="notice">聯絡表單尚未綁定收信信箱；表單送出的資料仍會保存並可查看，但不會轉寄到信箱，你仍可完成結帳並於之後綁定。</p>
               <p v-else-if="contactModuleSelected" class="notice">聯絡表單送出的資料仍會保存並可查看；也會另外轉寄到已綁定的收信信箱 {{ contactInbox.maskedEmail }}，之後仍可換綁其他信箱。</p>
-              <p v-if="answers.domain?.option === 'new'" class="notice">新網域結帳後由我們代為註冊，實際可註冊狀態會再確認。</p>
-              <p v-else-if="answers.domain?.option === 'assisted'" class="notice">網域結帳後由我們代為註冊與設定，客服會與你確認需要的資料。</p>
-              <p v-else class="notice">付款後會與你確認現有網域的連接方式。</p>
+              <p class="notice">新網域結帳後由我們代為註冊，實際可註冊狀態會再確認。</p>
               </template>
+              <section v-else-if="!paymentVerified" class="manual-domain-handoff" aria-labelledby="manual-domain-handoff-title">
+                <h3 id="manual-domain-handoff-title">改由團隊確認下一步</h3>
+                <p>現有網域與人工代辦尚未開放自助付款。預覽會保留，我們不會為這個工作階段建立付款頁面。</p>
+                <div class="manual-domain-handoff__actions">
+                  <a v-if="manualEnquiryUrl" class="button" :href="manualEnquiryUrl" target="_blank" rel="noopener noreferrer">前往合作諮詢表單</a>
+                  <button type="button" class="button button--secondary" @click="goToStep(7)">改用新網域</button>
+                </div>
+                <small v-if="!manualEnquiryUrl">合作諮詢網址尚未設定，請由 DiscoveryStack 公開官網的「開始對話」聯絡我們。</small>
+              </section>
               <p v-else class="success-panel" role="status">付款已確認，我們會依上方「模組處理進度」為你開通，不需要再次付款。</p>
             </section>
           </template>
@@ -1262,6 +1306,11 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .toggle-line small { color: var(--muted); font-size: .78rem; font-weight: 400; line-height: 1.75; }
 .toggle-line b { grid-column: 2; font-size: .9rem; font-weight: 500; }
 .option-card { display: grid; align-content: start; gap: 1rem; width: 100%; padding: 1.8rem 1.3rem 1.4rem; }
+.manual-domain-card { display: grid; align-content: start; gap: 1rem; width: 100%; padding: 1.8rem 1.3rem 1.4rem; border: 1px solid var(--line); background: #f1ece3; }
+.manual-domain-card strong { font-size: 1rem; font-weight: 500; }
+.manual-domain-card > span { color: var(--muted); font-size: .8rem; line-height: 1.75; }
+.manual-domain-card small, .manual-domain-handoff small { color: #8a8172; font-size: .73rem; line-height: 1.7; }
+.manual-domain-card__link { align-self: end; color: #756852; font-size: .78rem; line-height: 1.7; text-underline-offset: .25rem; }
 .option-card__top { display: grid; gap: .7rem; }
 .option-card__top strong, .option-card > strong { font-size: 1rem; font-weight: 500; }
 .option-card > span:not(.option-card__top), .module-card > span:not(.module-card__heading):not(.module-card__prices), .plan-card button > span { color: var(--muted); font-size: .8rem; line-height: 1.75; }
@@ -1322,6 +1371,10 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:f
 .quote-total strong { font: 400 clamp(1.75rem, 4vw, 2.55rem)/1 Georgia, serif; white-space: nowrap; }
 .future-charges { padding: 1rem; background: var(--ivory); color: var(--muted); font-size: .78rem; }
 .checkout-action { display: grid; gap: 1rem; }
+.manual-domain-handoff { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid #bcae95; background: #f1ece3; }
+.manual-domain-handoff h3, .manual-domain-handoff p { margin: 0; }
+.manual-domain-handoff p { color: var(--muted); font-size: .8rem; line-height: 1.75; }
+.manual-domain-handoff__actions { display: flex; flex-wrap: wrap; gap: .75rem; }
 .success-panel { border-color: #7c9272; background: #e6eadf; color: #4a6046; }
 .step-footer { position: fixed; z-index: 10; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .7rem; padding: .85rem max(1rem, env(safe-area-inset-right)) max(.85rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); border-top: 1px solid var(--line); background: rgba(238, 233, 223, .98); }
 .step-footer__status { min-width: 0; }

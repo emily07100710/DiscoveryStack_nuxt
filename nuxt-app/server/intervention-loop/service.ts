@@ -3,6 +3,7 @@ import { computePrePostResult, classifyMeasurementPhases } from './assessment'
 import { resolveInterventionLoopDependencies } from './dependencies'
 import type { InterventionLoopDependencies } from './dependencies'
 import { evaluateDeploymentFetch, safeDependencyError } from './deployment-check'
+import { resolveInterventionEnvelope } from './envelope'
 import { dateOnly, dayWindow, fingerprint, parseManualDeploymentInput, parseManualMeasurementInput, parseManualRecrawlInput, parseRegisterInterventionInput } from './normalization'
 import type { EventCreate, Intervention, InterventionPatch, InterventionStatus, MeasurementCreate, RegisterInterventionInput } from './types'
 
@@ -101,8 +102,8 @@ export async function registerInterventionWithSource(ownerUserId: number, value:
   })
   await deps.repository.appendEvent(event(ownerUserId, created.id, 'registered', null, 'registered', { changeSummaryLength: input.changeSummary.length, interventionType: input.interventionType, briefId: input.briefId, draftId: input.draftId, entryId: input.entryId, targetId: input.targetId, urlHash: input.urlHash, siteHost: input.siteHost, registrationSource }, now))
   const inventory = await deps.baselineProvider.readInventoryHash(ownerUserId, input.urlHash)
-  if (!inventory?.contentHash) return { intervention: created, replayed: false, limitations: ['baseline_unknown'] }
-  const capturedAt = inventory.lastFetchedAt || now
+  if (!inventory?.contentHash || !inventory.lastFetchedAt || inventory.lastFetchedAt > now || !/^[a-f0-9]{64}$/u.test(inventory.contentHash)) return { intervention: created, replayed: false, limitations: ['baseline_unknown'] }
+  const capturedAt = inventory.lastFetchedAt
   const updated = await deps.repository.updateIntervention(ownerUserId, created.id, { baselineContentHash: inventory.contentHash, baselineHashSource: 'site_evidence_inventory', baselineCapturedAt: capturedAt, updatedAt: now })
   if (!updated) notFound()
   await deps.repository.appendEvent(event(ownerUserId, created.id, 'baseline_captured', 'registered', 'registered', { source: 'site_evidence_inventory', contentHash: inventory.contentHash, lastFetchedAt: inventory.lastFetchedAt }, now))
@@ -172,8 +173,10 @@ export async function confirmDeploymentManually(ownerUserId: number, interventio
 
 export async function markPublicationInterventionDeployed(ownerUserId: number, interventionId: number, input: { deliveredAt: Date, contentHash: string | null, receiptFingerprint: string }, dependencies: Dependencies = {}) {
   const deps = resolveInterventionLoopDependencies(dependencies); const row = await owned(ownerUserId, interventionId, deps)
+  if (!(input.deliveredAt instanceof Date) || !Number.isFinite(input.deliveredAt.getTime()) || input.deliveredAt > deps.clock.now() || !/^[a-f0-9]{64}$/u.test(input.receiptFingerprint) || (input.contentHash !== null && !/^[a-f0-9]{64}$/u.test(input.contentHash))) invalid('PUBLICATION_EVIDENCE_INVALID', '發布回執或內容指紋不正確。')
   if (row.status !== 'registered') return row
-  return transition(deps, row, { baselineContentHash: row.baselineContentHash || input.contentHash, baselineHashSource: row.baselineHashSource || (input.contentHash ? 'content_operations' : null), baselineCapturedAt: row.baselineCapturedAt || (input.contentHash ? input.deliveredAt : null), deployedAt: input.deliveredAt, deployEvidenceLevel: 'strong', deployEvidenceSource: 'publication_receipt', deployedContentHash: input.contentHash }, 'deployed', 'deployed', { source: 'publication_receipt', receiptFingerprint: input.receiptFingerprint, contentHash: input.contentHash }, deps.clock.now())
+  const hasBefore = row.baselineContentHash && row.baselineCapturedAt && row.baselineCapturedAt < input.deliveredAt && row.baselineHashSource !== 'content_operations'
+  return transition(deps, row, { baselineContentHash: hasBefore ? row.baselineContentHash : null, baselineHashSource: hasBefore ? row.baselineHashSource : null, baselineCapturedAt: hasBefore ? row.baselineCapturedAt : null, deployedAt: input.deliveredAt, deployEvidenceLevel: 'strong', deployEvidenceSource: 'publication_receipt', deployedContentHash: input.contentHash }, 'deployed', 'deployed', { source: 'publication_receipt', receiptFingerprint: input.receiptFingerprint, contentHash: input.contentHash }, deps.clock.now())
 }
 
 export async function checkRecrawl(ownerUserId: number, interventionId: number, dependencies: Dependencies = {}, options: { automatic?: boolean } = {}) {
@@ -207,6 +210,7 @@ export async function confirmRecrawlManually(ownerUserId: number, interventionId
   const deps = resolveInterventionLoopDependencies(dependencies); const row = await owned(ownerUserId, interventionId, deps)
   if (row.status !== 'deployed') conflict('INVALID_TRANSITION', transitionMessage(row.status, 'recrawl_confirmed'))
   const now = deps.clock.now(); const input = parseManualRecrawlInput(value, now); const confirmedAt = input.confirmedAt || now
+  if (!row.deployedAt || confirmedAt < row.deployedAt) invalid('RECRAWL_BEFORE_DEPLOYMENT', '重抓確認時間不可早於上線時間。')
   return transition(deps, row, { recrawlStatus: 'confirmed', recrawlConfirmedAt: confirmedAt, recrawlSource: 'manual', recrawlNote: input.note }, 'recrawl_confirmed', 'recrawl_confirmed', { source: 'manual', noteLength: input.note.length, confirmedAt }, now)
 }
 
@@ -214,6 +218,7 @@ export async function recordManualMeasurement(ownerUserId: number, interventionI
   const deps = resolveInterventionLoopDependencies(dependencies); const intervention = await owned(ownerUserId, interventionId, deps)
   if (intervention.status === 'cancelled') conflict('INVALID_TRANSITION', transitionMessage(intervention.status, 'measurement_recorded'))
   const input = parseManualMeasurementInput(value); const now = deps.clock.now()
+  if (input.windowEnd > now) invalid('FUTURE_MEASUREMENT_WINDOW', '量測期間尚未結束，請等資料完整後再輸入。')
   const sourceHash = fingerprint({ source: input.source, origin: 'manual', windowStart: input.windowStart, windowEnd: input.windowEnd, metrics: input.metrics })
   const stored = await deps.repository.upsertMeasurement({ ownerUserId, interventionId, origin: 'manual', source: input.source, windowStart: input.windowStart, windowEnd: input.windowEnd, metrics: input.metrics, sampleSize: input.sampleSize, sourceHash, capturedAt: now, property: null, pullReason: null, note: input.note, createdAt: now, updatedAt: now })
   await deps.repository.appendEvent(event(ownerUserId, interventionId, 'measurement_recorded', intervention.status, intervention.status, { measurementId: stored.row.id, source: input.source, origin: 'manual', sourceHash, replaced: stored.replaced }, now))
@@ -302,7 +307,8 @@ export async function cancelIntervention(ownerUserId: number, interventionId: nu
 export async function getIntervention(ownerUserId: number, interventionId: number, dependencies: Dependencies = {}) {
   const deps = resolveInterventionLoopDependencies(dependencies); const intervention = await owned(ownerUserId, interventionId, deps)
   const [events, measurements, results] = await Promise.all([deps.repository.listEvents(ownerUserId, interventionId), deps.repository.listMeasurements(ownerUserId, interventionId), deps.repository.listResultsForIntervention(ownerUserId, interventionId)])
-  return { intervention, events, measurements, results }
+  const envelope = await resolveInterventionEnvelope({ intervention, events, measurements, results }, deps)
+  return { intervention, events, measurements, results, envelope }
 }
 
 export async function listInterventions(ownerUserId: number, options: { status?: InterventionStatus, limit?: number } = {}, dependencies: Dependencies = {}) {

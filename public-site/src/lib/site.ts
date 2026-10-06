@@ -28,7 +28,7 @@ export function absoluteUrl(path: string, siteUrl: string) {
 }
 
 export function isPlaceholderSiteUrl(siteUrl: string) {
-  return siteUrl.includes('www.example.com') || siteUrl.includes('discoverystack.example')
+  return isPlaceholderPublicOrigin(siteUrl)
 }
 
 export function contentSchemaType(route: string, contentRole: string) {
@@ -92,3 +92,4 @@ export function homeJsonLd(locale: 'en' | 'zh-hant', title: string, description:
     ],
   }
 }
+import { isPlaceholderPublicOrigin } from './origin-policy'

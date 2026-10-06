@@ -19,7 +19,7 @@ function delivered() {
     riskGate: { id: 10, draftId: 5, status: 'passed', evidenceSnapshotHash: evidenceHash },
     publicationRun: { id: 11, ownerUserId, entryId: 30, stage: 'publication', state: 'succeeded', completedAt: new Date('2026-08-01T01:00:00.000Z') },
     publicationTarget: { id: 55, ownerUserId, clientId: 20, transport: 'wordpress_rest', targetId: 'target-55', contentRoot: 'content', status: 'active', targetOrigin: 'https://client.acme.taipei' },
-    publicationAttempt: { id: 12, ownerUserId, clientId: 20, entryId: 30, runId: 11, targetId: 55, status: 'delivered', receiptFingerprint: receiptHash, publicationUrl: canonicalPage, contentHash, evidenceSnapshotHash: evidenceHash },
+    publicationAttempt: { id: 12, ownerUserId, clientId: 20, entryId: 30, runId: 11, targetId: 55, status: 'delivered', mode: 'execute', completedAt: new Date('2026-08-01T01:00:00.000Z'), receiptFingerprint: receiptHash, publicationUrl: canonicalPage, contentHash, evidenceSnapshotHash: evidenceHash },
   }
 }
 

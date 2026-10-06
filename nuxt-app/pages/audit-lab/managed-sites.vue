@@ -215,7 +215,7 @@ const statusClass = (status: string) => status === 'verified' || status === 'liv
   <main v-else class="workbench">
     <header class="hero">
       <div><p class="eyebrow">OWNER ONLY / LIVE CONNECTORS V1</p><h1>Managed AI Website + GEO</h1><p>這裡顯示 provider、生成候選、付款、網域、DNS/TLS、部署與 GEO 啟用的真實 receipt 狀態。意圖、configured 或瀏覽器回傳都不算成功。</p></div>
-      <div><NuxtLink class="button button--primary" to="/audit-lab/managed-sites/projects">開啟專案交付</NuxtLink><button type="button" :disabled="pending || ordersPending || saving" @click="refresh">重新整理</button></div>
+      <div><NuxtLink class="button button--primary" to="/audit-lab/managed-sites/setup">上線設定</NuxtLink><NuxtLink class="button button--primary" to="/audit-lab/managed-sites/media">圖片倉庫</NuxtLink><NuxtLink class="button button--primary" to="/audit-lab/managed-sites/projects">開啟專案交付</NuxtLink><button type="button" :disabled="pending || ordersPending || saving" @click="refresh">重新整理</button></div>
     </header>
     <p class="muted">專案交付頁可管理成員、佈建、網域、發佈與稽核軌跡。</p>
 

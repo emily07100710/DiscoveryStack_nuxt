@@ -4,8 +4,31 @@ import { notifyInterventionLoopOutcomeAssessed } from '../server/intervention-lo
 import { createInMemoryInterventionLoopRepository, runInterventionLoopTick } from '../server/intervention-loop'
 
 const owner = 1
-function delivered(id = 30) { return { entry: { id, ownerUserId: owner, status: 'delivered', updatedAt: new Date('2026-09-01T00:00:00.000Z'), contentHash: 'c'.repeat(64), publicationPath: '/articles/a' }, calendar: { ownerUserId: owner, clientId: 20 }, job: { briefId: 4 }, draft: { id: 5 }, publicationRun: { id: 11, ownerUserId: owner, entryId: id, stage: 'publication', state: 'succeeded', completedAt: new Date('2026-09-01T00:00:00.000Z') }, publicationTarget: { id: 55, ownerUserId: owner, clientId: 20, transport: 'wordpress_rest', targetId: 'target-55', contentRoot: 'content', status: 'active', targetOrigin: 'https://client.acme.taipei' }, publicationAttempt: { ownerUserId: owner, clientId: 20, entryId: id, status: 'delivered', runId: 11, targetId: 55, receiptFingerprint: 'a'.repeat(64), publicationUrl: 'https://client.acme.taipei/articles/a', publicationContentHash: 'c'.repeat(64) } } as any }
+function delivered(id = 30) {
+  const completedAt = new Date('2026-09-01T00:00:00.000Z')
+  return {
+    entry: { id, ownerUserId: owner, status: 'delivered', updatedAt: completedAt, contentHash: 'c'.repeat(64), publicationPath: '/articles/a' },
+    calendar: { ownerUserId: owner, clientId: 20 }, job: { briefId: 4 }, draft: { id: 5, contentHash: 'c'.repeat(64) },
+    publicationRun: { id: 11, ownerUserId: owner, entryId: id, stage: 'publication', state: 'succeeded', completedAt },
+    publicationTarget: { id: 55, ownerUserId: owner, clientId: 20, transport: 'wordpress_rest', targetId: 'target-55', contentRoot: 'content', status: 'active', targetOrigin: 'https://client.acme.taipei' },
+    publicationAttempt: { ownerUserId: owner, clientId: 20, entryId: id, status: 'delivered', mode: 'execute', runId: 11, targetId: 55, contentHash: 'c'.repeat(64), receiptFingerprint: 'a'.repeat(64), publicationUrl: 'https://client.acme.taipei/articles/a', publicationContentHash: 'c'.repeat(64), completedAt },
+  } as any
+}
 describe('content-operations intervention bridge', () => {
+  it.each(['dry_run', 'missing_mode', 'missing_completion', 'content_drift', 'draft_drift', 'target_owner', 'client_owner'] as const)('does not treat %s as a verified executed publication', async scenario => {
+    const publication = delivered()
+    const client = { id: 20, ownerUserId: owner, canonicalSiteOrigin: 'https://client.acme.taipei' }
+    if (scenario === 'dry_run') publication.publicationAttempt.mode = 'dry_run'
+    if (scenario === 'missing_mode') delete publication.publicationAttempt.mode
+    if (scenario === 'missing_completion') publication.publicationAttempt.completedAt = null
+    if (scenario === 'content_drift') publication.publicationAttempt.contentHash = 'd'.repeat(64)
+    if (scenario === 'draft_drift') publication.draft.contentHash = 'd'.repeat(64)
+    if (scenario === 'target_owner') publication.publicationTarget.ownerUserId = 999
+    if (scenario === 'client_owner') client.ownerUserId = 999
+    const source = createContentOperationsDeliveredPublicationSource({ async findClient() { return client }, async listEntries() { return [publication.entry] }, async resolveDeliveredPublication() { return publication } } as any)
+    expect(await source.listDeliveredPublications(owner, 50)).toEqual([])
+    expect(await source.resolveDeliveredPublication!(owner, 30)).toBeNull()
+  })
   it('projects only resolvable delivered publications with a validated receipt', async () => { const primary = delivered(); const repository = { async findClient() { return { id: 20, ownerUserId: owner, canonicalSiteOrigin: 'https://client.acme.taipei' } }, async listEntries() { return [primary.entry, { ...primary.entry, id: 31, status: 'planned' }, { ...primary.entry, id: 32 }] }, async resolveDeliveredPublication(_owner: number, entryId: number) { if (entryId === 32) throw new Error('stale'); return entryId === 30 ? primary : null } } as any; const publications = await createContentOperationsDeliveredPublicationSource(repository).listDeliveredPublications(owner, 50); expect(publications).toEqual([expect.objectContaining({ entryId: 30, targetId: 55, publicationUrl: 'https://client.acme.taipei/articles/a', receiptFingerprint: 'a'.repeat(64), deliveredAt: new Date('2026-09-01T00:00:00.000Z') })]) })
   it('does not auto-register transport URLs or missing CMS URLs', async () => {
     for (const publicationUrl of [null, 'https://api.github.com/content/en/articles/a.md', 'https://other.acme.taipei/articles/a']) {

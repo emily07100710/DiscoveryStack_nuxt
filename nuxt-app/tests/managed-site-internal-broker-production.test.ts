@@ -62,6 +62,19 @@ describe('managed-site Cloudflare production driver', () => {
     expect(cf.calls.some(call => call.init.method === 'PATCH' || call.init.method === 'DELETE' || call.url.endsWith('/domains') || call.url.includes('/dns_records'))).toBe(false)
   })
 
+  it('verifies an explicitly published non-home route in addition to the canonical homepage', async () => {
+    const about = '<!doctype html><html><body>Exact about route</body></html>'
+    const routedCommand = { ...command, assets: [...command.assets, { path: 'about/index.html', contentType: 'text/html; charset=utf-8', content: about }], verificationAssetPath: 'about/index.html' }
+    const cf = cloudflareFixture()
+    const productionProbe = vi.fn(async (_domain: string, _timeoutMs: number, pathname = '/') => ({ status: 200, contentType: 'text/html; charset=utf-8', body: pathname === '/about/' ? about : html }))
+    await expect(deployCloudflarePagesProduction(routedCommand, { ...cf.options, productionProbe })).resolves.toMatchObject({ deploymentId: 'cf-production-001' })
+    expect(productionProbe).toHaveBeenNthCalledWith(1, domain, expect.any(Number))
+    expect(productionProbe).toHaveBeenNthCalledWith(2, domain, expect.any(Number), '/about/')
+
+    const mismatch = cloudflareFixture()
+    await expect(deployCloudflarePagesProduction(routedCommand, { ...mismatch.options, productionProbe: async () => ({ status: 200, contentType: 'text/html; charset=utf-8', body: html }) })).rejects.toMatchObject({ statusCode: 503 })
+  })
+
   it.each([
     { environment: 'preview' },
     { project_name: 'ds-o2-p2' },

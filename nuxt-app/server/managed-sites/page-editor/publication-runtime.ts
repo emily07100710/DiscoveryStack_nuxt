@@ -10,6 +10,7 @@ import type { ApprovedFirstPartyPublication, FirstPartyExecutionResult, FirstPar
 import { getDrizzleMediaVaultRepository } from '../media-vault/repository-drizzle'
 import { canonicalFingerprint, canonicalJson, parsePageDocument } from './canonical'
 import { compilePageDocument } from './compiler'
+import { executeManagedSiteNativePublicationIfConfigured } from './native-publication'
 import { managedPageRouteSlug, serializeManagedPageTransport } from './transport'
 import type { CompiledPageArtifact, PageActor, PageDocument } from './types'
 
@@ -62,7 +63,16 @@ export async function executeDrizzlePagePublicationWork(work: PublicationWorkRow
   const [versionRow] = await database.select({ document: managedSitePageVersions.document }).from(managedSitePageVersions).where(and(eq(managedSitePageVersions.ownerUserId, work.ownerUserId), eq(managedSitePageVersions.projectId, work.projectId), eq(managedSitePageVersions.pageId, work.pageId), eq(managedSitePageVersions.version, work.pageVersion))).limit(1)
   const [target] = await database.select().from(contentOperationPublicationTargets).where(eq(contentOperationPublicationTargets.id, work.publicationTargetId)).limit(1); const [release] = await database.select({ status: managedSiteReleaseProjections.status }).from(managedSiteReleaseProjections).where(and(eq(managedSiteReleaseProjections.id, work.releaseId), eq(managedSiteReleaseProjections.ownerUserId, work.ownerUserId), eq(managedSiteReleaseProjections.projectId, work.projectId))).limit(1)
   let result: FirstPartyExecutionResult
-  try { if (!pageRow || pageRow.currentDraftVersion !== work.pageVersion || !versionRow || !target || !release) throw Object.assign(new Error('Publication authority lineage is missing or stale.'), { reasonCode: 'STALE_PUBLICATION_AUTHORITY' }); const page = parsePageDocument(versionRow.document); result = await validateAndExecutePublicationWork({ work, page, target, releaseStatus: release.status, resolveMedia: (actor, binding) => media.findAsset(actor, binding.assetId), now, dependencies: input.dependencies || getContentOperationsRuntimeDependencies(), executor: input.executor }) } catch (error: any) { result = { status: 'blocked', code: error?.reasonCode || 'INVALID_INPUT', reasons: [String(error?.message || 'Publication validation failed.').slice(0, 500)] } as FirstPartyExecutionResult }
+  try {
+    if (!pageRow || pageRow.currentDraftVersion !== work.pageVersion || !versionRow || !target || !release) throw Object.assign(new Error('Publication authority lineage is missing or stale.'), { reasonCode: 'STALE_PUBLICATION_AUTHORITY' })
+    const page = parsePageDocument(versionRow.document)
+    const dependencies = input.dependencies || getContentOperationsRuntimeDependencies()
+    const executor: PagePublicationExecutor = input.executor || (async value => {
+      const native = await executeManagedSiteNativePublicationIfConfigured({ target: value.target, publication: value.publication, now: value.now, pageWorkId: work.id, dependencies: { database } })
+      return native || executeFirstPartyPublication({ target: value.target, publication: value.publication, now: value.now.toISOString(), serverNow: value.now.toISOString(), mode: 'execute', ...value.dependencies })
+    })
+    result = await validateAndExecutePublicationWork({ work, page, target, releaseStatus: release.status, resolveMedia: (actor, binding) => media.findAsset(actor, binding.assetId), now, dependencies, executor })
+  } catch (error: any) { result = { status: 'blocked', code: error?.reasonCode || 'INVALID_INPUT', reasons: [String(error?.message || 'Publication validation failed.').slice(0, 500)] } as FirstPartyExecutionResult }
   const retry = result.status === 'retryable_failure' && work.attemptCount < Math.min(work.maxAttempts, MAX_ATTEMPTS); const terminalSuccess = result.status === 'delivered'; const terminalBlocked = !terminalSuccess && !retry; const attemptStatus = result.status === 'delivered' ? 'delivered' : result.status === 'retryable_failure' ? 'retryable_failure' : result.status === 'permanent_failure' ? 'permanent_failure' : 'blocked'; const errorCode = result.status === 'delivered' ? null : result.status === 'dry_run' ? 'DRY_RUN_NOT_DELIVERY' : result.code; const receiptFingerprint = canonicalFingerprint({ version: 'managed-site-page-publication-attempt-v1', workId: work.id, attemptNumber: work.attemptCount, requestFingerprint: work.requestFingerprint, result })
   await database.transaction(async (transaction: any) => {
     await transaction.insert(managedSitePagePublicationAttempts).values({ workId: work.id, ownerUserId: work.ownerUserId, projectId: work.projectId, publicationTargetId: work.publicationTargetId, attemptNumber: work.attemptCount, idempotencyKey: work.idempotencyKey, requestFingerprint: work.requestFingerprint, status: attemptStatus, receiptFingerprint, remoteRevision: result.status === 'delivered' ? result.remoteRevision : null, remoteState: result.status === 'delivered' ? result.remoteState : null, errorCode, result, createdAt: now })

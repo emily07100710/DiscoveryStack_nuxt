@@ -100,6 +100,7 @@ describe('managed-site contact inbox binding', () => {
     const started = await startManagedSiteContactInboxBinding({ session: line.session, email }, line.dependencies)
     expect(line.transport.messages).toHaveLength(1)
     expect(line.transport.messages[0]).toMatchObject({ to: email, subject: expect.stringContaining('驗證碼'), text: expect.stringContaining('10 分鐘') })
+    expect(line.transport.messages[0]!.idempotencyKey).toMatch(/^managed-site-inbox-code:41:[a-f0-9]{48}$/u)
     const code = messageCode(line.transport.messages[0]!.text)
     const projection = await managedSiteContactInboxProjection(line.session.id, line.dependencies)
     expect(JSON.stringify(started)).not.toContain(code)

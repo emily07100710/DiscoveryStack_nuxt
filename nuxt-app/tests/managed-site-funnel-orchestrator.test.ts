@@ -2,6 +2,8 @@ import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, createError, createRouter, defineEventHandler, send, setResponseStatus, toWebHandler } from 'h3'
 import { MANAGED_SITE_FUNNEL_BUILD_STALE_MS, MANAGED_SITE_FUNNEL_CHECKOUT_SESSION_TTL_MS, MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE, MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT, managedSiteFunnelDailyBuildLimit, runFunnelBuild, runFunnelCheckout, type ManagedSiteFunnelOrchestratorDependencies } from '../server/managed-sites/funnel/checkout-orchestrator'
 import { projectFunnelQuote } from '../server/managed-sites/funnel/quote-projection'
+import { checkFunnelDomainAvailability } from '../server/managed-sites/funnel/domain-registration'
+import { createFunnelDomainRegistrationDelegation } from '../server/managed-sites/funnel/domain-purchase-authority'
 import { setManagedSiteContactInboxBindingDependenciesForTests } from '../server/managed-sites/contact-inbox/binding-service'
 import { createFunnelSession, loadFunnelSession, MANAGED_SITE_FUNNEL_CONSENT_VERSION, recordFunnelConsent, saveFunnelStep, type FunnelAnswers } from '../server/managed-sites/funnel/session-service'
 import { getManagedSitePriceCatalog } from '../server/managed-sites/ordering-service'
@@ -24,6 +26,7 @@ const savedStripeLiveMode = process.env.MANAGED_SITE_FUNNEL_STRIPE_LIVE_MODE
 const savedAllowedProviderOrigins = process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS
 const savedAllowedCheckoutOrigins = process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_CHECKOUT_ORIGINS
 const savedCredentialsJson = process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON
+const savedDomainProcurementPolicy = process.env.MANAGED_SITE_FUNNEL_DOMAIN_PROCUREMENT_POLICY_JSON
 
 beforeAll(() => {
   ;(globalThis as any).defineEventHandler = defineEventHandler
@@ -49,6 +52,8 @@ afterEach(() => {
   else process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_CHECKOUT_ORIGINS = savedAllowedCheckoutOrigins
   if (savedCredentialsJson === undefined) delete process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON
   else process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON = savedCredentialsJson
+  if (savedDomainProcurementPolicy === undefined) delete process.env.MANAGED_SITE_FUNNEL_DOMAIN_PROCUREMENT_POLICY_JSON
+  else process.env.MANAGED_SITE_FUNNEL_DOMAIN_PROCUREMENT_POLICY_JSON = savedDomainProcurementPolicy
 })
 
 function completeAnswers(label = 'Acme'): FunnelAnswers {
@@ -281,28 +286,49 @@ describe('managed-site self-serve funnel', () => {
 
   it('applies the Stripe test-mode guard on the live funnel checkout path before any durable checkout write', async () => {
     const line = await configuredLine('LiveGuard')
-    // This regression isolates payment policy; domain procurement has its own live authorization tests.
-    await saveFunnelStep(line.created.sessionId, line.created.sessionToken, { step: 7, answers: { domain: { option: 'existing', name: 'liveguard.example.com' } } }, line.funnel.repository, () => managedSiteFixedNow)
+    const porkbunOrigin = 'https://api.porkbun.com'
+    const porkbunCredential = JSON.stringify({ apiKey: 'pk1_noncredential', secretApiKey: 'noncredential_secret' })
+    const procurementPolicy = JSON.stringify({ com: { currency: 'USD', maxAmountMinor: 1500 } })
+    process.env.MANAGED_SITE_FUNNEL_DOMAIN_PROCUREMENT_POLICY_JSON = procurementPolicy
+    process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS = `${porkbunOrigin},https://api.stripe.com`
+    process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON = JSON.stringify({ 'vault:porkbun-funnel-live-guard': porkbunCredential, 'vault:stripe-funnel-live-guard': 'sk_live_placeholder' })
+    await configureManagedSiteProvider(1, { capability: 'domain_registration', providerKey: 'porkbun', readinessStatus: 'configured', credentialReference: 'vault:porkbun-funnel-live-guard', transportConfiguration: { endpointOrigin: porkbunOrigin }, idempotencyKey: 'funnel-config-LiveGuard-domain-porkbun' }, line.live.repository, () => managedSiteFixedNow)
+    const domainConfiguration = await line.live.repository.findProviderConfiguration(1, 'domain_registration')
+    Object.assign(domainConfiguration!, { readinessStatus: 'verified', verificationReceiptFingerprint: 'c'.repeat(64), capabilityIdentity: 'porkbun:production', verifiedAt: managedSiteFixedNow })
+    const domainResponse = async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/getRegistrationRequirements/com')) return new Response(JSON.stringify({ status: 'SUCCESS', tld: 'com', apiRegisterable: true, requiresValidatedAddress: false, registryRequirements: null, registrationDurationYears: 1 }))
+      if (url.includes('/checkDomain/liveguard.com')) return new Response(JSON.stringify({ status: 'SUCCESS', response: { avail: 'yes', price: '12.99', premium: 'no', minDuration: 1 } }))
+      throw new Error(`unexpected provider URL: ${url}`)
+    }
+    const availability = await checkFunnelDomainAvailability(1, line.created.sessionId, 'liveguard.com', { repository: line.live.repository, credentialResolver: async () => ({ ok: true, value: porkbunCredential }), fetchImpl: domainResponse as typeof fetch, clock: () => managedSiteFixedNow, procurementPolicyJson: procurementPolicy })
+    if (!availability.available) throw new Error('expected liveguard.com fixture to be available')
+    const delegation = createFunnelDomainRegistrationDelegation({ sessionId: line.created.sessionId, canonicalDomain: availability.canonicalDomain, registrant: { firstName: 'Live', lastName: 'Guard', organization: '', address1: '1 Test Street', city: 'Taipei', state: '', postalCode: '100', country: 'TW', phoneCountryCode: '886', phone: '912345678', email: 'liveguard@example.test' }, quote: availability.quote, customerPrice: availability.customerPrice, acceptedAt: managedSiteFixedNow.toISOString() })
+    const consent = line.funnel.state.sessions[0]!.consentSnapshot as Record<string, unknown>
+    await line.funnel.repository.updateSession(line.created.sessionId, { consentSnapshot: { ...consent, domainAvailability: availability, domainRegistration: delegation } })
     await runFunnelBuild(line.created.sessionId, line.created.sessionToken, line.dependencies)
     delete process.env.MANAGED_SITE_FUNNEL_STRIPE_LIVE_MODE
-    process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS = 'https://api.stripe.com'
     process.env.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_CHECKOUT_ORIGINS = 'https://checkout.stripe.com'
-    process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON = JSON.stringify({ 'vault:stripe-funnel-live-guard': 'sk_live_placeholder' })
     await configureManagedSiteProvider(1, { capability: 'payment', providerKey: 'stripe', readinessStatus: 'configured', credentialReference: 'vault:stripe-funnel-live-guard', transportConfiguration: { endpointOrigin: 'https://api.stripe.com', checkoutOrigin: 'https://checkout.stripe.com', returnOrigin: 'https://merchant.example.com' }, idempotencyKey: 'funnel-config-LiveGuard-payment-stripe' }, line.live.repository, () => managedSiteFixedNow)
     const configuration = await line.live.repository.findProviderConfiguration(1, 'payment')
     Object.assign(configuration!, { readinessStatus: 'verified', verificationReceiptFingerprint: 'b'.repeat(64), capabilityIdentity: 'stripe-balance:test', verifiedAt: managedSiteFixedNow })
-    const spy = vi.fn(async () => { throw new Error('network must not be reached') })
+    const spy = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).startsWith(porkbunOrigin)) return domainResponse(input)
+      throw new Error('Stripe checkout network must not succeed')
+    })
     vi.stubGlobal('fetch', spy)
     const { checkoutAdapter: _mocked, ...liveDependencies } = line.dependencies
     await expect(runFunnelCheckout(line.created.sessionId, line.created.sessionToken, { ...liveDependencies, executionMode: 'live' })).rejects.toMatchObject({ statusCode: 503, statusMessage: '自助下單目前僅開放 Stripe 測試模式，請聯絡客服。' })
-    expect(spy).not.toHaveBeenCalled()
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(spy.mock.calls.every(([input]) => String(input).startsWith(porkbunOrigin))).toBe(true)
     expect(line.live.state.releases[0]!.status).toBe('preview_ready')
     expect(line.live.state.attempts.filter(attempt => attempt.operation === 'checkout_session_create')).toHaveLength(0)
     expect(line.funnel.state.sessions[0]!.checkoutUrl).toBeFalsy()
 
-    process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON = JSON.stringify({ 'vault:stripe-funnel-live-guard': 'sk_test_placeholder' })
+    process.env.DISCOVERYSTACK_MANAGED_SITE_CREDENTIALS_JSON = JSON.stringify({ 'vault:porkbun-funnel-live-guard': porkbunCredential, 'vault:stripe-funnel-live-guard': 'sk_test_placeholder' })
     await expect(runFunnelCheckout(line.created.sessionId, line.created.sessionToken, { ...liveDependencies, executionMode: 'live' })).rejects.toMatchObject({ statusCode: 503, statusMessage: 'Stripe checkout transport failed.' })
-    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledTimes(5)
+    expect(spy.mock.calls.filter(([input]) => String(input).startsWith('https://api.stripe.com')).length).toBe(1)
   })
 
   it('keeps all nine saved steps refreshable and hides missing, wrong-token, and expired distinctions', async () => {

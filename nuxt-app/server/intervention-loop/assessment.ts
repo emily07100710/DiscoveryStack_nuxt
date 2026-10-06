@@ -1,5 +1,6 @@
 import { OUTCOME_POSITION_DELTA_THRESHOLD, OUTCOME_SIGNAL_DELTA_THRESHOLD } from '../outcome-learning/policy-catalog'
 import { fingerprint } from './normalization'
+import { compareInterventionMeasurements } from './measurement-comparisons'
 import type { ExperimentResult, Intervention, InterventionMeasurement, InterventionSignal, MeasurementAggregates, PrePostEffect } from './types'
 
 export const PRE_POST_CAUSAL_STATEMENT = '這是同一頁面的前後比較，不是對照實驗。季節、同時期的其他改動、搜尋演算法更新、競爭者變化都可能影響結果；只能視為相關，不能視為因果。'
@@ -68,7 +69,11 @@ function combinedSignal(effect: PrePostEffect): InterventionSignal {
 }
 
 export function computePrePostResult(intervention: Intervention, measurements: InterventionMeasurement[], policy: { minimumSampleSize: number }, computedAt = new Date()) {
-  const phases = classifyMeasurementPhases(intervention, measurements)
+  const comparisons = compareInterventionMeasurements(intervention, measurements)
+  const searchScopes = comparisons.filter(group => group.source === 'google_search_console')
+  // Do not choose the best-performing scope or add different properties/modes together.
+  const selected = searchScopes.length === 1 && searchScopes[0]!.status === 'comparable' ? searchScopes[0]! : null
+  const phases = selected?.phases || { baseline: [], followUp: [], excluded: measurements }
   const baseline = aggregateMeasurements(phases.baseline)
   const followUp = aggregateMeasurements(phases.followUp)
   const sampleSizeBaseline = phases.baseline.reduce((sum, row) => sum + row.sampleSize, 0)
@@ -85,6 +90,10 @@ export function computePrePostResult(intervention: Intervention, measurements: I
     primaryMetric: 'clicks',
   }
   const limitations = ['pre_post_not_experiment', 'no_control_group']
+  if (!selected) limitations.push('no_comparable_measurement_scope')
+  if (searchScopes.length > 1) limitations.push('multiple_measurement_scopes')
+  if (comparisons.some(group => group.source !== 'google_search_console')) limitations.push('non_search_sources_kept_separate')
+  limitations.push(...new Set(comparisons.flatMap(group => group.reasons)))
   if (sampleSizeBaseline < policy.minimumSampleSize || sampleSizeFollowUp < policy.minimumSampleSize) limitations.push('sample_below_minimum')
   if (followUp.days < 14) limitations.push('short_follow_up_window')
   if (intervention.deployEvidenceLevel === 'weak') limitations.push('deployment_weak_evidence')
@@ -92,13 +101,15 @@ export function computePrePostResult(intervention: Intervention, measurements: I
   if (new Set(measurements.map(row => row.origin)).size > 1) limitations.push('mixed_measurement_origins')
   if (phases.excluded.length) limitations.push('transition_rows_excluded')
   if (!intervention.baselineContentHash) limitations.push('baseline_unknown')
-  const signal: InterventionSignal = limitations.includes('sample_below_minimum') ? 'insufficient_data' : combinedSignal(effect)
+  const signal: InterventionSignal = !selected || !phases.baseline.length || !phases.followUp.length || limitations.includes('sample_below_minimum') ? 'insufficient_data' : combinedSignal(effect)
   const metric = 'clicksPerDay'
-  const resultFingerprint = fingerprint({ interventionId: intervention.id, resultKind: 'pre_post', metric, sampleSizeBaseline, sampleSizeFollowUp, effect, signal, limitations })
+  const measurementFingerprint = fingerprint(comparisons.map(group => group.comparisonFingerprint))
+  const resultFingerprint = fingerprint({ interventionId: intervention.id, resultKind: 'pre_post', metric, sampleSizeBaseline, sampleSizeFollowUp, effect, signal, limitations, measurementFingerprint })
   return { resultKind: 'pre_post' as const, metric, sampleSizeBaseline, sampleSizeFollowUp, effect: effect as unknown as Record<string, unknown>, signal, limitations, causalStatement: PRE_POST_CAUSAL_STATEMENT, computedAt, resultFingerprint, phases }
 }
 
 export function latestRelativeClicksDelta(result: ExperimentResult): number | null {
+  if (result.signal === 'insufficient_data') return null
   const effect = result.effect as { deltas?: { clicksPerDay?: unknown } }
   return typeof effect.deltas?.clicksPerDay === 'number' ? effect.deltas.clicksPerDay : null
 }

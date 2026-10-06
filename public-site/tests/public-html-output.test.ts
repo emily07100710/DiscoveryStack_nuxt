@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 const publicRoot = join(process.cwd(), 'dist')
 const siteUrl = (process.env.PUBLIC_SITE_URL || 'https://www.example.com').replace(/\/$/, '')
+const opsUiUrl = (process.env.PUBLIC_OPS_UI_ORIGIN || process.env.PUBLIC_OPS_API_ORIGIN || 'https://api.example.com').replace(/\/$/, '')
 const indexableRoutes = [
   '/en', '/zh-hant',
   '/en/services/seo-geo-growth-system', '/zh-hant/services/seo-geo-growth-system',
@@ -56,6 +57,9 @@ describe('Astro public static output', () => {
     expect(builder.querySelector('#builder-url')).toBeNull()
     expect(builder.body.textContent).not.toContain('開始公開診斷')
     expect(builder.body.textContent).not.toContain('你現在有網站嗎？')
+    expect(htmlFor('/zh-hant/website-builder-preview')).toContain(`${opsUiUrl}/customer/managed-sites/start`)
+    expect(builder.querySelector('link[rel="alternate"]')).toBeNull()
+    expect(htmlFor('/zh-hant/website-builder-preview')).not.toContain('/en/website-builder-preview')
   })
 
   it('renders the full API platform list with shipped marks and explains SEO versus GEO', () => {

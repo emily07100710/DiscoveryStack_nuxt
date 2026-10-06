@@ -10,6 +10,15 @@ export type OAuthProviderErrorKind = 'timeout' | 'response' | 'network' | 'unkno
 export type OAuthProviderRejectionReason = 'invalid_client' | 'invalid_redirect_uri' | 'invalid_authorization_code' | 'unauthenticated'
 export type OAuthProviderError = { kind: OAuthProviderErrorKind, status: number | null, reason: OAuthProviderRejectionReason | null }
 
+function runtimeOrEnvironment(runtimeValue: unknown, environmentNames: readonly string[]): string {
+  if (typeof runtimeValue === 'string' && runtimeValue.trim()) return runtimeValue.trim()
+  for (const name of environmentNames) {
+    const value = process.env[name]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
 const toBase64 = (value: string) => Buffer.from(value, 'utf8').toString('base64')
 const fromBase64 = (value: string) => Buffer.from(value, 'base64').toString('utf8')
 
@@ -46,15 +55,23 @@ function classifyProviderError(error: unknown): OAuthProviderError {
 
 export function oauthConfig(event: H3Event) {
   const config = useRuntimeConfig(event)
-  const serverUrl = typeof config.oauthServerUrl === 'string' ? config.oauthServerUrl : ''
-  const portalUrl = typeof config.oauthPortalUrl === 'string' ? config.oauthPortalUrl : ''
-  const appId = typeof config.oauthAppId === 'string' ? config.oauthAppId : ''
+  // Nuxt runtimeConfig remains authoritative, including NUXT_* overrides. The
+  // explicit environment fallbacks keep legacy deployment names request-time
+  // configurable when a production artifact was built before secrets existed.
+  const serverUrl = runtimeOrEnvironment(config.oauthServerUrl, ['NUXT_OAUTH_SERVER_URL', 'OAUTH_SERVER_URL'])
+  const portalUrl = runtimeOrEnvironment(config.oauthPortalUrl, ['NUXT_OAUTH_PORTAL_URL', 'VITE_OAUTH_PORTAL_URL'])
+  const appId = runtimeOrEnvironment(config.oauthAppId, ['NUXT_OAUTH_APP_ID', 'VITE_APP_ID'])
   const configuredOrigin = typeof config.discoveryStackOauthAllowedOrigin === 'string' ? config.discoveryStackOauthAllowedOrigin : ''
-  if (!serverUrl || !portalUrl || !appId || !configuredOrigin) {
+  const resolvedOrigin = runtimeOrEnvironment(configuredOrigin, ['NUXT_DISCOVERY_STACK_OAUTH_ALLOWED_ORIGIN', 'OAUTH_ALLOWED_ORIGIN'])
+  if (!serverUrl || !portalUrl || !appId || !resolvedOrigin) {
     throw createError({ statusCode: 503, statusMessage: 'Private sign-in is not configured.' })
   }
   let allowedOrigin = ''
-  try { allowedOrigin = new URL(configuredOrigin).origin } catch { throw createError({ statusCode: 503, statusMessage: 'Private sign-in origin is not configured correctly.' }) }
+  try {
+    allowedOrigin = configuredOrigin.trim()
+      ? new URL(configuredOrigin).origin
+      : new URL(resolvedOrigin).origin
+  } catch { throw createError({ statusCode: 503, statusMessage: 'Private sign-in origin is not configured correctly.' }) }
   if (!allowedOrigin.startsWith('https://')) throw createError({ statusCode: 503, statusMessage: 'Private sign-in origin must use HTTPS.' })
   return { serverUrl, portalUrl, appId, allowedOrigin }
 }

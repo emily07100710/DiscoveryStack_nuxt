@@ -100,6 +100,7 @@ describe('intervention loop service', () => {
     const h = harness(); const row = (await registerIntervention(1, registration('manual-recrawl'), h.dependencies)).intervention; await confirmDeploymentManually(1, row.id, { note: '已確認上線' }, h.dependencies)
     await expectCode(confirmRecrawlManually(1, row.id, {}, h.dependencies), 'INVALID_INPUT', 422)
     h.setNow('2026-09-02T00:00:00.000Z'); await confirmRecrawlManually(1, row.id, { note: '已從搜尋結果與後台人工確認' }, h.dependencies)
+    h.setNow('2026-09-21T00:00:00.000Z')
     await recordManualMeasurement(1, row.id, { windowStart: '2026-08-01T00:00:00.000Z', windowEnd: '2026-08-20T00:00:00.000Z', metrics: { clicks: 40, impressions: 100 }, note: 'before' }, h.dependencies)
     await recordManualMeasurement(1, row.id, { windowStart: '2026-09-03T00:00:00.000Z', windowEnd: '2026-09-20T00:00:00.000Z', metrics: { clicks: 50, impressions: 120 }, note: 'after' }, h.dependencies)
     await measureIntervention(1, row.id, h.dependencies)

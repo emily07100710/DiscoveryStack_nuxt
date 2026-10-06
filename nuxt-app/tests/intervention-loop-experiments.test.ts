@@ -16,6 +16,7 @@ describe('intervention experiments', () => {
   it('auto-creates and attaches a pre_post experiment during assessment', async () => {
     const h = setup(); const row = (await registerIntervention(1, input('auto'), h.dependencies)).intervention
     await confirmDeploymentManually(1, row.id, { note: '已確認上線' }, h.dependencies); h.setNow('2026-09-02T00:00:00.000Z'); await confirmRecrawlManually(1, row.id, { note: '已確認重新抓取' }, h.dependencies)
+    h.setNow('2026-09-21T00:00:00.000Z')
     await recordManualMeasurement(1, row.id, { windowStart: '2026-08-01T00:00:00.000Z', windowEnd: '2026-08-20T00:00:00.000Z', metrics: { clicks: 10, impressions: 50 } }, h.dependencies)
     await recordManualMeasurement(1, row.id, { windowStart: '2026-09-03T00:00:00.000Z', windowEnd: '2026-09-20T00:00:00.000Z', metrics: { clicks: 20, impressions: 60 } }, h.dependencies)
     await measureIntervention(1, row.id, h.dependencies); const assessed = await assessIntervention(1, row.id, h.dependencies)

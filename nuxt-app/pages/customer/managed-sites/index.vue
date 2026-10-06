@@ -1,5 +1,5 @@
 <script setup lang="ts">
-type CustomerPortalFetch = <T = unknown>(path: '/api/managed-sites/customer/session' | '/api/managed-sites/customer/modules' | '/api/managed-sites/customer/content-admin' | '/api/managed-sites/customer/visibility' | '/api/system-factory/customer/status' | '/api/managed-sites/customer/assistant', options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown> }) => Promise<T>
+type CustomerPortalFetch = <T = unknown>(path: '/api/managed-sites/customer/session' | '/api/managed-sites/customer/modules' | '/api/managed-sites/customer/content-admin' | '/api/managed-sites/customer/visibility' | '/api/system-factory/customer/status' | '/api/managed-sites/customer/assistant' | '/api/managed-sites/customer/logout', options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown> }) => Promise<T>
 // Preserve the same Nuxt requests, session checks and customer response DTOs.
 const fetchCustomerPortal = $fetch as unknown as CustomerPortalFetch
 
@@ -27,6 +27,7 @@ const systemStatus = ref<any>(null)
 const assistantQuestion = ref('')
 const assistantResult = ref<any>(null)
 const assistantLoading = ref(false)
+const signingOut = ref(false)
 const recentContent = computed(() => [...(contentProgress.value?.entries || [])].sort((a, b) => b.plannedLocalDate.localeCompare(a.plannedLocalDate)).slice(0, 5))
 const percentage = (value: number | null | undefined) => typeof value === 'number' ? `${Math.round(value * 100)}%` : '資料不足'
 const displayDate = (value: string | Date) => new Intl.DateTimeFormat('zh-Hant-TW', { dateStyle: 'medium' }).format(new Date(value))
@@ -65,6 +66,18 @@ async function askAssistant() {
   finally { assistantLoading.value = false }
 }
 
+async function signOut() {
+  if (signingOut.value) return
+  signingOut.value = true
+  try {
+    await fetchCustomerPortal('/api/managed-sites/customer/logout', { method: 'POST' })
+    window.location.assign('/managed-site-access')
+  } catch {
+    errorMessage.value = '目前無法安全登出，請稍後再試。'
+    signingOut.value = false
+  }
+}
+
 onMounted(loadCustomerSite)
 </script>
 
@@ -77,8 +90,11 @@ onMounted(loadCustomerSite)
         <p class="lede">這裡只顯示你所屬網站專案的內容、版本、素材與訂閱狀態。平台原始碼與其他客戶資料不在此入口提供。</p>
       </div>
       <button v-if="projection?.capabilities.customerDataExport" type="button" class="button" @click="exportData">匯出我的資料</button>
+      <NuxtLink v-if="projection?.capabilities.customerDataExport" class="button button--editor" to="/customer/managed-sites/inbox">網站詢問</NuxtLink>
       <NuxtLink v-if="projection && ['owner', 'administrator', 'editor'].includes(projection.membership.role)" class="button button--editor" to="/customer/managed-sites/editor">開啟網站編輯器</NuxtLink>
-      <a class="button button--editor" href="/managed-site-access">重新登入</a>
+      <NuxtLink v-if="projection && ['owner', 'administrator', 'editor'].includes(projection.membership.role)" class="button button--editor" to="/customer/managed-sites/design-care">免費美術調整</NuxtLink>
+      <button v-if="projection" type="button" class="button button--editor" :disabled="signingOut" @click="signOut">{{ signingOut ? '登出中…' : '登出' }}</button>
+      <a v-else-if="!loading" class="button button--editor" href="/managed-site-access">重新登入</a>
     </header>
 
     <p v-if="loading" class="state" role="status">正在載入專案資料…</p>

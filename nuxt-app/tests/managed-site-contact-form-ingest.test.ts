@@ -80,6 +80,14 @@ function form(overrides: Partial<Record<string, string>> = {}) {
 }
 
 describe('managed-site contact form ingest', () => {
+  it('validates consent when provided without breaking previously published form submissions', async () => {
+    const current = await line({ bound: true })
+    expect((await current.request(form({ contactConsent: 'no' }))).status).toBe(422)
+    expect((await current.request(`${form({ contactConsent: 'yes' })}&contactConsent=yes`)).status).toBe(422)
+    expect(current.state.submissions).toHaveLength(0)
+    expect((await current.request(form({ contactConsent: 'yes' }))).status).toBe(303)
+    expect(current.state.submissions).toHaveLength(1)
+  })
   it('returns 404 for an unknown token and stores nothing', async () => {
     const current = await line()
     const response = await current.request(form(), { token: 'f'.repeat(64) })
@@ -112,7 +120,12 @@ describe('managed-site contact form ingest', () => {
     const messages = (current.transport as ReturnType<typeof createRecordingManagedSiteEmailTransport>).messages
     expect(response.status).toBe(303)
     expect(messages).toHaveLength(1)
-    expect(messages[0]).toMatchObject({ to: 'bound-inbox@example.com', replyTo: 'visitor@example.com', text: expect.stringContaining('請寄產品資料給我。') })
+    expect(messages[0]).toMatchObject({
+      to: 'bound-inbox@example.com',
+      replyTo: 'visitor@example.com',
+      text: expect.stringContaining('請寄產品資料給我。'),
+      idempotencyKey: expect.stringMatching(/^managed-site-contact-form:71:1:[a-f0-9]{32}$/u),
+    })
     expect(messages[0]!.to).not.toBe('visitor@example.com')
     expect(current.state.submissions[0]).toMatchObject({ status: 'forwarded', forwardTargetEmail: 'bound-inbox@example.com', forwardErrorCode: null })
   })

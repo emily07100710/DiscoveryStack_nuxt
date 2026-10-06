@@ -1,5 +1,6 @@
 import { getOwnerDatabaseUserId } from '../../../../audit/repository'
-import { parseReplanInput, replanOwnerContentCalendar, toPublicContentOperationsError } from '../../../../content-operations'
+import { replanOwnerContentCalendar } from '../../../../content-operations/service'
+import { parseReplanInput, toPublicContentOperationsError } from '../../../../content-operations/normalization'
 import { requireOwner } from '../../../../utils/auth'
 
 function calendarId(event: Parameters<typeof requireOwner>[0]): number {

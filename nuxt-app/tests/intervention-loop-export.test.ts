@@ -9,6 +9,7 @@ describe('intervention outcome export', () => {
     const secrets = { summary: 'SECRET_CHANGE_SUMMARY', hypothesis: 'SECRET_HYPOTHESIS', deploy: 'SECRET_DEPLOY_NOTE', recrawl: 'SECRET_RECRAWL_NOTE', measure: 'SECRET_MEASUREMENT_NOTE' }
     const row = (await registerIntervention(77, { targetUrl: 'https://example.com/private-copy', changeSummary: secrets.summary, hypothesis: secrets.hypothesis, interventionType: 'content_update', idempotencyKey: 'export' }, dependencies)).intervention
     await confirmDeploymentManually(77, row.id, { note: secrets.deploy }, dependencies); now = new Date('2026-09-02T00:00:00.000Z'); await confirmRecrawlManually(77, row.id, { note: secrets.recrawl }, dependencies)
+    now = new Date('2026-09-21T00:00:00.000Z')
     await recordManualMeasurement(77, row.id, { windowStart: '2026-08-01T00:00:00.000Z', windowEnd: '2026-08-20T00:00:00.000Z', metrics: { clicks: 10, impressions: 100 }, note: secrets.measure }, dependencies)
     await recordManualMeasurement(77, row.id, { windowStart: '2026-09-03T00:00:00.000Z', windowEnd: '2026-09-20T00:00:00.000Z', metrics: { clicks: 20, impressions: 120 }, note: secrets.measure }, dependencies)
     await measureIntervention(77, row.id, dependencies); await assessIntervention(77, row.id, dependencies)

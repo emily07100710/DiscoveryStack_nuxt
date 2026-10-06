@@ -7,6 +7,8 @@ import { managedSiteStableFingerprint } from './live-connectors/canonical'
 export const SITE_SPEC_VERSION = 'site-spec-v1'
 export const STYLE_PROFILE_VERSION = 'style-profile-v1'
 export const PREVIEW_TTL_MS = 1000 * 60 * 60 * 24
+export const CUSTOMER_SITE_PRESETS = ['atelier', 'bloom', 'alignment'] as const
+export type CustomerSitePreset = typeof CUSTOMER_SITE_PRESETS[number]
 
 export const BUSINESS_GOALS = ['increase_inquiries', 'increase_bookings', 'sell_online', 'reduce_support', 'build_brand', 'improve_search_ai_understanding', 'membership_repurchase'] as const
 export type BusinessGoal = typeof BUSINESS_GOALS[number]
@@ -73,6 +75,7 @@ export type SiteSpec = {
   }
   businessGoals: BusinessGoal[]
   siteType: ManagedSiteType
+  customerSitePreset?: CustomerSitePreset
   pageCatalog: Array<'home' | 'about' | 'services' | 'faq' | 'contact' | 'blog' | 'shop'>
   navigation: Array<{ label: string; page: string }>
   designTokens: {
@@ -116,6 +119,7 @@ export type SiteBriefInput = {
   brief: string
   businessGoals: BusinessGoal[]
   siteType?: ManagedSiteType
+  customerSitePreset?: CustomerSitePreset
   selectedModules?: SiteModule[]
   styleReferences?: StyleReferenceInput[]
   approvedEvidenceReferences?: Array<{ sourceId: number; artifactId?: number | null; locator?: string; artifactHash?: string; approvedAt?: string; purpose: 'diagnosis' | 'recommendation' | 'content_draft' }>
@@ -236,6 +240,7 @@ export function buildSiteSpec(input: unknown, capturedAt = new Date()): SiteSpec
   const siteType = candidate.siteType || defaultSiteType(businessGoals)
   if (!(MANAGED_SITE_TYPES as readonly string[]).includes(siteType)) invalid('Site type is not available in V1.')
   const styleReferenceProfile = buildStyleProfile(candidate.styleReferences, capturedAt)
+  if (candidate.customerSitePreset !== undefined && !(CUSTOMER_SITE_PRESETS as readonly string[]).includes(candidate.customerSitePreset)) invalid('品牌網站版型不支援。')
   const selectedModules = Array.isArray(candidate.selectedModules) ? uniqueSorted(candidate.selectedModules.filter((value): value is SiteModule => typeof value === 'string') as SiteModule[]) : defaultModules(businessGoals, siteType)
   if (!selectedModules.every(value => (SITE_MODULES as readonly string[]).includes(value))) invalid('Site module is not available in V1.')
   if (siteType === 'simple_commerce' && !selectedModules.includes('shopify_commerce')) invalid('簡易電商網站必須選擇 Shopify 電商模組，請返回模組步驟勾選後再繼續。')
@@ -259,6 +264,7 @@ export function buildSiteSpec(input: unknown, capturedAt = new Date()): SiteSpec
     businessIdentity: { brandName, audience, brief },
     businessGoals,
     siteType,
+    ...(candidate.customerSitePreset ? { customerSitePreset: candidate.customerSitePreset } : {}),
     pageCatalog: pages,
     navigation,
     designTokens: tokens(styleReferenceProfile),
@@ -286,6 +292,7 @@ export function buildSiteSpec(input: unknown, capturedAt = new Date()): SiteSpec
 export function parseSiteSpecSnapshot(input: unknown): SiteSpec {
   if (!input || typeof input !== 'object' || Array.isArray(input)) invalid('Persisted SiteSpec is invalid.')
   const candidate = input as Partial<SiteSpec>
+  if (candidate.customerSitePreset !== undefined && !(CUSTOMER_SITE_PRESETS as readonly string[]).includes(candidate.customerSitePreset)) invalid('Persisted customer site preset is invalid.')
   if (candidate.schemaVersion !== SITE_SPEC_VERSION || typeof candidate.deterministicFingerprint !== 'string' || !candidate.businessIdentity || typeof candidate.businessIdentity !== 'object') invalid('Persisted SiteSpec version or identity is invalid.')
   if (!Array.isArray(candidate.businessGoals) || !candidate.businessGoals.length || candidate.businessGoals.some(value => typeof value !== 'string' || !(BUSINESS_GOALS as readonly string[]).includes(value))) invalid('Persisted SiteSpec business goals are invalid.')
   if (!Array.isArray(candidate.selectedModules) || candidate.selectedModules.some(value => typeof value !== 'string' || !(SITE_MODULES as readonly string[]).includes(value))) invalid('Persisted SiteSpec modules are invalid.')

@@ -2,7 +2,8 @@ import {z} from 'zod'
 import {and,eq} from 'drizzle-orm'
 import {getDatabase} from '../../database'
 import {contentOperationClients} from '../../database/schema'
-import {createOwnerContentClient,createContentOperationsRepositoryFromDatabase,type ContentOperationsRepository} from '../../content-operations'
+import {createOwnerContentClient} from '../../content-operations/service'
+import {createContentOperationsRepositoryFromDatabase,type ContentOperationsRepository} from '../../content-operations/repository'
 import {requireWeeklyOwner,weeklyBody,weeklyRuntimeDependencies,weeklyPublicError} from '../../weekly-content/http'
 export default defineEventHandler(async event=>{try{
  const owner=await requireWeeklyOwner(event,true);z.object({}).strict().parse(await weeklyBody(event));weeklyRuntimeDependencies()

@@ -1,5 +1,6 @@
 import { getOwnerDatabaseUserId } from '../../../../audit/repository'
-import { materializeOwnerDueContent, parseMaterializeInput, toPublicContentOperationsError } from '../../../../content-operations'
+import { materializeOwnerDueContent } from '../../../../content-operations/service'
+import { parseMaterializeInput, toPublicContentOperationsError } from '../../../../content-operations/normalization'
 import { requireOwner } from '../../../../utils/auth'
 
 function calendarId(event: Parameters<typeof requireOwner>[0]): number {

@@ -14,7 +14,7 @@ const registration = (key: string, path = key) => ({ targetUrl: `https://example
 
 describe('intervention loop tick', () => {
   it('auto-registers a delivered publication exactly once and marks receipt deployment strong', async () => {
-    const h = setup(); h.state.delivered.push({ entryId: 10, targetId: 2, publicationUrl: 'https://example.com/published', contentHash: 'a'.repeat(64), receiptFingerprint: 'receipt-1', deliveredAt: new Date('2026-09-01T00:00:00.000Z'), briefId: null, draftId: null, changeSummary: '發布新內容' })
+    const h = setup(); h.state.delivered.push({ entryId: 10, targetId: 2, publicationUrl: 'https://example.com/published', contentHash: 'a'.repeat(64), receiptFingerprint: sha256Hex('receipt-1'), deliveredAt: new Date('2026-09-01T00:00:00.000Z'), briefId: null, draftId: null, changeSummary: '發布新內容' })
     expect((await runInterventionLoopTick(1, h.dependencies)).autoRegistered).toBe(1)
     expect((await runInterventionLoopTick(1, h.dependencies)).autoRegistered).toBe(0)
     const rows = await h.repository.listInterventions(1, { limit: 20 }); expect(rows).toHaveLength(1); expect(rows[0]).toMatchObject({ status: 'recrawl_confirmed', deployEvidenceLevel: 'strong', deployEvidenceSource: 'publication_receipt', registrationSource: 'content_operations_delivery' })

@@ -51,7 +51,7 @@ async function fixture() {
     return result
   })
   const domainAdapter = vi.fn(async () => ({ quote, createPurchaseIntent: create }))
-  const dependencies = { funnelRepository: funnel.repository, repository: line.live.repository, orderingRepository: line.ordering.repository, managedRepository: line.managed.repository, productionTransaction: line.productionTransaction, domainAdapter, executionMode: 'mocked' as const, clock: () => now }
+  const dependencies = { funnelRepository: funnel.repository, repository: line.live.repository, orderingRepository: line.ordering.repository, managedRepository: line.managed.repository, productionTransaction: line.productionTransaction, domainAdapter, executionMode: 'mocked' as const, clock: () => now, activateGeoOperations: (async (_ownerUserId: number, input: { releaseId: number }) => ({ release: await line.live.repository.findRelease(1, input.releaseId), replayed: false })) as any, bootstrapCustomerWorkspace: (async () => ({ replayed: false })) as any, notifyCustomerWorkspace: (async () => ({ sent: true, replayed: false, receiptFingerprint: 'a'.repeat(64) })) as any }
   return { line, release, answers, session, delegation, dependencies, base, quote, create, domainAdapter, payment, now: () => now, advanceClock: (ms: number) => { now = new Date(now.getTime() + ms) } }
 }
 

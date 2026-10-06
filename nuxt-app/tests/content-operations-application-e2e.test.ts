@@ -182,7 +182,9 @@ describe('Content Operations application-level lifecycle V1', () => {
     expect(runtime.autoGeoProvider).toHaveBeenCalledTimes(1)
     expect(fixture.reviews.size).toBe(1)
     expect(fixture.attempts).toHaveLength(1)
-    expect(fixture.attempts[0]).toMatchObject({ targetId: target.id, status: 'delivered', contentHash: fixture.entries.find(row => row.id === entry.id)?.contentHash })
+    const deliveredDraft = fixture.generated.get(entry.id)!.draft as { body: string; contentHash: string }
+    expect(fixture.attempts[0]).toMatchObject({ targetId: target.id, status: 'delivered', contentHash: deliveredDraft.contentHash, publicationContentHash: hash(deliveredDraft.body) })
+    expect(fixture.entries.find(row => row.id === entry.id)).toMatchObject({ contentHash: deliveredDraft.contentHash, publicationContentHash: hash(deliveredDraft.body) })
     expect(fixture.events.some(event => event.eventType === 'publication_delivered')).toBe(true)
 
     const outcome = await recordOwnerOutcomeAssessment(1, { entryId: entry.id, idempotencyKey: 'ref-app-manual-outcome', baselineMeasurements: [makeMeasurement({ deidentifiedSubjectKey: OWNER_SUBJECT_KEY, windowStart: '2026-08-01T00:00:00.000Z', windowEnd: '2026-08-08T00:00:00.000Z', capturedAt: '2026-08-09T00:00:00.000Z' })], followUpMeasurements: [makeMeasurement({ phase: 'follow_up', deidentifiedSubjectKey: OWNER_SUBJECT_KEY, windowStart: '2026-09-01T00:00:00.000Z', windowEnd: '2026-09-08T00:00:00.000Z', capturedAt: '2026-09-09T00:00:00.000Z', metrics: { impressions: 1400, clicks: 210, averagePosition: 8 } })], consent: makeGrantedConsent(), learningCandidate: true, dataContractVersion: 'outcome-contract-v1', measuredAt: '2026-09-09T12:00:00.000Z' }, fixture.repository)

@@ -107,9 +107,12 @@ export function parseManualMeasurementInput(value: unknown): ManualMeasurementIn
   if (rawMetrics.clicks === undefined || rawMetrics.impressions === undefined) invalid('INVALID_METRICS', 'metrics.clicks 與 metrics.impressions 為必填。')
   const clicks = boundedNumber(rawMetrics.clicks, 'metrics.clicks')
   const impressions = boundedNumber(rawMetrics.impressions, 'metrics.impressions')
+  if (!Number.isSafeInteger(clicks) || !Number.isSafeInteger(impressions) || clicks > impressions) invalid('INVALID_METRICS', '點擊與曝光必須是非負整數，且點擊不可大於曝光。')
   const metrics: ManualMeasurementInput['metrics'] = { clicks, impressions, ctr: rawMetrics.ctr === undefined ? (impressions > 0 ? clicks / impressions : 0) : boundedNumber(rawMetrics.ctr, 'metrics.ctr') }
+  if (metrics.ctr! > 1) invalid('INVALID_METRICS', 'CTR 必須介於 0 與 1。')
   if (rawMetrics.averagePosition !== undefined) metrics.averagePosition = boundedNumber(rawMetrics.averagePosition, 'metrics.averagePosition')
-  const sampleSize = input.sampleSize === undefined ? Math.trunc(impressions) : positiveInt(input.sampleSize, 'sampleSize', true)!
+  const sampleSize = input.sampleSize === undefined ? impressions : boundedNumber(input.sampleSize, 'sampleSize')
+  if (!Number.isSafeInteger(sampleSize) || sampleSize > impressions) invalid('INVALID_SAMPLE_SIZE', '樣本數必須是非負整數，且不可大於曝光。')
   return { source: source as ManualMeasurementInput['source'], windowStart, windowEnd, metrics, sampleSize, note: text(input.note, 'note', 1, 500, false) }
 }
 

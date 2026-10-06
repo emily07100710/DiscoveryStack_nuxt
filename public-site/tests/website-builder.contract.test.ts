@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { builderPhases, builderSteps, motionOptions, phaseForStep } from '../src/lib/website-builder-model'
 
 const component = readFileSync(resolve(process.cwd(), 'src/components/WebsiteBuilderConcept.vue'), 'utf8')
+const page = readFileSync(resolve(process.cwd(), 'src/pages/zh-hant/website-builder-preview.astro'), 'utf8')
 const model = readFileSync(resolve(process.cwd(), 'src/lib/website-builder-model.ts'), 'utf8')
 const styles = readFileSync(resolve(process.cwd(), 'src/styles/website-builder.css'), 'utf8')
 
@@ -17,6 +18,10 @@ describe('website builder safety and presentation contracts', () => {
     expect(component).toContain('不收集密碼、身分證、付款資料或 API key')
     expect(component).toContain('privacyConsent: handoffContact.privacyConsent')
     expect(component).toContain('送出需求不會建立訂單或扣款')
+    expect(component).toContain('defineProps<{ customerStartUrl: string }>()')
+    expect(component).toContain(':href="customerStartUrl"')
+    expect(component).toContain('data-managed-site-start')
+    expect(component).toContain('正式自助流程會另行建立工作階段')
   })
 
   it('keeps preview-only claims explicit and never presents simulated domain/Shopify/payment actions as completed', () => {
@@ -28,6 +33,11 @@ describe('website builder safety and presentation contracts', () => {
     expect(component).toContain('這份預覽不會建立 Shopify 商店')
     expect(component).toContain('REQUEST RECEIVED / NOT AN ORDER')
     expect(component).toContain('不是已付款、已購買網域或已部署的正式成品')
+  })
+
+  it('does not advertise an English alternate route that the static site does not ship', () => {
+    expect(page).toContain('localizedAlternates={false}')
+    expect(page).not.toContain('/en/website-builder-preview')
   })
 
   it('keeps state machine, cadence options, and client-owned domain language in model/data contracts', () => {

@@ -28,7 +28,7 @@ export type FunnelAnswers = {
   }
   company?: { brandName: string; whatWeDo: string; feelings: string[]; mainOffer: string; conversionGoals: string[] }
   contact?: { email: string; contactName: string; phone?: string }
-  style?: { referenceUrls: string[]; stylePreset?: 'minimal' | 'business' | 'premium' | 'warm' | 'lively' | 'tech'; designTier: 'template' | 'designer' }
+  style?: { referenceUrls: string[]; stylePreset?: 'minimal' | 'business' | 'premium' | 'warm' | 'lively' | 'tech'; customerSitePreset?: 'atelier' | 'bloom' | 'alignment'; designTier: 'template' | 'designer' }
   siteType?: 'one_page' | 'brand_blog' | 'simple_commerce'
   modules?: string[]
   previewDraft?: { generatedAt: string; source: 'llm' | 'template'; headline: string; sections: { heading: string; body: string }[] }
@@ -139,14 +139,16 @@ function validateAnswers(input: unknown): Partial<FunnelAnswers> {
     output.contact = { email, contactName, ...(phone ? { phone } : {}) }
   }
   if ('style' in candidate) {
-    const value = exactObject(candidate.style, ['referenceUrls', 'stylePreset', 'designTier'], 'Style answer')
+    const value = exactObject(candidate.style, ['referenceUrls', 'stylePreset', 'customerSitePreset', 'designTier'], 'Style answer')
     if (!Array.isArray(value.referenceUrls) || value.referenceUrls.length > 3) invalid('At most three style reference URLs are allowed.')
     const referenceUrls = value.referenceUrls.map((url, index) => httpsUrl(url, `Style reference ${index + 1}`, 512))
     if (new Set(referenceUrls).size !== referenceUrls.length) invalid('Style reference URLs must not contain duplicates.')
     const stylePreset = value.stylePreset === undefined ? undefined : requiredString(value.stylePreset, 'Style preset', 32)
     if (stylePreset && !(STYLE_PRESETS as readonly string[]).includes(stylePreset)) invalid('Style preset is not supported.')
+    const customerSitePreset = value.customerSitePreset
+    if (customerSitePreset !== undefined && !['atelier', 'bloom', 'alignment'].includes(String(customerSitePreset))) invalid('品牌網站版型不支援。')
     if (!getManagedSitePriceCatalog().designTiers.some(tier => tier.key === value.designTier)) invalid('Design tier is not supported.')
-    output.style = { referenceUrls, ...(stylePreset ? { stylePreset: stylePreset as NonNullable<FunnelAnswers['style']>['stylePreset'] } : {}), designTier: value.designTier as 'template' | 'designer' }
+    output.style = { referenceUrls, ...(stylePreset ? { stylePreset: stylePreset as NonNullable<FunnelAnswers['style']>['stylePreset'] } : {}), ...(customerSitePreset ? { customerSitePreset: customerSitePreset as NonNullable<FunnelAnswers['style']>['customerSitePreset'] } : {}), designTier: value.designTier as 'template' | 'designer' }
   }
   if ('siteType' in candidate) {
     if (!(MANAGED_SITE_TYPES as readonly unknown[]).includes(candidate.siteType)) invalid('Site type is not supported.')

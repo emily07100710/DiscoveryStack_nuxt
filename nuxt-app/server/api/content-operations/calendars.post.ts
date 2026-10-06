@@ -1,5 +1,6 @@
 import { getOwnerDatabaseUserId } from '../../audit/repository'
-import { createCalendarFromProductionPlan, parseCalendarInput, toPublicContentOperationsError } from '../../content-operations'
+import { createCalendarFromProductionPlan } from '../../content-operations/service'
+import { parseCalendarInput, toPublicContentOperationsError } from '../../content-operations/normalization'
 import { requireOwner } from '../../utils/auth'
 
 export default defineEventHandler(async (event) => {

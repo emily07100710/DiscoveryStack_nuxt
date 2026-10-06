@@ -73,6 +73,9 @@ function parseSubmission(rawBody: Buffer): ParsedSubmission {
   const phone = field(params, 'phone', 64, false) || null
   const message = field(params, 'message', 2000, true)
   const companyFax = field(params, 'companyFax', 512, false)
+  // Existing published forms predate this field. Preserve their submit contract,
+  // while new rendered forms require an affirmative checkbox in the browser.
+  if (params.has('contactConsent') && field(params, 'contactConsent', 16, true) !== 'yes') throw createError({ statusCode: 422, statusMessage: '請確認同意提供資料供我們回覆這次詢問。' })
   if ([name, email, phone || ''].some(value => CONTROL.test(value))) throw createError({ statusCode: 422, statusMessage: '聯絡表單欄位含有不允許的控制字元。' })
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) throw createError({ statusCode: 422, statusMessage: 'Email 格式不正確。' })
   return { name, email, phone, message, honeypot: Boolean(companyFax) }
@@ -89,6 +92,8 @@ function successFor(project: ManagedSiteProject): { status: 303; location: strin
 }
 
 function forwardErrorCode(error: unknown): string {
+  const code = String((error as { data?: { code?: unknown } })?.data?.code || '')
+  if (code === 'email_provider_timeout') return 'timeout'
   const name = String((error as { name?: unknown })?.name || '')
   return name === 'AbortError' || name === 'TimeoutError' ? 'timeout' : 'provider_rejected'
 }
@@ -149,6 +154,7 @@ export async function ingestManagedSiteContactForm(
       replyTo: parsed.email,
       subject: `網站聯絡表單新訊息｜${project.canonicalClientIdentity}`,
       text: `你的網站收到一則新的聯絡表單訊息。\n\n姓名：${parsed.name}\nEmail：${parsed.email}\n電話：${parsed.phone || '未提供'}\n\n訊息：\n${parsed.message}`,
+      idempotencyKey: `managed-site-contact-form:${project.id}:${submission.id}:${dedupeKey.slice(0, 32)}`,
     })
     await markForwardResult(injected.repository, submission.id, { status: 'forwarded', forwardedAt: now, forwardTargetEmail: binding.email, forwardErrorCode: null })
   } catch (error) {

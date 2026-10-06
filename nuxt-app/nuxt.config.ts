@@ -24,6 +24,7 @@ for (const [cron, tasks] of [
   [contentOperationsExecutionCron, ['content-operations:execution-tick']],
   [contentOperationsMeasurementCron, ['content-operations:measurement-tick']],
   ['*/5 * * * *', ['weekly-content:tick']],
+  ['*/5 * * * *', ['learning-loop:tick']],
 ] as const) (scheduledTasks[cron] ||= []).push(...tasks)
 
 export default defineNuxtConfig({
@@ -57,6 +58,7 @@ export default defineNuxtConfig({
       'content-operations:execution-tick': { handler: fileURLToPath(new URL('./server/tasks/content-operations-execution-tick.ts', import.meta.url)) },
       'llm-visibility:benchmark-tick': { handler: fileURLToPath(new URL('./server/tasks/llm-visibility-benchmark-tick.ts', import.meta.url)) },
       'weekly-content:tick': { handler: fileURLToPath(new URL('./server/tasks/weekly-content-tick.ts', import.meta.url)) },
+      'learning-loop:tick': { handler: fileURLToPath(new URL('./server/tasks/learning-loop-tick.ts', import.meta.url)) },
     },
     scheduledTasks,
   },

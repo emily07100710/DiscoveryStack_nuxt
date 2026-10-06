@@ -186,7 +186,7 @@ export type ContentOperationsRepository = {
   finalizePublicationAttempt(ownerUserId: number, attemptId: number, patch: PublicationAttemptFinalization): Promise<ContentOperationPublicationAttemptRow | null>
   findOutcomeByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationOutcomeAssessmentRow | null>
   insertOutcome(input: OutcomeInsert): Promise<ContentOperationOutcomeAssessmentRow>
-  listOutcomes(ownerUserId: number): Promise<ContentOperationOutcomeAssessmentRow[]>
+  listOutcomes(ownerUserId: number, limit?: number): Promise<ContentOperationOutcomeAssessmentRow[]>
   getPlanBundle(ownerUserId: number, productionPlanId: number): Promise<PlanBundle>
   resolveCanonicalContext(ownerUserId: number, productionPlanId: number, deliverableId: number): Promise<CanonicalContext>
   resolveDeliveredPublication(ownerUserId: number, entryId: number): Promise<DeliveredPublication | null>
@@ -746,8 +746,10 @@ function makeRepository(database: any, currentTime: () => Date = () => new Date(
       if (!row) throw createError({ statusCode: 500, statusMessage: 'Content operation outcome could not be loaded.' })
       return row
     },
-    async listOutcomes(ownerUserId) {
-      return database.select().from(contentOperationOutcomeAssessments).where(eq(contentOperationOutcomeAssessments.ownerUserId, ownerUserId)).orderBy(desc(contentOperationOutcomeAssessments.measuredAt)).limit(100)
+    async listOutcomes(ownerUserId, limit = 100) {
+      // Workbench keeps its 100-row default; reviewed learning needs at least 150 rows.
+      const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.trunc(limit))) : 100
+      return database.select().from(contentOperationOutcomeAssessments).where(eq(contentOperationOutcomeAssessments.ownerUserId, ownerUserId)).orderBy(desc(contentOperationOutcomeAssessments.measuredAt), desc(contentOperationOutcomeAssessments.id)).limit(boundedLimit)
     },
     async getPlanBundle(ownerUserId, productionPlanId) {
       return await getProductionPlanBundle(ownerUserId, productionPlanId) as unknown as PlanBundle

@@ -33,11 +33,15 @@ async function fixture() {
   const deploymentBase = createMockManagedSiteDeploymentAdapter({ now: () => now })
   const deploy = vi.fn(deploymentBase.deployProduction)
   const dns = vi.fn(createMockManagedSiteDnsTlsAdapter().configureAndVerify)
+  const activateGeoOperations = vi.fn(async (_ownerUserId: number, input: { releaseId: number }, injected: { repository: typeof line.live.repository }) => ({ release: await injected.repository.findRelease(1, input.releaseId), replayed: false })) as any
+  const bootstrapCustomerWorkspace = vi.fn(async () => ({ replayed: false })) as any
+  const notifyCustomerWorkspace = vi.fn(async () => ({ sent: true, replayed: false, receiptFingerprint: 'a'.repeat(64) })) as any
   const dependencies: FunnelFulfilmentDependencies = {
     funnelRepository: funnel.repository, repository: line.live.repository, orderingRepository: line.ordering.repository, managedRepository: line.managed.repository,
     productionTransaction: line.productionTransaction, deploymentAdapter: async () => ({ ...deploymentBase, deployProduction: deploy }), dnsTlsAdapter: async () => ({ configureAndVerify: dns }), executionMode: 'mocked', clock: () => now,
+    activateGeoOperations, bootstrapCustomerWorkspace, notifyCustomerWorkspace,
   }
-  return { line, release, session, funnel, dependencies, deploy, dns, payment, now: () => now, advanceClock: (ms: number) => { now = new Date(now.getTime() + ms) } }
+  return { line, release, session, funnel, dependencies, deploy, dns, activateGeoOperations, bootstrapCustomerWorkspace, notifyCustomerWorkspace, payment, now: () => now, advanceClock: (ms: number) => { now = new Date(now.getTime() + ms) } }
 }
 
 describe('durable paid funnel fulfilment advancement', () => {
@@ -54,6 +58,18 @@ describe('durable paid funnel fulfilment advancement', () => {
     expect(f.line.live.state.candidates).toHaveLength(1)
     expect(f.line.live.state.receipts.filter(row => row.receiptType === 'checkout_session_created')).toHaveLength(1)
     expect(f.line.live.state.receipts.filter(row => row.receiptType === 'production_deployment_verified')).toHaveLength(1)
+    expect(f.activateGeoOperations).toHaveBeenCalledTimes(2)
+    expect(f.bootstrapCustomerWorkspace).toHaveBeenCalledTimes(2)
+    expect(f.notifyCustomerWorkspace).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps production delivered while a site-ready email waits for retry', async () => {
+    const f = await fixture()
+    f.notifyCustomerWorkspace.mockResolvedValueOnce({ sent: false, replayed: false, retryable: true, reason: 'email_delivery_failed' })
+    expect(await advancePaidManagedSiteFunnel({}, f.dependencies)).toMatchObject({ scanned: 1, advanced: 0, waiting: 1, failed: 0 })
+    expect(f.line.live.state.releases[0]).toMatchObject({ status: 'live_verified', activeDeploymentReceiptFingerprint: expect.any(String) })
+    expect(f.bootstrapCustomerWorkspace).toHaveBeenCalledTimes(1)
+    expect(f.notifyCustomerWorkspace).toHaveBeenCalledTimes(1)
   })
 
   it.each(['missing_domain', 'foreign_domain', 'owner_mismatch', 'unpaid', 'snapshot_changed', 'suspended', 'effective_dispute'] as const)('does not call DNS or production with %s authority', async reason => {

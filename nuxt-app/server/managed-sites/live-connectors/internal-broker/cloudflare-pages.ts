@@ -2,7 +2,7 @@ import { blake3 } from '@noble/hashes/blake3.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import type { ManagedSiteStaticAsset } from './static-renderer'
 import { readBoundedManagedSiteResponse } from '../hmac-broker-transport'
-import { MAX_MANAGED_SITE_PRODUCTION_HTML_BYTES, probeManagedSiteProductionHomepage, type ManagedSiteProductionProbe } from './production-probe'
+import { MAX_MANAGED_SITE_PRODUCTION_HTML_BYTES, probeManagedSiteProductionPath, type ManagedSiteProductionProbe } from './production-probe'
 
 const API_ORIGIN = 'https://api.cloudflare.com'
 const MAX_RESPONSE_BYTES = 256 * 1024
@@ -147,14 +147,17 @@ function productionIdentity(deployment: Record<string, any>, expected: { project
 }
 
 /** Publish only to a preconfigured, active custom domain; DNS and ownership are never inferred or created here. */
-export async function deployCloudflarePagesProduction(input: { ownerUserId: number; projectId: number; releaseId: number; canonicalDomain: string; requestFingerprint: string; assets: ManagedSiteStaticAsset[]; timeoutMs: number }, options: CloudflarePagesOptions & { productionProbe?: ManagedSiteProductionProbe }): Promise<{ deploymentId: string; deploymentUrl: string; projectName: string }> {
+export async function deployCloudflarePagesProduction(input: { ownerUserId: number; projectId: number; releaseId: number; canonicalDomain: string; requestFingerprint: string; assets: ManagedSiteStaticAsset[]; timeoutMs: number; verificationAssetPath?: string }, options: CloudflarePagesOptions & { productionProbe?: ManagedSiteProductionProbe }): Promise<{ deploymentId: string; deploymentUrl: string; projectName: string }> {
   const now = options.now || Date.now; const sleep = options.sleep || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)))
   const deadline = now() + Math.max(1, Math.min(input.timeoutMs - 1_000, 28_000))
   const remaining = () => { const available = deadline - now(); if (available <= 0) throw cloudflareError(503, 'Cloudflare production verification exceeded its bounded budget.'); return available }
   const projectName = managedSitePagesProjectName(options.projectPrefix, input.ownerUserId, input.projectId)
   const accountProject = `${API_ORIGIN}/client/v4/accounts/${options.accountId}/pages/projects/${projectName}`
   const homepage = input.assets.find(asset => asset.path === 'index.html')
-  if (!homepage || Buffer.byteLength(homepage.content, 'utf8') > MAX_MANAGED_SITE_PRODUCTION_HTML_BYTES || !/^[a-f0-9]{64}$/u.test(input.requestFingerprint) || !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/u.test(input.canonicalDomain)) throw cloudflareError(422, 'Managed-site production asset or release identity was invalid.')
+  const verificationAssetPath = input.verificationAssetPath || 'index.html'
+  const verificationAsset = input.assets.find(asset => asset.path === verificationAssetPath)
+  const verificationPathname = verificationAssetPath === 'index.html' ? '/' : /^(?:[a-z0-9][a-z0-9_-]*\/)*index\.html$/u.test(verificationAssetPath) ? `/${verificationAssetPath.slice(0, -'index.html'.length)}` : null
+  if (!homepage || !verificationAsset || !verificationPathname || !/^text\/html(?:\s*;|$)/iu.test(verificationAsset.contentType) || [homepage, verificationAsset].some(asset => Buffer.byteLength(asset.content, 'utf8') > MAX_MANAGED_SITE_PRODUCTION_HTML_BYTES) || !/^[a-f0-9]{64}$/u.test(input.requestFingerprint) || !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/u.test(input.canonicalDomain)) throw cloudflareError(422, 'Managed-site production asset or release identity was invalid.')
   const get = async (path: string) => {
     const response = await request(options.fetchImpl, `${accountProject}${path}`, { method: 'GET', headers: bearer(options.apiToken) }, remaining())
     if (!response.response.ok) throw cloudflareError(response.response.status, 'Cloudflare production authority lookup failed.')
@@ -196,8 +199,13 @@ export async function deployCloudflarePagesProduction(input: { ownerUserId: numb
   const active = await get('')
   if (active.id !== project.id || active.name !== projectName || active.production_branch !== 'main' || active.canonical_deployment?.id !== deploymentId) throw cloudflareError(503, 'Cloudflare canonical production deployment has not converged to the authorized release.')
   productionIdentity(active.canonical_deployment, { ...expected, deploymentId })
-  const observed = await (options.productionProbe || probeManagedSiteProductionHomepage)(input.canonicalDomain, Math.min(5_000, remaining()))
+  const probe = options.productionProbe || ((domain: string, timeoutMs: number, pathname = '/') => probeManagedSiteProductionPath(domain, pathname, timeoutMs))
+  const observed = await probe(input.canonicalDomain, Math.min(5_000, remaining()))
   if (observed.status !== 200 || !/^text\/html(?:\s*;|$)/iu.test(observed.contentType) || observed.body !== homepage.content) throw cloudflareError(503, 'Canonical production homepage did not match the immutable rendered release.')
+  if (verificationPathname !== '/') {
+    const routeObserved = await probe(input.canonicalDomain, Math.min(5_000, remaining()), verificationPathname)
+    if (routeObserved.status !== 200 || !/^text\/html(?:\s*;|$)/iu.test(routeObserved.contentType) || routeObserved.body !== verificationAsset.content) throw cloudflareError(503, 'Canonical production target route did not match the immutable rendered release.')
+  }
   remaining()
   return { deploymentId, deploymentUrl: `https://${input.canonicalDomain}/`, projectName }
 }

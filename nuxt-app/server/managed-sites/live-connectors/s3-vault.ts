@@ -5,8 +5,8 @@ import type { ManagedSiteArtifactVault } from './generation-service'
 
 type VaultConfiguration = { bucket: string; region: string; prefix: string; endpoint?: string }
 
-function configurationFromRuntime(): VaultConfiguration {
-  const raw = process.env.DISCOVERYSTACK_MANAGED_SITE_VAULT_JSON
+export function managedSiteVaultConfigurationFromEnv(env: Record<string, string | undefined> = process.env): VaultConfiguration {
+  const raw = env.DISCOVERYSTACK_MANAGED_SITE_VAULT_JSON
   let parsed: unknown
   try { parsed = raw ? JSON.parse(raw) : null } catch { parsed = null }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw createError({ statusCode: 503, statusMessage: 'Managed-site owner artifact vault configuration is unavailable.' })
@@ -49,7 +49,7 @@ async function boundedObjectBody(body: any): Promise<string> {
 }
 
 export function createS3ManagedSiteArtifactVault(options: { configuration?: VaultConfiguration; client?: Pick<S3Client, 'send'> } = {}): ManagedSiteArtifactVault {
-  const configuration = options.configuration || configurationFromRuntime()
+  const configuration = options.configuration || managedSiteVaultConfigurationFromEnv()
   const client = options.client || new S3Client({ region: configuration.region, ...(configuration.endpoint ? { endpoint: configuration.endpoint } : {}) })
   return {
     async lookupImmutableCandidate(input) {

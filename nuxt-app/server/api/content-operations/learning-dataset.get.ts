@@ -1,4 +1,5 @@
-import { buildOwnerContentLearningDataset, toPublicContentOperationsError } from '../../content-operations'
+import { buildOwnerContentLearningDataset } from '../../content-operations/service'
+import { toPublicContentOperationsError } from '../../content-operations/normalization'
 import { requireOwner } from '../../utils/auth'
 import { getOwnerDatabaseUserId } from '../../audit/repository'
 

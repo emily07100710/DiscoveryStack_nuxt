@@ -3,8 +3,13 @@ export type PublicApiPath = (typeof PUBLIC_API_PATHS)[number]
 
 const isLocalhost = (hostname: string) => hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
 
-function readOrigin(name: 'PUBLIC_SITE_URL' | 'PUBLIC_OPS_API_ORIGIN', fallback: string) {
-  const value = import.meta.env[name] || fallback
+export function assertPublicJourneyOrigin(name: string, origin: string, siteOrigin: string): string {
+  if (!import.meta.env.DEV && !isPlaceholderPublicOrigin(siteOrigin) && isPlaceholderPublicOrigin(origin)) throw new Error(`${name} cannot be a placeholder when PUBLIC_SITE_URL is a production origin`)
+  return origin
+}
+
+export function readPublicOrigin(name: string, configuredValue: string | undefined, fallback: string) {
+  const value = configuredValue || fallback
   try {
     const url = new URL(value)
     const development = import.meta.env.DEV
@@ -19,8 +24,11 @@ function readOrigin(name: 'PUBLIC_SITE_URL' | 'PUBLIC_OPS_API_ORIGIN', fallback:
   }
 }
 
-export const publicSiteOrigin = readOrigin('PUBLIC_SITE_URL', 'https://www.example.com')
-export const publicOpsApiOrigin = readOrigin('PUBLIC_OPS_API_ORIGIN', 'https://api.example.com')
+// Vite only replaces statically named import.meta.env properties. Dynamic
+// access (`import.meta.env[name]`) silently dropped deployment values and left
+// the public forms posting to the placeholder origin in production builds.
+export const publicSiteOrigin = readPublicOrigin('PUBLIC_SITE_URL', import.meta.env.PUBLIC_SITE_URL, 'https://www.example.com')
+export const publicOpsApiOrigin = assertPublicJourneyOrigin('PUBLIC_OPS_API_ORIGIN', readPublicOrigin('PUBLIC_OPS_API_ORIGIN', import.meta.env.PUBLIC_OPS_API_ORIGIN, 'https://api.example.com'), publicSiteOrigin)
 
 function isAllowedPath(pathname: string): pathname is PublicApiPath {
   return PUBLIC_API_PATHS.includes(pathname as PublicApiPath)
@@ -42,3 +50,4 @@ export async function publicApiFetch<T>(path: PublicApiPath, options: { body: un
     throw new Error('The public request returned an invalid response')
   }
 }
+import { isPlaceholderPublicOrigin } from './origin-policy'

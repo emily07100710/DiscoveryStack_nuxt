@@ -272,8 +272,14 @@ export async function requestManagedSiteReaccess(rawEmail: unknown, dependencies
   if (!links.length) return neutral({ outcome: 'no_active_membership' })
 
   const message = composeReaccessEmail(links)
+  const deliveryFingerprint = stableFingerprint({ invitationIds: created.map(entry => entry.invitation.id).sort((left, right) => left - right) })
   try {
-    await transport.send({ to: email, subject: message.subject, text: message.text })
+    await transport.send({
+      to: email,
+      subject: message.subject,
+      text: message.text,
+      idempotencyKey: `managed-site-reaccess:${deliveryFingerprint}`,
+    })
   } catch {
     // The tokens are already live but unreachable. Void them so nothing usable is
     // left behind and so the customer is not throttled out of an immediate retry.

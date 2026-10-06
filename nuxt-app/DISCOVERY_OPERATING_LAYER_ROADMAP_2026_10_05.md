@@ -2,6 +2,8 @@
 
 狀態：**PLANNED；本文件不代表以下後端切片已實作、已接通外部服務或已完成生產驗收。**
 
+2026-10-06 更新：使用者指定先完成 DS 官網／平台功能與機器學習閉環，再續作一鍵建站及網域合作。P0-A 現在是 **PARTIAL**：`server/intervention-loop/envelope.ts` 的 owner-scoped Before／Intervention／After／Confidence 投影已接到既有 detail API、v2 operational export 與 private workbench；來源／收集模式／property 分組、重疊視窗拒絕、exact delivered execute receipt 重讀與 stale assessment 檢查已實作。不新增第二個狀態機，也未更改公開官網設計。**immutable change-set／精確 revision diff、發布同交易 bridge、current consent／PII／candidate authority 到 action-learning 的 adapter 仍待實作**；所以此 envelope 的 learning 一律 blocked，只供營運檢查，不是可直接訓練的資料集。其餘規劃與外部 NOT RUN 邊界保留。
+
 本期已選方向：首頁／建站定位與 Roadmap 一起調整；公開前端與全站動效的實作、畫面和測試由本輪前端交付報告記錄。本文件只記錄程式碼盤點、產品方向、後續切片與驗收，不更改既有付款、方案、授權或部署行為。
 
 ## 1. 產品方向

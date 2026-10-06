@@ -9,9 +9,9 @@ describe('owner managed sites projects UI contract', () => {
   it('uses only the allowed managed-site project endpoints', () => {
     for (const endpoint of ['/api/managed-sites/projects', '/api/managed-sites/projects/${project.id}', '/audit', '/members', '/provisioning-workspace', '/provisioning-plans', '/dry-run', '/domain-intents', '/integrations', '/gates', '/domain-quote', '/approve', '/deploy', '/content-operations-link', '/api/managed-sites/live-connectors/readiness']) expect(page).toContain(endpoint)
     for (const removed of ['/domain-release', '/releases/rollback']) expect(page).not.toContain(removed)
-    // memberAcceptNotice names the invitee's accept endpoint in copy; the page itself never calls it.
+    // The invitee uses the browser confirmation page; the owner page itself never consumes a token.
     const acceptNotice = page.match(/const memberAcceptNotice = '([^']*)'/u)?.[1] ?? ''
-    expect(acceptNotice).toContain('POST /api/managed-sites/invitations/accept')
+    expect(acceptNotice).toContain('按下「進入網站後台」的 POST')
     expect(page).not.toMatch(/(?:\$fetch|fetchManagedProjects)[^(]*\(\s*['"`]\/api\/managed-sites\/invitations\/accept/u)
     const apiLiterals = [...page.matchAll(/['"`]([^'"`]*\/api\/[^'"`]*)['"`]/gu)].map(match => match[1]!).filter(literal => literal !== acceptNotice)
     expect(apiLiterals.length).toBeGreaterThan(0)
@@ -45,22 +45,26 @@ describe('owner managed sites projects UI contract', () => {
     expect(page).toContain('server 只會在本地寫入一筆 domain_claim_released receipt，不會呼叫網域註冊商')
   })
 
-  it('shows a newly issued member invitation token exactly once and explains how it is redeemed', () => {
-    // inviteManagedSiteMember stores only the token hash and returns invitationToken once; a pending, unexpired
-    // invitation for the same email answers invitationToken: null with replayed: true. No email is ever sent.
+  it('reports automatic invitation delivery and keeps a one-time manual link as a bounded fallback', () => {
+    // The route sends the browser confirmation URL when email is ready and strips the bearer from a successful
+    // owner response. An unconfigured or failed transport returns one manual URL; pending replays use re-access.
     expect(page).toContain('const lastMemberInvitation = ref<IssuedMemberInvitation | null>(null)')
-    expect(page).toContain("token: typeof result?.invitationToken === 'string' && result.invitationToken ? result.invitationToken : null, replayed: result?.replayed === true")
+    expect(page).toContain("deliveryStatus === 'sent'")
+    expect(page).toContain("deliveryStatus === 'delivery_failed'")
+    expect(page).toContain("deliveryStatus === 'already_pending'")
+    expect(page).toContain("/managed-site-access?token=${encodeURIComponent(result.invitationToken)}")
     expect(page).toContain('<div v-if="lastMemberInvitation && lastMemberInvitation.projectId === selectedProject?.id" class="invite-token" role="status">')
-    expect(page).toContain('<input class="mono" :value="lastMemberInvitation.token" readonly')
+    expect(page).toContain('<input class="mono" :value="lastMemberInvitation.invitationUrl" readonly')
     expect(page).toContain('<p>{{ memberTokenNotice }}</p><p>{{ memberAcceptNotice }}</p>')
-    expect(page).toContain('<p v-else>{{ lastMemberInvitation.replayed ? memberReplayNotice : memberMissingTokenNotice }}</p>')
+    expect(page).toContain('<p v-else-if="lastMemberInvitation.deliveryStatus === \'sent\'">')
+    expect(page).toContain('{{ lastMemberInvitation.replayed ? memberReplayNotice : memberMissingTokenNotice }}')
     expect(page).toContain('<p class="limitation">{{ memberInvitationLimitation }}</p>')
-    expect(page).toContain('server 只保存這個 token 的 hash')
+    expect(page).toContain('server 只保存 token 的 hash')
     expect(page).toContain('邀請 72 小時後到期')
-    expect(page).toContain('不會寄出任何郵件，也不會通知受邀者')
-    expect(page).toContain('這個工作台目前沒有給受邀者用的兌換畫面')
-    expect(page).toContain('server 不會再發新的 token，原本的 token 也無法取回。目前沒有撤銷邀請的功能')
-    expect(page).not.toContain("afterWrite('成員邀請已建立。')")
+    expect(page).toContain('系統會直接寄出完整邀請連結')
+    expect(page).toContain('郵件掃描器或連結預覽不會把邀請提早用掉')
+    expect(page).toContain('不必等待原邀請到期')
+    expect(page).toContain('開啟客戶重新登入頁')
   })
 
   it('says a dry_run domain quote only checks eligibility and never shows a quote the server did not return', () => {

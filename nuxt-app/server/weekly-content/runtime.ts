@@ -9,22 +9,30 @@ import {runWeeklyLineOutbox,isWeeklyLineConfigurationReady} from './runtime-line
 import {rollApprovedWeeklyCalendar,productionWeeklyPlannerDependencies} from './planner'
 import type {ContentOperationsRepository} from '../content-operations/repository'
 import type {WeeklyConfig} from './types'
+import {createError} from 'h3'
 
 export type WeeklyRuntimeDependencies={weekly:WeeklyContentDependencies;operations:ContentOperationsRepository;roll:(owner:number,client:number,now:Date)=>Promise<unknown>;workflow:typeof runOwnerContentEntryWorkflow;publish:typeof executeContentOperationEntry;send:typeof runWeeklyLineOutbox;runtime:ReturnType<typeof getContentOperationsRuntimeDependencies>}
 export type WeeklyTickResult={status:'disabled'|'not_configured'|'completed';processed:number;reviewQueued:number;publicationAttempted:number;failed:number;clients:Array<{clientId:number;status:string}>;notifications?:Awaited<ReturnType<typeof runWeeklyLineOutbox>>}
 function productionDependencies():WeeklyRuntimeDependencies{
   return {weekly:weeklyRuntimeDependencies(),operations:createContentOperationsRepository(),roll:(owner,client,now)=>rollApprovedWeeklyCalendar(owner,client,now,productionWeeklyPlannerDependencies()),workflow:runOwnerContentEntryWorkflow,publish:executeContentOperationEntry,send:runWeeklyLineOutbox,runtime:getContentOperationsRuntimeDependencies()}
 }
-export async function runWeeklyContentTick(input:{ownerUserId:number;now?:Date;maxClients?:number},options:{featureEnabled?:boolean;schedulerEnabled?:boolean;configurationReady?:boolean;getDependencies?:()=>WeeklyRuntimeDependencies}={}):Promise<WeeklyTickResult>{
+export async function runWeeklyContentTick(input:{ownerUserId:number;clientId?:number;now?:Date;maxClients?:number},options:{featureEnabled?:boolean;schedulerEnabled?:boolean;configurationReady?:boolean;getDependencies?:()=>WeeklyRuntimeDependencies}={}):Promise<WeeklyTickResult>{
   const result:WeeklyTickResult={status:'disabled',processed:0,reviewQueued:0,publicationAttempted:0,failed:0,clients:[]}
   // Flags and static credential readiness precede all owner-scoped storage/provider construction.
   if(!(options.featureEnabled ?? weeklyFeatureEnabled()) || !(options.schedulerEnabled ?? process.env.NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED==='true'))return result
   if(!(options.configurationReady ?? isWeeklyLineConfigurationReady()))return {...result,status:'not_configured'}
+  if(input.clientId!==undefined && (!Number.isSafeInteger(input.clientId) || input.clientId<1))throw createError({statusCode:422,statusMessage:'Weekly client is invalid.'})
   const deps=(options.getDependencies || productionDependencies)()
   const phaseNow=()=>input.now || new Date()
   const weekly={...deps.weekly,now:input.now}
   const maximum=Math.max(1,Math.min(10,input.maxClients || 10))
-  const configs=selectWeeklyClientBatch(await weekly.repository.listConfigs(input.ownerUserId,50),input.ownerUserId,maximum,phaseNow())
+  let configs:WeeklyConfig[]
+  if(input.clientId!==undefined){
+    const config=await weekly.repository.getConfig(input.ownerUserId,input.clientId)
+    if(!config || config.ownerUserId!==input.ownerUserId || config.clientId!==input.clientId){result.status='completed';result.clients.push({clientId:input.clientId,status:'not_configured'});return result}
+    if(config.status!=='active'){result.status='completed';result.clients.push({clientId:input.clientId,status:'paused'});return result}
+    configs=[config]
+  }else configs=selectWeeklyClientBatch(await weekly.repository.listConfigs(input.ownerUserId,50),input.ownerUserId,maximum,phaseNow())
   result.status='completed'
   for(const config of configs){
     if(config.ownerUserId!==input.ownerUserId || config.status!=='active'){result.clients.push({clientId:config.clientId,status:'paused'});continue}
@@ -74,7 +82,7 @@ export async function runWeeklyContentTick(input:{ownerUserId:number;now?:Date;m
       }else result.clients.push({clientId:config.clientId,status:entry.status})
     }catch{result.failed++;result.clients.push({clientId:config.clientId,status:'needs_operator_review'})}
   }
-  result.notifications=await deps.send({ownerUserId:input.ownerUserId,maxMessages:maximum},weekly)
+  result.notifications=await deps.send(input.clientId===undefined?{ownerUserId:input.ownerUserId,maxMessages:maximum}:{ownerUserId:input.ownerUserId,clientId:input.clientId,maxMessages:maximum},weekly)
   return result
 }
 

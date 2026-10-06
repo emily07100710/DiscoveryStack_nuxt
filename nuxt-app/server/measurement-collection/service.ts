@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { createError } from 'h3'
 import { z } from 'zod'
-import { recordOwnerOutcomeAssessment, createContentOperationsRepository, normalizePublicHttpsOrigin, normalizeTimeZone } from '../content-operations'
-import type { ContentOperationsRepository } from '../content-operations'
+import { recordOwnerOutcomeAssessment } from '../content-operations/service'
+import { createContentOperationsRepository, type ContentOperationsRepository } from '../content-operations/repository'
+import { normalizePublicHttpsOrigin, normalizeTimeZone } from '../content-operations/normalization'
 import { publicationPublicOrigin, resolvePublicationPublicUrl, PUBLICATION_PUBLIC_URL_NOT_CONFIGURED } from '../content-operations/publication-public-url'
 import { OUTCOME_DATA_CONTRACT_VERSION } from '../outcome-learning'
 import { runOwnerProviderObservation } from '../llm-visibility/repository'
@@ -170,21 +171,22 @@ function publicUrlNotConfigured(): never {
 }
 
 function projectDeliveredMeasurementLineage(ownerUserId: number, client: Awaited<ReturnType<ContentOperationsRepository['findClient']>>, delivered: Awaited<ReturnType<ContentOperationsRepository['resolveDeliveredPublication']>>, target = delivered?.publicationTarget, attempt = delivered?.publicationAttempt, publicationRun = delivered?.publicationRun) {
-  if (!delivered || !target || !attempt || !publicationRun || attempt.status !== 'delivered' || publicationRun.stage !== 'publication' || publicationRun.state !== 'succeeded' || attempt.runId !== publicationRun.id || attempt.targetId !== target.id || attempt.contentHash !== delivered.entry.contentHash || attempt.evidenceSnapshotHash !== delivered.entry.evidenceSnapshotHash || typeof attempt.receiptFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(attempt.receiptFingerprint)) return null
+  if (!delivered || !target || !attempt || !publicationRun || attempt.status !== 'delivered' || attempt.mode !== 'execute' || publicationRun.stage !== 'publication' || publicationRun.state !== 'succeeded' || attempt.runId !== publicationRun.id || attempt.targetId !== target.id || attempt.contentHash !== delivered.entry.contentHash || attempt.evidenceSnapshotHash !== delivered.entry.evidenceSnapshotHash || typeof attempt.receiptFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(attempt.receiptFingerprint)) return null
   if (delivered.calendar.ownerUserId !== ownerUserId || attempt.ownerUserId !== ownerUserId || attempt.clientId !== delivered.calendar.clientId || attempt.entryId !== delivered.entry.id || publicationRun.ownerUserId !== ownerUserId || publicationRun.entryId !== delivered.entry.id) return null
   if (!client || client.id !== delivered.calendar.clientId) publicUrlNotConfigured()
   const publicPage = resolvePublicationPublicUrl({ ownerUserId, client, entry: delivered.entry, target, identity: { publicationId: attempt.publicationId, slug: attempt.publicationSlug, path: attempt.publicationPath }, publicationUrl: attempt.publicationUrl })
   if (!publicPage.configured) publicUrlNotConfigured()
   if (!delivered.entry.contentHash || !delivered.entry.evidenceSnapshotHash) return null
   const canonicalPage = publicPage.publicationUrl
-  const publishedAt = attempt.completedAt || publicationRun.completedAt || delivered.entry.updatedAt
+  const publishedAt = attempt.completedAt
   if (!(publishedAt instanceof Date) || !Number.isFinite(publishedAt.getTime())) return null
   return { ownerUserId, entryId: delivered.entry.id, targetId: target.id, clientId: delivered.calendar.clientId, canonicalPage, publicationReceiptFingerprint: attempt.receiptFingerprint, contentHash: delivered.entry.contentHash, evidenceSnapshotHash: delivered.entry.evidenceSnapshotHash, timeZone: delivered.calendar.timeZone, publicationLocalDate: publicationLocalDate(publishedAt, delivered.calendar.timeZone), publishedAt }
 }
 
 async function resolveDeliveredMeasurementLineages(ownerUserId: number, entryId: number, contentRepository: ContentOperationsRepository) {
   const delivered = await contentRepository.resolveDeliveredPublication(ownerUserId, entryId)
-  const autopilotAuthority = typeof delivered?.authorityReference === 'string' && /^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(delivered.authorityReference)
+  // The canonical repository already re-resolves V4 authority against the published authorization ledger.
+  const autopilotAuthority = typeof delivered?.authorityReference === 'string' && (/^ref-autopilot-[A-Za-z0-9._:-]+$/u.test(delivered.authorityReference) || (/^[a-f0-9]{64}$/u.test(delivered.authorityReference) && delivered.entry.publicationAuthorityReference === delivered.authorityReference))
   const manualReviewValid = delivered?.review?.decision === 'approved_for_delivery'
   if (!delivered || (delivered.entry.status !== 'delivered' && delivered.entry.status !== 'completed') || !delivered.job || !delivered.draft || !delivered.riskGate || delivered.riskGate.status !== 'passed' || (!autopilotAuthority && !manualReviewValid)) return []
   const client = await contentRepository.findClient(ownerUserId, delivered.calendar.clientId)

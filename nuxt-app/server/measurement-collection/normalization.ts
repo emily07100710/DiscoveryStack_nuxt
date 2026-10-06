@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { outcomeSha256, stableOutcomeStringify } from '../outcome-learning'
-import { normalizePublicHttpsOrigin, normalizeTimeZone, stableFingerprint } from '../content-operations'
+import { normalizePublicHttpsOrigin, normalizeTimeZone, stableFingerprint } from '../content-operations/normalization'
 import { MEASUREMENT_CHECKPOINTS, MEASUREMENT_MAX_ERROR_SUMMARY, MEASUREMENT_MAX_PAGE_SCOPE, MEASUREMENT_SOURCES, type MeasurementCheckpointDays, type MeasurementConnectionInput, type MeasurementPhase, type MeasurementSource, type MeasurementSourceSnapshot, type MeasurementWindow } from './types'
 
 const DAY_MS = 86_400_000

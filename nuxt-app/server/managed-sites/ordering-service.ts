@@ -9,6 +9,7 @@ import type { ManagedSiteDraftOrder, ManagedSiteLeadIntent, ManagedSitePaymentEv
 import type { DraftOrderInput, LeadInput, ManagedSiteCheckoutAuthority, ManagedSiteCheckoutAuthorityInput, ManagedSiteCheckoutAuthorityResolver, PaymentEventVerifier, PreviewGenerationResult, PreviewRepository, QuoteInput } from './ordering-types'
 import { MANAGED_SITE_TYPES, type ManagedSiteType } from './types'
 import { createPaidManagedSiteModuleFulfilments } from './funnel/module-fulfilment'
+import { DESIGN_CARE_POLICY } from './customer-runtime'
 
 export const MANAGED_SITE_PRICE_CATALOG_VERSION = 'managed-site-pricing-twd-v6'
 export const MANAGED_SITE_CURRENCY = 'TWD' as const
@@ -118,6 +119,7 @@ function quoteProjection(quote: ManagedSiteQuote, lines: ManagedSiteQuoteLine[])
     manualServiceModules,
     manualSetupModules,
     comingSoonModules,
+    designCare: DESIGN_CARE_POLICY,
     limitations: [
       '目前報價未計算稅金。',
       '付款、網域購買、DNS、TLS 與部署，須在另行授權與完成設定後才會執行。',
@@ -142,6 +144,7 @@ export function getManagedSitePriceCatalog() {
     domainOptions: ['existing', 'new', 'assisted'] as const,
     domainTlds: Object.entries(DOMAIN_TLD_CATALOG).map(([tld, annualMinor]) => ({ tld, annualMinor })),
     assistedDomainSetupMinor: ASSISTED_DOMAIN_SETUP_MINOR,
+    designCare: DESIGN_CARE_POLICY,
   }
 }
 

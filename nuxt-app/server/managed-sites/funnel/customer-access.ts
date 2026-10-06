@@ -5,6 +5,7 @@ import { getManagedSitePrePurchaseRepositories } from '../prepurchase-service'
 import { MANAGED_SITE_SESSION_TTL_MS } from '../types'
 import { getFunnelSessionRepository, type FunnelSessionRepository } from './session-repository'
 import { loadFunnelSession, type FunnelAnswers } from './session-service'
+import { ensurePaidFunnelCustomerMembership } from './paid-customer-membership'
 
 type Repositories = ReturnType<typeof getManagedSitePrePurchaseRepositories>
 export type FunnelCustomerAccessDependencies = {
@@ -40,19 +41,19 @@ export async function claimFunnelCustomerAccess(ownerUserId: number, sessionId: 
       repositories.ordering.findLeadById(order.leadId),
     ])
     if (!lead || normalizeRecipientEmail(lead.email) !== email || !project || project.status === 'suspended' || !release || release.projectId !== project.id || release.draftOrderId !== order.id || release.previewId !== order.previewId || release.quoteId !== order.quoteId) unavailable()
-    if (!receipts.some(row => row.releaseId === release.id && row.receiptType === 'checkout_succeeded' && row.receiptStatus === 'verified' && (row.metadata as any)?.effective === true)
-      || receipts.some(row => row.releaseId === release.id && ['payment_refunded', 'payment_disputed'].includes(row.receiptType) && row.receiptStatus === 'verified' && (row.metadata as any)?.effective === true)) unavailable()
+    const payment = receipts.find(row => row.releaseId === release.id && row.projectId === project.id && row.draftOrderId === order.id && row.contentHash === release.contentHash && row.canonicalDomain === release.canonicalDomain && row.receiptType === 'checkout_succeeded' && row.receiptStatus === 'verified' && (row.metadata as any)?.effective === true)
+    if (!payment || receipts.some(row => row.releaseId === release.id && ['payment_refunded', 'payment_disputed'].includes(row.receiptType) && row.receiptStatus === 'verified' && (row.metadata as any)?.effective === true)) unavailable()
+    const paidGrant = await ensurePaidFunnelCustomerMembership({ ownerUserId, projectId: project.id, draftOrderId: order.id, releaseId: release.id, paymentReceiptFingerprint: payment.receiptFingerprint, email, allowExistingMembership: false }, repositories.managed, clock)
     const issued = await repositories.managed.findAuditEventByFingerprint(ownerUserId, eventFingerprint)
     const previous = await repositories.managed.findSessionByHash(sessionHash)
-    const membership = await repositories.managed.findMembershipByEmail(ownerUserId, project.id, email)
+    const membership = paidGrant.membership
     const now = clock()
-    if (issued || previous || membership) {
-      if (!issued || !previous || !membership || previous.ownerUserId !== ownerUserId || previous.projectId !== project.id || previous.membershipId !== membership.id || previous.revokedAt || previous.expiresAt.getTime() <= now.getTime() || membership.status !== 'active' || membership.role !== 'editor' || (issued.metadata as any)?.membershipId !== membership.id || (issued.metadata as any)?.customerSessionId !== previous.id) unavailable()
+    if (issued || previous) {
+      if (!issued || !previous || previous.ownerUserId !== ownerUserId || previous.projectId !== project.id || previous.membershipId !== membership.id || previous.revokedAt || previous.expiresAt.getTime() <= now.getTime() || membership.status !== 'active' || membership.role !== 'editor' || (issued.metadata as any)?.membershipId !== membership.id || (issued.metadata as any)?.customerSessionId !== previous.id) unavailable()
       return { session: previous, projectId: project.id, replayed: true }
     }
-    const member = await repositories.managed.insertMembership({ ownerUserId, projectId: project.id, principalEmail: email, userId: null, role: 'editor', status: 'active', invitedAt: now, acceptedAt: now, revokedAt: null })
-    const session = await repositories.managed.insertSession({ ownerUserId, projectId: project.id, membershipId: member.id, sessionHash, expiresAt: new Date(Math.min(now.getTime() + MANAGED_SITE_SESSION_TTL_MS, funnel.expiresAt.getTime())), revokedAt: null, lastSeenAt: now })
-    await repositories.managed.insertAuditEvent({ ownerUserId, projectId: project.id, actorUserId: null, authority: 'system_workflow', action: 'paid_funnel_customer_access_issued', beforeFingerprint: null, afterFingerprint: stableFingerprint({ customerSessionId: session.id, membershipId: member.id }), eventFingerprint, metadata: { funnelSessionId: funnel.id, releaseId: release.id, draftOrderId: order.id, membershipId: member.id, customerSessionId: session.id }, occurredAt: now })
+    const session = await repositories.managed.insertSession({ ownerUserId, projectId: project.id, membershipId: membership.id, sessionHash, expiresAt: new Date(Math.min(now.getTime() + MANAGED_SITE_SESSION_TTL_MS, funnel.expiresAt.getTime())), revokedAt: null, lastSeenAt: now })
+    await repositories.managed.insertAuditEvent({ ownerUserId, projectId: project.id, actorUserId: null, authority: 'system_workflow', action: 'paid_funnel_customer_access_issued', beforeFingerprint: null, afterFingerprint: stableFingerprint({ customerSessionId: session.id, membershipId: membership.id }), eventFingerprint, metadata: { funnelSessionId: funnel.id, releaseId: release.id, draftOrderId: order.id, membershipId: membership.id, customerSessionId: session.id }, occurredAt: now })
     return { session, projectId: project.id, replayed: false }
   })
   return { ...result, sessionToken }

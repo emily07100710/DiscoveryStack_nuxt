@@ -626,7 +626,8 @@ export async function recordOwnerOutcomeAssessment(ownerUserId: number, input: u
   const receiptAttempt = publication.publicationAttempt
   if (!receiptAttempt || typeof receiptAttempt.receiptFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(receiptAttempt.receiptFingerprint)) invalid('Outcome assessment requires a validated delivered publication receipt.')
   if (parsed.runId && parsed.runId !== publication.publicationRun?.id) collision('Outcome runId does not match the delivered publication run.')
-  const publishedAt = publication.publicationRun?.completedAt || publication.entry.updatedAt
+  const publishedAt = receiptAttempt.completedAt
+  if (receiptAttempt.mode !== 'execute' || !(publishedAt instanceof Date) || !Number.isFinite(publishedAt.getTime())) invalid('Outcome assessment requires the exact executed receipt completion timestamp.')
   const publicationIdentity = {
     deidentifiedSubjectKey: deidentifiedOwnerKey(ownerUserId),
     scheduleEntryId: publication.entry.engineEntryId,

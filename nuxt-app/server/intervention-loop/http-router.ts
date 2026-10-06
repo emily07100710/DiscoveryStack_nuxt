@@ -6,6 +6,11 @@ import { enqueueRefreshManually, getRefreshPolicy, listRefreshQueue, updateRefre
 import { assessIntervention, cancelIntervention, checkDeploymentNow, checkRecrawl, confirmDeploymentManually, confirmRecrawlManually, getIntervention, listInterventions, measureIntervention, pullMetrics, recordManualMeasurement, registerIntervention } from './service'
 import { runInterventionLoopTick } from './tick'
 import { interventionStatuses } from './types'
+import { collectAuthorizedLearningEvidence, createLearningAuthorization, exportStructuralLearningEvidence, getLearningLoopWorkspace, reviewLearningCollection, revokeLearningAuthorization } from '../learning-loop/service'
+import { buildGovernedContentOutcomeRelease, runLearningClientCycle } from '../learning-loop/runtime'
+import { trainApprovedLearningDataset } from '../learning-loop/training'
+import { getDraftLearningAdvice } from '../learning-loop/model-advice'
+import { approveContentEffectTraining, executeContentEffectTraining, getContentEffectModelWorkspace, revokeContentEffectModel } from '../learning-loop/effect-service'
 
 type RouteMethod = 'GET' | 'POST'
 type RouteContext = { event: H3Event, ownerUserId: number, params: string[], body: Record<string, unknown> }
@@ -45,6 +50,20 @@ function created<T extends { replayed: boolean }>(event: H3Event, result: T): T 
 // radix3 does not match a bare path against `/api/interventions/**`, so a second route file would be
 // needed, and this app is at the typed-route-map depth limit (INTERVENTION_LOOP_RUNTIME_V1.md §路由清單).
 const routes: InterventionRoute[] = [
+  { method: 'GET', pattern: ['closed-loop', 'workspace'], handle: ({ ownerUserId }) => getLearningLoopWorkspace(ownerUserId) },
+  { method: 'GET', pattern: ['closed-loop', 'structural-release'], handle: ({ ownerUserId }) => exportStructuralLearningEvidence(ownerUserId) },
+  { method: 'GET', pattern: ['closed-loop', 'outcome-release'], handle: ({ ownerUserId }) => buildGovernedContentOutcomeRelease(ownerUserId) },
+  { method: 'GET', pattern: ['closed-loop', 'effect-models'], handle: ({ ownerUserId }) => getContentEffectModelWorkspace(ownerUserId) },
+  { method: 'POST', pattern: ['closed-loop', 'effect-models', 'review'], handle: ({ ownerUserId, body }) => approveContentEffectTraining(ownerUserId, body) },
+  { method: 'POST', pattern: ['closed-loop', 'effect-models', 'train'], handle: ({ ownerUserId, body }) => executeContentEffectTraining(ownerUserId, body) },
+  { method: 'POST', pattern: ['closed-loop', 'effect-models', ':id', 'revoke'], handle: ({ ownerUserId, params, body }) => { if (Object.keys(body).length) throw createError({ statusCode: 422, statusMessage: '撤回模型不接受額外欄位。' }); return revokeContentEffectModel(ownerUserId, positiveId(params[0])) } },
+  { method: 'POST', pattern: ['closed-loop', 'authorizations'], handle: ({ ownerUserId, body }) => createLearningAuthorization(ownerUserId, body) },
+  { method: 'POST', pattern: ['closed-loop', 'authorizations', ':id', 'revoke'], handle: ({ ownerUserId, params, body }) => { if (Object.keys(body).length) throw createError({ statusCode: 422, statusMessage: '撤回授權不接受額外欄位。' }); return revokeLearningAuthorization(ownerUserId, positiveId(params[0])) } },
+  { method: 'POST', pattern: ['closed-loop', 'collect'], handle: ({ ownerUserId, body }) => collectAuthorizedLearningEvidence(ownerUserId, body) },
+  { method: 'POST', pattern: ['closed-loop', 'collections', ':id', 'review'], handle: ({ ownerUserId, params, body }) => reviewLearningCollection(ownerUserId, positiveId(params[0]), body) },
+  { method: 'POST', pattern: ['closed-loop', 'client-cycle'], handle: ({ ownerUserId, body }) => runLearningClientCycle(ownerUserId, body) },
+  { method: 'POST', pattern: ['closed-loop', 'train'], handle: ({ ownerUserId, body }) => trainApprovedLearningDataset(ownerUserId, body) },
+  { method: 'POST', pattern: ['closed-loop', 'draft-advice'], handle: ({ ownerUserId, body }) => getDraftLearningAdvice(ownerUserId, body) },
   { method: 'GET', pattern: ['export'], handle: async ({ event, ownerUserId }) => { setHeader(event, 'content-disposition', 'attachment; filename="intervention-outcome-dataset.json"'); return exportInterventionOutcomeDataset(ownerUserId) } },
   { method: 'GET', pattern: ['experiments'], handle: async ({ ownerUserId }) => ({ experiments: await listExperiments(ownerUserId) }) },
   { method: 'POST', pattern: ['experiments'], handle: async ({ event, ownerUserId, body }) => created(event, await createExperiment(ownerUserId, body)) },

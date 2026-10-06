@@ -44,6 +44,7 @@ export const MANAGED_SITE_FUNNEL_CHECKOUT_SESSION_TTL_MS = 24 * 60 * 60_000
 export const MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT = 20
 export const MANAGED_SITE_FUNNEL_DAILY_BUILD_WINDOW_MS = 24 * 60 * 60_000
 export const MANAGED_SITE_FUNNEL_DAILY_CAP_MESSAGE = '今日的網站建置名額已滿，請明天再試。'
+export const MANAGED_SITE_FUNNEL_MANUAL_DOMAIN_CHECKOUT_MESSAGE = '現有網域與人工代辦目前需要團隊先確認，尚未開放自助付款。請改用合作諮詢表單聯絡我們。'
 
 export function managedSiteFunnelDailyBuildLimit(raw = process.env.MANAGED_SITE_FUNNEL_DAILY_BUILD_LIMIT): number {
   if (raw === undefined || raw === '') return MANAGED_SITE_FUNNEL_DEFAULT_DAILY_BUILD_LIMIT
@@ -262,10 +263,15 @@ export async function runFunnelBuild(sessionId: number, sessionToken: string, de
 export async function runFunnelCheckout(sessionId: number, sessionToken: string, dependencies: ManagedSiteFunnelOrchestratorDependencies = {}) {
   const clock = dependencies.clock || (() => new Date())
   const funnelRepository = dependencies.funnelRepository || getFunnelSessionRepository()
+  const session = await loadFunnelSession(sessionId, sessionToken, funnelRepository, clock)
+  const answers = answersFor(session)
+  if (answers.domain && answers.domain.option !== 'new') conflict(MANAGED_SITE_FUNNEL_MANUAL_DOMAIN_CHECKOUT_MESSAGE)
+  // The public funnel only has an automated fulfilment contract for newly registered domains.
+  // Resolve no ordering/provider dependency before this guard so a restored legacy session cannot
+  // read or mutate an order, approve a release, or create an external checkout session.
   const ordering = dependencies.orderingRepository || getPreviewRepository()
   const live = dependencies.connectorRepository || getManagedSiteLiveConnectorRepository()
   const managed = dependencies.managedRepository || getManagedSiteRepository()
-  const session = await loadFunnelSession(sessionId, sessionToken, funnelRepository, clock)
   const executionMode = dependencies.executionMode || 'live'
   if (!consentFor(session)) conflict('Consent is required before checkout can start.')
   if (session.status !== 'checkout_pending' || !session.releaseId || !session.builtPreviewUrl || !session.draftOrderId || !session.previewId || !session.previewAccessTokenHash) conflict('A verified built preview is required before checkout can start.')
@@ -279,7 +285,7 @@ export async function runFunnelCheckout(sessionId: number, sessionToken: string,
   if (order.ownerUserId !== ownerUserId) conflict('付款資料暫時無法讀取，請稍後再試。')
   const guardedProjectId = session.projectId || order.projectId
   if (guardedProjectId) await assertManagedSiteProjectNotSuspended(ownerUserId, guardedProjectId, managed)
-  if (executionMode === 'live' && (session.answers as FunnelAnswers).domain?.option === 'new') await assertFunnelDomainReadyForCheckout(ownerUserId, session, { repository: live, clock })
+  if (executionMode === 'live' && answers.domain?.option === 'new') await assertFunnelDomainReadyForCheckout(ownerUserId, session, { repository: live, clock })
   const receipts = await live.listReceiptsByDraftOrder(ownerUserId, order.id)
   if (receipts.some(receipt => receipt.receiptType === 'checkout_succeeded' && receipt.receiptStatus === 'verified')) conflict('這筆訂單已完成付款，無需再次結帳。')
   const checkoutReceipts = receipts

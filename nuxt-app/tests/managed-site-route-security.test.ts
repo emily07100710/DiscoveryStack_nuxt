@@ -18,11 +18,34 @@ describe('managed-site customer route security contract', () => {
     expect(files.length).toBeGreaterThanOrEqual(8)
     for (const file of files) {
       const source = readFileSync(file, 'utf8')
-      expect(source, relative(process.cwd(), file)).toMatch(/private, no-store/u)
-      expect(source, relative(process.cwd(), file)).toMatch(/no-referrer/u)
-      expect(source, relative(process.cwd(), file)).toMatch(/noindex, nofollow, noarchive/u)
+      const usesPrivateHeaders = /import\s*\{[^}]*\bprivateManagedSiteHeaders\b[^}]*\}\s*from\s*['"][^'"]*managed-sites\/live-connectors\/http['"]/u.test(source)
+        && /privateManagedSiteHeaders\(event\)/u.test(source)
+      if (!usesPrivateHeaders) {
+        expect(source, relative(process.cwd(), file)).toMatch(/private, no-store/u)
+        expect(source, relative(process.cwd(), file)).toMatch(/no-referrer/u)
+        expect(source, relative(process.cwd(), file)).toMatch(/noindex, nofollow, noarchive/u)
+      }
       expect(source, relative(process.cwd(), file)).toMatch(/requireManagedSiteCustomer|acceptManagedSiteInvitation|revokeManagedSiteSession/u)
     }
+  })
+
+  it('requires the shared private-header helper to set all three protections', () => {
+    const source = readFileSync(join(process.cwd(), 'server/managed-sites/live-connectors/http.ts'), 'utf8')
+    const body = source.match(/export function privateManagedSiteHeaders\(event: H3Event\): void \{([\s\S]*?)\n\}/u)?.[1]
+    expect(body).toBeTruthy()
+    const event = {}
+    let actualEvent: unknown
+    let headers: Record<string, string> = {}
+    new Function('event', 'setResponseHeaders', body!)(event, (target: unknown, values: Record<string, string>) => {
+      actualEvent = target
+      headers = values
+    })
+    expect(actualEvent).toBe(event)
+    expect(headers).toEqual({
+      'cache-control': 'private, no-store, max-age=0',
+      'x-robots-tag': 'noindex, nofollow, noarchive',
+      'referrer-policy': 'no-referrer',
+    })
   })
 
   it('keeps sensitive customer capabilities separated by fixed role permission gates', () => {

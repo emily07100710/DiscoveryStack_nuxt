@@ -1,5 +1,6 @@
 import { getOwnerDatabaseUserId } from '../../../../audit/repository'
-import { executeContentOperationEntry, toPublicContentOperationsError } from '../../../../content-operations'
+import { executeContentOperationEntry } from '../../../../content-operations/orchestrator'
+import { toPublicContentOperationsError } from '../../../../content-operations/normalization'
 import { getContentOperationsRuntimeDependencies } from '../../../../content-operations/runtime-dependencies'
 import { requireOwner } from '../../../../utils/auth'
 

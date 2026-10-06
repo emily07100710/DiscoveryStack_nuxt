@@ -40,7 +40,7 @@ export interface WeeklyContentRepository {
   insertConsent(row: InsertRow<WeeklyConsent>): Promise<WeeklyConsent>
   hasReservedPublication(ownerUserId: number, jobId: number, draftId: number): Promise<boolean>
   enqueueOutbox(row: InsertRow<WeeklyOutbox>): Promise<WeeklyOutbox>
-  claimOutbox(ownerUserId: number, max: number, leaseToken: string, now: Date): Promise<WeeklyOutbox[]>
+  claimOutbox(ownerUserId: number, max: number, leaseToken: string, now: Date, clientId?: number): Promise<WeeklyOutbox[]>
   reserveOutboxPayload(id: number, leaseToken: string, payloadFingerprint: string, now: Date): Promise<boolean>
   finishOutbox(id: number, leaseToken: string, now: Date, result: { status: 'sent' | 'retry_wait' | 'failed' | 'cancelled'; providerMessageId?: string; retryEligibleAt?: Date; errorCode?: string }): Promise<boolean>
 }
@@ -118,10 +118,14 @@ function makeRepository(database: any, transactional = false): WeeklyContentRepo
       return lineage.length > 0
     },
     enqueueOutbox: row => insert(outbox, row),
-    async claimOutbox(owner, maximum, token, now) {
+    async claimOutbox(owner, maximum, token, now, clientId) {
       if (!token || token.length > 96) throw createError({ statusCode: 422, statusMessage: 'Invalid weekly outbox lease.' })
+      if (clientId !== undefined && (!Number.isSafeInteger(clientId) || clientId < 1)) throw createError({ statusCode: 422, statusMessage: 'Invalid weekly outbox client.' })
       const claim = async (txDatabase: any) => {
-        const due = and(eq(outbox.ownerUserId, owner), or(eq(outbox.status, 'queued'), and(eq(outbox.status, 'retry_wait'), lte(outbox.retryEligibleAt, now)), and(eq(outbox.status, 'processing'), lte(outbox.leaseExpiresAt, now))))
+        const dueState = or(eq(outbox.status, 'queued'), and(eq(outbox.status, 'retry_wait'), lte(outbox.retryEligibleAt, now)), and(eq(outbox.status, 'processing'), lte(outbox.leaseExpiresAt, now)))
+        const due = clientId === undefined
+          ? and(eq(outbox.ownerUserId, owner), dueState)
+          : and(eq(outbox.ownerUserId, owner), eq(outbox.clientId, clientId), dueState)
         const candidates: WeeklyOutbox[] = await txDatabase.select().from(outbox).where(due).orderBy(asc(outbox.id)).limit(Math.max(1, Math.min(10, maximum)))
         const claimed: WeeklyOutbox[] = []
         for (const row of candidates) {

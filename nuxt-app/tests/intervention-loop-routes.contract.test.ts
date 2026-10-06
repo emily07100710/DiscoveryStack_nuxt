@@ -22,6 +22,22 @@ describe('intervention owner routes', () => {
   })
   it('matches the documented sub-routes exactly and rejects everything else', () => {
     const cases: Array<[string, string[], string[] | null, string[]]> = [
+      ['GET', ['closed-loop', 'workspace'], ['closed-loop', 'workspace'], []],
+      ['GET', ['closed-loop', 'structural-release'], ['closed-loop', 'structural-release'], []],
+      ['GET', ['closed-loop', 'outcome-release'], ['closed-loop', 'outcome-release'], []],
+      ['GET', ['closed-loop', 'effect-models'], ['closed-loop', 'effect-models'], []],
+      ['POST', ['closed-loop', 'effect-models', 'review'], ['closed-loop', 'effect-models', 'review'], []],
+      ['POST', ['closed-loop', 'effect-models', 'train'], ['closed-loop', 'effect-models', 'train'], []],
+      ['POST', ['closed-loop', 'effect-models', '9', 'revoke'], ['closed-loop', 'effect-models', ':id', 'revoke'], ['9']],
+      ['POST', ['closed-loop', 'effect-models', '9', 'activate'], null, []],
+      ['POST', ['closed-loop', 'authorizations'], ['closed-loop', 'authorizations'], []],
+      ['POST', ['closed-loop', 'authorizations', '7', 'revoke'], ['closed-loop', 'authorizations', ':id', 'revoke'], ['7']],
+      ['POST', ['closed-loop', 'collect'], ['closed-loop', 'collect'], []],
+      ['POST', ['closed-loop', 'collections', '8', 'review'], ['closed-loop', 'collections', ':id', 'review'], ['8']],
+      ['POST', ['closed-loop', 'client-cycle'], ['closed-loop', 'client-cycle'], []],
+      ['POST', ['closed-loop', 'train'], ['closed-loop', 'train'], []],
+      ['POST', ['closed-loop', 'draft-advice'], ['closed-loop', 'draft-advice'], []],
+      ['GET', ['closed-loop', 'unknown'], null, []],
       ['GET', ['5'], [':id'], ['5']],
       ['POST', ['5', 'confirm-recrawl'], [':id', ':action'], ['5', 'confirm-recrawl']],
       ['GET', ['export'], ['export'], []],

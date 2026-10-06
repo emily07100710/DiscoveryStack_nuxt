@@ -17,7 +17,7 @@ function delivered() {
     riskGate: { id: 10, draftId: 5, status: 'passed', evidenceSnapshotHash: 'd'.repeat(64) },
     publicationRun: { id: 11, ownerUserId, entryId: 30, stage: 'publication', state: 'succeeded', completedAt: new Date('2026-08-01T01:00:00.000Z') },
     publicationTarget: { id: 55, ownerUserId, clientId: 20, transport: 'wordpress_rest', targetId: 'target-55', contentRoot: 'content', status: 'active', targetOrigin: 'https://client.acme.taipei' },
-    publicationAttempt: { id: 12, ownerUserId, clientId: 20, entryId: 30, runId: 11, targetId: 55, status: 'delivered', receiptFingerprint: 'a'.repeat(64), publicationUrl: 'https://client.acme.taipei/articles/a', contentHash: 'c'.repeat(64), evidenceSnapshotHash: 'd'.repeat(64) },
+    publicationAttempt: { id: 12, ownerUserId, clientId: 20, entryId: 30, runId: 11, targetId: 55, status: 'delivered', mode: 'execute', completedAt: new Date('2026-08-01T01:00:00.000Z'), receiptFingerprint: 'a'.repeat(64), publicationUrl: 'https://client.acme.taipei/articles/a', contentHash: 'c'.repeat(64), evidenceSnapshotHash: 'd'.repeat(64) },
   }
 }
 
@@ -61,6 +61,24 @@ describe('measurement windows and scheduling', () => {
     expect(first.scheduled).toBe(5)
     expect(second.scheduled).toBe(5)
     expect([...new Set(first.runs.map(run => run.checkpointDays))].sort((left, right) => left - right)).toEqual([7, 15, 30, 60, 90])
+  })
+  it.each(['dry_run', 'missing_receipt_time'])('does not invent measurement authority from %s', async kind => {
+    const publication = delivered()
+    if (kind === 'dry_run') publication.publicationAttempt.mode = 'dry_run'
+    else Object.assign(publication.publicationAttempt, { completedAt: null })
+    const contentOperations = { ...contentRepository, async resolveDeliveredPublication() { return publication } }
+    const repository = fakeRepository()
+    await expect(scheduleMeasurementForEntry(ownerUserId, 30, { repository, contentOperations })).rejects.toMatchObject({ statusCode: 422 })
+    expect(await repository.listRuns(ownerUserId)).toHaveLength(0)
+  })
+  it('accepts canonical V4 receipt authority without pretending there was a human draft review', async () => {
+    const publication = delivered(), authorityReference = 'f'.repeat(64)
+    Object.assign(publication, { review: null, authorityReference })
+    Object.assign(publication.entry, { publicationAuthorityReference: authorityReference })
+    const contentOperations = { ...contentRepository, async resolveDeliveredPublication() { return publication } }
+    expect((await scheduleMeasurementForEntry(ownerUserId, 30, { repository: fakeRepository(), contentOperations })).scheduled).toBe(5)
+    Object.assign(publication.entry, { publicationAuthorityReference: 'e'.repeat(64) })
+    await expect(scheduleMeasurementForEntry(ownerUserId, 30, { repository: fakeRepository(), contentOperations })).rejects.toMatchObject({ statusCode: 422 })
   })
 
   it('schedules target-bound windows for every delivered site without mixing receipts', async () => {

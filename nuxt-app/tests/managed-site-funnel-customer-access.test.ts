@@ -5,6 +5,9 @@ import { tokenHash } from '../server/managed-sites/normalization'
 import { createFunnelSessionMemoryRepository } from './fixtures/managed-site/funnel-session-repository'
 import { createAuthoritativeManagedSiteReleaseFixture, managedSiteExactPaymentWebhookPayload, managedSiteFixedNow } from './fixtures/managed-site/live-connectors-application'
 import { processManagedSiteVerifiedPaymentWebhook } from '../server/managed-sites/live-connectors/payment-webhook'
+import { createRecordingManagedSiteEmailTransport } from '../server/managed-sites/contact-inbox/email-transport'
+import { requestManagedSiteReaccess } from '../server/managed-sites/reaccess-service'
+import { PAID_FUNNEL_CUSTOMER_MEMBERSHIP_ACTION } from '../server/managed-sites/funnel/paid-customer-membership'
 
 async function paidLine() {
   const line = await createAuthoritativeManagedSiteReleaseFixture()
@@ -28,6 +31,7 @@ async function paidLine() {
 describe('paid funnel customer access', () => {
   it('exchanges only verified paid authority for an editor session and replays without extending access', async () => {
     const line = await paidLine()
+    expect(line.managed.state.memberships.find(row => row.principalEmail === 'not-authority@example.invalid')).toMatchObject({ role: 'editor', status: 'active', acceptedAt: managedSiteFixedNow })
     const result = await line.claim()
     const member = line.managed.state.memberships.find(row => row.id === result.session.membershipId)!
     expect(member).toMatchObject({ ownerUserId: line.ownerUserId, projectId: line.prePurchase.project.id, role: 'editor', principalEmail: 'not-authority@example.invalid' })
@@ -40,6 +44,25 @@ describe('paid funnel customer access', () => {
     expect(line.managed.state.sessions).toHaveLength(1)
     expect(JSON.stringify(line.managed.state)).not.toContain(line.created.sessionToken)
     expect(JSON.stringify(line.managed.state)).not.toContain(result.sessionToken)
+  })
+
+  it('can recover on another device immediately after payment without first using the browser bearer', async () => {
+    const line = await paidLine()
+    const transport = createRecordingManagedSiteEmailTransport()
+    const result = await requestManagedSiteReaccess('not-authority@example.invalid', {
+      repository: line.managed.repository,
+      emailTransport: transport,
+      resolveOwnerUserId: async () => line.ownerUserId,
+      portalOrigin: 'https://ops.discoverystack.example',
+      clock: () => managedSiteFixedNow,
+    })
+    expect(result.diagnostics).toMatchObject({ outcome: 'sent', issued: 1 })
+    expect(line.managed.state.sessions).toHaveLength(0)
+    expect(transport.messages).toHaveLength(1)
+    expect(transport.messages[0]!.text).toContain('/managed-site-access?token=')
+    const grant = line.managed.state.audits.find(row => row.action === PAID_FUNNEL_CUSTOMER_MEMBERSHIP_ACTION)!
+    expect(grant).toBeTruthy()
+    expect(JSON.stringify(grant.metadata)).not.toContain('not-authority@example.invalid')
   })
 
   it.each(['payment_pending', 'refunded', 'disputed'])('never grants access for a current %s order', async status => {
@@ -81,6 +104,8 @@ describe('paid funnel customer access', () => {
 
   it('never assumes an existing membership belongs to the paid funnel bearer', async () => {
     const line = await paidLine()
+    line.managed.state.memberships = line.managed.state.memberships.filter(row => row.role === 'owner')
+    line.managed.state.audits = line.managed.state.audits.filter(row => row.action !== PAID_FUNNEL_CUSTOMER_MEMBERSHIP_ACTION)
     await line.managed.repository.insertMembership({ ownerUserId: line.ownerUserId, projectId: line.prePurchase.project.id, principalEmail: 'not-authority@example.invalid', role: 'administrator', status: 'active', userId: null, invitedAt: managedSiteFixedNow, acceptedAt: managedSiteFixedNow, revokedAt: null })
     await expect(line.claim()).rejects.toMatchObject({ statusCode: 409 })
     expect(line.managed.state.sessions).toHaveLength(0)

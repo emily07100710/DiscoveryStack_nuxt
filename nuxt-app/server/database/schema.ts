@@ -4253,3 +4253,91 @@ export const weeklyContentWebhookInbox = mysqlTable('weeklyContentWebhookInbox',
   status: mysqlEnum('status',['processed']).notNull(), resultCode: varchar('resultCode', { length: 80 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, t => [uniqueIndex('weekly_webhook_event_uq').on(t.eventHash)])
+
+/** Purpose-specific learning authority. LINE article approval never creates this permission. */
+export const learningSourceAuthorizations = mysqlTable('learningSourceAuthorizations', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  clientId: int('clientId').notNull(),
+  sourceId: int('sourceId').notNull(),
+  authorizedOrigin: varchar('authorizedOrigin', { length: 2048 }).notNull(),
+  rightsBasis: mysqlEnum('rightsBasis', ['owner_authorized', 'licensed', 'open_license_verified']).notNull(),
+  rightsEvidenceHash: varchar('rightsEvidenceHash', { length: 64 }).notNull(),
+  consentVersion: varchar('consentVersion', { length: 80 }).notNull(),
+  consentReceiptHash: varchar('consentReceiptHash', { length: 64 }).notNull(),
+  authorizationFingerprint: varchar('authorizationFingerprint', { length: 64 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  status: mysqlEnum('status', ['active', 'revoked']).notNull(),
+  retentionDays: int('retentionDays').notNull(),
+  approvedAt: timestamp('approvedAt').notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, t => [
+  uniqueIndex('learning_auth_owner_key_uq').on(t.ownerUserId, t.idempotencyKey), index('learning_auth_scope_idx').on(t.ownerUserId, t.clientId, t.sourceId, t.status),
+  foreignKey({ name: 'learning_auth_owner_fk', columns: [t.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'learning_auth_client_fk', columns: [t.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'learning_auth_source_fk', columns: [t.sourceId], foreignColumns: [publicIntelligenceSources.id] }),
+])
+
+/** Bounded hash/structural projections only; raw HTML, query text and customer/contact PII stay out. */
+export const learningEvidenceCollections = mysqlTable('learningEvidenceCollections', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  authorizationId: int('authorizationId').notNull(),
+  clientId: int('clientId').notNull(),
+  sourceId: int('sourceId').notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 64 }).notNull(),
+  authorizationFingerprint: varchar('authorizationFingerprint', { length: 64 }).notNull(),
+  status: mysqlEnum('status', ['collecting', 'completed', 'failed']).notNull(),
+  projection: json('projection'),
+  projectionFingerprint: varchar('projectionFingerprint', { length: 64 }),
+  reviewStatus: mysqlEnum('reviewStatus', ['pending', 'approved', 'rejected']).default('pending').notNull(),
+  reviewFingerprint: varchar('reviewFingerprint', { length: 64 }),
+  reviewedAt: timestamp('reviewedAt'),
+  retentionUntil: timestamp('retentionUntil').notNull(),
+  leaseToken: varchar('leaseToken', { length: 64 }),
+  leaseVersion: int('leaseVersion').default(1).notNull(),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
+  errorCode: varchar('errorCode', { length: 80 }),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  completedAt: timestamp('completedAt'),
+}, t => [
+  uniqueIndex('learning_collect_owner_key_uq').on(t.ownerUserId, t.idempotencyKey), index('learning_collect_scope_idx').on(t.ownerUserId, t.clientId, t.status), index('learning_collect_retention_idx').on(t.retentionUntil),
+  foreignKey({ name: 'learning_collect_owner_fk', columns: [t.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'learning_collect_authorization_fk', columns: [t.authorizationId], foreignColumns: [learningSourceAuthorizations.id] }),
+  foreignKey({ name: 'learning_collect_client_fk', columns: [t.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'learning_collect_source_fk', columns: [t.sourceId], foreignColumns: [publicIntelligenceSources.id] }),
+])
+
+export type LearningSourceAuthorization = typeof learningSourceAuthorizations.$inferSelect
+export type LearningEvidenceCollection = typeof learningEvidenceCollections.$inferSelect
+
+// A separate observational task: never stores citation truth or changes production activation.
+// Rows reserve an immutable owner-reviewed release; artifact payloads contain numeric weights only.
+export const learningOutcomeModels = mysqlTable('learningOutcomeModels', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  datasetDigest: varchar('datasetDigest', { length: 64 }).notNull(),
+  lineageFingerprint: varchar('lineageFingerprint', { length: 64 }).notNull(),
+  dataReviewFingerprint: varchar('dataReviewFingerprint', { length: 64 }).notNull(),
+  reviewReasonHash: varchar('reviewReasonHash', { length: 64 }).notNull(),
+  candidateCount: int('candidateCount').notNull(),
+  candidateFingerprints: json('candidateFingerprints').notNull(),
+  candidateLineage: json('candidateLineage').notNull(),
+  status: mysqlEnum('status', ['queued', 'training', 'completed', 'blocked', 'revoked']).default('queued').notNull(),
+  approvedAt: timestamp('approvedAt').notNull(),
+  artifact: json('artifact'),
+  artifactHash: varchar('artifactHash', { length: 64 }),
+  metrics: json('metrics'),
+  reasonCode: varchar('reasonCode', { length: 80 }),
+  leaseToken: varchar('leaseToken', { length: 64 }),
+  leaseVersion: int('leaseVersion').default(0).notNull(),
+  leaseExpiresAt: timestamp('leaseExpiresAt'),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  completedAt: timestamp('completedAt'),
+  revokedAt: timestamp('revokedAt'),
+}, t => [uniqueIndex('learning_effect_owner_release_uq').on(t.ownerUserId, t.datasetDigest, t.lineageFingerprint), index('learning_effect_queue_idx').on(t.ownerUserId, t.status, t.id), foreignKey({ name: 'learning_effect_owner_fk', columns: [t.ownerUserId], foreignColumns: [users.id] })])
+
+export type LearningOutcomeModel = typeof learningOutcomeModels.$inferSelect

@@ -1,4 +1,4 @@
-import { checkRecrawl, markPublicationInterventionDeployed, pullMetrics, registerInterventionWithSource, syncDeploymentFromSiteEvidence } from './service'
+import { assessIntervention, checkRecrawl, markPublicationInterventionDeployed, pullMetrics, registerInterventionWithSource, syncDeploymentFromSiteEvidence } from './service'
 import { evaluateRefreshTriggers } from './refresh-queue'
 import { resolveInterventionLoopDependencies } from './dependencies'
 import type { InterventionLoopDependencies } from './dependencies'
@@ -15,26 +15,33 @@ export async function autoRegisterDeliveredPublications(ownerUserId: number, dep
   const publications = await deps.deliveredPublications.listDeliveredPublications(ownerUserId, limit)
   const registered: number[] = []; const errors: Array<{ interventionId: number, step: string, code: string }> = []
   for (const publication of publications) {
-    const idempotencyKey = `auto:entry:${publication.entryId}:target:${publication.targetId ?? 0}:${publication.receiptFingerprint}`
     try {
-      const existing = await deps.repository.findInterventionByIdempotencyKey(ownerUserId, idempotencyKey)
-      if (existing) {
-        if (existing.status === 'registered') await markPublicationInterventionDeployed(ownerUserId, existing.id, { deliveredAt: publication.deliveredAt, contentHash: publication.contentHash, receiptFingerprint: publication.receiptFingerprint }, deps)
-        continue
-      }
-      const created = await registerInterventionWithSource(ownerUserId, { targetUrl: publication.publicationUrl, changeSummary: publication.changeSummary, interventionType: 'content_update', briefId: publication.briefId ?? undefined, draftId: publication.draftId ?? undefined, entryId: publication.entryId, targetId: publication.targetId ?? undefined, idempotencyKey }, 'content_operations_delivery', deps)
-      await markPublicationInterventionDeployed(ownerUserId, created.intervention.id, { deliveredAt: publication.deliveredAt, contentHash: publication.contentHash, receiptFingerprint: publication.receiptFingerprint }, deps)
-      registered.push(created.intervention.id)
+      const result = await registerDeliveredPublication(ownerUserId, publication, deps)
+      if (!result.replayed) registered.push(result.interventionId)
     } catch (error) { errors.push({ interventionId: 0, step: 'auto_register', code: codeOf(error) }) }
   }
   return { registered, errors }
+}
+
+/** The formal delivery hook and recovery tick share the same idempotent registration. */
+export async function registerDeliveredPublication(ownerUserId: number, publication: Awaited<ReturnType<InterventionLoopDependencies['deliveredPublications']['listDeliveredPublications']>>[number], dependencies: Partial<InterventionLoopDependencies> = {}) {
+  const deps = resolveInterventionLoopDependencies(dependencies)
+  const idempotencyKey = `auto:entry:${publication.entryId}:target:${publication.targetId ?? 0}:${publication.receiptFingerprint}`
+  const existing = await deps.repository.findInterventionByIdempotencyKey(ownerUserId, idempotencyKey)
+  if (existing) {
+    if (existing.status === 'registered') await markPublicationInterventionDeployed(ownerUserId, existing.id, { deliveredAt: publication.deliveredAt, contentHash: publication.contentHash, receiptFingerprint: publication.receiptFingerprint }, deps)
+    return { interventionId: existing.id, replayed: true }
+  }
+  const created = await registerInterventionWithSource(ownerUserId, { targetUrl: publication.publicationUrl, changeSummary: publication.changeSummary, interventionType: 'content_update', briefId: publication.briefId ?? undefined, draftId: publication.draftId ?? undefined, entryId: publication.entryId, targetId: publication.targetId ?? undefined, idempotencyKey }, 'content_operations_delivery', deps)
+  await markPublicationInterventionDeployed(ownerUserId, created.intervention.id, { deliveredAt: publication.deliveredAt, contentHash: publication.contentHash, receiptFingerprint: publication.receiptFingerprint }, deps)
+  return { interventionId: created.intervention.id, replayed: created.replayed }
 }
 
 export async function runInterventionLoopTick(ownerUserId: number, dependencies: Partial<InterventionLoopDependencies> = {}, options: { now?: Date, maxInterventions?: number } = {}) {
   const initial = resolveInterventionLoopDependencies(dependencies); const now = options.now || initial.clock.now(); const deps = { ...initial, clock: { now: () => now } }
   const max = Math.max(1, Math.min(200, Math.trunc(options.maxInterventions || 50)))
   const errors: Array<{ interventionId: number, step: string, code: string }> = []
-  let autoRegistered = 0; let deploymentsSynced = 0; let metricsPulled = 0; let metricsUnknown = 0; let metricsCapped = 0; let recrawlChecked = 0; let recrawlConfirmed = 0; let refreshEnqueued = 0
+  let autoRegistered = 0; let deploymentsSynced = 0; let metricsPulled = 0; let metricsUnknown = 0; let metricsCapped = 0; let recrawlChecked = 0; let recrawlConfirmed = 0; let refreshEnqueued = 0; let assessed = 0
   try {
     const registration = await autoRegisterDeliveredPublications(ownerUserId, deps, { limit: max }); autoRegistered = registration.registered.length; errors.push(...registration.errors)
   } catch (error) { errors.push({ interventionId: 0, step: 'auto_register_list', code: codeOf(error) }) }
@@ -60,8 +67,12 @@ export async function runInterventionLoopTick(ownerUserId: number, dependencies:
       const result = await checkRecrawl(ownerUserId, row.id, deps, { automatic: true }); recrawlChecked += 1; if (result.outcome === 'confirmed') recrawlConfirmed += 1
     } catch (error) { errors.push({ interventionId: row.id, step: 'check_recrawl', code: codeOf(error) }) }
   }
+  rows = await deps.repository.listInterventions(ownerUserId, { limit: max })
+  for (const row of rows.filter(item => item.status === 'measured' && item.recrawlStatus === 'confirmed')) {
+    try { await assessIntervention(ownerUserId, row.id, deps); assessed += 1 } catch (error) { errors.push({ interventionId: row.id, step: 'assess', code: codeOf(error) }) }
+  }
   try { const result = await evaluateRefreshTriggers(ownerUserId, deps, { now }); refreshEnqueued = result.enqueued.length } catch (error) { errors.push({ interventionId: 0, step: 'evaluate_refresh', code: codeOf(error) }) }
-  return { autoRegistered, deploymentsSynced, metricsPulled, metricsUnknown, metricsCapped, recrawlChecked, recrawlConfirmed, refreshEnqueued, errors, limitations: ['bounded_owner_tick', 'per_intervention_failures_isolated'] }
+  return { autoRegistered, deploymentsSynced, metricsPulled, metricsUnknown, metricsCapped, recrawlChecked, recrawlConfirmed, assessed, refreshEnqueued, errors, limitations: ['bounded_owner_tick', 'per_intervention_failures_isolated'] }
 }
 
 export async function runInterventionLoopTickSafely(ownerUserId: number, dependencies: Partial<InterventionLoopDependencies> = {}) {

@@ -9,9 +9,10 @@ function harness(lookup: () => Promise<any> = async () => available) {
   const projection = { consentVersion: 'current-consent', domainDelegationVersion: 'current-delegation' }
   const fetch = vi.fn(async (url: string, _options: unknown) => url.endsWith('/domain-availability') ? lookup() : projection)
   const vue = { ref: (value: unknown) => ({ value }), computed: (definition: any) => ({ get value() { return typeof definition === 'function' ? definition() : definition.get() }, set value(value: unknown) { definition.set(value) } }), onMounted: vi.fn(), onBeforeUnmount: vi.fn() }
+  const useRuntimeConfig = vi.fn(() => ({ public: { discoveryStackPublicSiteOrigin: 'https://www.discoverystack.tw' } }))
   const script = ts.transpileModule(`${source}\nexport { answers, currentStep, sessionId, sessionToken, consentScrolledToBottom, consentChecked, domainRegistrant, domainDelegated, domainName, domainTld, domainAvailability, nextDisabled, checkDomainAvailability, saveCurrentAndAdvance };`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const module = { exports: {} as any }
-  new Function('require', 'module', 'exports', '$fetch', 'useHead', script)((name: string) => name === 'vue' ? vue : utility, module, module.exports, fetch, vi.fn())
+  new Function('require', 'module', 'exports', '$fetch', 'useHead', 'useRuntimeConfig', script)((name: string) => name === 'vue' ? vue : utility, module, module.exports, fetch, vi.fn(), useRuntimeConfig)
   const page = module.exports
   page.currentStep.value = 7; page.sessionId.value = 7; page.sessionToken.value = 'capability-token'
   page.answers.value.domain = { option: 'new', name: 'chosen-customer', tld: 'com' }

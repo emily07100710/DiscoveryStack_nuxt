@@ -4,6 +4,7 @@ import { getOwnerDatabaseUserId } from '../../../audit/repository'
 import { getManagedSiteProviderReadiness } from '../../../managed-sites/live-connectors/provider-registry'
 import { evaluateManagedSiteLaunchReadiness } from '../../../managed-sites/live-connectors/launch-readiness'
 import { getManagedSiteLiveConnectorRepository } from '../../../managed-sites/live-connectors/repository'
+import { getDiscoveryStackSetupReadiness } from '../../../managed-sites/setup-readiness'
 
 export default defineEventHandler(async event => {
   const owner = await requireOwner(event)
@@ -14,5 +15,6 @@ export default defineEventHandler(async event => {
     getManagedSiteProviderReadiness(ownerUserId, repository),
     evaluateManagedSiteLaunchReadiness(ownerUserId, repository),
   ])
-  return { ...providerReadiness, launchReadiness }
+  const setupReadiness = getDiscoveryStackSetupReadiness({ providers: providerReadiness, runtimeConfig: useRuntimeConfig(event) as Record<string, unknown> })
+  return { ...providerReadiness, launchReadiness, setupReadiness }
 })

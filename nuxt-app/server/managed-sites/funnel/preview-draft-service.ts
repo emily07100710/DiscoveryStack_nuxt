@@ -9,6 +9,7 @@ import { MANAGED_SITE_BLUEPRINT_MAX_BYTES, compileManagedSiteBlueprint, validate
 import { renderManagedSiteStaticAssets } from '../live-connectors/internal-broker/static-renderer'
 import type { ManagedSiteBlueprintProviderOutput, ManagedSiteBlueprintV1, ManagedSiteGenerationAdapter, ManagedSiteGenerationRequest } from '../live-connectors/types'
 import type { ManagedSiteFunnelSession } from '../../database/schema'
+import type { CustomerSitePreset, SiteSpec } from '../site-spec'
 import type { FunnelAnswers } from './session-service'
 import { funnelSiteSpec } from './quote-projection'
 
@@ -51,7 +52,7 @@ function answersFor(session: ManagedSiteFunnelSession): FunnelAnswers {
   return session.answers && typeof session.answers === 'object' && !Array.isArray(session.answers) ? session.answers as FunnelAnswers : {}
 }
 
-function previewRequest(session: ManagedSiteFunnelSession): ManagedSiteGenerationRequest {
+function previewRequest(session: ManagedSiteFunnelSession): ManagedSiteGenerationRequest & { siteSpec: SiteSpec } {
   const answers = answersFor(session)
   const siteSpec = funnelSiteSpec(answers, session.id)
   const answersFingerprint = stableFingerprint(answers)
@@ -128,9 +129,9 @@ function assertSafePreviewHtml(html: string): void {
   }
 }
 
-function renderPreview(blueprint: ManagedSiteBlueprintProviderOutput['blueprint'], blueprintHash: string): Pick<FunnelPreviewDraft, 'blueprintHash' | 'headline' | 'sections' | 'html'> {
+function renderPreview(blueprint: ManagedSiteBlueprintProviderOutput['blueprint'], blueprintHash: string, customerSitePreset?: CustomerSitePreset): Pick<FunnelPreviewDraft, 'blueprintHash' | 'headline' | 'sections' | 'html'> {
   const files = compileManagedSiteBlueprint(blueprint)
-  const asset = renderManagedSiteStaticAssets(blueprint, files).find(candidate => candidate.path === 'index.html')
+  const asset = renderManagedSiteStaticAssets(blueprint, files, undefined, customerSitePreset).find(candidate => candidate.path === 'index.html')
   if (!asset) throw new PreviewDraftUnavailableError('malformed_output')
   assertSafePreviewHtml(asset.content)
   const home = blueprint.pages.find(page => page.pageKey === 'home')
@@ -169,9 +170,9 @@ function templateBlueprint(request: ManagedSiteGenerationRequest, dependencies: 
   }
 }
 
-function renderTemplate(blueprint: ManagedSiteBlueprintProviderOutput['blueprint'], blueprintHash: string): Pick<FunnelPreviewDraft, 'blueprintHash' | 'headline' | 'sections' | 'html'> {
+function renderTemplate(blueprint: ManagedSiteBlueprintProviderOutput['blueprint'], blueprintHash: string, customerSitePreset?: CustomerSitePreset): Pick<FunnelPreviewDraft, 'blueprintHash' | 'headline' | 'sections' | 'html'> {
   try {
-    return renderPreview(blueprint, blueprintHash)
+    return renderPreview(blueprint, blueprintHash, customerSitePreset)
   } catch {
     previewUnavailable()
   }
@@ -210,13 +211,13 @@ export async function generateFunnelPreviewDraft(session: ManagedSiteFunnelSessi
 
   let rendered: Pick<FunnelPreviewDraft, 'blueprintHash' | 'headline' | 'sections' | 'html'>
   try {
-    rendered = renderPreview(blueprint, blueprintHash)
+    rendered = renderPreview(blueprint, blueprintHash, request.siteSpec.customerSitePreset)
   } catch (error) {
     if (source !== 'llm') previewUnavailable()
     ;({ blueprint, blueprintHash } = templateBlueprint(request, dependencies))
     source = 'template'
     sourceReason = fallbackReason(error)
-    rendered = renderTemplate(blueprint, blueprintHash)
+    rendered = renderTemplate(blueprint, blueprintHash, request.siteSpec.customerSitePreset)
   }
   const hostname = `funnel-${session.id}.preview.invalid`
   const analysis = (dependencies.analyse || analysePublicHomepageHtml)({ html: rendered.html, requestedUrl: `https://${hostname}/`, finalUrl: `https://${hostname}/`, hostname, analysedAt: generatedAt })

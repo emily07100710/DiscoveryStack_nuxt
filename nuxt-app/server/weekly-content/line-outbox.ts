@@ -10,13 +10,14 @@ export type WeeklyLineOutboxResult = { status: 'disabled' | 'not_configured' | '
 const DAY_MS = 24 * 60 * 60 * 1000
 // LINE retry keys expire after 24h. Conservatively start this window at outbox creation;
 // never send an uncertain old request as a new message after provider deduplication expires.
-export async function runWeeklyLineOutbox(input: { ownerUserId: number; maxMessages?: number }, dependencies: WeeklyLineOutboxDependencies): Promise<WeeklyLineOutboxResult> {
+export async function runWeeklyLineOutbox(input: { ownerUserId: number; clientId?: number; maxMessages?: number }, dependencies: WeeklyLineOutboxDependencies): Promise<WeeklyLineOutboxResult> {
   const result: WeeklyLineOutboxResult = { status: 'disabled', claimed: 0, sent: 0, deduplicated: 0, retryWaiting: 0, failed: 0, cancelled: 0, leaseLost: 0 }
   if (!dependencies.featureEnabled) return result
   if (!isWeeklyLineAccessToken(dependencies.channelAccessToken) || !WEEKLY_LINE_USER_ID.test(dependencies.botUserId) || Buffer.byteLength(dependencies.tokenKey || '') < 32) return { ...result, status: 'not_configured' }
   let origin: string
   try { origin = normalizeWeeklyLinePublicOrigin(dependencies.publicOrigin) } catch { return { ...result, status: 'not_configured' } }
   if (!Number.isSafeInteger(input.ownerUserId) || input.ownerUserId < 1) throw createError({ statusCode: 422, statusMessage: 'Weekly notification owner is invalid.' })
+  if (input.clientId !== undefined && (!Number.isSafeInteger(input.clientId) || input.clientId < 1)) throw createError({ statusCode: 422, statusMessage: 'Weekly notification client is invalid.' })
   const maximum = Number.isSafeInteger(input.maxMessages) && input.maxMessages! > 0 ? Math.min(10, input.maxMessages!) : 10
   const now = dependencies.now || new Date()
   if (!Number.isFinite(now.getTime())) throw createError({ statusCode: 422, statusMessage: 'Weekly notification clock is invalid.' })
@@ -24,11 +25,13 @@ export async function runWeeklyLineOutbox(input: { ownerUserId: number; maxMessa
   const repository = dependencies.repository
   const leaseToken = randomUUID()
   result.status = 'completed'
-  const rows = await repository.claimOutbox(input.ownerUserId, maximum, leaseToken, now)
+  const rows = input.clientId === undefined
+    ? await repository.claimOutbox(input.ownerUserId, maximum, leaseToken, now)
+    : await repository.claimOutbox(input.ownerUserId, maximum, leaseToken, now, input.clientId)
   if (rows.length > maximum) throw createError({ statusCode: 503, statusMessage: 'Weekly notification storage returned an invalid claim.' })
   result.claimed = rows.length
   for (const row of rows) {
-    if (row.ownerUserId !== input.ownerUserId || row.status !== 'processing' || row.leaseToken !== leaseToken || !row.leaseExpiresAt || row.leaseExpiresAt.getTime() <= now.getTime() + 10_000) { result.leaseLost++; continue }
+    if (row.ownerUserId !== input.ownerUserId || (input.clientId !== undefined && row.clientId !== input.clientId) || row.status !== 'processing' || row.leaseToken !== leaseToken || !row.leaseExpiresAt || row.leaseExpiresAt.getTime() <= now.getTime() + 10_000) { result.leaseLost++; continue }
     const finish = async (state: 'sent' | 'retry_wait' | 'failed' | 'cancelled', fields: { providerMessageId?: string; retryEligibleAt?: Date; errorCode?: string } = {}) => {
       const changed = await repository.finishOutbox(row.id, leaseToken, dependencies.now || new Date(), { status: state, ...fields })
       if (!changed) { result.leaseLost++; return false }

@@ -1,5 +1,5 @@
 import { resolveControlledOwnerDatabaseUserId } from '../audit/repository'
-import { runContentOperationsTick } from '../content-operations'
+import { runContentOperationsTick } from '../content-operations/scheduler'
 
 export default defineTask<Awaited<ReturnType<typeof runContentOperationsTick>> | { status: 'disabled'; processed: 0 }>({
   meta: {

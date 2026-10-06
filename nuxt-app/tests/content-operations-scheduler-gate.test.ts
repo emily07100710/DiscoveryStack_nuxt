@@ -9,7 +9,8 @@ const calls = vi.hoisted(() => ({
   dependencies: vi.fn(() => ({ fetchImpl: 'test-transport', serverCredentialResolver: 'test-resolver', nonceProvider: 'test-nonce' })),
 }))
 vi.mock('../server/audit/repository', () => ({ resolveControlledOwnerDatabaseUserId: calls.owner }))
-vi.mock('../server/content-operations', () => ({ runContentOperationsTick: calls.materialize, runContentOperationsExecutionTick: calls.execute }))
+vi.mock('../server/content-operations/scheduler', () => ({ runContentOperationsTick: calls.materialize }))
+vi.mock('../server/content-operations/orchestrator', () => ({ runContentOperationsExecutionTick: calls.execute }))
 vi.mock('../server/content-operations/runtime-dependencies', () => ({ getContentOperationsRuntimeDependencies: calls.dependencies }))
 
 type Task = typeof import('../server/tasks/content-operations-tick').default
@@ -62,5 +63,9 @@ describe('content scheduler deployment contract', () => {
     expect(manual).not.toContain('NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED')
     const service = readFileSync(new URL('../server/content-operations/service.ts', import.meta.url), 'utf8')
     expect(service).toContain("schedulerEnabled: process.env.NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED === 'true'")
+    const materialize = readFileSync(new URL('../server/tasks/content-operations-tick.ts', import.meta.url), 'utf8')
+    const execute = readFileSync(new URL('../server/tasks/content-operations-execution-tick.ts', import.meta.url), 'utf8')
+    expect(materialize).toContain("from '../content-operations/scheduler'")
+    expect(execute).toContain("from '../content-operations/orchestrator'")
   })
 })

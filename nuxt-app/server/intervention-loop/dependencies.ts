@@ -32,6 +32,7 @@ export type InterventionPageMetricsPuller = (input: { ownerUserId: number, pageU
 >
 export interface InterventionDeliveredPublicationSource {
   listDeliveredPublications(ownerUserId: number, limit: number): Promise<Array<{ entryId: number, targetId: number | null, publicationUrl: string, contentHash: string | null, receiptFingerprint: string, deliveredAt: Date, briefId: number | null, draftId: number | null, changeSummary: string }>>
+  resolveDeliveredPublication?(ownerUserId: number, entryId: number): Promise<{ entryId: number, targetId: number | null, publicationUrl: string, contentHash: string | null, receiptFingerprint: string, deliveredAt: Date } | null>
 }
 export interface InterventionLoopDependencies {
   repository: InterventionLoopRepository

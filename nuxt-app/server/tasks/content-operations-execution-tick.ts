@@ -1,5 +1,5 @@
 import { resolveControlledOwnerDatabaseUserId } from '../audit/repository'
-import { runContentOperationsExecutionTick } from '../content-operations'
+import { runContentOperationsExecutionTick } from '../content-operations/orchestrator'
 import { getContentOperationsRuntimeDependencies } from '../content-operations/runtime-dependencies'
 
 export default defineTask<Awaited<ReturnType<typeof runContentOperationsExecutionTick>> | { status: 'disabled'; processed: 0 }>({

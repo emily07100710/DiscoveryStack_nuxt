@@ -13,7 +13,11 @@ const mockedPublicApiFetch = vi.mocked(publicApiFetch)
 const mountedBuilders: ReturnType<typeof mount>[] = []
 
 function mountBuilder(withMotion = false) {
-  const wrapper = mount(WebsiteBuilderConcept, { attachTo: document.body, ...(withMotion ? { global: { stubs: { transition: false } } } : {}) })
+  const wrapper = mount(WebsiteBuilderConcept, {
+    attachTo: document.body,
+    props: { customerStartUrl: 'https://ops.example.com/customer/managed-sites/start' },
+    ...(withMotion ? { global: { stubs: { transition: false } } } : {}),
+  })
   mountedBuilders.push(wrapper)
   return wrapper
 }
@@ -142,6 +146,7 @@ describe('website builder experience', () => {
     expect(mockedPublicApiFetch).toHaveBeenCalledWith('/api/leads', expect.objectContaining({ body: expect.objectContaining({ email: 'owner@example.tw', privacyConsent: true, message: expect.stringContaining('shanyu-dental.tw') }) }))
     expect(wrapper.text()).toContain('網站方向已送出')
     expect(wrapper.text()).toContain('尚未付款')
+    expect(wrapper.get('[data-managed-site-start]').attributes('href')).toBe('https://ops.example.com/customer/managed-sites/start')
   })
 
   it('starts with a short brand brief and three customer-facing phases', () => {

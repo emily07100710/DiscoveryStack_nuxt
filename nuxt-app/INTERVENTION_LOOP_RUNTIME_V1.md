@@ -40,6 +40,22 @@ URL Inspection 可確認 crawl 時間；手動確認必須附說明。自動查�
 
 `GET /api/interventions/export` 匯出 owner-scoped JSON outcome dataset，回應為 attachment；以遞增 id 游標走訪該 owner 的全部介入，並逐筆載入關聯資料以限制資料庫並行量；包含記錄、事件、量測、結果與限制，並不代表驗證過的業務結果。
 
+### 2026-10-06：InterventionEnvelope 與 operational export v2（PARTIAL）
+
+`GET /api/interventions/:id` 追加 `envelope`，同一投影亦包含於 `intervention-outcome-v2` export。`pages/audit-lab/interventions.vue` 的前後證據卡呈現內容 hash／擷取時間、發布回執綁定、重新抓取、各來源視窗、樣本／實際觀察天數、目前評估與限制。無量測為 unknown；零曝光的 CTR 為 null；不產生置信百分比或因果宣稱。使用者能以目前資料重新評估，歷史結果保留，不覆寫舊結果。
+
+- GSC、其他來源、人工／系統、不同 property 分開。click 契約目前只可評估 GSC；其他來源保持 unsupported，不拿 clicks 欄位當 AI citation／GA4 指標。重疊視窗、source hash mismatch、future/incomplete window、不合法 count/rate/sample 均不形成可比較訊號。同時有多個 GSC 範圍不自動選最好的範圍或合併。
+- contentops 的發布後 content hash 不再回填成 baseline。inventory baseline 必須有明確時間；exact publication receipt 只能保留發布前 inventory／live-fetch 基準。舊 `content_operations` baseline 投影為 unknown。人工重抓不能早於發布時間。
+- contentops bridge 必須有 delivered 的 execute attempt、完成時間、owner／client／target／entry／draft/content lineage。detail/export 每次由 durable resolver 重讀 receipt、頁面、content hash、target 和時間；drift、revocation 或讀取失敗不能繼續當有效回執。
+- assessment 以目前分組與 measurement references 重算 fingerprint；量測更正、來源變更、policy 變動、事件 fingerprint 漂移會使既有結果失效。fingerprint 是 checksum，不代替 owner authority。
+- envelope 只保存 hash-only lineage、固定 reason codes 與 aggregates；不將 change summary／hypothesis／原始 provider 回應當訓練欄位。匯出的歷史 results 是營運稽核記錄，必須以 envelope 的 current 狀態判讀。
+
+此切片**未實作** immutable change-set／exact paragraph or metadata diff、current consent／PII／revocation 到 action-learning 的 adapter，因此 `modelTrainingAllowed=false`、`primaryCitationLabelAllowed=false`、`candidateAuthority=not_bound`。GSC aggregate 永遠不是 primary citation label；正式 citation dataset 繼續使用 GEO Outcome Model 的 consumer-surface review／candidate-set authority。不得把新增 operational export 當成 dataset admission、訓練完成或模型變強。
+
+後續優先：受控 revision/change-set identity → publication bridge 回補與冪等 → current consent/PII/rights/withdrawal 的 durable learning adapter → leakage-safe holdout／shadow evaluation。真實 DB、Google、publisher、背景排程、模型訓練／promotion 均仍需分別驗收，本輪不呼叫、不部署、不套 migration。
+
+本輪本機驗證（2026-10-06）：使用專案已安裝的 Nuxt／Vitest 工具，依序完成 typecheck → fresh `node-server` build → 全量安全回歸，**276 個測試檔通過、5,504 個測試通過、14 個檔案／27 個測試依既有條件跳過**。新增 envelope service 與實際 SFC SSR rendering 的 27 個測試亦通過；尚未做瀏覽器視覺／操作驗收。首次受限環境的全量測試遇到 `listen EPERM: operation not permitted 127.0.0.1`，允許本機測試伺服器後重跑通過；未刪除測試或放寬 skip 條件，外部 `DS_RUN_*` opt-in 保持關閉。這些結果不代表真實 provider／DB、訓練品質或正式部署驗收。
+
 ## 路由清單
 
 `/api/interventions/list` 提供清單、`/api/interventions/register` 提供登記；`/:id` 提供詳情以及 deployment、recrawl、measurements、pull-metrics、measure、assess、cancel；`/experiments`、`/refresh-queue`、`/refresh-policy`、`/export`、`/tick` 提供對應 owner-only 操作。POST 均要求 same-origin。
@@ -54,7 +70,7 @@ URL Inspection 可確認 crawl 時間；手動確認必須附說明。自動查�
 
 ## 與 content-operations 的接點
 
-outcome assessment 成功後以一行 hook 非阻斷連結；tick 讀取 delivered entries 自動登記，key 為 `auto:entry:<entryId>:target:<targetId|0>:<receiptFingerprint>`。直接掛在發布成功點被 `server/content-operations/orchestrator.ts` 擋住，屬後續單。
+outcome assessment 成功後以 hook 非阻斷連結；tick 讀取 delivered entries 自動登記，key 為 `auto:entry:<entryId>:target:<targetId|0>:<receiptFingerprint>`。2026-10-06 新增 gated post-commit learning bridge：正式回執接受並持久化後才補登介入／安排量測，失敗留待五分鐘補登，不能造成重新發布。已量測且 recrawl confirmed 才由 tick 評估，未知基準不冒充改善。詳見 [學習閉環 Runtime](LEARNING_CLOSED_LOOP_RUNTIME_V1.md)。
 
 ## 安全
 

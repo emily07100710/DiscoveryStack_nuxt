@@ -36,6 +36,8 @@ import '../styles/website-builder.css'
 
 type DomainMode = 'new' | 'existing'
 
+defineProps<{ customerStartUrl: string }>()
+
 const currentStep = ref<BuilderStep>('diagnosis_or_brief')
 const brandName = ref('')
 const businessBrief = ref('')
@@ -72,7 +74,7 @@ const handoffError = ref('')
 const handoffContact = reactive({ name: '', email: '', company: '', website: '', privacyConsent: false, recontactConsent: false, companyFax: '' })
 const handoffCloseButton = ref<HTMLButtonElement | null>(null)
 const handoffDialog = ref<HTMLElement | null>(null)
-const handoffStepTrigger = ref<HTMLButtonElement | null>(null)
+const handoffStepTrigger = ref<HTMLElement | null>(null)
 const reviewHandoffTrigger = ref<HTMLButtonElement | null>(null)
 const builderPanel = ref<HTMLElement | null>(null)
 const builderPanelHead = ref<HTMLElement | null>(null)
@@ -572,6 +574,7 @@ onBeforeUnmount(() => {
         <p class="builder-lede">說說你的生意，選擇風格與功能，<br class="studio-desktop-break">按一下，產生可以親手體驗的網站預覽。</p>
         <div class="studio-entry-actions"><a class="studio-start" href="#website-studio" @click.prevent="focusStudio">開始建立網站預覽 <span aria-hidden="true">↗</span></a><a class="studio-services-link" href="#builder-services">可以做哪些功能？ <span aria-hidden="true">↓</span></a></div>
         <p class="builder-care-note">預覽起步；上線後，可依方案持續觀察與改善。</p>
+        <p class="builder-care-note">正式交付後 30 天，原功能範圍內的排版、美術調整免費。新增功能、資料搬遷、新串接及第三方費用另行確認。</p>
         <div class="builder-trust-row" aria-label="預覽體驗"><span>免信用卡</span><span>風格與動畫可選</span><span>先看成果，再選方案</span></div>
       </div>
       <div class="builder-timepiece">
@@ -651,7 +654,7 @@ onBeforeUnmount(() => {
 
         <section v-else-if="currentStep === 'review_order'" class="builder-step review-step" aria-labelledby="review-title"><div class="step-heading"><p class="builder-eyebrow">REVIEW BEFORE HANDOFF</p><h2 id="review-title" tabindex="-1">這是你要保存的方向嗎？</h2><p>最後看一次規格、預估費用與尚未執行的外部操作。這不是正式訂單。</p></div><div class="review-layout"><div class="review-list"><article><span>品牌</span><strong>{{ brandName || '尚未命名' }}</strong><button type="button" @click="setStep('diagnosis_or_brief')">修改</button></article><article><span>網站架構</span><strong>{{ currentSiteType.label }} · {{ currentSiteType.pages.join('／') }}</strong><button type="button" @click="setStep('site_architecture')">修改</button></article><article><span>風格與功能</span><strong>{{ currentTheme.label }} · {{ selectedModuleLabels.join('、') || '尚未選擇模組' }}</strong><button type="button" @click="setStep('style_and_modules')">修改</button></article><article><span>動畫節奏</span><strong>{{ currentMotion.label }}</strong><button type="button" @click="setStep('style_and_modules')">修改</button></article><article v-if="styleDescription.trim()"><span>風格描述</span><strong class="review-style-description">{{ styleDescription }}</strong><button type="button" @click="setStep('style_and_modules')">修改</button></article><article><span>GEO 方案</span><strong>{{ currentPlan.label }}{{ plan !== 'launch' ? ` · 每 ${cadence} 天` : '' }}</strong><button type="button" @click="setStep('plan_and_cadence')">修改</button></article><article><span>網域方向</span><strong>{{ domainMode === 'new' ? '新網域規劃' : '使用現有網域' }} · {{ currentDomain }}</strong><button type="button" @click="setStep('domain_and_launch')">修改</button></article></div><aside class="review-price"><p>ESTIMATED PROJECT SUMMARY</p><h3>{{ brandName || '你的品牌' }}</h3><div><span>一次性網站建置預估</span><strong>NT$ {{ formatMoney(oneTimeEstimate) }}</strong></div><div v-if="monthlyEstimate"><span>每月 GEO 訂閱預估</span><strong>NT$ {{ formatMoney(monthlyEstimate) }}</strong></div><small>網域與人工串接另行報價；規劃中功能只記錄需求。以上均為示意或預估。</small><label><input v-model="reviewConfirmed" type="checkbox"> 我理解這是互動式預覽，不是已付款、已購買網域或已部署的正式成品。</label></aside></div><div class="ownership-note"><span>CLIENT OWNED DOMAIN</span><p>網域原則上歸客戶所有；DiscoveryStack 代管程式碼、部署與長期維護。V1 不提供完整原始碼下載。</p></div><div class="step-footer"><p>不會建立真實訂單，也不會呼叫付款、網域或部署服務。</p><button ref="reviewHandoffTrigger" class="builder-primary" type="button" :disabled="!reviewConfirmed" @click="submitReview">保存這份預覽，聯絡我們確認 <span>→</span></button></div></section>
 
-        <section v-else class="builder-step handoff-step" aria-labelledby="handoff-step-title"><div class="handoff-success-mark" aria-hidden="true">✓</div><div class="step-heading"><p class="builder-eyebrow">PREVIEW HANDOFF</p><h2 id="handoff-step-title" tabindex="-1">網站方向已送出。</h2><p>我們已收到你送出當時的聯絡資料與預覽選擇，接下來確認規格、費用與正式上線安排。</p></div><div class="handoff-next-grid"><article v-for="(item, index) in ['確認規格與付款', '重新確認網域與服務費', '完成授權後設定 DNS／SSL', '部署上線，依方案安排後續營運']" :key="item"><span>0{{ index + 1 }}</span><strong>{{ item }}</strong></article></div><div class="handoff-honesty"><span>REQUEST RECEIVED / NOT AN ORDER</span><p>已送出合作需求；目前尚未付款、購買網域或部署網站。若之後在預覽中修改選擇，已送出的版本不會自動更新。</p></div><div class="step-footer"><button type="button" class="builder-secondary" @click="setStep('review_order')">返回摘要</button><button ref="handoffStepTrigger" type="button" class="builder-primary" @click="openHandoff">查看交接詳情 <span>↗</span></button></div></section>
+        <section v-else class="builder-step handoff-step" aria-labelledby="handoff-step-title"><div class="handoff-success-mark" aria-hidden="true">✓</div><div class="step-heading"><p class="builder-eyebrow">PREVIEW HANDOFF</p><h2 id="handoff-step-title" tabindex="-1">網站方向已送出。</h2><p>我們已收到你送出當時的聯絡資料與預覽選擇，接下來可進入正式自助建站流程，建立工作階段並確認規格、費用與上線安排。</p></div><div class="handoff-next-grid"><article v-for="(item, index) in ['確認規格與付款', '重新確認網域與服務費', '完成授權後設定 DNS／SSL', '部署上線，依方案安排後續營運']" :key="item"><span>0{{ index + 1 }}</span><strong>{{ item }}</strong></article></div><div class="handoff-honesty"><span>REQUEST RECEIVED / NOT AN ORDER</span><p>已送出合作需求；目前尚未付款、購買網域或部署網站。正式自助流程會另行建立工作階段，此處的預覽不會自動成為訂單。</p></div><div class="step-footer"><button type="button" class="builder-secondary" @click="setStep('review_order')">返回摘要</button><a ref="handoffStepTrigger" class="builder-primary" data-managed-site-start :href="customerStartUrl">前往正式自助建站 <span>↗</span></a></div></section>
         </Transition>
         </div>
       </section>

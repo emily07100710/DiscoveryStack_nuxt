@@ -71,14 +71,14 @@ function authority(value: unknown): ManagedSiteProviderAuthoritySnapshot {
   return value as ManagedSiteProviderAuthoritySnapshot
 }
 
-function validateBundle(value: unknown, expected: { ownerUserId: number; projectId: number; requestFingerprint: string; contentHash: string }): ManagedSiteArtifactVaultBundle {
+export function validateManagedSiteVaultBundle(value: unknown, expected: { ownerUserId: number; projectId: number; requestFingerprint: string; contentHash: string }): ManagedSiteArtifactVaultBundle {
   if (!plain(value)) fail(409, 'Managed-site vault bundle is malformed.')
   const keys = ['schemaVersion', 'ownerUserId', 'projectId', 'requestFingerprint', 'providerOutput', 'blueprint', 'blueprintHash', 'compilerFingerprint', 'manifest', 'files']
   if (!exact(value, keys) || value.schemaVersion !== 'managed-site-owner-vault-bundle-v2' || value.ownerUserId !== expected.ownerUserId || value.projectId !== expected.projectId || value.requestFingerprint !== expected.requestFingerprint || !plain(value.manifest) || value.manifest.contentHash !== expected.contentHash || !plain(value.blueprint) || !Array.isArray(value.files) || typeof value.blueprintHash !== 'string' || !FINGERPRINT.test(value.blueprintHash) || managedSiteStableFingerprint(value.blueprint) !== value.blueprintHash || value.files.some(file => !plain(file) || typeof file.path !== 'string' || typeof file.content !== 'string' || typeof file.sha256 !== 'string' || sha256(file.content) !== file.sha256)) fail(409, 'Managed-site vault bundle identity is mismatched.')
   return value as unknown as ManagedSiteArtifactVaultBundle
 }
 
-function parseVaultReference(value: unknown): { ownerUserId: number; projectId: number; requestFingerprint: string } {
+export function parseManagedSiteVaultReference(value: unknown): { ownerUserId: number; projectId: number; requestFingerprint: string } {
   if (typeof value !== 'string') fail(422, 'Managed-site vault reference is invalid.')
   const matched = /^vault:s3:([1-9]\d{0,14}):([1-9]\d{0,14}):([a-f0-9]{64})$/u.exec(value)
   if (!matched) fail(422, 'Managed-site vault reference is invalid.')
@@ -161,12 +161,12 @@ export function createManagedSiteInternalBrokerFetch(dependencies: ManagedSiteIn
           const requestFingerprint = stableFingerprint({ operation: 'production_deploy', releaseId: body.releaseId, projectId: body.projectId, versionId: body.versionId, contentHash: body.contentHash, canonicalDomain, previewReceiptFingerprint: body.previewReceiptFingerprint, approvalFingerprint: body.approvalFingerprint, providerAuthorityFingerprint: providerAuthority.authorityFingerprint })
           if (body.requestFingerprint !== requestFingerprint) fail(409, 'Internal production request lineage is mismatched.')
         }
-        const vaultIdentity = parseVaultReference(body.vaultReference)
+        const vaultIdentity = parseManagedSiteVaultReference(body.vaultReference)
         if (vaultIdentity.projectId !== body.projectId) fail(409, 'Internal preview vault project identity is mismatched.')
         const stored = await vaultFactory().lookupImmutableCandidate(vaultIdentity)
         if (!stored || stored.vaultReference !== body.vaultReference) fail(409, 'Internal preview vault candidate was not found.')
-        const bundle = validateBundle(stored.bundle, { ...vaultIdentity, contentHash: body.contentHash })
-        const assets = renderManagedSiteStaticAssets(bundle.blueprint, bundle.files)
+        const bundle = validateManagedSiteVaultBundle(stored.bundle, { ...vaultIdentity, contentHash: body.contentHash })
+        const assets = renderManagedSiteStaticAssets(bundle.blueprint, bundle.files, `https://${canonicalDomain}`)
         const deployOptions = { fetchImpl: dependencies.cloudflareFetch || fetch, accountId: configuration.cloudflare.accountId, apiToken: cloudflareToken, projectPrefix: configuration.cloudflare.projectPrefix, now: () => clock().getTime(), sleep: dependencies.sleep }
         const deployInput = { ownerUserId: vaultIdentity.ownerUserId, projectId: body.projectId, releaseId: body.releaseId, assets, timeoutMs: body.timeoutMs }
         const deployed = production

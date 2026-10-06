@@ -1,5 +1,6 @@
 import { getOwnerDatabaseUserId } from '../../audit/repository'
-import { createOwnerContentClient, parseClientInput, toPublicContentOperationsError } from '../../content-operations'
+import { createOwnerContentClient } from '../../content-operations/service'
+import { parseClientInput, toPublicContentOperationsError } from '../../content-operations/normalization'
 import { requireOwner } from '../../utils/auth'
 
 export default defineEventHandler(async (event) => {

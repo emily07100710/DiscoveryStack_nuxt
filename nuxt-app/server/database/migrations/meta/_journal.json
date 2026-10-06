@@ -316,6 +316,13 @@
       "when": 1791060745045,
       "tag": "0044_peaceful_lethal_legion",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "5",
+      "when": 1791303608110,
+      "tag": "0045_learning_authorized_closed_loop",
+      "breakpoints": true
     }
   ]
 }

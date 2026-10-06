@@ -11,16 +11,30 @@ pnpm install
 pnpm install --frozen-lockfile
 PUBLIC_SITE_URL=http://localhost:4321 \
 PUBLIC_OPS_API_ORIGIN=http://localhost:3000 \
+PUBLIC_OPS_UI_ORIGIN=http://localhost:3000 \
 pnpm dev
 ```
 
-The public site runs on port `4321` and the private Nuxt ops/API app runs independently on port `3000`. In production, both public-site origin variables must use HTTPS origins. Localhost is permitted only during development.
+The public site runs on port `4321` and the private Nuxt ops/API app runs independently on port `3000`. In production, all three public-site origin variables must use HTTPS origins. Localhost is permitted only during development. `PUBLIC_OPS_UI_ORIGIN` may point at a separate Nuxt UI origin; when omitted it falls back to `PUBLIC_OPS_API_ORIGIN` because the current Nuxt service serves both surfaces.
+
+## Production journey configuration
+
+The target Render wiring after deploying this source uses only non-secret HTTPS origins:
+
+| Service | Variable | Value |
+| --- | --- | --- |
+| `discoverystack-web` | `PUBLIC_SITE_URL` | `https://discoverystack-web.onrender.com` |
+| `discoverystack-web` | `PUBLIC_OPS_API_ORIGIN` | `https://discoverystack-api.onrender.com` |
+| `discoverystack-web` | `PUBLIC_OPS_UI_ORIGIN` | `https://discoverystack-api.onrender.com` |
+| `discoverystack-api` | `DISCOVERYSTACK_PUBLIC_SITE_ORIGIN` | `https://discoverystack-web.onrender.com` |
+
+After deployment with these values, public contact and analysis requests go to the Nuxt API, while the completed website-preview handoff links to `https://discoverystack-api.onrender.com/customer/managed-sites/start`. This is source/configuration guidance, not confirmation of the currently deployed version. A placeholder-origin build remains intentionally `noindex` and is suitable for static verification only; it is not launch-ready. A production site origin paired with a placeholder API/UI origin is rejected. This wiring does not prove Stripe, AI provider, domain purchase, DNS, TLS or customer-site deployment against real external services.
 
 ## Public API boundary
 
 The browser may call only `POST /api/leads` and `POST /api/site-analysis` at `PUBLIC_OPS_API_ORIGIN`. The shared `publicApiFetch` helper accepts only those two paths, uses `credentials: 'omit'`, does not forward owner cookies, and returns safe public errors without exposing server/provider details.
 
-The private Nuxt app is the only owner-authenticated application. The public site does not link customers into the owner workbench and never shares owner session cookies.
+The private Nuxt app is the only owner-authenticated application. The public site links only to the unauthenticated customer managed-site start flow, never to the owner workbench, and never shares owner session cookies.
 
 ## Verification
 

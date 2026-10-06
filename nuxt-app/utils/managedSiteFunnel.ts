@@ -16,7 +16,7 @@ export type FunnelAnswersView = {
   }
   company?: { brandName: string; whatWeDo: string; feelings: string[]; mainOffer: string; conversionGoals: string[] }
   contact?: { email: string; contactName: string; phone?: string }
-  style?: { referenceUrls: string[]; stylePreset?: 'minimal' | 'business' | 'premium' | 'warm' | 'lively' | 'tech'; designTier: 'template' | 'designer' }
+  style?: { referenceUrls: string[]; stylePreset?: 'minimal' | 'business' | 'premium' | 'warm' | 'lively' | 'tech'; customerSitePreset?: 'atelier' | 'bloom' | 'alignment'; designTier: 'template' | 'designer' }
   siteType?: 'one_page' | 'brand_blog' | 'simple_commerce'
   modules?: string[]
   previewDraft?: { generatedAt: string; source: 'llm' | 'template'; headline: string; sections: { heading: string; body: string }[] }

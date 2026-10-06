@@ -113,11 +113,13 @@ export async function startManagedSiteContactInboxBinding(
 
   const code = randomInt(0, 1_000_000).toString().padStart(6, '0')
   const expiresAt = new Date(now.getTime() + CODE_EXPIRY_MS)
+  const verificationHash = codeHash(dependencies.pepper, input.session.id, code)
   try {
     await dependencies.transport.send({
       to: email,
       subject: 'DiscoveryStack 收信信箱驗證碼',
       text: `你的 DiscoveryStack 收信信箱驗證碼是：${code}\n\n此驗證碼將於 10 分鐘後失效。DiscoveryStack 的任何人都不會向你索取這組驗證碼，請勿轉交他人。`,
+      idempotencyKey: `managed-site-inbox-code:${input.session.id}:${verificationHash.slice(0, 48)}`,
     })
   } catch (error) { deliveryError(error) }
 
@@ -128,7 +130,7 @@ export async function startManagedSiteContactInboxBinding(
       projectId: input.session.projectId,
       email,
       status: 'pending',
-      codeHash: codeHash(dependencies.pepper, input.session.id, code),
+      codeHash: verificationHash,
       codeExpiresAt: expiresAt,
       attemptCount: 0,
       sendCount: 1,

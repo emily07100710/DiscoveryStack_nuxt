@@ -1,7 +1,9 @@
 import { revokeManagedSiteSession } from '../../../managed-sites/service'
 import { clearManagedSiteSessionCookie, getManagedSiteSessionToken } from '../../../managed-sites/auth'
+import { assertSameOriginManagedSiteMutation } from '../../../managed-sites/live-connectors/http'
 
 export default defineEventHandler(async (event) => {
+  assertSameOriginManagedSiteMutation(event)
   const token = getManagedSiteSessionToken(event)
   if (token) await revokeManagedSiteSession(token)
   clearManagedSiteSessionCookie(event)
