@@ -428,7 +428,7 @@ describe('policy-driven experimental ModelOps', () => {
     expect(result.artifact?.status).toBe('approved_for_shadow')
     expect((await outcome.listDecisions(OWNER)).at(-1)?.reviewerUserId).toBeNull()
     await expect(predict(OWNER, result.artifact!.artifactId, rawObservation(9_999, 'cited'), outcome, { allowTrustedFixture: true })).resolves.toMatchObject({ predictionIsVerifiedOutcome: false, modelArtifactHash: result.artifact!.artifactHash })
-  }, 15000)
+  }, 60000)
 
   it('fails closed if the fallback or exact dataset-member snapshot is revoked during prediction', async () => {
     async function candidateState() {
