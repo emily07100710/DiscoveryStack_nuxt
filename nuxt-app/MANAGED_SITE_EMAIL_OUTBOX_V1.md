@@ -1,6 +1,6 @@
 # Managed Site Email Outbox V1
 
-Status: **IMPLEMENTED / DATABASE_APPLIED / CODE_NOT_YET_DEPLOYED / DELIVERY_GATED**. This document records implementation, local verification and exact production schema application; it is not real email or complete production-journey acceptance evidence.
+Status: **IMPLEMENTED / DATABASE_APPLIED / DEPLOYED / DELIVERY_GATED**. This document records implementation, local verification, exact production schema application and the verified live code; it is not real email or complete production-journey acceptance evidence.
 
 ## Scope
 
@@ -72,3 +72,13 @@ After that correction, runtime and tests were frozen again: typecheck (20.978 s)
 At 2026-10-07 07:20:02 Asia/Taipei, corrected migration 0046 was applied to the exact previously verified TLS TiDB target. SQL SHA-256: `548a889a95f04fe9f6a05de8ade6a553b7992aaea7ca58b9cb0797ed7b76306d`. Production now has 196 tables and 47 ledger rows; all 22 new columns, millisecond precision and four indexes (primary, unique, due, owner) were verified. The new queue remains empty. Only the new table/indexes and canonical migration ledger were written; existing business tables were not changed.
 
 Code commit, push and live deployment are still pending at this record's checkpoint. The directly checked Render service remains Free; the new delivery and retention environment keys are absent and no linked environment groups are configured, so source defaults remain off. No email, model, customer-site publication or payment switch was enabled.
+
+## 2026-10-07 live deployment verification
+
+Execution revision `f0daa2774bad818f53e8c1659d080842c446ae9e` was committed within the exact 43-file release fence (secret-pattern matches: zero; runtime/test freeze fingerprint unchanged) and normally pushed to both existing main remotes, without force. Render service `srv-dab7es3tqb8s73f1orlg` was directly checked: Last successfully deployed commit points to that exact revision; deployment `dep-db2o56jrjlhs73flr8q0` is Live, Auto-Deploy duration 2m23s. The service remains Docker Free and its inactivity/scheduler limitation remains unresolved. The live screenshot is held in protected local temporary storage, not Git.
+
+All 21 formal non-mutating HTTP checks passed: the previous 16 public/private checks plus four new anonymous email page/API checks and the exact client artifact. Formal HTML references `/_nuxt/C1Ft4Ad0.js`, whose served SHA-256 `8d223e68eeaa0be5c7d1d4088cde4d7f870f0de5cf91c7bc98e89075c45c2468` matches the local fresh build and includes the new email API reference. These anonymous checks are distinct from the subsequent owner read below. Business-data writes, real email acceptance/inbox receipt, continuous worker operation, actual LINE approval and model training remain separately NOT_RUN.
+
+Remote [CI run `37546156904`](https://github.com/tendertech2018/DiscoveryStack_nuxt/actions/runs/37546156904) for this exact execution revision completed successfully. Both required jobs, public-site (astro check/build/test) and nuxt-app (typecheck/build/test), are success. The final remote result was checked independently; the local test counts above are not asserted as uncollected remote per-test totals.
+
+After the human confirmed a normal owner login, the existing formal email page was reloaded and its read-only “更新紀錄” control used. The exact `/api/managed-sites/email-outbox` response was HTTP 200 / application/json; this route requires the current owner and performs a real owner-scoped SQL metadata query, with database errors returning 503 rather than a false empty success. The settled UI showed no records, configuration incomplete, and delivery off. Only response path/status/MIME and the non-private empty-state UI were retained: no cookies, tokens, headers, bodies, addresses, customer records or secret values were inspected or copied. This proves the new owner's empty-list database read, not production record isolation with populated data, a business write, provider acceptance or inbox delivery. The screenshot stays in protected local temporary storage, not Git. No email, LINE message, publication, training, payment or execution switch was triggered.
