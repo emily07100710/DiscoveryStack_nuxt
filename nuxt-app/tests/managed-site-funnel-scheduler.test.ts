@@ -20,11 +20,12 @@ function schedules(env: Record<string, string> = {}): Record<string, string[]> {
   return module.exports.default.nitro.scheduledTasks
 }
 
-const configurableCronKeys = ['MODEL_IMPROVEMENT_CRON', 'GEO_MODELOPS_CRON', 'MANAGED_SITE_EDITOR_CRON', 'MANAGED_SITE_PROVISIONING_CRON', 'SYSTEM_FACTORY_CRON', 'CONTENT_OPERATIONS_MEASUREMENT_CRON', 'CONTENT_OPERATIONS_CRON', 'CONTENT_OPERATIONS_EXECUTION_CRON', 'LLM_VISIBILITY_BENCHMARK_CRON']
-const originalTasks = ['model-improvement:collect', 'content-operations:geo-modelops-tick', 'managed-sites:editor-tick', 'managed-sites:provisioning-tick', 'system-factory:provisioning-tick', 'llm-visibility:benchmark-tick', 'content-operations:tick', 'content-operations:execution-tick', 'content-operations:measurement-tick']
+const configurableCronKeys = ['MODEL_IMPROVEMENT_CRON', 'GEO_MODELOPS_CRON', 'MANAGED_SITE_EDITOR_CRON', 'MANAGED_SITE_PROVISIONING_CRON', 'MANAGED_SITE_EMAIL_OUTBOX_CRON', 'SYSTEM_FACTORY_CRON', 'CONTENT_OPERATIONS_MEASUREMENT_CRON', 'CONTENT_OPERATIONS_CRON', 'CONTENT_OPERATIONS_EXECUTION_CRON', 'LLM_VISIBILITY_BENCHMARK_CRON']
+const originalTasks = ['model-improvement:collect', 'content-operations:geo-modelops-tick', 'managed-sites:editor-tick', 'managed-sites:provisioning-tick', 'managed-sites:email-outbox-tick', 'system-factory:provisioning-tick', 'llm-visibility:benchmark-tick', 'content-operations:tick', 'content-operations:execution-tick', 'content-operations:measurement-tick']
 const weeklyTask = 'weekly-content:tick'
 const learningTask = 'learning-loop:tick'
 const weeklyDefaultCron = '*/5 * * * *'
+const emailOutboxDefaultCron = '*/1 * * * *'
 
 describe('actual Nuxt scheduled task registration', () => {
   it('retains all original tasks and weekly scanning at the actual default cadences', () => {
@@ -33,6 +34,7 @@ describe('actual Nuxt scheduled task registration', () => {
     expect(registered['*/15 * * * *']).toEqual(['content-operations:geo-modelops-tick', 'content-operations:tick'])
     expect(registered['*/30 * * * *']).toEqual(['content-operations:measurement-tick'])
     expect(registered['0 18 * * *']).toEqual(['model-improvement:collect'])
+    expect(registered[emailOutboxDefaultCron]).toEqual(['managed-sites:email-outbox-tick'])
     expect(Object.values(registered).flat().sort()).toEqual([...originalTasks, weeklyTask, learningTask].sort())
   })
   it('retains every precise task identity when configured schedules coincide with the fixed weekly cron', () => {

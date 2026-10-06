@@ -3,6 +3,8 @@ import { createError } from 'h3'
 import type { ManagedSiteContactInboxBinding, ManagedSiteFunnelSession } from '../../database/schema'
 import { getManagedSiteContactInboxBindingRepository, type ManagedSiteContactInboxBindingRepository } from './binding-repository'
 import { managedSiteEmailTransportFromEnv, type ManagedSiteEmailTransport } from './email-transport'
+import { createManagedSiteEmailOutboxRuntime, attemptManagedSiteEmailOutboxItem } from '../email-outbox/runtime'
+import type { ManagedSiteEmailOutboxRepository } from '../email-outbox/types'
 
 const BINDABLE_SESSION_STATUSES = ['active', 'building', 'checkout_pending', 'converted'] as const
 const CODE_EXPIRY_MS = 10 * 60 * 1000
@@ -23,6 +25,7 @@ export type ManagedSiteContactInboxBindingDependencies = {
   transport: ManagedSiteEmailTransport
   pepper: string
   clock: () => Date
+  durableOutbox?: boolean
 }
 
 let testDependencies: ManagedSiteContactInboxBindingDependencies | null = null
@@ -34,11 +37,14 @@ export function setManagedSiteContactInboxBindingDependenciesForTests(dependenci
 
 function runtimeDependencies(): ManagedSiteContactInboxBindingDependencies {
   if (process.env.NODE_ENV === 'test' && testDependencies) return testDependencies
+  let transport: ManagedSiteEmailTransport
+  try { transport = managedSiteEmailTransportFromEnv() } catch { transport = { configured: false, async send(): Promise<never> { throw new Error('email transport unavailable') } } }
   return {
     repository: getManagedSiteContactInboxBindingRepository(),
-    transport: managedSiteEmailTransportFromEnv(),
+    transport,
     pepper: process.env.NUXT_MANAGED_SITE_EMAIL_CODE_PEPPER || '',
     clock: () => new Date(),
+    durableOutbox: true,
   }
 }
 
@@ -76,20 +82,34 @@ function codeHash(pepper: string, sessionId: number, code: string): string {
 }
 
 function latestWithSentAt(rows: ManagedSiteContactInboxBinding[]): ManagedSiteContactInboxBinding | null {
-  return rows.filter(row => row.lastSentAt).sort((left, right) => right.lastSentAt!.getTime() - left.lastSentAt!.getTime() || right.id - left.id)[0] || null
+  return rows.sort((left, right) => rateAnchor(right) - rateAnchor(left) || right.id - left.id)[0] || null
+}
+
+function rateAnchor(row: ManagedSiteContactInboxBinding): number {
+  return Math.max(row.createdAt.getTime(), row.lastSentAt?.getTime() || 0)
 }
 
 function resendAvailableAt(row: ManagedSiteContactInboxBinding | null): string | null {
-  return row?.lastSentAt ? new Date(row.lastSentAt.getTime() + RESEND_INTERVAL_MS).toISOString() : null
+  return row ? new Date((row.lastSentAt?.getTime() || row.createdAt.getTime()) + RESEND_INTERVAL_MS).toISOString() : null
 }
 
 function throwRateLimit(availableAt: Date): never {
   throw createError({ statusCode: 429, statusMessage: `寄送驗證碼太頻繁，最早可於 ${availableAt.toISOString()} 再次寄送。` })
 }
 
+function assertRateAvailable(rows: ManagedSiteContactInboxBinding[], now: Date): void {
+  const latestSend = latestWithSentAt(rows)
+  if (latestSend && rateAnchor(latestSend) + RESEND_INTERVAL_MS > now.getTime()) throwRateLimit(new Date(rateAnchor(latestSend) + RESEND_INTERVAL_MS))
+  const windowStart = now.getTime() - SEND_WINDOW_MS
+  const windowRows = rows.filter(row => rateAnchor(row) > windowStart).sort((left, right) => rateAnchor(left) - rateAnchor(right))
+  const sendsInWindow = windowRows.reduce((sum, row) => sum + Math.max(row.sendCount, 1), 0)
+  if (sendsInWindow >= MAX_SENDS_PER_WINDOW) throwRateLimit(new Date(rateAnchor(windowRows[0]!) + SEND_WINDOW_MS))
+}
+
 function deliveryError(error: unknown): never {
   if ((error as any)?.statusCode === 503) throw error
   if ((error as any)?.statusCode === 502) throw error
+  if ((error as any)?.statusCode === 429) throw error
   throw createError({ statusCode: 502, statusMessage: '寄信服務暫時無法送出驗證碼，請稍後再試。' })
 }
 
@@ -100,21 +120,46 @@ export async function startManagedSiteContactInboxBinding(
   assertBindableSession(input.session)
   const email = validatedEmail(input.email)
   if (!usable(dependencies)) throw createError({ statusCode: 503, statusMessage: '寄信服務尚未開通，暫時無法寄出驗證碼。' })
-  const now = nowFrom(dependencies)
+  const rawNow = nowFrom(dependencies)
+  const now = dependencies.durableOutbox ? new Date(Math.floor(rawNow.getTime() / 1000) * 1000) : rawNow
   const rows = await dependencies.repository.listForSession(input.session.id)
-  const latestSend = latestWithSentAt(rows)
-  if (latestSend?.lastSentAt && latestSend.lastSentAt.getTime() + RESEND_INTERVAL_MS > now.getTime()) throwRateLimit(new Date(latestSend.lastSentAt.getTime() + RESEND_INTERVAL_MS))
-  const windowStart = now.getTime() - SEND_WINDOW_MS
-  const sendsInWindow = rows.filter(row => row.lastSentAt && row.lastSentAt.getTime() > windowStart).reduce((sum, row) => sum + row.sendCount, 0)
-  if (sendsInWindow >= MAX_SENDS_PER_WINDOW) {
-    const windowRows = rows.filter(row => row.lastSentAt && row.lastSentAt.getTime() > windowStart).sort((left, right) => left.lastSentAt!.getTime() - right.lastSentAt!.getTime())
-    throwRateLimit(new Date(windowRows[0]!.lastSentAt!.getTime() + SEND_WINDOW_MS))
-  }
+  assertRateAvailable(rows, now)
 
   const code = randomInt(0, 1_000_000).toString().padStart(6, '0')
   const expiresAt = new Date(now.getTime() + CODE_EXPIRY_MS)
   const verificationHash = codeHash(dependencies.pepper, input.session.id, code)
   try {
+    if (dependencies.durableOutbox) {
+      const transaction = dependencies.repository.transactionWithEmailOutbox
+      if (!transaction) throw new Error('durable email storage unavailable')
+      let bindingId: number | null = null, itemId: string | null = null
+      await transaction.call(dependencies.repository, async (repository, outboxRepository: ManagedSiteEmailOutboxRepository) => {
+        if (!repository.lockSessionForEmailIssuance) throw new Error('durable session serialization unavailable')
+        await repository.lockSessionForEmailIssuance(input.session.id)
+        assertRateAvailable(await repository.listForSession(input.session.id), now)
+        await repository.supersedeStatus(input.session.id, 'pending')
+        const binding = await repository.insertBinding({
+          funnelSessionId: input.session.id, projectId: input.session.projectId, email, status: 'pending', codeHash: verificationHash, codeExpiresAt: expiresAt,
+          attemptCount: 0, sendCount: 0, lastSentAt: null, boundAt: null,
+        })
+        bindingId = binding.id
+        const result = await createManagedSiteEmailOutboxRuntime(outboxRepository).enqueueOnly({
+          idempotencyKey: `managed-site-inbox-code:${input.session.id}:${binding.id}:${verificationHash.slice(0, 48)}`,
+          context: { purpose: 'inbox_verification', ownerUserId: null, projectId: input.session.projectId, authority: { funnelSessionId: input.session.id, bindingId: binding.id, codeHash: verificationHash }, expiresAt },
+          message: { to: email, subject: 'DiscoveryStack 收信信箱驗證碼', text: `你的 DiscoveryStack 收信信箱驗證碼是：${code}\n\n此驗證碼將於 10 分鐘後失效。DiscoveryStack 的任何人都不會向你索取這組驗證碼，請勿轉交他人。` },
+        })
+        if (!result.itemId || (!result.accepted && result.status !== 'queued')) throw new Error('encrypted email could not be durably queued')
+        itemId = result.itemId
+      })
+      if (!bindingId || !itemId) throw new Error('email outbox transaction did not complete')
+      const result = await attemptManagedSiteEmailOutboxItem(itemId)
+      if (!result.accepted) {
+        if (result.status === 'queued') throw createError({ statusCode: 503, statusMessage: '驗證碼已安全排入寄送佇列，請稍後再試。' })
+        throw new Error('email outbox did not accept delivery')
+      }
+      return { status: 'pending' as const, maskedEmail: maskEmail(email), expiresAt: expiresAt.toISOString(), resendAvailableAt: new Date(now.getTime() + RESEND_INTERVAL_MS).toISOString() }
+    }
+
     await dependencies.transport.send({
       to: email,
       subject: 'DiscoveryStack 收信信箱驗證碼',

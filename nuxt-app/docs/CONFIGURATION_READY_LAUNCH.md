@@ -122,7 +122,7 @@ pnpm test
 仍需處理的缺項：
 
 1. **LINE／實際發布**：正式環境尚缺每週內容所需的 LINE access token、channel secret、bot user ID；仍需實際客戶綁定、內容計畫、精確稿件核准與發布目標。手機按確認到供應商發布、回執與下一輪量測回流，尚未做真實端到端驗收。
-2. **Email／網域**：Resend 寄信 adapter 已實作；DS 平台伺服器的獨立 durable outbox 目前是每週 LINE 通知，不是 Resend 郵件佇列。平台交易郵件由各服務直接呼叫 transport，部分網站上線通知有交付重試與成功回執，但統一郵件佇列／租約重送機制尚未完成。獨立客戶站 SQLite 核心另有每站 Email outbox，已做本機／mock 測試；它尚未整合為 DS 平台郵件佇列，也不代替正式收信驗收。正式 key、已驗證寄件網域、From、驗證 pepper 及真實收信驗收仍未完成。公司信箱另需信箱服務，不會由 Resend 自動建立。
+2. **Email／網域**：Resend 寄信 adapter 與每週 LINE durable outbox 已存在。本輪另補 DS 平台自己的加密交易郵件佇列，涵蓋信箱驗證、重新登入、成員邀請、聯絡表單及網站上線通知；新增 migration `0046` 已正式套用，新程式仍待推送部署，完整分階段證據另列於下節，不能沿用既有 Live 版本或 LINE 佇列的證明。獨立客戶站 SQLite 核心的每站 Email outbox 仍維持隔離，沒有併入平台資料庫。正式 key、已驗證寄件網域、From、驗證 pepper、獨立郵件加密密鑰及真實收信驗收仍未完成；公司信箱服務也沒有自動建立。
 3. **常駐與備援**：目前私有 Render 服務為 Free，閒置會休眠；持續排程與關閉瀏覽器後的驗收尚未完成。付費升級／新託管與定期異地備份需要選擇、成本與保存責任，這次沒有擅自升級。
 4. **真實學習資料與模型**：正式 public sources、training runs、model artifacts、內容日曆項目、publication targets 均為 0。需要合法授權的來源及可追溯觀測、GSC／GA4 連線與足夠真實標籤，才能評估模型；API 回答／結構分數不能冒充消費者 AI 引用真值。
 5. **尚未完整的學習工程**：已新增成效 trainer 的 server-owned 時間／baseline 譜系、publication 去重及時間外 subject holdout，與首次引用模型獨立 owner 核准的固定 train-only shadow 回退基準。第一方 Git 的正式更新也能保存精確 receipt-bound、hash-only repository change-set；但 repository revision 不是已部署頁面的 live before／after。完整 live action-learning adapter／admission、真實資料上的準確度與效果、production activation 仍未驗收，保留關閉與 owner 核准門檻；不能說只要填 API 就已完成學習品質驗證。
@@ -130,3 +130,17 @@ pnpm test
 7. **美術與對外宣稱**：範例目前仍有示範圖片與資料，尚需品牌素材與正式美術驗收。官網所列平台是可規劃整合方向，不是 40 個正式串接全部驗收；「亞洲唯一」等唯一性宣稱仍需獨立可驗證佐證，這次工程檢查不提供此證明。
 
 這次沒有發真 LINE、寄真通知、呼叫真 AI／Google、向客戶站發布內容、啟用正式模型、購買網域或執行真實付款。登入後的正式資料讀寫與業務流程也不由匿名唯讀檢查代替。
+
+## 2026-10-07 平台交易郵件佇列驗收與正式資料庫套用
+
+狀態：**IMPLEMENTED / DATABASE_APPLIED / CODE_NOT_YET_DEPLOYED / DELIVERY_GATED**。以下分開記錄程式驗證與正式資料庫；不改寫上節 `0045` 與 `515e4fb` 的歷史證據，也不代表真實收信或完整業務流程已驗收。
+
+- 五個正式呼叫路徑接上平台獨立佇列；一次性驗證碼／登入權杖的來源雜湊與加密郵件在同一 SQL transaction 保存，provider 呼叫只在提交後執行。信件入列不是寄出成功，provider 接受也不是已確認收件匣收到。
+- 加密內容與權威使用獨立密鑰及 HMAC，精確綁定 owner／project／purpose／目前收件人／來源／供應商設定；租約、到期、撤回、重試窗口及已接受後回執補登均不依賴瀏覽器宣告。回執補登不再次呼叫 provider。
+- 排程寄送及過期清理分別 opt-in，範本均預設關閉；兩者關閉時 task 不查設定、identity、資料庫或 provider。擁有人「郵件紀錄」頁僅唯讀列出自己的最近 50 筆減敏狀態，未購買而尚無 owner 的驗證碼紀錄刻意不混入。
+- `0046_managed_email_outbox_v1.sql` 是新增一張表及索引，不改既有業務表。隔離 MySQL 8.4 以合成資料實際執行 migration／Drizzle／repository／service，6 項通過：64 KiB 郵件與毫秒保存、併行租約、接受後重啟不重寄、清理 fencing、來源與佇列原子 rollback、owner metadata 隔離。修正 MySQL 要求 `ON UPDATE CURRENT_TIMESTAMP(3)` 的精度一致性，沒有向正式 DB 執行試驗。
+- 修正正式相容性之前，凍結程式與測試後依序完成型別檢查（16.928 秒）、fresh node-server build（47.489 秒）、完整安全 Vitest（232.85 秒），全部 exit 0：302 個檔案／5,736 項通過，15 個檔案／33 項跳過，共 317 個檔案／5,769 項。其中 6 項 opt-in MySQL 在隔離環境另外實際通過，不把完整安全套件中未啟用的項目算成通過。原首次完整執行有 3 項失敗，均為原排程契約仍預期舊的 11 個工作；加入新郵件工作與 cron 後保留精確 cadence／collision／no-loss／no-duplicate 斷言，重新完成整套凍結驗收，不刪除或跳過案例。這筆歷史本機結果不代替下列修正後驗收。仍有既有 browsers data、plugin timing、ULID BigInt target 與 H3 statusMessage 警告，沒有更動依賴或隱藏警告。
+- 另以新正式建置完成 4 項本機 HTTP 保護核對：未登入的郵件 API、無法由 query 借用 owner／project、公共 origin 不取得私人 API CORS、新頁面的 no-store／noindex／正確官網回返。既有正式官網與後台再次完成 16 項唯讀檢查，全部通過；它們是已部署版本的可用性證據，不代表新增郵件功能已 Live。三個獨立客戶站核心範例再次跑完 53 項、0 失敗、0 跳過。正式 Resend 接受、實際收信、已登入 owner 的新頁面與常駐主機排程驗收仍為 **NOT_RUN**。
+- 最初快照操作因可能包含客戶資料而被拒絕，沒有執行。使用者後續明確授權完整本機備份與隔離還原：新一致性快照為 195 張表／260 筆，SHA-256 `72b420a96f497582672a2cd6b29642edfd2fd55950b02f0bd695dc180c1559b9`；受限目錄 0700、SQL 0600，未上傳或放 Git。隔離還原逐表筆數與逐欄語意雜湊全部相符，臨時副本已移除；保留本機備份不代表定期異地備援。
+- 初次正式 CREATE TABLE 被 TiDB 以 `ER_INVALID_DEFAULT` 拒絕，沒有任何 DDL 成功；唯讀核對仍是 0045／195 表／46 ledger。將尚未套用的 SQL、schema 與 snapshot 時間 default 統一成 `CURRENT_TIMESTAMP(3)`，保留同精度 on-update，重新隔離還原並排演修正後 migration，再凍結完成 typecheck（20.978 秒）→ fresh build（58.892 秒）→完整安全 Vitest（246.33 秒），全部 exit 0：302 個檔案／5,737 項通過、15 個檔案／34 項跳過，共 317 個檔案／5,771 項，0 失敗。報告 SHA-256 `b07d5db060d28677a958ca4d20e76d29942f93719991bb01e16f2047f6538792`。隔離 MySQL 的 7 項另行全部通過，含省略時間欄位的真實 default 回歸；本機 4 項 HTTP 與三範例 53 項也再通過。
+- 2026-10-07 07:20:02（Asia/Taipei）已向相同 TLS TiDB 套用 `0046`，精確 SQL SHA-256 `548a889a95f04fe9f6a05de8ade6a553b7992aaea7ca58b9cb0797ed7b76306d`；正式為 196 張表／47 ledger。22 個新欄位、毫秒精度與 4 個索引（含主鍵／唯一鍵）均核對，queue 0 筆；只寫新增表／索引及 canonical ledger，未改既有業務表。此 checkpoint 新程式仍待提交、推送及 Live 驗收。Render 仍是 Free，新郵件寄送／清理環境鍵未設定、沒有 linked environment group，依程式預設關閉；未啟用真郵件、模型、付款或客戶站發布。

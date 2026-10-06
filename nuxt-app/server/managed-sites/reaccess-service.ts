@@ -6,6 +6,8 @@ import { normalizePublicSiteOrigin } from '../utils/publicCors'
 import { managedSiteEmailTransportFromEnv, type ManagedSiteEmailTransport } from './contact-inbox/email-transport'
 import { eventFingerprint, normalizeRecipientEmail, tokenHash } from './normalization'
 import { getManagedSiteRepository } from './repository'
+import { createManagedSiteEmailOutboxRuntime, attemptManagedSiteEmailOutboxItem } from './email-outbox/runtime'
+import type { ManagedSiteEmailOutboxRepository } from './email-outbox/types'
 import {
   MANAGED_SITE_REACCESS_COOLDOWN_MS,
   MANAGED_SITE_REACCESS_MAX_PER_WINDOW,
@@ -49,6 +51,7 @@ export type ManagedSiteReaccessDependencies = {
   /** Absolute origin the emailed link points at. Defaults to NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN. */
   portalOrigin?: string
   nodeEnv?: string
+  durableOutbox?: boolean
 }
 
 export type ManagedSiteReaccessDiagnostics =
@@ -206,6 +209,8 @@ export async function requestManagedSiteReaccess(rawEmail: unknown, dependencies
 
   const transport = resolveTransport(dependencies)
   if (!transport) return neutral({ outcome: 'not_configured', missing: 'email_transport' })
+  const durableOutbox = dependencies.durableOutbox ?? process.env.NODE_ENV !== 'test'
+  if (durableOutbox && !process.env.NUXT_MANAGED_SITE_EMAIL_OUTBOX_ENCRYPTION_KEY) return neutral({ outcome: 'not_configured', missing: 'email_transport' })
 
   let repository: ManagedSiteRepository
   let ownerUserId: number
@@ -226,11 +231,13 @@ export async function requestManagedSiteReaccess(rawEmail: unknown, dependencies
   if (!memberships.length) return neutral({ outcome: 'no_active_membership' })
 
   const recipientFingerprint = stableFingerprint({ recipientEmail: email })
-  const issuedAt = clock()
+  const clockValue = clock()
+  const issuedAt = durableOutbox ? new Date(Math.floor(clockValue.getTime() / 1000) * 1000) : clockValue
   const expiresAt = new Date(issuedAt.getTime() + MANAGED_SITE_REACCESS_TTL_MS)
   const created: Array<{ invitation: ManagedSiteInvitation, membership: ManagedSiteMembership }> = []
   const links: Array<{ project: ManagedSiteProject, url: string }> = []
 
+  let outboxItemId: string | null = null
   try {
     for (const membership of memberships) {
       const history = (await repository.listInvitations(ownerUserId, membership.projectId)).filter(row => row.recipientEmail === email)
@@ -238,31 +245,49 @@ export async function requestManagedSiteReaccess(rawEmail: unknown, dependencies
       if (throttle.throttled) return neutral({ outcome: 'throttled', retryAfterSeconds: throttle.retryAfterSeconds })
     }
 
-    for (const membership of memberships) {
-      const project = await repository.findProject(ownerUserId, membership.projectId)
-      if (!project) continue
-      const rawToken = randomBytes(32).toString('base64url')
-      const invitation = await repository.transaction(async transaction => {
-        const row = await transaction.insertInvitation({
-          ownerUserId,
-          projectId: membership.projectId,
-          membershipId: membership.id,
-          recipientEmail: email,
-          role: membership.role,
-          tokenHash: tokenHash(rawToken),
-          status: 'pending',
-          expiresAt,
-          acceptedAt: null,
-          revokedAt: null,
-          // Stamped from the service clock so the throttle window is decided by one
-          // clock rather than by whichever database node inserted the row.
-          createdAt: issuedAt,
-        } as any)
-        await recordReaccessAudit(transaction, { ownerUserId, projectId: membership.projectId, membership, invitationId: row.id, recipientFingerprint, expiresAt, action: 'managed_site_reaccess_link_issued' })
-        return row
-      })
-      created.push({ invitation, membership })
-      links.push({ project, url: reaccessLink(portalOrigin, rawToken) })
+    const insertInvitations = async (transaction: ManagedSiteRepository, outboxRepository?: ManagedSiteEmailOutboxRepository) => {
+      for (const membership of memberships) {
+        const [project, currentMembership] = await Promise.all([
+          transaction.findProject(ownerUserId, membership.projectId),
+          transaction.findMembership(ownerUserId, membership.id),
+        ])
+        if (!project || project.status !== 'active' || !currentMembership || currentMembership.status !== 'active' || currentMembership.role === 'owner' || currentMembership.role !== membership.role || currentMembership.projectId !== membership.projectId || currentMembership.principalEmail !== email) continue
+        const rawToken = randomBytes(32).toString('base64url')
+        const invitation = await transaction.insertInvitation({ ownerUserId, projectId: membership.projectId, membershipId: membership.id, recipientEmail: email, role: membership.role, tokenHash: tokenHash(rawToken), status: 'pending', expiresAt, acceptedAt: null, revokedAt: null, createdAt: issuedAt } as any)
+        await recordReaccessAudit(transaction, { ownerUserId, projectId: membership.projectId, membership: currentMembership, invitationId: invitation.id, recipientFingerprint, expiresAt, action: 'managed_site_reaccess_link_issued' })
+        created.push({ invitation, membership: currentMembership })
+        links.push({ project, url: reaccessLink(portalOrigin, rawToken) })
+      }
+      if (durableOutbox && links.length) {
+        if (!outboxRepository) throw new Error('durable email repository unavailable')
+        const message = composeReaccessEmail(links)
+        const bindings = created.map(({ invitation, membership }) => ({ projectId: membership.projectId, invitationId: invitation.id, membershipId: membership.id, tokenHash: invitation.tokenHash }))
+        const deliveryKey = stableFingerprint({ invitationIds: created.map(entry => entry.invitation.id).sort((left, right) => left - right) })
+        const stored = await createManagedSiteEmailOutboxRuntime(outboxRepository).enqueueOnly({
+          idempotencyKey: `managed-site-reaccess:${deliveryKey}`,
+          context: { purpose: 'customer_reaccess', ownerUserId, projectId: null, authority: { bindings }, expiresAt },
+          message: { to: email, subject: message.subject, text: message.text },
+        })
+        if (!stored.itemId || (!stored.accepted && stored.status !== 'queued')) throw new Error('encrypted email could not be durably queued')
+        outboxItemId = stored.itemId
+      }
+    }
+    if (durableOutbox) {
+      if (!repository.transactionWithEmailOutbox) throw new Error('durable email transaction unavailable')
+      await repository.transactionWithEmailOutbox((transaction, outboxRepository) => insertInvitations(transaction, outboxRepository))
+    } else {
+      for (const membership of memberships) {
+        const project = await repository.findProject(ownerUserId, membership.projectId)
+        if (!project) continue
+        const rawToken = randomBytes(32).toString('base64url')
+        const invitation = await repository.transaction(async transaction => {
+          const row = await transaction.insertInvitation({ ownerUserId, projectId: membership.projectId, membershipId: membership.id, recipientEmail: email, role: membership.role, tokenHash: tokenHash(rawToken), status: 'pending', expiresAt, acceptedAt: null, revokedAt: null, createdAt: issuedAt } as any)
+          await recordReaccessAudit(transaction, { ownerUserId, projectId: membership.projectId, membership, invitationId: row.id, recipientFingerprint, expiresAt, action: 'managed_site_reaccess_link_issued' })
+          return row
+        })
+        created.push({ invitation, membership })
+        links.push({ project, url: reaccessLink(portalOrigin, rawToken) })
+      }
     }
   } catch {
     await voidIssuedInvitations(repository, ownerUserId, created, recipientFingerprint, expiresAt, clock)
@@ -274,6 +299,14 @@ export async function requestManagedSiteReaccess(rawEmail: unknown, dependencies
   const message = composeReaccessEmail(links)
   const deliveryFingerprint = stableFingerprint({ invitationIds: created.map(entry => entry.invitation.id).sort((left, right) => left - right) })
   try {
+    if (durableOutbox) {
+      if (!outboxItemId) return neutral({ outcome: 'delivery_failed', issued: created.length })
+      const result = await attemptManagedSiteEmailOutboxItem(outboxItemId)
+      if (result.accepted) return neutral({ outcome: 'sent', issued: created.length })
+      if (result.status === 'queued') return neutral({ outcome: 'delivery_failed', issued: created.length })
+      await voidIssuedInvitations(repository, ownerUserId, created, recipientFingerprint, expiresAt, clock)
+      return neutral({ outcome: 'delivery_failed', issued: created.length })
+    }
     await transport.send({
       to: email,
       subject: message.subject,

@@ -2,10 +2,14 @@ import { and, desc, eq, gt } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDatabase } from '../../database'
 import { managedSiteContactInboxBindings, managedSiteContactSubmissions, managedSiteProjects, type ManagedSiteContactInboxBinding, type ManagedSiteContactSubmission, type ManagedSiteProject } from '../../database/schema'
+import { createManagedSiteEmailOutboxRepository } from '../email-outbox/repository'
+import type { ManagedSiteEmailOutboxRepository } from '../email-outbox/types'
 
 export type ManagedSiteContactFormRepository = {
+  transactionWithEmailOutbox?<T>(work: (repository: ManagedSiteContactFormRepository, outbox: ManagedSiteEmailOutboxRepository) => Promise<T>): Promise<T>
   findProjectByTokenHash(tokenHash: string): Promise<ManagedSiteProject | null>
   findBoundInbox(projectId: number): Promise<ManagedSiteContactInboxBinding | null>
+  findSubmission?(id: number): Promise<ManagedSiteContactSubmission | null>
   findRecentDuplicate(dedupeKey: string, since: Date): Promise<ManagedSiteContactSubmission | null>
   insertSubmission(input: Omit<ManagedSiteContactSubmission, 'id' | 'createdAt'>): Promise<ManagedSiteContactSubmission>
   updateSubmission(id: number, patch: Partial<Pick<ManagedSiteContactSubmission, 'status' | 'forwardTargetEmail' | 'forwardedAt' | 'forwardErrorCode'>>): Promise<ManagedSiteContactSubmission | null>
@@ -19,6 +23,9 @@ function rowId(result: unknown): number {
 
 export function makeManagedSiteContactFormRepository(database: any): ManagedSiteContactFormRepository {
   return {
+    async transactionWithEmailOutbox(work) {
+      return database.transaction((transaction: any) => work(makeManagedSiteContactFormRepository(transaction), createManagedSiteEmailOutboxRepository(transaction))) as Promise<any>
+    },
     async findProjectByTokenHash(tokenHash) {
       const [row] = await database.select().from(managedSiteProjects).where(eq(managedSiteProjects.contactFormTokenHash, tokenHash)).limit(1)
       return row || null
@@ -27,6 +34,10 @@ export function makeManagedSiteContactFormRepository(database: any): ManagedSite
       const [row] = await database.select().from(managedSiteContactInboxBindings)
         .where(and(eq(managedSiteContactInboxBindings.projectId, projectId), eq(managedSiteContactInboxBindings.status, 'bound')))
         .orderBy(desc(managedSiteContactInboxBindings.boundAt), desc(managedSiteContactInboxBindings.id)).limit(1)
+      return row || null
+    },
+    async findSubmission(id) {
+      const [row] = await database.select().from(managedSiteContactSubmissions).where(eq(managedSiteContactSubmissions.id, id)).limit(1)
       return row || null
     },
     async findRecentDuplicate(dedupeKey, since) {

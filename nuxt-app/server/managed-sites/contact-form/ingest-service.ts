@@ -5,6 +5,9 @@ import { requestFingerprint } from '../../utils/lead'
 import { managedSiteEmailTransportFromEnv, type ManagedSiteEmailTransport } from '../contact-inbox/email-transport'
 import { getManagedSiteContactFormRepository, type ManagedSiteContactFormRepository } from './repository'
 import { normalizePublicSiteOrigin } from '../../utils/publicCors'
+import { createManagedSiteEmailOutboxRuntime, attemptManagedSiteEmailOutboxItem } from '../email-outbox/runtime'
+import type { ManagedSiteEmailOutboxRepository } from '../email-outbox/types'
+import type { ManagedSiteEmailOutboxResult } from '../email-outbox/types'
 
 const DEDUPE_WINDOW_MS = 15 * 60 * 1000
 const FINGERPRINT_WINDOW_MS = 60 * 60 * 1000
@@ -43,6 +46,7 @@ export type ManagedSiteContactFormDependencies = {
   transport: ManagedSiteEmailTransport
   rateLimiter: ManagedSiteContactFormRateLimiter
   clock: () => Date
+  durableOutbox?: boolean
 }
 
 const runtimeRateLimiter = createManagedSiteContactFormRateLimiter()
@@ -55,7 +59,9 @@ export function setManagedSiteContactFormDependenciesForTests(dependencies: Mana
 
 function dependencies(): ManagedSiteContactFormDependencies {
   if (process.env.NODE_ENV === 'test' && testDependencies) return testDependencies
-  return { repository: getManagedSiteContactFormRepository(), transport: managedSiteEmailTransportFromEnv(), rateLimiter: runtimeRateLimiter, clock: () => new Date() }
+  let transport: ManagedSiteEmailTransport
+  try { transport = managedSiteEmailTransportFromEnv() } catch { transport = { configured: false, async send() { throw new Error('email transport unavailable') } } }
+  return { repository: getManagedSiteContactFormRepository(), transport, rateLimiter: runtimeRateLimiter, clock: () => new Date(), durableOutbox: true }
 }
 
 function field(params: URLSearchParams, key: string, maxLength: number, required: boolean): string {
@@ -126,24 +132,64 @@ export async function ingestManagedSiteContactForm(
   const duplicate = await injected.repository.findRecentDuplicate(dedupeKey, new Date(now.getTime() - DEDUPE_WINDOW_MS))
   if (duplicate) return success
 
-  const submission = await injected.repository.insertSubmission({
-    projectId: project.id,
-    submittedName: parsed.name,
-    submittedEmail: parsed.email,
-    submittedPhone: parsed.phone,
-    submittedMessage: parsed.message,
-    status: 'received',
-    forwardTargetEmail: null,
-    forwardedAt: null,
-    forwardErrorCode: null,
-    requestFingerprint: fingerprint,
-    dedupeKey,
-  })
   const binding = await injected.repository.findBoundInbox(project.id)
   if (!binding) {
-    await markForwardResult(injected.repository, submission.id, { status: 'forward_failed', forwardErrorCode: 'no_bound_inbox', forwardTargetEmail: null, forwardedAt: null })
+    const submission = await injected.repository.insertSubmission({ projectId: project.id, submittedName: parsed.name, submittedEmail: parsed.email, submittedPhone: parsed.phone, submittedMessage: parsed.message, status: 'forward_failed', forwardTargetEmail: null, forwardedAt: null, forwardErrorCode: 'no_bound_inbox', requestFingerprint: fingerprint, dedupeKey })
     return success
   }
+  if (injected.durableOutbox) {
+    const tx = injected.repository.transactionWithEmailOutbox
+    if (!tx) {
+      await injected.repository.insertSubmission({ projectId: project.id, submittedName: parsed.name, submittedEmail: parsed.email, submittedPhone: parsed.phone, submittedMessage: parsed.message, status: 'forward_failed', forwardTargetEmail: null, forwardedAt: null, forwardErrorCode: 'outbox_storage_unavailable', requestFingerprint: fingerprint, dedupeKey })
+      return success
+    }
+    let itemId: string | null = null, submissionId: number | null = null
+    let duplicateInsideTransaction = false
+    const queued = await (tx.call(injected.repository, async (repository, outboxRepository: ManagedSiteEmailOutboxRepository): Promise<ManagedSiteEmailOutboxResult | null> => {
+      const [recent, currentProject, currentBinding] = await Promise.all([
+        repository.findRecentDuplicate(dedupeKey, new Date(now.getTime() - DEDUPE_WINDOW_MS)),
+        repository.findProjectByTokenHash(tokenHash),
+        repository.findBoundInbox(project.id),
+      ])
+      if (recent) { duplicateInsideTransaction = true; return null }
+      if (!currentProject || currentProject.id !== project.id || currentProject.status !== 'active' || !currentBinding || currentBinding.id !== binding.id || currentBinding.email !== binding.email || currentBinding.status !== 'bound') {
+        // Keep the visitor's submitted message even when forwarding authority drifted
+        // between the initial read and the transaction's authoritative recheck.
+        await repository.insertSubmission({ projectId: project.id, submittedName: parsed.name, submittedEmail: parsed.email, submittedPhone: parsed.phone, submittedMessage: parsed.message, status: 'forward_failed', forwardTargetEmail: null, forwardedAt: null, forwardErrorCode: 'authority_changed', requestFingerprint: fingerprint, dedupeKey })
+        return null
+      }
+      const current = await repository.insertSubmission({ projectId: project.id, submittedName: parsed.name, submittedEmail: parsed.email, submittedPhone: parsed.phone, submittedMessage: parsed.message, status: 'received', forwardTargetEmail: null, forwardedAt: null, forwardErrorCode: null, requestFingerprint: fingerprint, dedupeKey })
+      submissionId = current.id
+      const message = {
+        to: currentBinding.email,
+        replyTo: current.submittedEmail,
+        subject: `網站聯絡表單新訊息｜${currentProject.canonicalClientIdentity}`,
+        text: `你的網站收到一則新的聯絡表單訊息。\n\n姓名：${current.submittedName}\nEmail：${current.submittedEmail}\n電話：${current.submittedPhone || '未提供'}\n\n訊息：\n${current.submittedMessage}`,
+      }
+      const context = {
+        purpose: 'contact_form_forward' as const,
+        ownerUserId: currentProject.ownerUserId,
+        projectId: currentProject.id,
+        authority: { submissionId: current.id, bindingId: currentBinding.id, dedupeKey: current.dedupeKey },
+        expiresAt: new Date(current.createdAt.getTime() + 24 * 60 * 60_000),
+      }
+      const key = `managed-site-contact-form:${project.id}:${current.id}:${dedupeKey.slice(0, 32)}`
+      const result = await createManagedSiteEmailOutboxRuntime(outboxRepository).enqueueOnly({ idempotencyKey: key, context, message })
+      if (result.itemId) itemId = result.itemId
+      return result
+    }) as Promise<ManagedSiteEmailOutboxResult | null>)
+    if (duplicateInsideTransaction) return success
+    if (!queued?.itemId || (!queued.accepted && queued.status !== 'queued') || !submissionId) {
+      if (submissionId) await markForwardResult(injected.repository, submissionId, { status: 'forward_failed', forwardErrorCode: 'outbox_unconfigured', forwardTargetEmail: null, forwardedAt: null })
+      return success
+    }
+    const result = await attemptManagedSiteEmailOutboxItem(itemId!)
+    if (!result.accepted && result.status !== 'queued') {
+      await markForwardResult(injected.repository, submissionId!, { status: 'forward_failed', forwardErrorCode: result.code, forwardTargetEmail: null, forwardedAt: null })
+    }
+    return success
+  }
+  const submission = await injected.repository.insertSubmission({ projectId: project.id, submittedName: parsed.name, submittedEmail: parsed.email, submittedPhone: parsed.phone, submittedMessage: parsed.message, status: 'received', forwardTargetEmail: null, forwardedAt: null, forwardErrorCode: null, requestFingerprint: fingerprint, dedupeKey })
   if (!injected.transport.configured) {
     await markForwardResult(injected.repository, submission.id, { status: 'forward_failed', forwardErrorCode: 'transport_unconfigured', forwardTargetEmail: null, forwardedAt: null })
     return success

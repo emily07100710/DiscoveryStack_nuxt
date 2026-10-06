@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { createError } from 'h3'
+import type { ManagedSiteInvitation, ManagedSiteMembership } from '../database/schema'
 import { stableFingerprint } from '../seo-geo-core/repository'
 import { managedSiteStableFingerprint } from './live-connectors/canonical'
 import { getManagedSiteRepository } from './repository'
@@ -262,7 +263,14 @@ export async function createManagedSiteVersion(ownerUserId: number, projectId: n
   throw createError({ statusCode: 409, statusMessage: 'Managed site version allocation could not be completed.' })
 }
 
-export async function inviteManagedSiteMember(ownerUserId: number, projectId: number, actor: ManagedSiteActor, input: unknown, repository = getManagedSiteRepository()) {
+export async function inviteManagedSiteMember(
+  ownerUserId: number,
+  projectId: number,
+  actor: ManagedSiteActor,
+  input: unknown,
+  repository = getManagedSiteRepository(),
+  queueInvitation?: (input: { invitation: ManagedSiteInvitation; membership: ManagedSiteMembership; rawToken: string; outboxRepository: import('./email-outbox/types').ManagedSiteEmailOutboxRepository }) => Promise<void>,
+) {
   ensureActorRole(actor, 'members:manage')
   const parsed = parseManagedSiteMemberInput(input)
   const project = await repository.findProject(ownerUserId, projectId)
@@ -275,12 +283,16 @@ export async function inviteManagedSiteMember(ownerUserId: number, projectId: nu
   const createdAt = now()
   const expiresAt = new Date(createdAt.getTime() + MANAGED_SITE_INVITATION_TTL_MS)
   const rawToken = randomBytes(32).toString('base64url')
-  return repository.transaction(async transaction => {
+  const createWithinTransaction = async (transaction: ManagedSiteRepository, outboxRepository?: import('./email-outbox/types').ManagedSiteEmailOutboxRepository) => {
     const membership = existingMembership && existingMembership.status === 'revoked'
       ? await transaction.updateMembership(ownerUserId, existingMembership.id, { role: parsed.role, status: 'active', invitedAt: createdAt, acceptedAt: null, revokedAt: null, updatedAt: createdAt } as any)
       : existingMembership || await transaction.insertMembership({ ownerUserId, projectId, principalEmail: parsed.email, userId: null, role: parsed.role, status: 'active', invitedAt: createdAt, acceptedAt: null, revokedAt: null, updatedAt: createdAt } as any)
     if (!membership) memberNotFound()
     const invitation = await transaction.insertInvitation({ ownerUserId, projectId, membershipId: membership.id, recipientEmail: parsed.email, role: parsed.role, tokenHash: tokenHash(rawToken), status: 'pending', expiresAt, acceptedAt: null, revokedAt: null } as any)
+    if (queueInvitation) {
+      if (!outboxRepository) throw createError({ statusCode: 503, statusMessage: 'Managed-site email outbox storage is unavailable.' })
+      await queueInvitation({ invitation, membership, rawToken, outboxRepository })
+    }
     await appendAudit(transaction, {
       ownerUserId,
       projectId,
@@ -293,7 +305,12 @@ export async function inviteManagedSiteMember(ownerUserId: number, projectId: nu
       metadata: { invitationId: invitation.id, membershipId: membership.id, role: membership.role },
     })
     return { invitation: { id: invitation.id, projectId: invitation.projectId, recipientEmail: invitation.recipientEmail, role: invitation.role, status: invitation.status, expiresAt: invitation.expiresAt }, invitationToken: rawToken, replayed: false }
-  })
+  }
+  if (queueInvitation) {
+    if (!repository.transactionWithEmailOutbox) throw createError({ statusCode: 503, statusMessage: 'Managed-site email outbox storage is unavailable.' })
+    return repository.transactionWithEmailOutbox((transaction, outboxRepository) => createWithinTransaction(transaction, outboxRepository))
+  }
+  return repository.transaction(transaction => createWithinTransaction(transaction))
 }
 
 export async function listManagedSiteMembers(ownerUserId: number, projectId: number, actor: ManagedSiteActor, repository = getManagedSiteRepository()) {

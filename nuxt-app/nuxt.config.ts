@@ -5,6 +5,7 @@ const modelImprovementCron = process.env.MODEL_IMPROVEMENT_CRON || '0 18 * * *'
 const geoModelOpsCron = process.env.GEO_MODELOPS_CRON || '*/15 * * * *'
 const managedSiteEditorCron = process.env.MANAGED_SITE_EDITOR_CRON || '*/5 * * * *'
 const managedSiteProvisioningCron = process.env.MANAGED_SITE_PROVISIONING_CRON || '*/5 * * * *'
+const managedSiteEmailOutboxCron = process.env.MANAGED_SITE_EMAIL_OUTBOX_CRON || '*/1 * * * *'
 const systemFactoryCron = process.env.SYSTEM_FACTORY_CRON || '*/5 * * * *'
 const llmVisibilityBenchmarkCron = process.env.LLM_VISIBILITY_BENCHMARK_CRON || '*/5 * * * *'
 const contentOperationsCron = process.env.CONTENT_OPERATIONS_CRON || '*/15 * * * *'
@@ -18,6 +19,7 @@ for (const [cron, tasks] of [
   [geoModelOpsCron, ['content-operations:geo-modelops-tick']],
   [managedSiteEditorCron, ['managed-sites:editor-tick']],
   [managedSiteProvisioningCron, ['managed-sites:provisioning-tick']],
+  [managedSiteEmailOutboxCron, ['managed-sites:email-outbox-tick']],
   [systemFactoryCron, ['system-factory:provisioning-tick']],
   [llmVisibilityBenchmarkCron, ['llm-visibility:benchmark-tick']],
   [contentOperationsCron, ['content-operations:tick']],
@@ -59,6 +61,7 @@ export default defineNuxtConfig({
       'llm-visibility:benchmark-tick': { handler: fileURLToPath(new URL('./server/tasks/llm-visibility-benchmark-tick.ts', import.meta.url)) },
       'weekly-content:tick': { handler: fileURLToPath(new URL('./server/tasks/weekly-content-tick.ts', import.meta.url)) },
       'learning-loop:tick': { handler: fileURLToPath(new URL('./server/tasks/learning-loop-tick.ts', import.meta.url)) },
+      'managed-sites:email-outbox-tick': { handler: fileURLToPath(new URL('./server/tasks/managed-site-email-outbox-tick.ts', import.meta.url)) },
     },
     scheduledTasks,
   },

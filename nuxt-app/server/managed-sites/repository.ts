@@ -14,6 +14,8 @@ import {
 import type {
   ManagedSiteRepository,
 } from './types'
+import { createManagedSiteEmailOutboxRepository } from './email-outbox/repository'
+import type { ManagedSiteEmailOutboxRepository } from './email-outbox/types'
 
 function requireManagedSiteDatabase() {
   const database = getDatabase()
@@ -31,6 +33,9 @@ export function makeManagedSiteRepository(database: any): ManagedSiteRepository 
   const repository: ManagedSiteRepository = {
     async transaction<T>(work: (repository: ManagedSiteRepository) => Promise<T>): Promise<T> {
       return database.transaction((transaction: any) => work(makeManagedSiteRepository(transaction))) as Promise<T>
+    },
+    async transactionWithEmailOutbox<T>(work: (repository: ManagedSiteRepository, outboxRepository: ManagedSiteEmailOutboxRepository) => Promise<T>) {
+      return database.transaction((transaction: any) => work(makeManagedSiteRepository(transaction), createManagedSiteEmailOutboxRepository(transaction))) as Promise<T>
     },
     async findProject(ownerUserId, projectId) {
       const [row] = await database.select().from(managedSiteProjects).where(and(eq(managedSiteProjects.ownerUserId, ownerUserId), eq(managedSiteProjects.id, projectId))).limit(1)

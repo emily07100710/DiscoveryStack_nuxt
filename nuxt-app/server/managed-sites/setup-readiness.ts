@@ -1,6 +1,7 @@
 import { resolveOpenAiCompatibleProviderConfiguration } from '../llm-provider/openai-compatible'
 import { normalizePublicHttpsOrigin } from '../content-operations/normalization'
 import { managedSiteEmailReadinessFromEnv } from './contact-inbox/email-transport'
+import { managedSiteEmailOutboxReadinessFromEnv } from './email-outbox/configuration'
 import { managedSiteVaultConfigurationFromEnv } from './live-connectors/s3-vault'
 import { parseManagedSiteInternalBrokerConfiguration } from './live-connectors/internal-broker/config'
 import { parseManagedSiteCredentialRegistryForTests } from './live-connectors/provider-registry'
@@ -60,6 +61,10 @@ export function getDiscoveryStackSetupReadiness(input: {
   checks.push({ id: 'owner_login', label: '擁有人登入方式', required: true, settings: ['OWNER_SIMPLE_LOGIN_PASSWORD 或 OAuth 設定', 'OAuth：NUXT_DISCOVERY_STACK_OAUTH_ALLOWED_ORIGIN'], status: simplePassword ? simplePassword.length >= 16 ? 'configured' : 'invalid' : oauthConfigured ? 'configured' : 'missing', action: 'OAuth 必須設定服務網址、portal、app ID 與同一後台的 allowed origin；使用密碼登入時請設定至少 16 個字元的強密碼。' })
   const email = managedSiteEmailReadinessFromEnv(env)
   checks.push({ id: 'email', label: 'Resend 系統寄信', required: true, settings: ['NUXT_MANAGED_SITE_EMAIL_API_KEY', 'NUXT_MANAGED_SITE_EMAIL_FROM', 'DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS'], status: email.status, action: '驗證寄件網域後設定 Resend API key 和寄件人，將 https://api.resend.com 加入 provider allowlist。完成後實測邀請、登入信與表單通知。' })
+  const emailOutbox = managedSiteEmailOutboxReadinessFromEnv(env)
+  checks.push({ id: 'email_queue', label: '郵件加密與可靠佇列', required: true, settings: ['NUXT_MANAGED_SITE_EMAIL_OUTBOX_ENCRYPTION_KEY'], status: emailOutbox.status, action: '設定獨立的 32 至 4096 bytes 隨機密鑰；套用經審核的郵件佇列 migration。設定存在不代表資料庫或寄送已驗收。' })
+  const emailSwitch = env.NUXT_MANAGED_SITE_EMAIL_OUTBOX_ENABLED
+  checks.push({ id: 'email_scheduler', label: '郵件自動寄送開關', required: false, settings: ['NUXT_MANAGED_SITE_EMAIL_OUTBOX_ENABLED', 'MANAGED_SITE_EMAIL_OUTBOX_CRON'], status: emailOutbox.enabled ? 'configured' : emailSwitch && emailSwitch !== 'false' ? 'invalid' : 'verification_required', action: '預設關閉。完成 migration、寄件網域與收信驗收後才明確設為 true；這會同時允許即時寄信與排程重試，且主機必須常駐。' })
   add('email_codes', '收信信箱驗證碼', ['NUXT_MANAGED_SITE_EMAIL_CODE_PEPPER'], Buffer.byteLength(env.NUXT_MANAGED_SITE_EMAIL_CODE_PEPPER || '') >= 32, '設定獨立的至少 32 bytes 隨機密鑰，驗證碼只保存雜湊。')
   const llm = resolveOpenAiCompatibleProviderConfiguration({ env, runtimeConfig })
   checks.push({ id: 'ai', label: '網站與內容 AI', required: true, settings: ['NUXT_LLM_ENDPOINT', 'NUXT_LLM_API_KEY', 'NUXT_LLM_MODEL'], status: llm.configured ? 'configured' : llm.reason.endsWith('missing') ? 'missing' : 'invalid', action: '設定官方 OpenAI 相容端點、API key 與模型，再在 Managed Sites 驗證網站生成供應商。' })
@@ -126,6 +131,7 @@ export function getDiscoveryStackSetupReadiness(input: {
     acceptance: [
       '資料庫 migration、真實持久化及付款交易回滾驗收。',
       '寄件網域 DNS 驗證，以及登入信、邀請信和聯絡表單通知實際收信。',
+      '郵件佇列 migration、同交易保存連結、重啟恢復及併發不重複寄送驗收；provider 接受與實際收信分開記錄。',
       'Stripe 測試付款與 webhook 重播；正式收費需另開 live mode。',
       '指定網域的註冊、DNS／HTTPS、部署及客戶網址內容驗證。',
       '關閉瀏覽器後背景排程仍執行；主機休眠時無法提供這項能力。',

@@ -103,8 +103,9 @@ describe('owner workbench navigation behavior', () => {
       for (const child of node.children) if (typeof child !== 'string') visit(child)
     }
     visit(nav)
-    expect(links).toHaveLength(13)
+    expect(links).toHaveLength(14)
     expect(links).toContain('/audit-lab/learning-loop')
+    expect(links).toContain('/audit-lab/email-delivery')
     expect(find(root, node => node.tag === 'a' && node.props.href === 'https://public.example.test/zh-hant')).toBeTruthy()
     app.unmount()
   })

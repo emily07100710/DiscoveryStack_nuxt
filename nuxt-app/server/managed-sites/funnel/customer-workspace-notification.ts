@@ -11,8 +11,10 @@ import { resolveManagedSiteReaccessOrigin } from '../reaccess-service'
 import { getManagedSiteRepository } from '../repository'
 import type { ManagedSiteRepository } from '../types'
 import { ensurePaidFunnelCustomerMembership } from './paid-customer-membership'
+import { getManagedSiteEmailOutboxRuntime } from '../email-outbox/runtime'
 
 export const CUSTOMER_WORKSPACE_NOTIFICATION_RECEIPT_TYPE = 'customer_workspace_notification_sent' as const
+const WORKSPACE_READY_OUTBOX_TTL_MS = 30 * 24 * 60 * 60_000
 
 type NotificationInput = {
   releaseId: number
@@ -28,6 +30,7 @@ type NotificationDependencies = {
   clock?: () => Date
   assertProductionPayment?: typeof assertManagedSiteProductionPayment
   ensurePaidMembership?: typeof ensurePaidFunnelCustomerMembership
+  durableOutbox?: boolean
 }
 
 type NotificationResult =
@@ -132,10 +135,39 @@ export async function notifyManagedSiteCustomerWorkspaceReady(ownerUserId: numbe
   if (!portalOrigin) return { sent: false, replayed: false, retryable: true, reason: 'portal_origin_not_configured' }
   const transport = resolveTransport(dependencies)
   if (!transport) return { sent: false, replayed: false, retryable: true, reason: 'email_transport_not_configured' }
+  const durableOutbox = dependencies.durableOutbox ?? process.env.NODE_ENV !== 'test'
 
   const reaccessUrl = `${portalOrigin}/managed-site-access`
   const publicUrl = `https://${release.canonicalDomain}`
   const message = composeReadyEmail({ customerName: lead.name.normalize('NFC').trim().slice(0, 160), siteLabel: project.canonicalClientIdentity, publicUrl, reaccessUrl })
+  if (durableOutbox) {
+    const queuedAt = clock()
+    const workspaceVerifiedAt = workspace.verifiedAt
+    if (!Number.isFinite(workspaceVerifiedAt.getTime()) || workspaceVerifiedAt.getTime() > queuedAt.getTime()) return { sent: false, replayed: false, retryable: true, reason: 'email_delivery_failed' }
+    const expiresAt = new Date(workspaceVerifiedAt.getTime() + WORKSPACE_READY_OUTBOX_TTL_MS)
+    if (expiresAt.getTime() <= queuedAt.getTime()) return { sent: false, replayed: false, retryable: true, reason: 'email_delivery_failed' }
+    const context = {
+      purpose: 'workspace_ready' as const,
+      ownerUserId,
+      projectId: release.projectId,
+      authority: {
+        releaseId: release.id,
+        draftOrderId: order.id,
+        membershipId: grant.membership.id,
+        paymentReceiptFingerprint: payment.receiptFingerprint,
+        workspaceReceiptFingerprint: workspace.receiptFingerprint,
+        productionReceiptFingerprint: release.activeDeploymentReceiptFingerprint,
+        requestFingerprint,
+      },
+      // Queue replay must retain the same immutable envelope. Anchor its TTL to
+      // the persisted workspace-ready receipt, never to the retry attempt time.
+      expiresAt,
+    }
+    const idempotencyKey = `managed-site-workspace-ready:${requestFingerprint}`
+    const queued = await getManagedSiteEmailOutboxRuntime().enqueueAndAttempt({ idempotencyKey, context, message: { to: email, subject: message.subject, text: message.text } })
+    if (!queued.accepted) return { sent: false, replayed: false, retryable: true, reason: 'email_delivery_failed' }
+    return { sent: true, replayed: false, receiptFingerprint }
+  }
   let providerMessageId: string
   try {
     providerMessageId = (await transport.send({ to: email, subject: message.subject, text: message.text, idempotencyKey: `managed-site-workspace-ready:${requestFingerprint}` })).providerMessageId

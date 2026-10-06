@@ -4,7 +4,7 @@ const publicSiteOrigin = String(config.public.discoveryStackPublicSiteOrigin || 
 const route = useRoute()
 const navigationOpen = ref(false)
 watch(() => route.path, () => { navigationOpen.value = false })
-const activeSection = computed(() => route.path === '/audit-lab/learning-loop' ? 'learning-loop' : route.path === '/audit-lab/site-evidence' ? 'site-evidence' : route.path === '/audit-lab/system-factory' ? 'system-factory' : route.path === '/audit-lab/geo' ? 'geo' : route.path === '/audit-lab/geo-outcome-model' ? 'geo-outcome-model' : route.path === '/audit-lab/seo-geo' ? 'core' : route.path === '/audit-lab/llm-visibility' ? 'visibility' : route.path === '/audit-lab/weekly-content' ? 'weekly-content' : route.path === '/audit-lab/content-operations' ? 'content-operations' : route.path === '/audit-lab/measurement-operations' ? 'measurement' : route.path === '/audit-lab/interventions' ? 'interventions' : route.path === '/audit-lab/managed-sites' ? 'managed-sites' : 'audit')
+const activeSection = computed(() => route.path === '/audit-lab/email-delivery' ? 'email-delivery' : route.path === '/audit-lab/learning-loop' ? 'learning-loop' : route.path === '/audit-lab/site-evidence' ? 'site-evidence' : route.path === '/audit-lab/system-factory' ? 'system-factory' : route.path === '/audit-lab/geo' ? 'geo' : route.path === '/audit-lab/geo-outcome-model' ? 'geo-outcome-model' : route.path === '/audit-lab/seo-geo' ? 'core' : route.path === '/audit-lab/llm-visibility' ? 'visibility' : route.path === '/audit-lab/weekly-content' ? 'weekly-content' : route.path === '/audit-lab/content-operations' ? 'content-operations' : route.path === '/audit-lab/measurement-operations' ? 'measurement' : route.path === '/audit-lab/interventions' ? 'interventions' : route.path === '/audit-lab/managed-sites' ? 'managed-sites' : 'audit')
 useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
 </script>
 
@@ -19,6 +19,7 @@ useHead({ htmlAttrs: { lang: 'zh-Hant', dir: 'ltr' } })
         <NuxtLink to="/audit-lab/geo" :aria-current="activeSection === 'geo' ? 'page' : undefined">GEO Workbench</NuxtLink>
         <NuxtLink to="/audit-lab/geo-outcome-model" :aria-current="activeSection === 'geo-outcome-model' ? 'page' : undefined">GEO 模型</NuxtLink>
         <NuxtLink to="/audit-lab/learning-loop" :aria-current="route.path === '/audit-lab/learning-loop' ? 'page' : undefined">學習閉環</NuxtLink>
+        <NuxtLink to="/audit-lab/email-delivery" :aria-current="route.path === '/audit-lab/email-delivery' ? 'page' : undefined">郵件紀錄</NuxtLink>
         <NuxtLink to="/audit-lab/seo-geo" :aria-current="activeSection === 'core' ? 'page' : undefined">SEO / GEO Core</NuxtLink>
         <NuxtLink to="/audit-lab/llm-visibility" :aria-current="activeSection === 'visibility' ? 'page' : undefined">LLM Visibility</NuxtLink>
         <NuxtLink to="/audit-lab/site-evidence" :aria-current="activeSection === 'site-evidence' ? 'page' : undefined">站台證據</NuxtLink>

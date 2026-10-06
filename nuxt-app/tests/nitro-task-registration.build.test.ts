@@ -15,6 +15,7 @@ const bindings = {
   'llm-visibility:benchmark-tick': './server/tasks/llm-visibility-benchmark-tick.ts',
   'weekly-content:tick': './server/tasks/weekly-content-tick.ts',
   'learning-loop:tick': './server/tasks/learning-loop-tick.ts',
+  'managed-sites:email-outbox-tick': './server/tasks/managed-site-email-outbox-tick.ts',
 }
 type Schedule = { cron: string; tasks: string[] }
 type BuiltMetadata = { schedules: Schedule[]; registry: Map<string, string> }
@@ -123,7 +124,7 @@ describe('production Nitro task registration', () => {
   })
   it('retains every configured scheduled job and its cron in the real production registry', () => {
     const expected = configuredSchedules()
-    expect(expected.flatMap(row => row.tasks)).toHaveLength(11)
+    expect(expected.flatMap(row => row.tasks)).toHaveLength(12)
     const built = readBuiltMetadata()
     expect(() => assertScheduledRegistration(expected, built)).not.toThrow()
     const taskDirectory = resolve(dirname(productionArtifact), '../tasks')
@@ -135,7 +136,7 @@ describe('production Nitro task registration', () => {
     expect(built.schedules.find(row => row.cron === '*/5 * * * *')?.tasks).toContain('weekly-content:tick')
     expect(built.schedules.find(row => row.cron === '*/5 * * * *')?.tasks).toContain('learning-loop:tick')
   })
-  it('resolves all five canonical names to the original built handler, without executing it', () => {
+  it('resolves all six canonical names to the original built handler, without executing it', () => {
     const built = readBuiltMetadata()
     for (const [name, relativeFile] of Object.entries(bindings)) {
       const scannedName = relativeFile.split('/').at(-1)!.replace(/\.ts$/, '')

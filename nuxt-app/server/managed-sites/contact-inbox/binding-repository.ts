@@ -1,11 +1,16 @@
 import { and, desc, eq, ne } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDatabase } from '../../database'
-import { managedSiteContactInboxBindings, type ManagedSiteContactInboxBinding } from '../../database/schema'
+import { managedSiteContactInboxBindings, managedSiteFunnelSessions, type ManagedSiteContactInboxBinding } from '../../database/schema'
+import { createManagedSiteEmailOutboxRepository } from '../email-outbox/repository'
+import type { ManagedSiteEmailOutboxRepository } from '../email-outbox/types'
 
 export type ManagedSiteContactInboxBindingRepository = {
   transaction<T>(work: (repository: ManagedSiteContactInboxBindingRepository) => Promise<T>): Promise<T>
+  transactionWithEmailOutbox?<T>(work: (repository: ManagedSiteContactInboxBindingRepository, outbox: ManagedSiteEmailOutboxRepository) => Promise<T>): Promise<T>
+  lockSessionForEmailIssuance?(sessionId: number): Promise<void>
   listForSession(sessionId: number): Promise<ManagedSiteContactInboxBinding[]>
+  findBindingById?(bindingId: number): Promise<ManagedSiteContactInboxBinding | null>
   insertBinding(input: Omit<ManagedSiteContactInboxBinding, 'id' | 'createdAt' | 'updatedAt'>): Promise<ManagedSiteContactInboxBinding>
   updateBinding(bindingId: number, expectedStatus: ManagedSiteContactInboxBinding['status'], patch: Partial<Omit<ManagedSiteContactInboxBinding, 'id' | 'funnelSessionId' | 'email' | 'createdAt' | 'updatedAt'>>): Promise<ManagedSiteContactInboxBinding | null>
   supersedeStatus(sessionId: number, status: 'pending' | 'bound', exceptBindingId?: number): Promise<void>
@@ -22,8 +27,21 @@ export function makeManagedSiteContactInboxBindingRepository(database: any): Man
     async transaction(work) {
       return database.transaction((transaction: any) => work(makeManagedSiteContactInboxBindingRepository(transaction))) as Promise<any>
     },
+    async transactionWithEmailOutbox(work) {
+      return database.transaction((transaction: any) => work(makeManagedSiteContactInboxBindingRepository(transaction), createManagedSiteEmailOutboxRepository(transaction))) as Promise<any>
+    },
+    async lockSessionForEmailIssuance(sessionId) {
+      // Serialize issuance against the durable session row, including the empty-history case.
+      // Without this lock concurrent first requests could each observe no recent challenge.
+      await database.select({ id: managedSiteFunnelSessions.id }).from(managedSiteFunnelSessions)
+        .where(eq(managedSiteFunnelSessions.id, sessionId)).for('update').limit(1)
+    },
     async listForSession(sessionId) {
       return database.select().from(managedSiteContactInboxBindings).where(eq(managedSiteContactInboxBindings.funnelSessionId, sessionId)).orderBy(desc(managedSiteContactInboxBindings.id)).limit(200)
+    },
+    async findBindingById(bindingId) {
+      const [row] = await database.select().from(managedSiteContactInboxBindings).where(eq(managedSiteContactInboxBindings.id, bindingId)).limit(1)
+      return row || null
     },
     async insertBinding(input) {
       const id = rowId(await database.insert(managedSiteContactInboxBindings).values(input as any))

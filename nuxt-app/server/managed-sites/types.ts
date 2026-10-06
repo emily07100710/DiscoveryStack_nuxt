@@ -98,6 +98,8 @@ export type ManagedSiteRoleUpdate = {
 
 export type ManagedSiteRepository = {
   transaction<T>(work: (repository: ManagedSiteRepository) => Promise<T>): Promise<T>
+  /** Scoped transactional email hook for source records whose bearer payload must never be orphaned. */
+  transactionWithEmailOutbox?<T>(work: (repository: ManagedSiteRepository, outboxRepository: import('./email-outbox/types').ManagedSiteEmailOutboxRepository) => Promise<T>): Promise<T>
   findProject(ownerUserId: number, projectId: number): Promise<ManagedSiteProject | null>
   findProjectByClientIdentity(ownerUserId: number, canonicalClientIdentity: string): Promise<ManagedSiteProject | null>
   findProjectByFingerprint(ownerUserId: number, projectFingerprint: string): Promise<ManagedSiteProject | null>

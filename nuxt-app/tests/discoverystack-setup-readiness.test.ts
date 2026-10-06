@@ -8,6 +8,7 @@ function environment(): Record<string, string> {
     DATABASE_URL: 'mysql://local-fixture:synthetic-value@db.test/ds', JWT_SECRET: 'synthetic-session-value-'.repeat(3), OWNER_OPEN_ID: 'fixture-owner', OWNER_SIMPLE_LOGIN_PASSWORD: 'synthetic-password-for-tests',
     NUXT_MANAGED_SITE_EMAIL_API_KEY: 're_synthetic_resend_key', NUXT_MANAGED_SITE_EMAIL_FROM: 'DiscoveryStack <notifications@ds.test>',
     NUXT_MANAGED_SITE_EMAIL_CODE_PEPPER: 'synthetic-email-pepper-'.repeat(3),
+    NUXT_MANAGED_SITE_EMAIL_OUTBOX_ENCRYPTION_KEY: 'synthetic-outbox-key-'.repeat(3),
     NUXT_LLM_ENDPOINT: 'https://api.openai.com/v1', NUXT_LLM_API_KEY: 'synthetic-llm-value', NUXT_LLM_MODEL: 'fixture-model',
     NUXT_CONTENT_DRAFT_PROVIDER: 'openai_compatible', NUXT_PAGE_EDITOR_AI_PROVIDER: 'openai_compatible', NUXT_PAGE_EDITOR_PREVIEW_SECRET: 'synthetic-preview-value-'.repeat(3),
     NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED: 'true',
@@ -46,7 +47,7 @@ describe('DiscoveryStack setup readiness', () => {
       expect(result.productionAccepted).toBe(false)
       expect(network).not.toHaveBeenCalled()
       const output = JSON.stringify(result)
-      for (const secret of ['synthetic-session', 'synthetic-password', 'synthetic_resend', 'synthetic-llm', 'synthetic-pepper', 'synthetic-aws', 'synthetic-deploy', 'synthetic-webhook', 'mysql://']) expect(output).not.toContain(secret)
+      for (const secret of ['synthetic-session', 'synthetic-password', 'synthetic_resend', 'synthetic-llm', 'synthetic-pepper', 'synthetic-aws', 'synthetic-deploy', 'synthetic-webhook', 'synthetic-outbox-key', 'mysql://']) expect(output).not.toContain(secret)
     } finally { vi.unstubAllGlobals() }
   })
   it('keeps configured and server-verified providers distinct', () => {
@@ -54,6 +55,14 @@ describe('DiscoveryStack setup readiness', () => {
     expect(result.configurationReady).toBe(true)
     expect(result.providerVerificationComplete).toBe(false)
     expect(check(result, 'provider_deployment').status).toBe('verification_required')
+  })
+  it('does not infer email execution or inbox acceptance from complete configuration', () => {
+    const result = getDiscoveryStackSetupReadiness({ env: environment(), providers: providers(true) })
+    expect(check(result, 'email_queue').status).toBe('configured')
+    expect(check(result, 'email_scheduler').status).toBe('verification_required')
+    expect(check(result, 'email_scheduler').required).toBe(false)
+    expect(result.productionAccepted).toBe(false)
+    expect(check(getDiscoveryStackSetupReadiness({ env: { ...environment(), NUXT_MANAGED_SITE_EMAIL_OUTBOX_ENABLED: 'TRUE' } }), 'email_scheduler').status).toBe('invalid')
   })
   it('checks the same authoritative runtime session secret as the authentication service', () => {
     const env = environment()
@@ -82,6 +91,7 @@ describe('DiscoveryStack setup readiness', () => {
     ['NUXT_LLM_ENDPOINT', 'https://untrusted.test/v1', 'ai'],
     ['NUXT_PAGE_EDITOR_PREVIEW_SECRET', 'short', 'editor_preview'],
     ['NUXT_MANAGED_SITE_EMAIL_CODE_PEPPER', 'short', 'email_codes'],
+    ['NUXT_MANAGED_SITE_EMAIL_OUTBOX_ENCRYPTION_KEY', 'short', 'email_queue'],
     ['NUXT_MEDIA_SCANNER_ENDPOINT', 'http://scanner.ds.test/scan', 'media_scanner'],
     ['NUXT_MEDIA_SCANNER_CREDENTIAL_REF', 'DS_ABSENT_SCANNER_VALUE', 'media_scanner'],
     ['NUXT_PAGE_EDITOR_AI_PROVIDER', 'unknown', 'ai_switches'],

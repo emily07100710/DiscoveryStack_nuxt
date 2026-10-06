@@ -4,6 +4,8 @@ import { managedSiteEmailTransportFromEnv, type ManagedSiteEmailTransport } from
 import { resolveManagedSiteReaccessOrigin } from './reaccess-service'
 import { getManagedSiteRepository } from './repository'
 import { inviteManagedSiteMember } from './service'
+import { createManagedSiteEmailOutboxRuntime, attemptManagedSiteEmailOutboxItem } from './email-outbox/runtime'
+import type { ManagedSiteEmailOutboxRepository } from './email-outbox/types'
 import { MANAGED_SITE_REACCESS_PATH, type ManagedSiteActor, type ManagedSiteRepository, type ManagedSiteRole } from './types'
 
 export type ManagedSiteMemberInvitationDeliveryStatus = 'sent' | 'manual_required' | 'delivery_failed' | 'already_pending'
@@ -13,6 +15,7 @@ export type ManagedSiteMemberInvitationDeliveryDependencies = {
   emailTransport?: ManagedSiteEmailTransport
   portalOrigin?: string
   nodeEnv?: string
+  durableOutbox?: boolean
 }
 
 function roleLabel(role: Exclude<ManagedSiteRole, 'owner'>): string {
@@ -61,7 +64,31 @@ export async function inviteAndDeliverManagedSiteMember(
   dependencies: ManagedSiteMemberInvitationDeliveryDependencies = {},
 ) {
   const repository = dependencies.repository || getManagedSiteRepository()
-  const result = await inviteManagedSiteMember(ownerUserId, projectId, actor, input, repository)
+  const durableOutbox = dependencies.durableOutbox ?? process.env.NODE_ENV !== 'test'
+  const portalOrigin = resolveManagedSiteReaccessOrigin({ portalOrigin: dependencies.portalOrigin, nodeEnv: dependencies.nodeEnv })
+  const project = await repository.findProject(ownerUserId, projectId)
+  const siteLabel = project?.canonicalClientIdentity || project?.canonicalWebsiteIdentity || `網站專案 #${projectId}`
+  let transport: ManagedSiteEmailTransport | null = dependencies.emailTransport || null
+  if (!transport) {
+    try { transport = managedSiteEmailTransportFromEnv() } catch { transport = null }
+  }
+  let itemId: string | null = null
+  const canQueue = durableOutbox && Boolean(portalOrigin && transport?.configured && process.env.NUXT_MANAGED_SITE_EMAIL_OUTBOX_ENCRYPTION_KEY)
+  const result = await inviteManagedSiteMember(ownerUserId, projectId, actor, input, repository, canQueue
+    ? async ({ invitation, membership, rawToken, outboxRepository }: { invitation: any; membership: any; rawToken: string; outboxRepository: ManagedSiteEmailOutboxRepository }) => {
+        if (invitation.role === 'owner' || membership.role === 'owner') throw createError({ statusCode: 500, statusMessage: 'Managed-site member invitation role is invalid.' })
+        const invitationUrl = `${portalOrigin}${invitationPath(rawToken)}`
+        const message = composeInvitationEmail({ siteLabel, role: invitation.role as Exclude<ManagedSiteRole, 'owner'>, invitationUrl, reaccessUrl: `${portalOrigin}${MANAGED_SITE_REACCESS_PATH}`, expiresAt: invitation.expiresAt })
+        const idempotencyKey = stableFingerprint({ scope: 'managed-site-member-invitation-delivery-v1', ownerUserId, projectId, invitationId: invitation.id })
+        const stored = await createManagedSiteEmailOutboxRuntime(outboxRepository).enqueueOnly({
+          idempotencyKey,
+          context: { purpose: 'member_invitation', ownerUserId, projectId, authority: { invitationId: invitation.id, tokenHash: invitation.tokenHash }, expiresAt: invitation.expiresAt },
+          message: { to: invitation.recipientEmail, ...message },
+        })
+        if (!stored.itemId || (!stored.accepted && stored.status !== 'queued')) throw createError({ statusCode: 503, statusMessage: 'Managed-site email outbox is not configured.' })
+        itemId = stored.itemId
+      }
+    : undefined)
   const reaccessPath = MANAGED_SITE_REACCESS_PATH
 
   if (!result.invitationToken) {
@@ -75,14 +102,9 @@ export async function inviteAndDeliverManagedSiteMember(
   }
 
   const path = invitationPath(result.invitationToken)
-  const portalOrigin = resolveManagedSiteReaccessOrigin({ portalOrigin: dependencies.portalOrigin, nodeEnv: dependencies.nodeEnv })
   const manualUrl = portalOrigin ? `${portalOrigin}${path}` : path
-  let transport: ManagedSiteEmailTransport | null = dependencies.emailTransport || null
-  if (!transport) {
-    try { transport = managedSiteEmailTransportFromEnv() } catch { transport = null }
-  }
 
-  if (!portalOrigin || !transport?.configured) {
+  if (!portalOrigin || !transport?.configured || (durableOutbox && !itemId)) {
     return {
       ...result,
       invitationUrl: manualUrl,
@@ -94,8 +116,6 @@ export async function inviteAndDeliverManagedSiteMember(
     }
   }
 
-  const project = await repository.findProject(ownerUserId, projectId)
-  const siteLabel = project?.canonicalClientIdentity || project?.canonicalWebsiteIdentity || `網站專案 #${projectId}`
   const invitationUrl = `${portalOrigin}${path}`
   if (result.invitation.role === 'owner') throw createError({ statusCode: 500, statusMessage: 'Managed-site member invitation role is invalid.' })
   const message = composeInvitationEmail({
@@ -107,6 +127,11 @@ export async function inviteAndDeliverManagedSiteMember(
   })
 
   try {
+    if (durableOutbox && itemId) {
+      const delivery = await attemptManagedSiteEmailOutboxItem(itemId)
+      if (!delivery.accepted) return { ...result, invitationUrl: manualUrl, reaccessPath, delivery: { status: 'delivery_failed' as const } }
+      return { ...result, invitationToken: null, invitationUrl: null, reaccessPath, delivery: { status: 'sent' as const } }
+    }
     await transport.send({
       to: result.invitation.recipientEmail,
       subject: message.subject,

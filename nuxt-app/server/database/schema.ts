@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { boolean, datetime, decimal, foreignKey, index, int, json, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/mysql-core'
+import { boolean, datetime, decimal, foreignKey, index, int, json, longtext, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/mysql-core'
 
 /** OAuth identities are private and are used only for owner-gated administration. */
 export const users = mysqlTable('users', {
@@ -4341,3 +4341,36 @@ export const learningOutcomeModels = mysqlTable('learningOutcomeModels', {
 }, t => [uniqueIndex('learning_effect_owner_release_uq').on(t.ownerUserId, t.datasetDigest, t.lineageFingerprint), index('learning_effect_queue_idx').on(t.ownerUserId, t.status, t.id), foreignKey({ name: 'learning_effect_owner_fk', columns: [t.ownerUserId], foreignColumns: [users.id] })])
 
 export type LearningOutcomeModel = typeof learningOutcomeModels.$inferSelect
+
+/** Durable private transaction-email queue. Ciphertext is cleared after accept/cancel; payload metadata is hashes only. */
+export const managedSiteEmailOutbox = mysqlTable('managedSiteEmailOutbox', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  ownerUserId: int('ownerUserId'),
+  projectId: int('projectId'),
+  purpose: mysqlEnum('purpose', ['inbox_verification', 'customer_reaccess', 'member_invitation', 'contact_form_forward', 'workspace_ready']).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  authorityFingerprint: varchar('authorityFingerprint', { length: 64 }).notNull(),
+  payloadFingerprint: varchar('payloadFingerprint', { length: 64 }).notNull(),
+  contextFingerprint: varchar('contextFingerprint', { length: 64 }).notNull(),
+  providerConfigurationFingerprint: varchar('providerConfigurationFingerprint', { length: 64 }).notNull(),
+  encryptedPayload: longtext('encryptedPayload'),
+  status: mysqlEnum('status', ['queued', 'processing', 'reconcile_pending', 'accepted', 'cancelled', 'manual_required']).default('queued').notNull(),
+  attemptCount: int('attemptCount').default(0).notNull(),
+  firstAttemptAt: datetime('firstAttemptAt', { fsp: 3 }),
+  nextAttemptAt: datetime('nextAttemptAt', { fsp: 3 }).notNull(),
+  expiresAt: datetime('expiresAt', { fsp: 3 }).notNull(),
+  leaseToken: varchar('leaseToken', { length: 36 }),
+  leaseExpiresAt: datetime('leaseExpiresAt', { fsp: 3 }),
+  safeCode: varchar('safeCode', { length: 80 }),
+  providerReceiptId: varchar('providerReceiptId', { length: 36 }),
+  acceptedAt: datetime('acceptedAt', { fsp: 3 }),
+  // Keep the default precision explicit: TiDB rejects timestamp(3) DEFAULT (now()).
+  createdAt: timestamp('createdAt', { fsp: 3 }).default(sql`CURRENT_TIMESTAMP(3)`).notNull(),
+  updatedAt: timestamp('updatedAt', { fsp: 3 }).default(sql`CURRENT_TIMESTAMP(3)`).onUpdateNow().notNull(),
+}, t => [
+  uniqueIndex('managed_email_outbox_key_uq').on(t.purpose, t.idempotencyKey),
+  index('managed_email_outbox_due_idx').on(t.status, t.nextAttemptAt, t.id),
+  index('managed_email_outbox_owner_idx').on(t.ownerUserId, t.projectId, t.createdAt),
+])
+
+export type ManagedSiteEmailOutbox = typeof managedSiteEmailOutbox.$inferSelect

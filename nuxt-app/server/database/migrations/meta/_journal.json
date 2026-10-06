@@ -323,6 +323,13 @@
       "when": 1791303608110,
       "tag": "0045_learning_authorized_closed_loop",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "5",
+      "when": 1791325531294,
+      "tag": "0046_managed_email_outbox_v1",
+      "breakpoints": true
     }
   ]
 }
