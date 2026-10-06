@@ -57,7 +57,8 @@ Production values must be supplied by the hosting environments; no values are co
 |---|---|---|---|
 | Astro | `PUBLIC_SITE_URL` | Public build-time URL | Absolute HTTPS origin in production; localhost is allowed only for local development |
 | Astro | `PUBLIC_OPS_API_ORIGIN` | Public build-time API target | Absolute HTTPS private API origin in production; used only to construct the two allowed public calls |
-| Nuxt | `DISCOVERYSTACK_PUBLIC_SITE_ORIGIN` | Server runtime plus a non-sensitive public mirror | Absolute HTTPS public origin in production; used by exact-origin CORS and owner exit link |
+| Nuxt | `DISCOVERYSTACK_PUBLIC_SITE_ORIGIN` | Server request-time CORS configuration | Absolute HTTPS public origin in production; used by exact-origin CORS |
+| Nuxt | `NUXT_PUBLIC_DISCOVERY_STACK_PUBLIC_SITE_ORIGIN` | Non-sensitive public runtime mirror | Must equal `DISCOVERYSTACK_PUBLIC_SITE_ORIGIN`; overrides the owner exit/customer portal link origin after Docker build |
 | Nuxt | Existing private runtime variables | Server-only | Auth, database, provider and model-improvement settings stay private and are not copied to Astro |
 
 Do not put `DATABASE_URL`, `JWT_SECRET`, OAuth secrets, provider API keys, training credentials, model artifacts or private API configuration in `public-site/`. Do not commit `.env` files or replace the placeholder values in `.env.example` with real deployment values.
@@ -98,7 +99,7 @@ The Nuxt build is a private server artifact. It must not be used as the public s
 
 ## Deployment order
 
-1. Build and validate the private Nuxt/Nitro artifact. Configure `DISCOVERYSTACK_PUBLIC_SITE_ORIGIN` and the private runtime secrets in the private host only. Verify that root `/` redirects to `/audit-lab`, private routes remain protected/noindex, and the two public POST handlers are available.
+1. Build and validate the private Nuxt/Nitro artifact. Configure `DISCOVERYSTACK_PUBLIC_SITE_ORIGIN`, its matching `NUXT_PUBLIC_DISCOVERY_STACK_PUBLIC_SITE_ORIGIN` runtime mirror, and the private runtime secrets in the private host only. Verify that root `/` redirects to `/audit-lab`, the owner exit link points to the actual public website (not a build-time placeholder), private routes remain protected/noindex, and the two public POST handlers are available.
 2. Deploy the private API/runtime artifact to the private operations origin. Verify exact-origin `OPTIONS` and `POST` behavior for `/api/leads` and `/api/site-analysis`, and verify that a representative private route has no public CORS allow header.
 3. Build the Astro artifact with the public origin and private API origin. Deploy only `public-site/dist/` to the public static host/CDN.
 4. Verify public routes, canonical/hreflang/robots/sitemap/llms output, public forms, and browser calls from the public origin. Verify that no `/api`, owner, Audit Lab, training or private strings are present in the public static artifact.

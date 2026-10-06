@@ -1,14 +1,27 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { fetchSsrResponse, startSsrServer, stopSsrServer } from './helpers/ssr-server'
 
 describe('private Nuxt runtime boundary', () => {
-  beforeAll(startSsrServer)
-  afterAll(stopSsrServer)
+  beforeAll(async () => {
+    // This mirror is injected after the production build, exactly as a Docker
+    // host supplies runtime values. It is a public URL, never a secret.
+    vi.stubEnv('NUXT_PUBLIC_DISCOVERY_STACK_PUBLIC_SITE_ORIGIN', 'https://public.synthetic.example.test')
+    await startSsrServer()
+  })
+  afterAll(async () => {
+    await stopSsrServer()
+    vi.unstubAllEnvs()
+  })
 
   it('redirects the root request to the private Audit Lab instead of public content', async () => {
     const response = await fetchSsrResponse('/', { redirect: 'manual' })
     expect(response.status).toBe(302)
     expect(response.headers.get('location')).toContain('/audit-lab')
+    const workbench = await fetchSsrResponse('/audit-lab/learning-loop')
+    expect(workbench.status).toBe(200)
+    const html = await workbench.text()
+    expect(html).toContain('href="https://public.synthetic.example.test/zh-hant"')
+    expect(html).not.toContain('href="https://www.example.com/zh-hant"')
   })
 
   it.each([

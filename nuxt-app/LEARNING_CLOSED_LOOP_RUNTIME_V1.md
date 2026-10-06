@@ -99,10 +99,10 @@
 
 ## 驗證證據
 
-新測試涵蓋授權／秒精度／owner 隔離、同意中途撤回、爬蟲 hard deadline／robots redirect、投影隱私、lease concurrency、過期投影清理、引用模型的真實 CPU 擬合及六分區評估、成效模型的真實 CPU 擬合／subject 隔離／無 follow-up 洩漏、核准子集／競爭 worker／權重撤回、精確草稿與模型譜系、指定客戶 LINE 確認到下一次 worker 的發布、正式回執與成效候選。所有資料為合成或 mock；沒有抓真客戶、發真 LINE、呼叫真 AI／Google、套 DB migration 或部署。
+新測試涵蓋授權／秒精度／owner 隔離、同意中途撤回、爬蟲 hard deadline／robots redirect、投影隱私、lease concurrency、過期投影清理、引用模型的真實 CPU 擬合及六分區評估、成效模型的真實 CPU 擬合／subject 隔離／無 follow-up 洩漏、核准子集／競爭 worker／權重撤回、精確草稿與模型譜系、指定客戶 LINE 確認到下一次 worker 的發布、正式回執與成效候選。開發測試資料為合成或 mock；沒有抓真客戶、發真 LINE或呼叫真 AI／Google。下述正式資料庫遷移與部署是之後經使用者明確授權、分開執行的操作，不是這些 mock 測試所證明的結果。
 
-2026-10-07 最終本機驗證：Nuxt typecheck exit 0；fresh node-server build exit 0；完整 Vitest suite 286 個檔案通過、14 個檔案跳過，5,606 項測試通過、27 項跳過（總計 5,633 項，129.04 秒）。跳過項目仍需外部服務／設定／資料庫，未把它們算成通過。測試啟動的伺服器只綁定本機 127.0.0.1，資料庫連線清空、真實服務測試及排程全部關閉；環境原有 listener 限制經有界本機測試權限處理，沒有放行真實外部操作。
+2026-10-07 部署修正後最終本機驗證：Nuxt typecheck exit 0；fresh node-server build exit 0；完整 Vitest suite 286 個檔案通過、14 個檔案跳過，5,607 項測試通過、27 項跳過（總計 5,634 項，171.30 秒）。另已以只含追蹤中 `nuxt-app`、沒有 `services` 或正式 `.env` 的隔離副本完成 prepare／typecheck／正式 build。跳過項目仍需外部服務／設定／資料庫，未把它們算成通過。測試啟動的伺服器只綁定本機 127.0.0.1，資料庫連線清空、真實服務測試及排程全部關閉；環境原有 listener 限制經有界本機測試權限處理，沒有放行真實外部操作。
 
 內容營運／量測的循環 barrel import 已改用原始模組；最後一次建置不再出現跨 chunk 的循環引用警告。仍有既有 browsers data 過期、plugin timing 與 knowledge ULID 的 es2019 BigInt target 警告，未更動依賴或把它們隱藏。環境中的 pnpm wrapper 有簽章／網路限制，因此驗證使用既有 Node 22.23.1 和已安裝的 Nuxt／Vitest 入口，不下載新版本、不關閉簽章檢查。
 
-正式資料庫遷移：**IMPLEMENTED / VERIFIED（2026-10-07）**。其餘正式外部流程驗收：**NOT_RUN**。正式模型準確度、客戶 LINE 手機體驗、權利與同意文件、常駐排程與完整 action-learning：**GATED / UNVERIFIED**。此次資料庫套用不會開啟自動訓練、授權客戶資料或啟用正式模型。當時正式來源、訓練紀錄、模型、內容日曆項目與發布目標均為 0；不能把上線當作有資料或已完成業務效果驗證。
+正式資料庫遷移及 DS 官網／後台部署：**IMPLEMENTED / VERIFIED（2026-10-07）**。資料庫 ledger 46 筆／195 張表；官網正式程式版本 `95b2bc4`、後台 `3123d6e`，兩者均已確認 Live。後台另以 runtime-only 公開網址鏡像修正官網回返連結；設定更新後 14 項正式唯讀 HTTP 檢查全通過，涵蓋 canonical／handoff、回返連結、根路由 redirect、noindex、未登入 401／no-store、精確 CORS／錯誤來源拒絕。其餘實際 provider／登入後完整業務流程驗收：**NOT_RUN**。正式模型準確度、客戶 LINE 手機體驗、權利與同意文件、常駐排程與完整 action-learning：**GATED / UNVERIFIED**。此次資料庫套用不會開啟自動訓練、授權客戶資料或啟用正式模型。當時正式來源、訓練紀錄、模型、內容日曆項目與發布目標均為 0；不能把上線當作有資料或已完成業務效果驗證。

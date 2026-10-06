@@ -7,7 +7,7 @@
 - `public-site` 是 Astro 靜態官網：安裝及 build 使用它自己的 package 與 lockfile。
 - `nuxt-app` 是常駐 Node API、客戶後台與擁有人工作台。需接 MySQL/TiDB、套用 migration，並使用可持續執行背景排程的主機。
 
-官網 build 設定 `PUBLIC_SITE_URL`、`PUBLIC_OPS_API_ORIGIN`、`PUBLIC_OPS_UI_ORIGIN`；後台 runtime 設定 `DISCOVERYSTACK_PUBLIC_SITE_ORIGIN`、`NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN`。API 與 UI origin 通常都是 Nuxt 後台的 origin。
+官網 build 設定 `PUBLIC_SITE_URL`、`PUBLIC_OPS_API_ORIGIN`、`PUBLIC_OPS_UI_ORIGIN`；後台 runtime 設定 `DISCOVERYSTACK_PUBLIC_SITE_ORIGIN`、`NUXT_PUBLIC_DISCOVERY_STACK_PUBLIC_SITE_ORIGIN`、`NUXT_DISCOVERYSTACK_PRIVATE_ORIGIN`。前兩者必須是相同的正式官網 origin：前者供伺服器 CORS 使用，後者才是 Nuxt 在 Docker 啟動後可覆寫的公開網址鏡像，供「返回公開網站」與客戶方案連結使用。只有前者時，執行期 CORS 可正常，但瀏覽器連結仍可能停在建置時的範例網址。API 與 UI origin 通常都是 Nuxt 後台的 origin。
 
 Render 等會休眠的免費 Node 服務，閒置後排程不會繼續運作。驗收時必須關閉瀏覽器，確認付款後開站、編輯發布與內容排程仍能完成；只設定 cron 不能證明主機具備常駐能力。
 
@@ -91,3 +91,27 @@ pnpm test
 ```
 
 以上是本機程式驗證。真實寄信、Stripe、Porkbun、Cloudflare、R2、資料庫與部署驗收應各自保存 reduced receipt；不把完整 token、金鑰或客戶資料放進報告。
+
+## 2026-10-07 正式套用與上線核對
+
+經使用者明確授權，這次已執行以下操作；不代表所有供應商流程已驗收：
+
+- 正式 Render 後台的資料庫設定與本機候選連線比對一致，TiDB TLS 連線已驗證。遷移前 192 張表、258 筆資料做一致性快照，另在隔離 MySQL 還原並核對每張表筆數及逐欄語意雜湊；正式資料未刪除或改寫。
+- 新增式 migration `0045` 已套用，正式 ledger 為 46 筆、總表數 195；新增 3 張學習表、8 個外鍵、7 個明確索引均已核對。備份沒有提交 Git 或傳到公開網站；臨時還原／遷移測試副本已清理。本機快照不等於定期異地備份。
+- 官網 `https://discoverystack-web.onrender.com/zh-hant` 的程式版本 `95b2bc4` 已 Live；後台 `https://discoverystack-api.onrender.com` 的程式版本 `3123d6e` 已 Live。後續只有文件／範本／回歸測試的提交不改動這兩個執行中的應用程式內容。
+- 正式 Nuxt 打包不會攜帶獨立客戶站的程式或測試 fixture。修正跨專案測試的靜態 import 問題後，保留真實契約測試；只有 Nuxt 的隔離建置也已成功。
+- 已加上非機密的 `NUXT_PUBLIC_DISCOVERY_STACK_PUBLIC_SITE_ORIGIN`，以 Save and deploy 套用。正式 DOM／HTTP 已確認「返回公開網站」指向真正官網。沒有變更 auth／DB／供應商密鑰、放寬 CORS 或模型閘門。
+- 最終 Nuxt 型別檢查與新正式建置通過；完整安全測試 286 個檔案、5,607 項通過，14 個檔案／27 項外部整合跳過。Astro check 為 53 個檔案、0 error／0 warning／20 hint；正式 origin build 與 89 項測試通過。正式網站更新設定後 14 項唯讀檢查通過。
+- 三種 DS 客戶網站核心範例（Atelier 電商、Bloom 電商、Alignment 預約＋部落格）已在 `services/customer-site-runtime`，53 項本機 HTTP／SQLite／mock 寄信測試通過，另檢查首頁／商品／手機預約版面。Alignment 目前為單人、容量 1 的時段預約，不是多人團課系統。資料、圖片與服務時段是示範內容；沒有付款或送出正式訂單／預約，不能等同原品牌成品或正式客戶網站交付。
+
+仍需處理的缺項：
+
+1. **LINE／實際發布**：正式環境尚缺每週內容所需的 LINE access token、channel secret、bot user ID；仍需實際客戶綁定、內容計畫、精確稿件核准與發布目標。手機按確認到供應商發布、回執與下一輪量測回流，尚未做真實端到端驗收。
+2. **Email／網域**：Resend 與 durable outbox 的程式已存在，正式 key、已驗證寄件網域、From、驗證 pepper 及真實收信驗收仍未完成。公司信箱另需信箱服務，不會由 Resend 自動建立。
+3. **常駐與備援**：目前私有 Render 服務為 Free，閒置會休眠；持續排程與關閉瀏覽器後的驗收尚未完成。付費升級／新託管與定期異地備份需要選擇、成本與保存責任，這次沒有擅自升級。
+4. **真實學習資料與模型**：正式 public sources、training runs、model artifacts、內容日曆項目、publication targets 均為 0。需要合法授權的來源及可追溯觀測、GSC／GA4 連線與足夠真實標籤，才能評估模型；API 回答／結構分數不能冒充消費者 AI 引用真值。
+5. **尚未完整的學習工程**：精確 live before／after action-learning adapter、成效 trainer 的可信時間外驗證與多 horizon 重複觀測處理、首次引用模型相容的 shadow 回退基準仍有缺項。正式模型 activation／準確度與效果尚未驗收，保留關閉與 owner 核准門檻。
+6. **後續一鍵客戶站交付**：Node 核心需要獨立託管與持久儲存的自動部署 adapter；現有靜態 Cloudflare 部署不能代替交易／預約後台。正式金流／退款、物流／發票、預約提醒、舊站會員與訂單匯入、HTTPS／備份／隔離與真手機驗收仍未完成。依目前優先序先完成 DS／學習閉環，不自動採購客戶網域。
+7. **美術與對外宣稱**：範例目前仍有示範圖片與資料，尚需品牌素材與正式美術驗收。官網所列平台是可規劃整合方向，不是 40 個正式串接全部驗收；「亞洲唯一」等唯一性宣稱仍需獨立可驗證佐證，這次工程檢查不提供此證明。
+
+這次沒有發真 LINE、寄真通知、呼叫真 AI／Google、向客戶站發布內容、啟用正式模型、購買網域或執行真實付款。登入後的正式資料讀寫與業務流程也不由匿名唯讀檢查代替。
