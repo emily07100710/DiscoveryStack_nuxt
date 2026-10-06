@@ -26,4 +26,14 @@ describe('repository application entrypoints', () => {
       expect(scripts[name]).not.toMatch(/drizzle-kit (?:push|migrate)|DS_RUN_REAL_|test:external-credentials/u)
     }
   })
+
+  it('keeps cross-application test fixtures outside the private production static dependency graph', () => {
+    const dockerfile = readFileSync(new URL('Dockerfile', root), 'utf8')
+    const bridgeTest = readFileSync(new URL('nuxt-app/tests/managed-site-customer-runtime.test.ts', root), 'utf8')
+    expect(dockerfile).toContain('COPY nuxt-app/ ./')
+    expect(dockerfile).not.toMatch(/^COPY\s+(?:services\/|\.\s)/m)
+    expect(bridgeTest).not.toMatch(/^import\s+.*from\s+['"]\.\.\/\.\.\/services\//m)
+    expect(bridgeTest).toContain('await import(customerRuntimeConfigUrl.href)')
+    expect(bridgeTest).not.toMatch(/skip|mock.*parseConfig/i)
+  })
 })

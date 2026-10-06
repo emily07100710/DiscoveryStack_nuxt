@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { buildSiteSpec, parseSiteSpecSnapshot } from '../server/managed-sites/site-spec'
 import { customerRuntimeManifest, prepareCustomerRuntime } from '../server/managed-sites/customer-runtime'
-import { parseConfig } from '../../services/customer-site-runtime/lib/config.mjs'
 import { funnelSiteSpec } from '../server/managed-sites/funnel/quote-projection'
+
+// The cross-application contract executes with the complete checkout in Vitest.
+// Keep its fixture out of Nuxt's static dependency graph: production packages
+// intentionally contain only nuxt-app, not the independently hosted merchant app.
+const customerRuntimeConfigUrl = new URL('../../services/customer-site-runtime/lib/config.mjs', import.meta.url)
+const { parseConfig } = await import(customerRuntimeConfigUrl.href)
 
 const spec = () => buildSiteSpec({ draftIdentity: 'fixture-brand', brandName: '測試品牌', audience: '一般訪客', brief: '品牌故事與商品', businessGoals: ['sell_online'], customerSitePreset: 'bloom' })
 describe('customer runtime generation bridge', () => {

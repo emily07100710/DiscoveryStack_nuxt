@@ -42,7 +42,7 @@
 - 新表 `learningSourceAuthorizations`：owner／客戶／來源、權利與同意收據、到期與撤回；日期按 MySQL 秒精度正規化再計算指紋。
 - 新表 `learningEvidenceCollections`：有界批次、冪等鍵、輸入／授權／投影／人工審查指紋、CAS lease fencing、保存期限。只保存結構區間與雜湊，不保存頁面本文、聯絡資料、Cookie、密鑰或查詢原文。
 - 新表 `learningOutcomeModels`：獨立的 observational task、確切候選與來源譜系指紋、不可改寫的 owner 資料核准、CPU 訓練 lease／結果／模型 hash。只在私有資料庫保存數值權重，工作台只回安全摘要；失效／撤回移除衍生權重，不會刪客戶內容。
-- `0045_learning_authorized_closed_loop.sql` 與對應 snapshot／journal 由已安裝的 Drizzle 產生，只有新增表／FK／index；**未套用任何資料庫**。
+- `0045_learning_authorized_closed_loop.sql` 與對應 snapshot／journal 由已安裝的 Drizzle 產生，只有新增表／FK／index。本機實作階段未套用資料庫；**2026-10-07 經使用者明確授權，已在與正式 Render 後台設定比對一致的 TiDB 套用 0045**。正式 ledger 已核對為 46 筆、新增表／8 個 FK／7 個明確索引皆存在；總表數 195。遷移前 192 張表、258 筆資料已做 TLS 一致性快照，並在隔離 MySQL 還原、逐表筆數與 JSON 正規化後逐欄雜湊核對成功。備份與正式資料不在 Git 或公開站內。
 - owner GET／POST 沿用唯一 intervention catch-all；POST 同源守門、64 KiB body limit、私有 no-store／noindex，不新增 API 路由檔或公開前端資料通道。
 - LINE approval 授權精確草稿發布，learning authorization 授權特定用途的資料使用；兩者沒有互相轉換。
 - 失敗／未知 outcome 不會湊成訓練標籤，爬蟲和 GSC／GA4 不會被訓練入口冒充引用 truth。
@@ -105,4 +105,4 @@
 
 內容營運／量測的循環 barrel import 已改用原始模組；最後一次建置不再出現跨 chunk 的循環引用警告。仍有既有 browsers data 過期、plugin timing 與 knowledge ULID 的 es2019 BigInt target 警告，未更動依賴或把它們隱藏。環境中的 pnpm wrapper 有簽章／網路限制，因此驗證使用既有 Node 22.23.1 和已安裝的 Nuxt／Vitest 入口，不下載新版本、不關閉簽章檢查。
 
-正式外部驗收：**NOT_RUN**。正式模型準確度、客戶 LINE 手機體驗、權利與同意文件、資料庫執行與完整 action-learning：**GATED / UNVERIFIED**。
+正式資料庫遷移：**IMPLEMENTED / VERIFIED（2026-10-07）**。其餘正式外部流程驗收：**NOT_RUN**。正式模型準確度、客戶 LINE 手機體驗、權利與同意文件、常駐排程與完整 action-learning：**GATED / UNVERIFIED**。此次資料庫套用不會開啟自動訓練、授權客戶資料或啟用正式模型。當時正式來源、訓練紀錄、模型、內容日曆項目與發布目標均為 0；不能把上線當作有資料或已完成業務效果驗證。
