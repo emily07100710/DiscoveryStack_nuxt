@@ -1,6 +1,7 @@
 import { GITHUB_CONTENTS_ORIGIN, type FirstPartyAdapterInput, type FirstPartyAdapterResult, type FirstPartyDecisionCode, type GitAdapterDependencies } from './types'
 import { isValidBranch, isValidRepositoryPart, readValue } from './normalization'
 import { validateFirstPartyAdapterBindings } from './adapter-validation'
+import { buildRepositoryChangeSet } from './change-set'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 const GITHUB_API_VERSION = '2026-03-10'
@@ -202,6 +203,12 @@ export async function executeGitContentsPublish(input: FirstPartyAdapterInput, d
     const writeUrl = contentsBaseUrl(input)
     const timeoutMs = dependencies.timeoutMs ?? DEFAULT_TIMEOUT_MS
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) return blocked('INVALID_INPUT', 'timeoutMs is outside the bounded policy')
+    let readAt: string | undefined
+    try {
+      readAt = dependencies.readAtProvider?.()
+    } catch {
+      readAt = undefined
+    }
     const getResponse = await dependencies.fetchImpl(readUrl, { method: 'GET', headers: authHeaders(credential), redirect: 'manual', timeoutMs })
     if (!isSafeStatus(getResponse.status)) return blocked('RESPONSE_INVALID', 'GitHub GET response status is invalid')
     if (getResponse.status === 404) {
@@ -260,7 +267,19 @@ export async function executeGitContentsPublish(input: FirstPartyAdapterInput, d
     if (putResponse.status < 200 || putResponse.status > 299) return statusFailure(putResponse.status)
     const putBody = await safeJson(putResponse)
     if (!putBody) return blocked('RESPONSE_INVALID', 'GitHub PUT response is not valid JSON')
-    return resultFromRemote(input, putBody, 'updated')
+    const trusted = resultFromRemote(input, putBody, 'updated')
+    if (trusted.status !== 'ok' || !readAt) return trusted
+    const existingCommit = readObject(readValue(existing, 'commit'))
+    const commitSha = existingCommit ? readValue(existingCommit, 'sha') : undefined
+    const changeSet = buildRepositoryChangeSet({
+      target: input.target,
+      artifact: input.artifact,
+      beforeMarkdown: existingContent,
+      blobSha: existingSha,
+      ...(typeof commitSha === 'string' && COMMIT_SHA_PATTERN.test(commitSha) ? { remoteRevision: commitSha.toLowerCase() } : {}),
+      readAt,
+    })
+    return changeSet ? { ...trusted, changeSet } : trusted
   } catch (error) {
     if (error instanceof Error && /timeout|abort/i.test(error.message)) return failure('TIMEOUT', ['GitHub request timed out'])
     return failure('NETWORK_FAILURE', ['GitHub request failed before a trusted response was received'])

@@ -6,7 +6,7 @@
 
 本機已實作：來源授權與撤回、受限結構蒐集、人工審查、資料釋出、既有引用模型的真實 CPU 訓練入口、精確草稿模型建議、指定客戶週更／LINE 送審、正式回執後的量測登記與失敗補登、成效候選的重新核對、核准後的成效模型 CPU 再訓練，以及過期結構投影／失效模型權重清理。
 
-**不是正式上線完成，也不是已用真實客戶資料訓練成功。** 正式資料庫套用、真實來源同意、AI／Google／LINE／發布通道設定及端到端實測尚未執行。引用觀測與內容成效是不同任務：前者訓練引用模型；後者由正式回執、目前同意及可重算評估建立成效候選，再由 owner 核准確切資料後，訓練獨立的實驗性 GSC 正向／負向方向模型。它沒有混入引用模型、不做因果推論，也不自動改稿或啟用正式模型。新引用模型仍需影子驗證與相容的已核准回退模型，既有首次影子模型的回退基準門檻沒有放寬。
+**正式資料庫與 DS 官網／後台已有部署版本，但不是已用真實客戶資料訓練成功。** 2026-10-07 正式遷移及匿名唯讀檢查的證據見下方；真實來源同意、AI／Google／LINE／發布通道設定及業務端到端實測仍未完成。引用觀測與內容成效是不同任務：前者訓練引用模型；後者由正式回執、目前同意及可重算評估建立成效候選，再由 owner 核准確切資料後，訓練獨立的實驗性 GSC 正向／負向方向模型。它沒有混入引用模型、不做因果推論，也不自動改稿或啟用正式模型。新引用模型仍需完整影子門檻與相容的已核准回退模型；首次回退可由獨立建立、獨立 owner 核准的固定 train-only prior 提供，不降低資料或影子驗證門檻。
 
 ## 一輪怎麼走
 
@@ -62,6 +62,8 @@
 | POST | `collections/:id/review` | 人工核准／排除；核准需明確 PII review，審查不可事後改寫 |
 | GET | `structural-release` | 目前仍有效、已核准的無標籤結構輔助投影 |
 | POST | `train` | 已核准、達標且目前仍合格的引用資料集訓練；回摘要，不回模型權重 |
+| POST | `citation-fallback/create` | 以核准的引用資料集建立固定 train-only prior；只有 train 分區擬合，建立不代表核准 |
+| POST | `citation-fallback/review` | owner 獨立核對並核准精確 prior artifact；只能供相容回退，不可預測、建議或正式啟用 |
 | POST | `draft-advice` | 已核准影子模型對 server-read exact draft 的實驗性建議 |
 | POST | `client-cycle` | 執行指定客戶的有界週更流程及發布補登；仍受原開關、政策與額度 |
 | GET | `outcome-release` | 同意／發布譜系重新核對的內容成效審查候選；不是引用資料集 |
@@ -91,17 +93,29 @@
 
 引用模型的既有開發 gate：至少 200 候選、30 query groups、5 網站、2 引擎、20 正例、40 hard negatives、14 天觀測跨度及六個非空分區。影子 gate 更嚴：至少 1000 候選、100 query groups、20 網站、3 引擎、100 正例、200 hard negatives、60 天跨度；還要 metrics／owner review／相容回退模型。資料不足不調低門檻。
 
-發布快照證明的是**發布了哪份稿**，不是完整 live before/after patch。`beforeState=unknown`、`causalChangeSetEligible=false`；既有 InterventionEnvelope 的精確 change-set／action-learning gate 仍可能 blocked。多發布目標的量測按正式回執隔離；目前 bridge 的介入以 canonical primary delivered publication 為準，未把部分成功但整體尚未完成的 multi-target run 宣稱為已驗收閉環。
+發布快照證明的是**發布了哪份稿**，不是完整 live before/after patch。第一方 Git 的 canonical 更新現在可記錄 server-read 的 repository revision diff：先以 GET 精確檔案／blob SHA 再以 CAS PUT 更新，只有 PII scan 通過、來源可解析且有 server readAt 的更新能保存 hash-only 標題／段落 added、removed、replaced、unmodified；新增檔案、重播或未知舊內容不虛構 before state。diff 與精確 owner／entry／draft version／content／evidence／target／正式 receipt／artifact 綁定，僅在唯一 immutable delivery event、目前發布身份、來源及同意重新核對後供輔助審查。缺少／撤回授權時保留營運觀測，但 learning authority 為 null。
+
+repository revision 不是已部署的 live-page before state：`liveBeforeState=unknown`、`causalChangeSetEligible=false`、`modelTrainingAllowed=false`。完整 live before/after adapter 與 action-learning admission 仍未完成；不把 repo diff 提升為因果、引用 primary label 或可訓練資料。多發布目標的量測按正式回執隔離；目前 bridge 的介入以 canonical primary delivered publication 為準，未把部分成功但整體尚未完成的 multi-target run 宣稱為已驗收閉環。
 
 成效模型沿用原 candidate admission：至少 150 合格候選、article／faq／service_page 與 en／zh-hant 各至少 20、兩種量測來源組合。另要求至少 100 GSC 二元候選、10 個 subject，train 至少正／負各 20、validation／test 各正／負至少 5。固定按 subject hash 分 70／15／15，subject 不跨分區；只用 train 擬合標準化與權重，回 validation／test log loss、Brier、F1、balanced accuracy 及 train-prevalence majority prior 基準。
 
-這個新 trainer 位於既有純 outcome-learning 治理核心之外，沒有修改 V1 的 label 或 admission 契約。候選本身沒有可信發布時間與 canonical publication grouping metadata，因此時間外驗證明示 `UNAVAILABLE`，多觀測 horizon 的 pseudo-replication 尚未消除，沒有宣稱因果或正式模型品質。完整 exact action-learning adapter、首次引用影子回退基準與 production 模型 activation 尚未完成正式驗收。本輪沒有從零訓練大型語言模型，文章生成仍由既有 AI provider 提供；新成效模型不會直接改寫草稿。
+這個新 trainer 位於既有純 outcome-learning 治理核心之外，沒有修改 V1 的 label 或 admission 契約。可信時間／分組 sidecar 從每次 fresh formal receipt、可重算 assessment 與 GSC 量測重新投影，不由瀏覽器提交。owner 核准綁定確切 sidecar、候選子集與譜系；新候選不改寫舊核准。所有 baseline 特徵的 capturedAt 必須不晚於發布時間，其 source／scope／window／capture／sourceHash 的組合指紋一併綁定，避免未來才取得的 baseline 洩漏或不同基準混用。
+
+同一 owner＋formal publication receipt 僅保留最早 GSC follow-up horizon（依 end／start／capturedAt，與標籤無關）；精確時間 ties 或衝突的 baseline／publication metadata fail closed。去重後才檢查 admission 及過濾二元答案。由全部唯一發布依 publishedAt 選最新 20% 為時間外 cohort，包含 cutoff ties；該 cohort 的 subject 不出現在其餘 train／validation／test，該 subject 的歷史發布亦排除。其餘分區仍按 subject hash 隔離 70／15／15。歷史 label window end 及 capture 必須嚴格早於 cutoff；時間外 follow-up 在 cutoff 之後，且在 sidecar trainingAsOf 前已取得。V2 artifact 包含獨立 temporal metrics、train-only majority baseline 及排除指紋；驗證不接受舊的 `UNAVAILABLE` 宣稱。
+
+首次引用回退基準版本固定為 `geo-outcome-train-prior-v1`：只用 train 標籤比例計算平滑 prior，其餘權重為零，validation／test／site／query／temporal 只做評估。建立與 owner 核准分開；candidate 在創建 immutable artifact 時綁定已核准的相容回退 hash，不可事後改寫補上。每次使用重新核對 exact rollback pointer、相容契約、durable decision、目前 dataset／members／governance 與有界無循環回退鏈。fallback-only 不可用於預測、shadow evaluation、草稿建議或 production activation。
+
+正式 TiDB 的唯讀 CAST 已確認 `DECIMAL(24,12)` 會改變超過 12 位的小數；模型持久化改以既有 JSON 欄位的版本化 envelope 保留精確 intercept，DECIMAL 只作明確四捨五入的鏡像。讀回先驗證版本、欄位、數值界限與鏡像，再以原精度重算 artifact hash；不修改模型數學或資料表，不回寫歷史模型。舊 raw configuration 仍須通過原 hash 核對，無法驗證或未知版本保持拒絕。存入／讀回測試使用小數取位的本機 harness，沒有向正式資料庫寫入測試模型。
+
+以上仍是合成／mock 驗證的觀察性工程，不宣稱因果或正式模型品質。完整 live action-learning adapter、足夠真實引用／成效資料、供應商端到端與 production 模型 activation 尚未完成正式驗收。本輪沒有從零訓練大型語言模型，文章生成仍由既有 AI provider 提供；成效模型不會直接改寫草稿。
 
 ## 驗證證據
 
 新測試涵蓋授權／秒精度／owner 隔離、同意中途撤回、爬蟲 hard deadline／robots redirect、投影隱私、lease concurrency、過期投影清理、引用模型的真實 CPU 擬合及六分區評估、成效模型的真實 CPU 擬合／subject 隔離／無 follow-up 洩漏、核准子集／競爭 worker／權重撤回、精確草稿與模型譜系、指定客戶 LINE 確認到下一次 worker 的發布、正式回執與成效候選。開發測試資料為合成或 mock；沒有抓真客戶、發真 LINE或呼叫真 AI／Google。下述正式資料庫遷移與部署是之後經使用者明確授權、分開執行的操作，不是這些 mock 測試所證明的結果。
 
-2026-10-07 部署修正後最終本機驗證：Nuxt typecheck exit 0；fresh node-server build exit 0；完整 Vitest suite 286 個檔案通過、14 個檔案跳過，5,607 項測試通過、27 項跳過（總計 5,634 項，171.30 秒）。另已以只含追蹤中 `nuxt-app`、沒有 `services` 或正式 `.env` 的隔離副本完成 prepare／typecheck／正式 build。跳過項目仍需外部服務／設定／資料庫，未把它們算成通過。測試啟動的伺服器只綁定本機 127.0.0.1，資料庫連線清空、真實服務測試及排程全部關閉；環境原有 listener 限制經有界本機測試權限處理，沒有放行真實外部操作。
+2026-10-07 首發部署修正後的本機驗證（歷史紀錄）：Nuxt typecheck exit 0；fresh node-server build exit 0；完整 Vitest suite 286 個檔案通過、14 個檔案跳過，5,607 項測試通過、27 項跳過（總計 5,634 項，171.30 秒）。另已以只含追蹤中 `nuxt-app`、沒有 `services` 或正式 `.env` 的隔離副本完成 prepare／typecheck／正式 build。跳過項目仍需外部服務／設定／資料庫，未把它們算成通過。測試啟動的伺服器只綁定本機 127.0.0.1，資料庫連線清空、真實服務測試及排程全部關閉；環境原有 listener 限制經有界本機測試權限處理，沒有放行真實外部操作。
+
+本輪 fallback／時間外 holdout／repository action／精度與撤回保護增補後，重新依序完成 typecheck、fresh node-server build 與完整 Vitest：295 個檔案／5,677 項通過，14 個檔案／27 項跳過（共 309 個檔案／5,704 項，258.72 秒），全部 exit 0。本機 production-origin runtime 的 7 項實際通過；新版匿名工作台與 390 px 手機導覽亦已在本機正式建置預覽核對。這不是已登入 owner 的正式業務驗收，也未呼叫真供應商、使用正式 DB 訓練或啟用 production 模型。本輪推送／Render Live 證據以 [上線核對文件](docs/CONFIGURATION_READY_LAUNCH.md) 的本輪章節為準。
 
 內容營運／量測的循環 barrel import 已改用原始模組；最後一次建置不再出現跨 chunk 的循環引用警告。仍有既有 browsers data 過期、plugin timing 與 knowledge ULID 的 es2019 BigInt target 警告，未更動依賴或把它們隱藏。環境中的 pnpm wrapper 有簽章／網路限制，因此驗證使用既有 Node 22.23.1 和已安裝的 Nuxt／Vitest 入口，不下載新版本、不關閉簽章檢查。
 

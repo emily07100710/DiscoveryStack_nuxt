@@ -5,6 +5,9 @@ export const GEO_OUTCOME_HARD_NEGATIVE_POLICY_VERSION = 'hard-negative-policy-v1
 export const GEO_OUTCOME_SPLIT_POLICY_VERSION = 'site-query-connected-component-temporal-v3'
 export const GEO_OUTCOME_ARTIFACT_SCHEMA_VERSION = 'geo-outcome-model-artifact-v1'
 export const GEO_OUTCOME_MODEL_VERSION = 'geo-outcome-model-v1'
+export const GEO_OUTCOME_TRAIN_PRIOR_VERSION = 'geo-outcome-train-prior-v1'
+export const GEO_OUTCOME_TRAIN_PRIOR_SMOOTHING = 0.5
+export const GEO_OUTCOME_TRAIN_PRIOR_MIN_PROBABILITY = 0.000001
 
 export const DEVELOPMENT_GATE = {
   minCandidates: 200,

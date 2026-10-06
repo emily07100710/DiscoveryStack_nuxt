@@ -375,6 +375,8 @@ export interface TrainingRun {
   modelFamily: ModelFamily
   status: 'queued' | 'running' | 'completed' | 'blocked' | 'failed'
   config: TrainingConfig
+  /** Exact immutable rollback snapshot captured when the reservation was created. Undefined is legacy. */
+  rollbackArtifactHash?: string | null
   artifactId: string | null
   artifactHash: string | null
   metrics: EvaluationBundle | null
@@ -392,6 +394,9 @@ export interface ModelArtifactSummary {
   modelFamily: ModelFamily
   taskType: TaskType
   modelVersion: string
+  role: 'candidate' | 'fallback'
+  fallbackOnly: boolean
+  productionActivation: false
   status: ModelStatus
   artifactHash: string
   datasetManifestHash: string

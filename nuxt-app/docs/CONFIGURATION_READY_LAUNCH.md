@@ -92,7 +92,9 @@ pnpm test
 
 以上是本機程式驗證。真實寄信、Stripe、Porkbun、Cloudflare、R2、資料庫與部署驗收應各自保存 reduced receipt；不把完整 token、金鑰或客戶資料放進報告。
 
-## 2026-10-07 正式套用與上線核對
+## 2026-10-07 正式套用與首發上線核對
+
+本節是首發版本的歷史驗收紀錄；後續學習工程增補的驗收與部署狀態另列於下一節，不能把首發的 Live 版本當作後續程式已部署的證明。
 
 經使用者明確授權，這次已執行以下操作；不代表所有供應商流程已驗收：
 
@@ -104,13 +106,22 @@ pnpm test
 - 最終 Nuxt 型別檢查與新正式建置通過；完整安全測試 286 個檔案、5,607 項通過，14 個檔案／27 項外部整合跳過。Astro check 為 53 個檔案、0 error／0 warning／20 hint；正式 origin build 與 89 項測試通過。正式網站更新設定後 14 項唯讀檢查通過。
 - 三種 DS 客戶網站核心範例（Atelier 電商、Bloom 電商、Alignment 預約＋部落格）已在 `services/customer-site-runtime`，53 項本機 HTTP／SQLite／mock 寄信測試通過，另檢查首頁／商品／手機預約版面。Alignment 目前為單人、容量 1 的時段預約，不是多人團課系統。資料、圖片與服務時段是示範內容；沒有付款或送出正式訂單／預約，不能等同原品牌成品或正式客戶網站交付。
 
+## 2026-10-07 本輪學習工程增補驗收
+
+- 在程式凍結後依序執行 Nuxt typecheck、fresh node-server build、完整安全測試，均 exit 0。完整 Vitest 為 295 個檔案／5,677 項通過，14 個檔案／27 項跳過，總計 309 個檔案／5,704 項，258.72 秒；不是沿用首發的 5,607 項結果。本機 production-origin runtime 的 7 項確實執行並通過，沒有因 listener 權限而跳過。
+- 新增覆蓋包括：獨立核准的 train-only fallback、精確回退與訓練預約譜系、重啟讀回、影子評估中途撤回、DECIMAL 精度存讀、發布 receipt-bound repository diff、成效 publication 去重及時間外 holdout。全部使用合成／mock 資料；沒有向正式資料庫寫入測試模型。
+- 新版 node-server 實際綁定 `127.0.0.1:3197`，工作台未登入狀態、正確官網回返連結及 390 px 手機版已在瀏覽器核對；沒有水平溢位，導覽可展開，切換工作台後自動收合。這是匿名本機 UI 驗收，不是正式 owner session／真手機 LINE 驗收；預覽與臨時分頁已關閉。
+- 三個客戶站核心範例再次執行 `node:test`：53 項通過、0 失敗、0 跳過。涵蓋本機 HTTP／SQLite／庫存訂單／預約部落格／權限及 mock 通知；不包含正式品牌美術、真金流、真收信或一鍵持久部署。
+- 2026-10-07 05:16（Asia/Taipei）正式 TiDB 唯讀核對：195 張表、46 筆 ledger、0045 精確 hash 相符、owner 配置有效；來源、training runs、model artifacts、calendar entries、publication targets 均為 0。沒有新增 migration，也沒有重套 0045 或改寫客戶資料。
+- 本輪執行程式的推送與 Render Live 核對尚待完成；首發 `3123d6e` 的 Live 證據不能代替本輪部署驗收。部署沿用既有 Free 服務，不自動升級、啟用模型或呼叫付費供應商。
+
 仍需處理的缺項：
 
 1. **LINE／實際發布**：正式環境尚缺每週內容所需的 LINE access token、channel secret、bot user ID；仍需實際客戶綁定、內容計畫、精確稿件核准與發布目標。手機按確認到供應商發布、回執與下一輪量測回流，尚未做真實端到端驗收。
 2. **Email／網域**：Resend 與 durable outbox 的程式已存在，正式 key、已驗證寄件網域、From、驗證 pepper 及真實收信驗收仍未完成。公司信箱另需信箱服務，不會由 Resend 自動建立。
 3. **常駐與備援**：目前私有 Render 服務為 Free，閒置會休眠；持續排程與關閉瀏覽器後的驗收尚未完成。付費升級／新託管與定期異地備份需要選擇、成本與保存責任，這次沒有擅自升級。
 4. **真實學習資料與模型**：正式 public sources、training runs、model artifacts、內容日曆項目、publication targets 均為 0。需要合法授權的來源及可追溯觀測、GSC／GA4 連線與足夠真實標籤，才能評估模型；API 回答／結構分數不能冒充消費者 AI 引用真值。
-5. **尚未完整的學習工程**：精確 live before／after action-learning adapter、成效 trainer 的可信時間外驗證與多 horizon 重複觀測處理、首次引用模型相容的 shadow 回退基準仍有缺項。正式模型 activation／準確度與效果尚未驗收，保留關閉與 owner 核准門檻。
+5. **尚未完整的學習工程**：已新增成效 trainer 的 server-owned 時間／baseline 譜系、publication 去重及時間外 subject holdout，與首次引用模型獨立 owner 核准的固定 train-only shadow 回退基準。第一方 Git 的正式更新也能保存精確 receipt-bound、hash-only repository change-set；但 repository revision 不是已部署頁面的 live before／after。完整 live action-learning adapter／admission、真實資料上的準確度與效果、production activation 仍未驗收，保留關閉與 owner 核准門檻；不能說只要填 API 就已完成學習品質驗證。
 6. **後續一鍵客戶站交付**：Node 核心需要獨立託管與持久儲存的自動部署 adapter；現有靜態 Cloudflare 部署不能代替交易／預約後台。正式金流／退款、物流／發票、預約提醒、舊站會員與訂單匯入、HTTPS／備份／隔離與真手機驗收仍未完成。依目前優先序先完成 DS／學習閉環，不自動採購客戶網域。
 7. **美術與對外宣稱**：範例目前仍有示範圖片與資料，尚需品牌素材與正式美術驗收。官網所列平台是可規劃整合方向，不是 40 個正式串接全部驗收；「亞洲唯一」等唯一性宣稱仍需獨立可驗證佐證，這次工程檢查不提供此證明。
 

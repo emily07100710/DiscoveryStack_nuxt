@@ -1,4 +1,4 @@
-import { GEO_OUTCOME_FEATURE_CATALOG_VERSION, MAX_FEATURES, MAX_TRAINING_ROWS, type ModelFamily } from './constants'
+import { GEO_OUTCOME_FEATURE_CATALOG_VERSION, GEO_OUTCOME_TRAIN_PRIOR_MIN_PROBABILITY, GEO_OUTCOME_TRAIN_PRIOR_SMOOTHING, MAX_FEATURES, MAX_TRAINING_ROWS, type ModelFamily } from './constants'
 import type { DatasetMember, TrainingConfig } from './types'
 
 const CONFIG_KEYS = ['epochs', 'learningRate', 'l2', 'seed', 'featureCatalogVersion'] as const
@@ -37,6 +37,26 @@ export function trainRegularizedLogisticBaseline(members: readonly DatasetMember
   const config = validateConfig(rawConfig); const { sorted, featureKeys, matrix } = prepareRows(members); const positives = sorted.filter(member => member.label === 1).length; const negatives = sorted.length - positives; if (!positives || !negatives) throw new Error('Both positive and negative classes are required.'); const normalized = normalize(matrix); const weightCount = at(normalized.matrix, 0, 'normalized matrix').length; const weights = Array<number>(weightCount).fill(0); let intercept = 0
   for (let epoch = 0; epoch < config.epochs; epoch += 1) { const gradient = Array<number>(weights.length).fill(0); let interceptGradient = 0; for (let rowIndex = 0; rowIndex < sorted.length; rowIndex += 1) { const row = at(normalized.matrix, rowIndex, 'normalized matrix'); const prediction = sigmoid(intercept + row.reduce((sum, value, index) => sum + value * at(weights, index, 'weights'), 0)); const error = prediction - at(sorted, rowIndex, 'sorted members').label; for (let index = 0; index < weights.length; index += 1) gradient[index] = at(gradient, index, 'gradient') + error * at(row, index, 'row'); interceptGradient += error } for (let index = 0; index < weights.length; index += 1) weights[index] = at(weights, index, 'weights') - config.learningRate * ((at(gradient, index, 'gradient') / sorted.length) + config.l2 * at(weights, index, 'weights')); intercept -= config.learningRate * (interceptGradient / sorted.length) }
   weights.forEach((value, index) => assertFinite(value, `weight[${index}]`)); assertFinite(intercept, 'intercept'); return { coefficients: weights, intercept, normalizationStatistics: { mean: normalized.mean, standardDeviation: normalized.standardDeviation }, trainingRowCount: sorted.length, featureKeys, trainingConfiguration: config }
+}
+
+/** Fixed, interpretable prevalence prior. Reads labels and features from train rows only. */
+export function trainTrainOnlyPrevalencePrior(members: readonly DatasetMember[], rawConfig: TrainingConfig): TrainedParameters {
+  const config = validateConfig(rawConfig)
+  const { sorted, featureKeys, matrix } = prepareRows(members)
+  const positives = sorted.filter(member => member.label === 1).length
+  const negatives = sorted.length - positives
+  if (!positives || !negatives) throw new Error('Both positive and negative classes are required.')
+  const smoothed = (positives + GEO_OUTCOME_TRAIN_PRIOR_SMOOTHING) / (sorted.length + 2 * GEO_OUTCOME_TRAIN_PRIOR_SMOOTHING)
+  const probability = Math.min(1 - GEO_OUTCOME_TRAIN_PRIOR_MIN_PROBABILITY, Math.max(GEO_OUTCOME_TRAIN_PRIOR_MIN_PROBABILITY, smoothed))
+  const normalization = normalize(matrix)
+  return {
+    coefficients: Array<number>(featureKeys.length).fill(0),
+    intercept: Math.log(probability / (1 - probability)),
+    normalizationStatistics: { mean: normalization.mean, standardDeviation: normalization.standardDeviation },
+    trainingRowCount: sorted.length,
+    featureKeys,
+    trainingConfiguration: config,
+  }
 }
 
 export function trainPairwiseLogisticRanker(members: readonly DatasetMember[], rawConfig: TrainingConfig): TrainedParameters {

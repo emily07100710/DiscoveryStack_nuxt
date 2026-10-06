@@ -40,6 +40,14 @@ Authorization header 只在 adapter 最後 request boundary 建構。401/403 回
 
 只有 leading canonical frontmatter 的 publication ID/content hash 相同，且 remote artifact bytes 與本次 deterministic artifact 完全一致時，才回傳 idempotent replay。正文內偽造的 metadata、重複或 malformed frontmatter、相同 publication ID 但不同 hash/bytes 都會回傳 identity collision 並 fail closed。Malformed JSON/base64/UTF-8、錯誤 repository/path、無效 SHA、timeout 與 network exception 都不會產生 delivered。
 
+### 2026-10-07：hash-only repository change-set
+
+可信的 `updated` 結果可追加 `first-party-repository-change-set-v1`：GET 取得的舊 canonical document 與本次 artifact 均能解析、PII scan 通過、注入 server `readAt` 有效，才產生標題及 bounded 段落差異（added／removed／replaced／unmodified）。最多 512 change units、來源各最多 1 MiB，只保留雜湊及索引，不保存舊本文／title／owner 或 repository 原文。blob SHA 與 commit SHA 分開；只有 GET 明確提供合法 commit SHA 才保存 before remoteRevision，缺少時為 null，不冒充已知 commit。
+
+change-set checksum 與 target／branch／path 指紋經嚴格 shape、時間、單元完整覆蓋及 deterministic diff 重算驗證。內容營運在已接受的正式 execute receipt 上綁定 exact owner／entry／draft version／content／evidence／target／artifact，再追加到原 immutable delivery event。舊文件未知、不安全、超限、GET 404 create 或 replay 時不虛構 change-set；這不會讓已成功發布變成失败或觸發重新發布。
+
+這是 `comparisonKind=repository_revision_diff`，不是已部署 live page 的 before state。`liveBeforeState=unknown`、`causalEligibility=false`；不得直接作 action-learning admission 或 primary citation label。Signed API、managed-native 與 multi-target 的完整 live change-set 仍待各自受控 adapter／正式驗收。
+
 ## Signed API adapter
 
 Signed API 使用 HMAC-SHA256。canonical signature input 依固定 newline 順序綁定 command version、target ID、publication ID、idempotency key、content hash、evidence hash、artifact fingerprint、injected timestamp 與 injected nonce。request body 同樣包含 artifact 與 identity binding；header 只包含版本、publication、idempotency、timestamp、nonce 與 signature metadata，不含 Authorization header。

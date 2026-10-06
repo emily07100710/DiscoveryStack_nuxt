@@ -11,6 +11,7 @@ import type { FetchLike, GoogleReadOnlyCredentialResolver, MeasurementRepository
 import { createInterventionLoopRepository } from './repository'
 import type { InterventionLoopRepository } from './types'
 import { createContentOperationsDeliveredPublicationSource } from './content-operations-source'
+import type { PublicationActionEvidence } from '../learning-loop/action-release'
 
 export interface InterventionClock { now(): Date }
 export interface InterventionLinkResolver {
@@ -33,6 +34,7 @@ export type InterventionPageMetricsPuller = (input: { ownerUserId: number, pageU
 export interface InterventionDeliveredPublicationSource {
   listDeliveredPublications(ownerUserId: number, limit: number): Promise<Array<{ entryId: number, targetId: number | null, publicationUrl: string, contentHash: string | null, receiptFingerprint: string, deliveredAt: Date, briefId: number | null, draftId: number | null, changeSummary: string }>>
   resolveDeliveredPublication?(ownerUserId: number, entryId: number): Promise<{ entryId: number, targetId: number | null, publicationUrl: string, contentHash: string | null, receiptFingerprint: string, deliveredAt: Date } | null>
+  resolvePublicationActionEvidence?(ownerUserId: number, entryId: number, now: Date | (() => Date)): Promise<PublicationActionEvidence | null>
 }
 export interface InterventionLoopDependencies {
   repository: InterventionLoopRepository

@@ -4,6 +4,7 @@ import { fingerprint } from '../geo-outcome-model/canonical'
 import { getProductionGeoOutcomeRepository, predict } from '../geo-outcome-model/service'
 import { canBePrimaryCitationTruth } from '../geo-outcome-model/observation-contract'
 import { verifyArtifactHash } from '../geo-outcome-model/release-gate'
+import { isFallbackOnlyArtifact } from '../geo-outcome-model/artifact'
 import type { ContentFeatureInput, GeoOutcomeRepositoryPort } from '../geo-outcome-model/types'
 import { contentFingerprint } from '../seo-geo-core/riskGate'
 import { DrizzleLearningLoopRepository } from './repository'
@@ -30,7 +31,7 @@ export async function getDraftLearningAdvice(ownerUserId: number, value: unknown
   }
   if (!grantedScope) learningError('CURRENT_LEARNING_CONSENT_REQUIRED')
   const artifact = await models.getArtifact(ownerUserId, parsed.data.artifactId)
-  if (!artifact || artifact.status !== 'approved_for_shadow' || artifact.taskType !== 'citation_selection' || !verifyArtifactHash(artifact)) learningError('OWNER_SHADOW_MODEL_REQUIRED')
+  if (!artifact || isFallbackOnlyArtifact(artifact) || artifact.status !== 'approved_for_shadow' || artifact.taskType !== 'citation_selection' || !verifyArtifactHash(artifact)) learningError('OWNER_SHADOW_MODEL_REQUIRED')
   const dataset = (await models.listDatasets(ownerUserId)).find(row => row.manifestFingerprint === artifact.datasetManifestFingerprint)
   const decision = (await models.listDatasetDecisions(ownerUserId)).filter(row => row.manifestFingerprint === dataset?.manifestFingerprint && row.manifestId === dataset?.manifestId).at(-1)
   const members = dataset ? await models.getDatasetMembers(ownerUserId, dataset.manifestId) : []
@@ -47,7 +48,9 @@ export async function getDraftLearningAdvice(ownerUserId: number, value: unknown
   const timestamp = now.toISOString(), runIdentity = `draft-advice:${fingerprint({ entryId: lineage.entry.id, draftId: draft.id, contentHash: draft.contentHash }).slice(0, 24)}`
   const input = { schemaVersion: 'geo-outcome-observation-v1', projectId: null, clientId: null, websiteIdentityHash: fingerprint(lineage.client.canonicalSiteOrigin), queryIdentityHash: fingerprint(lineage.deliverable.opportunityKey), normalizedQueryHash: fingerprint(lineage.deliverable.opportunityKey), candidatePageIdentityHash: fingerprint({ entryId: lineage.entry.id, contentHash: draft.contentHash }), canonicalPageHash: fingerprint({ entryId: lineage.entry.id }), contentHash: draft.contentHash, evidenceSnapshotHash: lineage.entry.evidenceSnapshotHash, publicationReceiptFingerprint: null,
     engine: context.engine, model: context.model, modelVersion: context.modelVersion, interface: context.interface, locale: lineage.entry.language, region: context.region, runIdentity, runTimestamp: timestamp, observationWindow: { start: timestamp, end: timestamp }, observableStatus: 'not_observable', retrievalStatus: 'unknown', citationStatus: 'unknown', citationPosition: null, mentionStatus: 'unknown', recommendationStatus: 'unknown', labelBasis: 'heuristic_auxiliary_only', verificationStatus: 'unverified', evidenceLocatorHashes: [], appliedRuleHashes: [], contentFeatureVector: features }
-  const prediction = await predict(ownerUserId, artifact.artifactId, input, models)
+  let prediction: Awaited<ReturnType<typeof predict>>
+  try { prediction = await predict(ownerUserId, artifact.artifactId, input, models) }
+  catch { learningError('ADVICE_LINEAGE_CHANGED', '模型、回退基準或資料授權已變動，請更新後重新核對。') }
   // A revocation or draft edit while scoring prevents even an advisory from being accepted as current.
   const fresh = await operations.resolveWorkspaceEntry(ownerUserId, lineage.entry.id)
   const freshArtifact = await models.getArtifact(ownerUserId, artifact.artifactId)

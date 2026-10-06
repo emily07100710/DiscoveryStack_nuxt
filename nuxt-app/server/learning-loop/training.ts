@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { createTrainingRun, executeTrainingRun, getProductionGeoOutcomeRepository } from '../geo-outcome-model/service'
+import { approveBootstrapFallback, createBootstrapFallback, createTrainingRun, executeTrainingRun, getProductionGeoOutcomeRepository } from '../geo-outcome-model/service'
 import { summarizeArtifact } from '../geo-outcome-model/artifact'
 import { canBePrimaryCitationTruth } from '../geo-outcome-model/observation-contract'
 import { fingerprint } from '../geo-outcome-model/canonical'
@@ -8,6 +8,20 @@ import type { GeoOutcomeRepositoryPort } from '../geo-outcome-model/types'
 import { learningError } from './authority'
 
 const inputSchema = z.object({ datasetManifestId: z.string().regex(/^geo-dataset-[a-f0-9]{20,64}$/), modelFamily: z.enum(['regularized_logistic_baseline_v1', 'pairwise_logistic_ranker_v1']) }).strict()
+const fallbackReviewSchema = z.object({ artifactId: z.string().regex(/^geo-model-[a-f0-9]{20}$/), reason: z.string().trim().min(10).max(500) }).strict()
+
+/** Separate fallback creation and owner review; no client-authored weights or role switches. */
+export async function createLearningCitationFallback(ownerUserId: number, input: unknown, repository?: GeoOutcomeRepositoryPort) {
+  const parsed = inputSchema.safeParse(input)
+  if (!parsed.success) learningError('INVALID_FALLBACK_INPUT', '請選擇已核准的資料集與相容模型種類。', 422)
+  return { artifact: await createBootstrapFallback(ownerUserId, parsed.data.datasetManifestId, parsed.data.modelFamily, repository), productionActivation: false as const }
+}
+
+export async function reviewLearningCitationFallback(ownerUserId: number, input: unknown, repository?: GeoOutcomeRepositoryPort) {
+  const parsed = fallbackReviewSchema.safeParse(input)
+  if (!parsed.success) learningError('INVALID_FALLBACK_REVIEW', '請核對回退基準並記錄核准理由。', 422)
+  return { ...await approveBootstrapFallback(ownerUserId, parsed.data.artifactId, ownerUserId, parsed.data.reason, repository), productionActivation: false as const }
+}
 
 /** A convenient stage, not a second training engine or an automatic approval path. */
 export async function trainApprovedLearningDataset(ownerUserId: number, input: unknown, repository?: GeoOutcomeRepositoryPort) {

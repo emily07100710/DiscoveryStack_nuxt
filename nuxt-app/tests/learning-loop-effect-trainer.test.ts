@@ -63,10 +63,60 @@ function trainingCandidates(count = 160) {
   return Array.from({ length: count }, (_, index) => candidate(index))
 }
 
-function train(candidates = trainingCandidates()) {
-  const manifest = buildOutcomeDatasetManifest({ candidates })
-  const datasetDigest = outcomeSha256({ manifestFingerprint: manifest.manifestFingerprint, candidateFingerprints: candidates.map((item) => item.candidateFingerprint).sort(), policy: 'secondary_hash_only_dataset_review_v1' })
-  return trainContentEffectModel({ candidates, datasetDigest, lineageFingerprint: outcomeSha256('durable-lineage') })
+function relabel(item: OutcomeLearningCandidate, signal: OutcomeSignal): OutcomeLearningCandidate {
+  const base = { ...item, directionalLabels: item.directionalLabels.map((label) => label.source === 'google_search_console' ? { ...label, signal } : label) }
+  const { candidateFingerprint: _previous, ...body } = base
+  return { ...body, candidateFingerprint: outcomeSha256(body) }
+}
+
+function baselineMetadata(index: number, publishedAt: string) {
+  const rows = [{
+    source: 'google_search_console',
+    scopeFingerprint: outcomeSha256(`gsc-scope-${index}`),
+    windowStart: new Date(Date.parse(publishedAt) - 30 * 86400000).toISOString(),
+    windowEnd: new Date(Date.parse(publishedAt) - 86400000).toISOString(),
+    capturedAt: new Date(Date.parse(publishedAt) - 86400000).toISOString(),
+    sourceHash: outcomeSha256(`gsc-baseline-source-${index}`),
+  }]
+  rows.sort((a, b) => {
+    const left = [a.source, a.windowStart, a.windowEnd, a.scopeFingerprint, a.capturedAt, a.sourceHash]
+    const right = [b.source, b.windowStart, b.windowEnd, b.scopeFingerprint, b.capturedAt, b.sourceHash]
+    for (let i = 0; i < left.length; i += 1) if (left[i] !== right[i]) return left[i]! < right[i]! ? -1 : 1
+    return 0
+  })
+  return { fingerprint: outcomeSha256({ kind: 'content_effect_baseline_metadata_v1', rows }), latestCapturedAt: rows.map(row => row.capturedAt).sort().at(-1)! }
+}
+
+function metadataFor(candidates: OutcomeLearningCandidate[], overrides: (entry: { candidateFingerprint: string; publicationGroupFingerprint: string; baselineMetadataFingerprint: string; latestBaselineCapturedAt: string; publishedAt: string; gscFollowUpWindowStart: string; gscFollowUpWindowEnd: string; capturedAt: string }, index: number) => void = () => {}) {
+  const entries = candidates.map((item, index) => {
+    const publishedAt = new Date(Date.UTC(2020, 0, 1 + index * 30)).toISOString()
+    const baseline = baselineMetadata(index, publishedAt)
+    const entry = {
+      candidateFingerprint: item.candidateFingerprint,
+      publicationGroupFingerprint: outcomeSha256(`publication-group-${index}`),
+      baselineMetadataFingerprint: baseline.fingerprint,
+      latestBaselineCapturedAt: baseline.latestCapturedAt,
+      publishedAt,
+      gscFollowUpWindowStart: new Date(Date.parse(publishedAt) + 7 * 86400000).toISOString(),
+      gscFollowUpWindowEnd: new Date(Date.parse(publishedAt) + 14 * 86400000).toISOString(),
+      capturedAt: new Date(Date.parse(publishedAt) + 14 * 86400000).toISOString(),
+    }
+    overrides(entry, index)
+    return entry
+  }).sort((a, b) => a.candidateFingerprint < b.candidateFingerprint ? -1 : a.candidateFingerprint > b.candidateFingerprint ? 1 : 0)
+  return rehashMetadata(entries)
+}
+
+function rehashMetadata(entries: Array<{ candidateFingerprint: string; publicationGroupFingerprint: string; baselineMetadataFingerprint: string; latestBaselineCapturedAt: string; publishedAt: string; gscFollowUpWindowStart: string; gscFollowUpWindowEnd: string; capturedAt: string }>) {
+  entries.sort((a, b) => a.candidateFingerprint < b.candidateFingerprint ? -1 : a.candidateFingerprint > b.candidateFingerprint ? 1 : 0)
+  const trainingAsOf = entries.map((entry) => entry.capturedAt).sort().at(-1)!
+  return { schema: 'content-effect-publication-metadata.v1' as const, trainingAsOf, entries, sidecarFingerprint: outcomeSha256({ schema: 'content-effect-publication-metadata.v1', trainingAsOf, entries }) }
+}
+
+function train(candidates = trainingCandidates(), metadata = metadataFor(candidates), digestCandidates = candidates) {
+  const manifest = buildOutcomeDatasetManifest({ candidates: digestCandidates })
+  const datasetDigest = outcomeSha256({ manifestFingerprint: manifest.manifestFingerprint, candidateFingerprints: digestCandidates.map((item) => item.candidateFingerprint).sort(), policy: 'secondary_hash_only_dataset_review_v1' })
+  return trainContentEffectModel({ candidates, datasetDigest, lineageFingerprint: outcomeSha256('durable-lineage'), publicationMetadata: metadata })
 }
 
 describe('offline observational content-effect trainer', () => {
@@ -78,7 +128,8 @@ describe('offline observational content-effect trainer', () => {
     expect(first.artifact).toEqual(second.artifact)
     expect(first.artifact?.config).toMatchObject({ seed: 0, epochs: 250, maxRows: 500, maxFeatures: 80 })
     expect(first.artifact?.features.length).toBeLessThanOrEqual(80)
-    expect(first.artifact?.splits.temporalHoldout).toBe('UNAVAILABLE')
+    expect(first.artifact?.splits.temporalHoldout.status).toBe('AVAILABLE')
+    expect(first.artifact?.metrics.temporalHoldout.rowCount).toBeGreaterThanOrEqual(10)
     expect(verifyContentEffectArtifact(first.artifact)).toBe(true)
     expect(first.artifact?.metrics.test.rowCount).toBeGreaterThan(0)
     expect(first.artifact?.metrics.test.logLoss).toBeLessThan(1)
@@ -87,8 +138,10 @@ describe('offline observational content-effect trainer', () => {
   it('keeps all rows from each subject within one deterministic split without publishing subject IDs', () => {
     const result = train()
     expect(result.status).toBe('completed')
+    const allRows = trainingCandidates()
+    const latestSubjects = new Set(allRows.slice(128).map((row) => row.deidentifiedSubjectKey))
     const groups = new Map<string, number>()
-    for (const row of trainingCandidates()) groups.set(row.deidentifiedSubjectKey, (groups.get(row.deidentifiedSubjectKey) ?? 0) + 1)
+    for (const row of allRows.slice(0, 128)) if (!latestSubjects.has(row.deidentifiedSubjectKey)) groups.set(row.deidentifiedSubjectKey, (groups.get(row.deidentifiedSubjectKey) ?? 0) + 1)
     const ordered = [...groups.keys()].sort((a, b) => {
       const left = outcomeSha256({ seed: 0, subject: a })
       const right = outcomeSha256({ seed: 0, subject: b })
@@ -185,7 +238,7 @@ describe('offline observational content-effect trainer', () => {
     expect(verifyContentEffectArtifact(artifact)).toBe(true)
     expect(verifyContentEffectArtifact({ ...artifact, intercept: artifact.intercept + 0.25 })).toBe(false)
     const summary = summarizeContentEffectArtifact(artifact)
-    expect(summary).toMatchObject({ status: 'verified', productionActivation: false, temporalHoldout: 'UNAVAILABLE' })
+    expect(summary).toMatchObject({ status: 'verified', productionActivation: false, temporalHoldout: { status: 'AVAILABLE' } })
     expect(summary).not.toHaveProperty('coefficients')
     expect(summary).not.toHaveProperty('intercept')
     expect(summary).not.toHaveProperty('normalization')
@@ -193,9 +246,113 @@ describe('offline observational content-effect trainer', () => {
   })
 
   it('does not silently extend its CPU deadline', () => {
-    const result = trainContentEffectModel({ candidates: trainingCandidates(), datasetDigest: outcomeSha256('d'), lineageFingerprint: outcomeSha256('l'), deadlineMs: 1 })
+    const candidates = trainingCandidates()
+    const result = trainContentEffectModel({ candidates, datasetDigest: outcomeSha256('d'), lineageFingerprint: outcomeSha256('l'), publicationMetadata: metadataFor(candidates), deadlineMs: 1 })
     expect(result.status).toBe('blocked')
     expect(result.reasonCodes).toContain('CPU_DEADLINE_REACHED')
     expect(result.artifact).toBeNull()
+  })
+
+  it('is invariant to candidate and metadata input order', () => {
+    const candidates = trainingCandidates()
+    const metadata = metadataFor(candidates)
+    const first = train(candidates, metadata)
+    const second = train([...candidates].reverse(), { ...metadata, entries: [...metadata.entries].reverse() })
+    expect(second.status).toBe('completed')
+    expect(second.artifact).toEqual(first.artifact)
+  })
+
+  it('deduplicates repeated horizons before admission and reports conflicting publication metadata', () => {
+    const candidates = trainingCandidates(180)
+    const mixedEarliest = relabel(candidates[0]!, 'mixed_signal')
+    const duplicate = candidate(0, { followup: 2_000_000 })
+    const withDuplicate = [mixedEarliest, ...candidates.slice(1), duplicate]
+    const sidecar = metadataFor(withDuplicate, (entry, index) => {
+      if (index === 180) {
+        entry.publicationGroupFingerprint = outcomeSha256('publication-group-0')
+        entry.publishedAt = new Date(Date.UTC(2020, 0, 1)).toISOString()
+        const baseline = baselineMetadata(0, entry.publishedAt)
+        entry.baselineMetadataFingerprint = baseline.fingerprint
+        entry.latestBaselineCapturedAt = baseline.latestCapturedAt
+        entry.gscFollowUpWindowStart = new Date(Date.UTC(2020, 0, 22)).toISOString()
+        entry.gscFollowUpWindowEnd = new Date(Date.UTC(2020, 0, 29)).toISOString()
+        entry.capturedAt = entry.gscFollowUpWindowEnd
+      }
+    })
+    const result = train(withDuplicate, sidecar)
+    expect(result.status).toBe('completed')
+    expect(result.artifact).not.toBeNull()
+    expect(result.counts.admittedCandidates).toBe(180)
+    expect(result.counts.excludedSignals.mixed_signal).toBe(1)
+    expect(result.artifact!.splits.train.rows + result.artifact!.splits.validation.rows + result.artifact!.splits.test.rows + result.artifact!.splits.temporalHoldout.rows).toBe(179)
+
+    const conflict = metadataFor(candidates, (entry, index) => {
+      if (index === 159) entry.publicationGroupFingerprint = outcomeSha256('publication-group-0')
+    })
+    expect(train(candidates, conflict)).toMatchObject({ status: 'blocked', reasonCodes: ['PUBLICATION_GROUP_METADATA_CONFLICT'], artifact: null })
+
+    const baselineConflict = metadataFor(withDuplicate, (entry, index) => {
+      if (index === 180) {
+        entry.publicationGroupFingerprint = outcomeSha256('publication-group-0')
+        entry.publishedAt = new Date(Date.UTC(2020, 0, 1)).toISOString()
+        entry.gscFollowUpWindowStart = new Date(Date.UTC(2020, 0, 22)).toISOString()
+        entry.gscFollowUpWindowEnd = new Date(Date.UTC(2020, 0, 29)).toISOString()
+        entry.capturedAt = entry.gscFollowUpWindowEnd
+        entry.baselineMetadataFingerprint = outcomeSha256('different-baseline-provenance')
+        entry.latestBaselineCapturedAt = new Date(Date.UTC(2019, 11, 31)).toISOString()
+      }
+    })
+    expect(train(withDuplicate, baselineConflict)).toMatchObject({ status: 'blocked', reasonCodes: ['PUBLICATION_GROUP_METADATA_CONFLICT'], artifact: null })
+  })
+
+  it('fails closed on missing metadata and publication/window boundary violations', () => {
+    const candidates = trainingCandidates()
+    const sidecar = metadataFor(candidates)
+    expect(train(candidates, { ...sidecar, entries: sidecar.entries.slice(1) })).toMatchObject({ status: 'blocked', reasonCodes: ['PUBLICATION_METADATA_INVALID'], artifact: null })
+    const missingBaselineMetadata = metadataFor(candidates)
+    const missingBaselineEntry = { ...missingBaselineMetadata.entries[0]! } as Record<string, unknown>
+    delete missingBaselineEntry.baselineMetadataFingerprint
+    expect(train(candidates, rehashMetadata([missingBaselineEntry as never, ...missingBaselineMetadata.entries.slice(1)]) as never)).toMatchObject({ status: 'blocked', reasonCodes: ['PUBLICATION_METADATA_INVALID'], artifact: null })
+
+    const badPublishedBoundary = metadataFor(candidates, (entry, index) => {
+      if (index === 127) entry.gscFollowUpWindowStart = new Date(Date.parse(entry.publishedAt) - 1).toISOString()
+    })
+    expect(train(candidates, badPublishedBoundary)).toMatchObject({ status: 'blocked', reasonCodes: ['PUBLICATION_METADATA_INVALID'], artifact: null })
+
+    const badBaselineCapturedAt = metadataFor(candidates, (entry, index) => {
+      if (index === 127) entry.latestBaselineCapturedAt = new Date(Date.parse(entry.publishedAt) + 1).toISOString()
+    })
+    expect(train(candidates, badBaselineCapturedAt)).toMatchObject({ status: 'blocked', reasonCodes: ['PUBLICATION_METADATA_INVALID'], artifact: null })
+
+    const cutoff = sidecar.entries.find((entry) => entry.candidateFingerprint === candidates[128]!.candidateFingerprint)!.publishedAt
+    const touchingCutoff = metadataFor(candidates, (entry, index) => {
+      if (index === 127) {
+        entry.gscFollowUpWindowEnd = cutoff
+        entry.capturedAt = cutoff
+      }
+    })
+    expect(train(candidates, touchingCutoff)).toMatchObject({ status: 'blocked', reasonCodes: ['TEMPORAL_HOLDOUT_UNAVAILABLE'], artifact: null })
+  })
+
+  it('rejects a legacy artifact that claims temporal holdout is unavailable', () => {
+    const artifact = train().artifact!
+    expect(verifyContentEffectArtifact({ ...artifact, schema: 'discoverystack.content-effect-logistic.v1', splits: { ...artifact.splits, temporalHoldout: 'UNAVAILABLE' } })).toBe(false)
+  })
+
+  it('rejects semantically invalid artifacts even when their checksum is recomputed', () => {
+    const artifact = train().artifact!
+    const { artifactHash: _oldHash, ...body } = artifact
+    const leakedFeature = { ...body, features: [...body.features] }
+    leakedFeature.features[0] = 'google_search_console.impressions.follow_up.log1p'
+    expect(verifyContentEffectArtifact({ ...leakedFeature, artifactHash: outcomeSha256(leakedFeature) })).toBe(false)
+
+    const badMetric = { ...body, metrics: { ...body.metrics, temporalHoldout: { ...body.metrics.temporalHoldout, brierScore: 1.5 } } }
+    expect(verifyContentEffectArtifact({ ...badMetric, artifactHash: outcomeSha256(badMetric) })).toBe(false)
+
+    const badMajorityBaseline = { ...body, metrics: { ...body.metrics, temporalMajorityBaseline: { ...body.metrics.temporalMajorityBaseline, logLoss: body.metrics.temporalMajorityBaseline.logLoss + 0.1 } } }
+    expect(verifyContentEffectArtifact({ ...badMajorityBaseline, artifactHash: outcomeSha256(badMajorityBaseline) })).toBe(false)
+
+    const badCounts = { ...body, splits: { ...body.splits, temporalHoldout: { ...body.splits.temporalHoldout, subjects: body.splits.temporalHoldout.rows + 1 } } }
+    expect(verifyContentEffectArtifact({ ...badCounts, artifactHash: outcomeSha256(badCounts) })).toBe(false)
   })
 })

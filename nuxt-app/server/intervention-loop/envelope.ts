@@ -5,6 +5,7 @@ import { fingerprint } from './normalization'
 import { sha256Hex } from '../site-evidence/normalization'
 import type { InterventionLoopDependencies } from './dependencies'
 import type { ExperimentResult, Intervention, InterventionEvent, InterventionMeasurement } from './types'
+import type { PublicationActionEvidence } from '../learning-loop/action-release'
 
 export const INTERVENTION_ENVELOPE_VERSION = 'intervention-envelope-v1' as const
 type PublicationBinding = 'verified' | 'missing' | 'stale' | 'unavailable' | 'not_applicable'
@@ -48,7 +49,14 @@ export async function resolveInterventionEnvelope(input: {
     && row.baselineHashSource !== 'content_operations' && (!row.deployedAt || row.baselineCapturedAt < row.deployedAt)
     && events.some(event => event.eventType === 'baseline_captured' && validEvent(event) && event.evidence.contentHash === row.baselineContentHash)
   const recrawlKnown = row.recrawlStatus === 'confirmed' && row.deployedAt !== null && row.recrawlConfirmedAt !== null && row.recrawlConfirmedAt >= row.deployedAt
-  const limitations = new Set([...computed.limitations, 'observational_not_causal', 'attribution_not_established', 'concurrent_changes_not_recorded', 'immutable_change_set_not_recorded'])
+  let actionEvidence: PublicationActionEvidence | null = null
+  if (publicationBinding === 'verified' && row.entryId && deps.deliveredPublications.resolvePublicationActionEvidence) {
+    try {
+      const evidence = await deps.deliveredPublications.resolvePublicationActionEvidence(row.ownerUserId, row.entryId, () => deps.clock.now())
+      if (evidence?.publicationReceiptFingerprint === receiptFingerprint) actionEvidence = evidence
+    } catch { /* a publication audit must remain available during learning-authority outages */ }
+  }
+  const limitations = new Set([...computed.limitations, 'observational_not_causal', 'attribution_not_established', 'concurrent_changes_not_recorded', actionEvidence ? 'repository_diff_is_not_live_before_after' : 'immutable_change_set_not_recorded'])
   if (!beforeKnown) limitations.add('baseline_unknown')
   if (!recrawlKnown) limitations.add('recrawl_not_confirmed')
   if (row.deployEvidenceSource === 'publication_receipt' && publicationBinding !== 'verified') limitations.add(`publication_binding_${publicationBinding}`)
@@ -58,7 +66,7 @@ export async function resolveInterventionEnvelope(input: {
   const assessmentCurrent = Boolean(currentResult && recrawlKnown && publicationCurrent && !limitations.has('event_fingerprint_mismatch') && row.status !== 'cancelled')
   const searchScopes = comparisons.filter(group => group.source === 'google_search_console')
   const selected = searchScopes.length === 1 && searchScopes[0]!.status === 'comparable' ? searchScopes[0]! : null
-  const learningReasons = ['consent_authority_not_bound', 'pii_review_not_bound', 'immutable_change_set_not_recorded', 'aggregate_is_not_citation_ground_truth']
+  const learningReasons = ['aggregate_is_not_citation_ground_truth', ...(actionEvidence ? actionEvidence.reasonCodes : ['immutable_change_set_not_recorded']), ...(!actionEvidence?.authority ? ['consent_authority_not_bound', 'pii_review_not_bound'] : [])]
   if (!assessmentCurrent || computed.signal === 'insufficient_data') learningReasons.push('comparable_outcome_not_ready')
   if (publicationBinding !== 'verified') learningReasons.push('exact_publication_authority_not_bound')
   const body = {
@@ -84,7 +92,7 @@ export async function resolveInterventionEnvelope(input: {
       // Free-text summaries/hypotheses are not training data; exact units cannot be inferred from them.
       summaryFingerprint: fingerprint(row.changeSummary),
       hypothesisFingerprint: row.hypothesis ? fingerprint(row.hypothesis) : null,
-      changeSet: { status: 'not_recorded' as const, changeSetId: null, units: [] },
+      changeSet: actionEvidence ? { status: 'recorded_repository_revision' as const, changeSetId: actionEvidence.binding.changeSet.changeSetId, beforeHash: actionEvidence.binding.changeSet.before.bodyHash, afterHash: actionEvidence.binding.changeSet.after.bodyHash, comparisonKind: 'repository_revision_diff' as const, liveBeforeState: 'unknown' as const, bindingFingerprint: actionEvidence.binding.bindingFingerprint, units: [{ type: 'title', ...actionEvidence.binding.changeSet.titleChange }, ...actionEvidence.binding.changeSet.paragraphChanges.map(unit => ({ type: 'paragraph', ...unit }))] } : { status: 'not_recorded' as const, changeSetId: null, units: [] },
       deployedAt: row.deployedAt,
       contentHash: hash(row.deployedContentHash) ? row.deployedContentHash : null,
       evidenceLevel: row.deployEvidenceLevel,
@@ -118,7 +126,8 @@ export async function resolveInterventionEnvelope(input: {
       reasonCodes: learningReasons.sort(),
       deidentificationVersion: 'intervention-hash-only-v1',
       // Existing consent/candidate-set/evidence governance must be separately server-resolved.
-      candidateAuthority: 'not_bound' as const,
+      candidateAuthority: actionEvidence?.authority ? 'current_auxiliary_review_only' as const : 'not_bound' as const,
+      authorityFingerprint: actionEvidence?.authority ? fingerprint(actionEvidence.authority) : null,
     },
     eventReferences: [...events].sort((a, b) => a.id - b.id).map(event => ({ id: event.id, eventType: event.eventType, occurredAt: event.occurredAt, fingerprint: event.evidenceFingerprint })),
   }

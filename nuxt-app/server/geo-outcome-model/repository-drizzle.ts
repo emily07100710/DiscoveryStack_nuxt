@@ -23,6 +23,11 @@ import {
   type GeoOutcomeTrainingRun,
 } from '../database/schema'
 import { canonicalJson, fingerprint, isSha256, sha256Hex } from './canonical'
+import { isFallbackOnlyArtifact } from './artifact'
+import { isExactTrainOnlyPriorArtifact } from './bootstrap-baseline'
+import { canBePrimaryCitationTruth } from './observation-contract'
+import { evaluatePromotionGate } from './release-gate'
+import { getShadowReadiness } from './dataset-builder'
 import { assertObservationIsUsable } from './observation-contract'
 import { deriveFeatureVector } from './feature-catalog'
 import { getDatasetReadiness } from './dataset-builder'
@@ -119,10 +124,12 @@ function splitKeyToDomain(key: string): DomainSplit {
 
 export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
   private readonly db: GeoOutcomeDrizzleDatabase
+  private readonly inTransaction: boolean
 
-  constructor(database: GeoOutcomeDrizzleDatabase | null = getDatabase()) {
+  constructor(database: GeoOutcomeDrizzleDatabase | null = getDatabase(), inTransaction = false) {
     if (!database) throw new Error('GEO outcome database is not configured.')
     this.db = database
+    this.inTransaction = inTransaction
   }
 
   private governanceProjection(observation: OutcomeObservation, facts: readonly GeoOutcomeObservationVerification[]): OutcomeObservation {
@@ -422,10 +429,18 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
   private async mapTraining(row: GeoOutcomeTrainingRun): Promise<TrainingRun> {
     const [dataset] = await this.db.select({ manifestId: geoOutcomeDatasetManifests.manifestId }).from(geoOutcomeDatasetManifests).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, row.ownerUserId), eq(geoOutcomeDatasetManifests.id, row.datasetManifestId))).limit(1)
     if (!dataset) throw new Error('Dangling training dataset foreign key.')
-    const config = parseTrainingConfig(row.configuration)
-    const expectedTrainingRunId = `geo-training-${fingerprint({ ownerUserId: row.ownerUserId, datasetManifestId: dataset.manifestId, modelFamily: row.modelFamily, config }).slice(0, 20)}`
+    const rawConfiguration = row.configuration as unknown
+    const isVersioned = Boolean(rawConfiguration && typeof rawConfiguration === 'object' && !Array.isArray(rawConfiguration) && (rawConfiguration as Record<string, unknown>).schemaVersion === 'geo-outcome-training-configuration-v2')
+    const configuration = isVersioned ? rawConfiguration as Record<string, unknown> : null
+    if (isVersioned && (Object.keys(configuration!).sort().join(',') !== 'config,rollbackArtifactHash,schemaVersion' || (configuration!.rollbackArtifactHash !== null && (typeof configuration!.rollbackArtifactHash !== 'string' || !isSha256(configuration!.rollbackArtifactHash))))) throw new Error('Corrupt durable training configuration snapshot.')
+    const config = parseTrainingConfig(isVersioned ? configuration!.config : rawConfiguration)
+    const rollbackArtifactHash = isVersioned ? configuration!.rollbackArtifactHash as string | null : undefined
+    const expectedFingerprint = isVersioned
+      ? fingerprint({ ownerUserId: row.ownerUserId, datasetManifestId: dataset.manifestId, modelFamily: row.modelFamily, config, rollbackArtifactHash })
+      : fingerprint({ ownerUserId: row.ownerUserId, datasetManifestId: dataset.manifestId, modelFamily: row.modelFamily, config })
+    const expectedTrainingRunId = `geo-training-${expectedFingerprint.slice(0, 20)}`
     if (row.trainingRunId !== expectedTrainingRunId) throw new Error('Corrupt durable training business id.')
-    const mapped = { trainingRunId: row.trainingRunId, ownerUserId: row.ownerUserId, datasetManifestId: dataset.manifestId, modelFamily: row.modelFamily, status: row.status, config, artifactId: row.artifactId, artifactHash: row.artifactHash, metrics: row.metrics === null ? null : evaluationBundle(row.metrics), reason: row.reason, createdAt: toIso(row.createdAt)!, startedAt: toIso(row.startedAt), completedAt: toIso(row.completedAt), leaseOwner: row.leaseOwner, leaseExpiresAt: toIso(row.leaseExpiresAt), version: row.version } satisfies TrainingRun
+    const mapped = { trainingRunId: row.trainingRunId, ownerUserId: row.ownerUserId, datasetManifestId: dataset.manifestId, modelFamily: row.modelFamily, status: row.status, config, ...(isVersioned ? { rollbackArtifactHash } : {}), artifactId: row.artifactId, artifactHash: row.artifactHash, metrics: row.metrics === null ? null : evaluationBundle(row.metrics), reason: row.reason, createdAt: toIso(row.createdAt)!, startedAt: toIso(row.startedAt), completedAt: toIso(row.completedAt), leaseOwner: row.leaseOwner, leaseExpiresAt: toIso(row.leaseExpiresAt), version: row.version } satisfies TrainingRun
     if (mapped.status === 'running' && (!mapped.leaseOwner || !mapped.leaseExpiresAt || !mapped.startedAt)) throw new Error('Corrupt durable training lease state.')
     if (mapped.status === 'completed' && (!mapped.artifactId || !mapped.artifactHash || !mapped.metrics || !mapped.completedAt)) throw new Error('Corrupt durable completed training state.')
     if (mapped.status === 'queued' && (mapped.artifactId || mapped.artifactHash || mapped.metrics || mapped.completedAt)) throw new Error('Corrupt durable queued training state.')
@@ -434,7 +449,8 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
   async createTrainingRun(ownerUserId: number, run: TrainingRun) {
     const [dataset] = await this.db.select({ id: geoOutcomeDatasetManifests.id }).from(geoOutcomeDatasetManifests).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, ownerUserId), eq(geoOutcomeDatasetManifests.manifestId, run.datasetManifestId))).limit(1)
     if (!dataset) throw new Error('Dataset manifest not found.')
-    try { await this.db.insert(geoOutcomeTrainingRuns).values({ ownerUserId, trainingRunId: run.trainingRunId, datasetManifestId: dataset.id, modelFamily: run.modelFamily, status: run.status, startedAt: null, completedAt: null, leaseOwner: null, leaseExpiresAt: null, version: 0, configuration: run.config, artifactId: null, artifactHash: null, metrics: null, reason: null, createdAt: new Date(run.createdAt) }) } catch { const replay = await this.getTrainingRun(ownerUserId, run.trainingRunId); if (replay && replay.datasetManifestId === run.datasetManifestId && replay.modelFamily === run.modelFamily && fingerprint(replay.config) === fingerprint(run.config)) return replay; throw new Error('Training run collision.') }
+    const configuration = run.rollbackArtifactHash === undefined ? run.config : { schemaVersion: 'geo-outcome-training-configuration-v2', config: run.config, rollbackArtifactHash: run.rollbackArtifactHash }
+    try { await this.db.insert(geoOutcomeTrainingRuns).values({ ownerUserId, trainingRunId: run.trainingRunId, datasetManifestId: dataset.id, modelFamily: run.modelFamily, status: run.status, startedAt: null, completedAt: null, leaseOwner: null, leaseExpiresAt: null, version: 0, configuration, artifactId: null, artifactHash: null, metrics: null, reason: null, createdAt: new Date(run.createdAt) }) } catch { const replay = await this.getTrainingRun(ownerUserId, run.trainingRunId); if (replay && replay.datasetManifestId === run.datasetManifestId && replay.modelFamily === run.modelFamily && fingerprint(replay.config) === fingerprint(run.config) && replay.rollbackArtifactHash === run.rollbackArtifactHash) return replay; throw new Error('Training run collision.') }
     return (await this.getTrainingRun(ownerUserId, run.trainingRunId))!
   }
   async getTrainingRun(ownerUserId: number, trainingRunId: string) { const [row] = await this.db.select().from(geoOutcomeTrainingRuns).where(and(eq(geoOutcomeTrainingRuns.ownerUserId, ownerUserId), eq(geoOutcomeTrainingRuns.trainingRunId, trainingRunId))).limit(1); return row ? this.mapTraining(row) : null }
@@ -467,7 +483,10 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     if (patch.artifactHash !== undefined) update.artifactHash = patch.artifactHash
     if (patch.metrics !== undefined) update.metrics = patch.metrics
     if (patch.reason !== undefined) update.reason = patch.reason
-    if (patch.config !== undefined) update.configuration = parseTrainingConfig(patch.config)
+    if (patch.config !== undefined) {
+      const config = parseTrainingConfig(patch.config)
+      update.configuration = current.rollbackArtifactHash === undefined ? config : { schemaVersion: 'geo-outcome-training-configuration-v2', config, rollbackArtifactHash: current.rollbackArtifactHash }
+    }
     const result = await this.db.update(geoOutcomeTrainingRuns).set(update).where(and(eq(geoOutcomeTrainingRuns.ownerUserId, ownerUserId), eq(geoOutcomeTrainingRuns.trainingRunId, trainingRunId), eq(geoOutcomeTrainingRuns.version, expectedVersion)))
     if (affectedRows(result) !== 1) throw new Error('Training run transition lost its compare-and-swap.')
     return (await this.getTrainingRun(ownerUserId, trainingRunId))!
@@ -479,7 +498,26 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     if (!normalization || typeof normalization !== 'object' || Array.isArray(normalization)) throw new Error('Corrupt durable normalization statistics.')
     const normalizationStatistics = { mean: numberArray(normalization.mean, 'normalization mean'), standardDeviation: numberArray(normalization.standardDeviation, 'normalization standard deviation') }
     if (normalizationStatistics.mean.length !== normalizationStatistics.standardDeviation.length || normalizationStatistics.standardDeviation.some(value => value <= 0)) throw new Error('Corrupt durable normalization statistics.')
-    const base = { artifactSchemaVersion: row.artifactSchemaVersion, taskType: row.taskType, modelFamily: row.modelFamily, modelVersion: row.modelVersion, featureCatalogVersion: row.featureCatalogVersion, labelContractVersion: row.labelContractVersion, datasetManifestFingerprint: row.datasetManifestFingerprint, splitManifestFingerprint: row.splitManifestFingerprint, coefficients: numberArray(row.coefficients, 'artifact coefficients'), intercept: Number(row.intercept), normalizationStatistics, trainingConfiguration: parseTrainingConfig(row.trainingConfiguration), trainingRowCount: row.trainingRowCount, evaluationMetrics: evaluationBundle(row.evaluationMetrics), limitations: stringArray(row.limitations, 'artifact limitations'), rollbackArtifactHash: row.rollbackArtifactHash }
+    const rawTrainingConfiguration = row.trainingConfiguration as unknown
+    const versionedConfiguration = Boolean(rawTrainingConfiguration && typeof rawTrainingConfiguration === 'object' && !Array.isArray(rawTrainingConfiguration) && 'schemaVersion' in rawTrainingConfiguration)
+    let trainingConfiguration: TrainingRun['config']
+    let intercept: number
+    if (versionedConfiguration) {
+      const envelope = rawTrainingConfiguration as Record<string, unknown>
+      if (envelope.schemaVersion !== 'geo-outcome-artifact-training-configuration-v2' || Object.keys(envelope).sort().join(',') !== 'config,exactIntercept,schemaVersion') throw new Error('Corrupt durable artifact training configuration envelope.')
+      if (typeof envelope.exactIntercept !== 'number' || !Number.isFinite(envelope.exactIntercept) || Math.abs(envelope.exactIntercept) > 1_000_000 || Object.is(envelope.exactIntercept, -0)) throw new Error('Corrupt durable exact artifact intercept.')
+      const expectedMirror = envelope.exactIntercept.toFixed(12)
+      const storedMirror = String(row.intercept)
+      const negativeZeroMirror = Number(expectedMirror) === 0 && storedMirror === '0.000000000000'
+      if (storedMirror !== expectedMirror && !negativeZeroMirror) throw new Error('Corrupt durable artifact DECIMAL intercept mirror.')
+      intercept = envelope.exactIntercept
+      trainingConfiguration = parseTrainingConfig(envelope.config)
+    } else {
+      if (rawTrainingConfiguration && typeof rawTrainingConfiguration === 'object' && !Array.isArray(rawTrainingConfiguration) && 'schemaVersion' in rawTrainingConfiguration) throw new Error('Unknown durable artifact training configuration marker.')
+      intercept = Number(row.intercept)
+      trainingConfiguration = parseTrainingConfig(rawTrainingConfiguration)
+    }
+    const base = { artifactSchemaVersion: row.artifactSchemaVersion, taskType: row.taskType, modelFamily: row.modelFamily, modelVersion: row.modelVersion, featureCatalogVersion: row.featureCatalogVersion, labelContractVersion: row.labelContractVersion, datasetManifestFingerprint: row.datasetManifestFingerprint, splitManifestFingerprint: row.splitManifestFingerprint, coefficients: numberArray(row.coefficients, 'artifact coefficients'), intercept, normalizationStatistics, trainingConfiguration, trainingRowCount: row.trainingRowCount, evaluationMetrics: evaluationBundle(row.evaluationMetrics), limitations: stringArray(row.limitations, 'artifact limitations'), rollbackArtifactHash: row.rollbackArtifactHash }
     if (base.coefficients.some(value => !Number.isFinite(value)) || !Number.isFinite(base.intercept)) throw new Error('Corrupt durable artifact parameters.')
     const artifactFingerprint = fingerprint(base)
     const artifactHash = sha256Hex(canonicalJson({ ...base, artifactFingerprint }))
@@ -496,7 +534,8 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
   }
   async saveArtifactTransactional(ownerUserId: number, artifact: ModelArtifact) {
     if (artifact.ownerUserId !== ownerUserId) throw new Error('Owner scope mismatch.')
-    await this.db.insert(geoOutcomeModelArtifacts).values({ ownerUserId, artifactId: artifact.artifactId, artifactSchemaVersion: artifact.artifactSchemaVersion, taskType: artifact.taskType, modelFamily: artifact.modelFamily, modelVersion: artifact.modelVersion, featureCatalogVersion: artifact.featureCatalogVersion, labelContractVersion: artifact.labelContractVersion, datasetManifestFingerprint: artifact.datasetManifestFingerprint, splitManifestFingerprint: artifact.splitManifestFingerprint, coefficients: artifact.coefficients, intercept: String(artifact.intercept), normalizationStatistics: artifact.normalizationStatistics, trainingConfiguration: artifact.trainingConfiguration, trainingRowCount: artifact.trainingRowCount, evaluationMetrics: artifact.evaluationMetrics, limitations: artifact.limitations, artifactFingerprint: artifact.artifactFingerprint, artifactHash: artifact.artifactHash, rollbackArtifactHash: artifact.rollbackArtifactHash, status: artifact.status, revokedAt: artifact.revokedAt ? new Date(artifact.revokedAt) : null, createdAt: new Date() })
+    if (!Number.isFinite(artifact.intercept) || Math.abs(artifact.intercept) > 1_000_000 || Object.is(artifact.intercept, -0)) throw new Error('Artifact intercept is outside the durable exact-value bounds.')
+    await this.db.insert(geoOutcomeModelArtifacts).values({ ownerUserId, artifactId: artifact.artifactId, artifactSchemaVersion: artifact.artifactSchemaVersion, taskType: artifact.taskType, modelFamily: artifact.modelFamily, modelVersion: artifact.modelVersion, featureCatalogVersion: artifact.featureCatalogVersion, labelContractVersion: artifact.labelContractVersion, datasetManifestFingerprint: artifact.datasetManifestFingerprint, splitManifestFingerprint: artifact.splitManifestFingerprint, coefficients: artifact.coefficients, intercept: artifact.intercept.toFixed(12), normalizationStatistics: artifact.normalizationStatistics, trainingConfiguration: { schemaVersion: 'geo-outcome-artifact-training-configuration-v2', config: artifact.trainingConfiguration, exactIntercept: artifact.intercept }, trainingRowCount: artifact.trainingRowCount, evaluationMetrics: artifact.evaluationMetrics, limitations: artifact.limitations, artifactFingerprint: artifact.artifactFingerprint, artifactHash: artifact.artifactHash, rollbackArtifactHash: artifact.rollbackArtifactHash, status: artifact.status, revokedAt: artifact.revokedAt ? new Date(artifact.revokedAt) : null, createdAt: new Date() })
     return (await this.getArtifact(ownerUserId, artifact.artifactId))!
   }
   async getArtifact(ownerUserId: number, artifactId: string) { const [row] = await this.db.select().from(geoOutcomeModelArtifacts).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactId, artifactId))).limit(1); return row ? this.validateArtifactLineage(this.mapArtifact(row)) : null }
@@ -513,11 +552,61 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     return updated
   }
   async transitionArtifactWithDecision(ownerUserId: number, artifactId: string, nextStatus: ModelArtifact['status'], reviewerUserId: number, reason: string, datasetManifestHash: string, rollbackArtifactHash: string | null = null) {
-    return this.db.transaction(async tx => {
+    const transition = async (tx: GeoOutcomeDrizzleDatabase) => {
       const repo = new DrizzleGeoOutcomeRepository(tx)
       const artifact = await repo.getArtifact(ownerUserId, artifactId)
       if (!artifact) throw new Error('Artifact not found.')
       if (artifact.status === 'revoked') throw new Error('Revoked models cannot be restored.')
+      if (artifact.datasetManifestFingerprint !== datasetManifestHash) throw new Error('Artifact dataset lineage changed before owner decision.')
+      if (isFallbackOnlyArtifact(artifact)) {
+        if (nextStatus !== 'approved_for_shadow' && nextStatus !== 'revoked') throw new Error('Bootstrap fallback status transition is invalid.')
+        if (nextStatus === 'approved_for_shadow' && rollbackArtifactHash !== null) throw new Error('Bootstrap fallback cannot point to itself or another rollback artifact.')
+        if (nextStatus === 'approved_for_shadow') {
+          if (reviewerUserId !== ownerUserId) throw new Error('Bootstrap fallback approval must be recorded as an owner decision.')
+          const [datasetRow] = await tx.select().from(geoOutcomeDatasetManifests).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, ownerUserId), eq(geoOutcomeDatasetManifests.manifestFingerprint, artifact.datasetManifestFingerprint))).limit(1)
+          const dataset = datasetRow ? await repo.getDataset(ownerUserId, datasetRow.manifestId) : null
+          if (!dataset || dataset.status !== 'approved' || dataset.manifestFingerprint !== datasetManifestHash) throw new Error('Bootstrap fallback dataset is no longer approved.')
+          const approvals = await tx.select().from(geoOutcomeDatasetDecisions).where(and(eq(geoOutcomeDatasetDecisions.ownerUserId, ownerUserId), eq(geoOutcomeDatasetDecisions.datasetManifestId, datasetRow!.id))).orderBy(asc(geoOutcomeDatasetDecisions.id))
+          const latestApproval = approvals.at(-1)
+          if (!latestApproval || latestApproval.newStatus !== 'approved' || (latestApproval.reviewerUserId !== null && latestApproval.reviewerUserId !== ownerUserId) || latestApproval.manifestFingerprint !== dataset.manifestFingerprint) throw new Error('Bootstrap fallback dataset lacks current durable approval.')
+          const members = await repo.getDatasetMembers(ownerUserId, dataset.manifestId)
+          if (members.some(member => !canBePrimaryCitationTruth(member.observation)) || !isExactTrainOnlyPriorArtifact(artifact, dataset, members)) throw new Error('Bootstrap fallback no longer matches current approved train-only provenance.')
+        }
+      } else if (nextStatus === 'approved_for_shadow' && (!artifact.rollbackArtifactHash || rollbackArtifactHash !== artifact.rollbackArtifactHash)) {
+        throw new Error('Candidate artifact must retain its immutable approved fallback hash.')
+      }
+      if (nextStatus === 'approved_for_shadow' && !isFallbackOnlyArtifact(artifact)) {
+        const visited = new Set<string>()
+        const validateFallbackChain = async (fallback: ModelArtifact): Promise<boolean> => {
+          if (visited.size >= 128 || visited.has(fallback.artifactHash) || fallback.ownerUserId !== ownerUserId || fallback.status !== 'approved_for_shadow' || fallback.taskType !== artifact.taskType || fallback.modelFamily !== artifact.modelFamily || fallback.featureCatalogVersion !== artifact.featureCatalogVersion || fallback.labelContractVersion !== artifact.labelContractVersion) return false
+          visited.add(fallback.artifactHash)
+          const [fallbackRow] = await tx.select().from(geoOutcomeModelArtifacts).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactId, fallback.artifactId))).limit(1)
+          if (!fallbackRow || fallbackRow.artifactHash !== fallback.artifactHash) return false
+          const decisions = await tx.select().from(geoOutcomeModelDecisions).where(and(eq(geoOutcomeModelDecisions.ownerUserId, ownerUserId), eq(geoOutcomeModelDecisions.modelArtifactId, fallbackRow.id))).orderBy(asc(geoOutcomeModelDecisions.id))
+          const latestDecision = decisions.at(-1)
+          if (!latestDecision || latestDecision.newStatus !== 'approved_for_shadow' || (isFallbackOnlyArtifact(fallback) ? latestDecision.reviewerUserId !== ownerUserId : latestDecision.reviewerUserId !== null && latestDecision.reviewerUserId !== ownerUserId) || latestDecision.artifactHash !== fallback.artifactHash || latestDecision.datasetManifestHash !== fallback.datasetManifestFingerprint) return false
+          const [fallbackDatasetRow] = await tx.select().from(geoOutcomeDatasetManifests).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, ownerUserId), eq(geoOutcomeDatasetManifests.manifestFingerprint, fallback.datasetManifestFingerprint))).limit(1)
+          const fallbackDataset = fallbackDatasetRow ? await repo.getDataset(ownerUserId, fallbackDatasetRow.manifestId) : null
+          if (!fallbackDataset || fallbackDataset.status !== 'approved') return false
+          const datasetDecisions = await tx.select().from(geoOutcomeDatasetDecisions).where(and(eq(geoOutcomeDatasetDecisions.ownerUserId, ownerUserId), eq(geoOutcomeDatasetDecisions.datasetManifestId, fallbackDatasetRow!.id))).orderBy(asc(geoOutcomeDatasetDecisions.id))
+          const latestDatasetDecision = datasetDecisions.at(-1)
+          if (!latestDatasetDecision || latestDatasetDecision.newStatus !== 'approved' || latestDatasetDecision.reviewerUserId !== null && latestDatasetDecision.reviewerUserId !== ownerUserId || latestDatasetDecision.manifestFingerprint !== fallbackDataset.manifestFingerprint) return false
+          const fallbackMembers = await repo.getDatasetMembers(ownerUserId, fallbackDataset.manifestId)
+          if (fallbackMembers.some(member => !canBePrimaryCitationTruth(member.observation))) return false
+          if (isFallbackOnlyArtifact(fallback)) {
+            if (latestDecision.reviewerUserId !== ownerUserId || !isExactTrainOnlyPriorArtifact(fallback, fallbackDataset, fallbackMembers)) return false
+            return evaluatePromotionGate({ dataset: fallbackDataset, members: fallbackMembers, artifact: fallback, ownerApproved: true, rollbackArtifact: null, target: 'shadow', shadowReadiness: getShadowReadiness({ candidates: fallbackDataset.sourceObservationFingerprints.length, queryGroups: fallbackDataset.queryGroupCount, websites: fallbackDataset.websiteCount, engines: Object.keys(fallbackDataset.engineCounts).length, positives: fallbackDataset.positiveCount, hardNegatives: fallbackDataset.hardNegativeCount, observationSpanDays: fallbackDataset.observationStart && fallbackDataset.observationEnd ? Math.floor((Date.parse(fallbackDataset.observationEnd) - Date.parse(fallbackDataset.observationStart)) / 86_400_000) : null, temporalHoldoutCount: fallbackDataset.temporalHoldoutRowCount, hasPrimaryEvidence: Boolean(fallbackDataset.sourceBasisCounts.manual_verified_primary || fallbackDataset.sourceBasisCounts.consumer_surface_observed) }) }).status === 'pass'
+          }
+          if (!fallback.rollbackArtifactHash || fallback.rollbackArtifactHash === fallback.artifactHash) return false
+          const [parentRow] = await tx.select().from(geoOutcomeModelArtifacts).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactHash, fallback.rollbackArtifactHash))).limit(1)
+          const parent = parentRow ? await repo.getArtifact(ownerUserId, parentRow.artifactId) : null
+          if (!parent || !await validateFallbackChain(parent)) return false
+          return evaluatePromotionGate({ dataset: fallbackDataset, members: fallbackMembers, artifact: fallback, ownerApproved: true, rollbackArtifact: parent, target: 'shadow', shadowReadiness: getShadowReadiness({ candidates: fallbackDataset.sourceObservationFingerprints.length, queryGroups: fallbackDataset.queryGroupCount, websites: fallbackDataset.websiteCount, engines: Object.keys(fallbackDataset.engineCounts).length, positives: fallbackDataset.positiveCount, hardNegatives: fallbackDataset.hardNegativeCount, observationSpanDays: fallbackDataset.observationStart && fallbackDataset.observationEnd ? Math.floor((Date.parse(fallbackDataset.observationEnd) - Date.parse(fallbackDataset.observationStart)) / 86_400_000) : null, temporalHoldoutCount: fallbackDataset.temporalHoldoutRowCount, hasPrimaryEvidence: Boolean(fallbackDataset.sourceBasisCounts.manual_verified_primary || fallbackDataset.sourceBasisCounts.consumer_surface_observed) }) }).status === 'pass'
+        }
+        const [fallbackRow] = await tx.select().from(geoOutcomeModelArtifacts).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactHash, rollbackArtifactHash || ''))).limit(1)
+        const fallback = fallbackRow ? await repo.getArtifact(ownerUserId, fallbackRow.artifactId) : null
+        if (!fallback || fallback.artifactHash === artifact.artifactHash || !await validateFallbackChain(fallback)) throw new Error('Bound fallback chain is no longer durably approved, compatible, and gate-valid.')
+      }
       const [artifactRow] = await tx.select({ id: geoOutcomeModelArtifacts.id }).from(geoOutcomeModelArtifacts).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactId, artifactId))).limit(1)
       if (!artifactRow) throw new Error('Artifact row not found.')
       const decision: ModelDecision = { decisionId: `geo-decision-${fingerprint({ ownerUserId, artifactId, previousStatus: artifact.status, newStatus: nextStatus, reason, artifactHash: artifact.artifactHash }).slice(0, 20)}`, ownerUserId, modelArtifactId: artifactId, previousStatus: artifact.status, newStatus: nextStatus, reviewerUserId, reason, artifactHash: artifact.artifactHash, datasetManifestHash, createdAt: new Date().toISOString() }
@@ -525,7 +614,8 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
       const result = await tx.update(geoOutcomeModelArtifacts).set({ status: nextStatus, revokedAt: nextStatus === 'revoked' ? new Date() : null }).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactId, artifactId), eq(geoOutcomeModelArtifacts.status, artifact.status)))
       if (affectedRows(result) !== 1) throw new Error('Artifact decision lost its compare-and-swap.')
       return { artifact: (await repo.getArtifact(ownerUserId, artifactId))!, decision }
-    })
+    }
+    return this.inTransaction ? transition(this.db) : this.db.transaction(async tx => transition(tx))
   }
   async listDecisions(ownerUserId: number) {
     const rows = await this.db.select().from(geoOutcomeModelDecisions).where(eq(geoOutcomeModelDecisions.ownerUserId, ownerUserId))
@@ -570,5 +660,5 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     if (affectedRows(result) !== 1) throw new Error('Idempotency failure transition lost its compare-and-swap.')
     return this.readClaim(ownerUserId, routeIdentity, idempotencyKey)
   }
-  async transaction<T>(work: (repository: GeoOutcomeRepositoryPort) => Promise<T>): Promise<T> { return this.db.transaction(async (tx): Promise<T> => work(new DrizzleGeoOutcomeRepository(tx))) }
+  async transaction<T>(work: (repository: GeoOutcomeRepositoryPort) => Promise<T>): Promise<T> { return this.db.transaction(async (tx): Promise<T> => work(new DrizzleGeoOutcomeRepository(tx, true))) }
 }

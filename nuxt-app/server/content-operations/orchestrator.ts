@@ -28,6 +28,7 @@ import { autonomousRiskSnapshotMatches, canonicalAutonomousRiskSnapshot } from '
 import { contentFingerprint } from '../seo-geo-core/riskGate'
 import { executeManagedSiteNativePublicationIfConfigured } from '../managed-sites/page-editor/native-publication'
 import { notifyLearningLoopPublicationDelivered, publicationLearningSnapshot, type PublicationBridgeDependencies } from '../learning-loop/publication-bridge'
+import { bindPublicationRepositoryChangeSet } from '../learning-loop/publication-action'
 
 const MAX_ATTEMPTS = 3
 const DEFAULT_LEASE_MS = 5 * 60 * 1000
@@ -966,6 +967,7 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
   const finalizePatch = (status: PublicationAttemptFinalization['status'], values: Partial<PublicationAttemptFinalization> = {}): PublicationAttemptFinalization => ({ status, artifactFingerprint: values.artifactFingerprint ?? null, remoteState: values.remoteState ?? null, receiptLedger: values.receiptLedger ?? null, remoteRevision: values.remoteRevision ?? null, receiptFingerprint: values.receiptFingerprint ?? null, publicationUrl: values.publicationUrl ?? null, errorCode: values.errorCode ?? null, errorSummary: values.errorSummary ?? null, completedAt: now })
   if (result.status === 'delivered') {
     const receiptFingerprint = stableFingerprint({ publicationId: result.publicationId, contentHash: result.contentHash, artifactFingerprint: result.artifactFingerprint, remoteState: result.remoteState, remoteRevision: result.remoteRevision })
+    const repositoryAction = bindPublicationRepositoryChangeSet({ identity: { ownerUserId, entryId: entry.id, draftId: draft.id, draftVersion: draft.version, draftContentHash: draft.contentHash, evidenceSnapshotHash: entry.evidenceSnapshotHash, targetId: target.id, receiptFingerprint, publicationContentHash: result.contentHash, artifactFingerprint: result.artifactFingerprint }, target: validatedTarget, path: identity.path, title: draft.title, body: draft.body, changeSet: result.changeSet })
     const publicPage = resolvePublicationPublicUrl({ ownerUserId, client: lineage.client, entry: persistedEntry, target, identity })
     const delivered = await repository.transaction(async transaction => {
       const stored = await transaction.finalizePublicationAttempt(ownerUserId, reservation?.attempt.id || existingAttempt?.id || 0, finalizePatch('delivered', { artifactFingerprint: result.artifactFingerprint, remoteState: result.remoteState, remoteRevision: result.remoteRevision, receiptFingerprint, publicationUrl: publicPage.configured ? publicPage.publicationUrl : null }))
@@ -993,6 +995,7 @@ async function executePublication(ownerUserId: number, entry: ContentOperationCa
           riskGateId: gate.id, contentType: entry.contentType, language: entry.language,
           productionDeliverableId: entry.productionDeliverableId, strategyRecommendationId: entry.strategyRecommendationId,
           remoteState: result.remoteState, remoteRevision: result.remoteRevision,
+          repositoryAction,
           learningSnapshot: learningSnapshot({ draftId: draft.id, draftVersion: draft.version, draftContentHash: draft.contentHash, title: draft.title, body: draft.body, targetId: target.id, publicationContentHash: result.contentHash, receiptFingerprint }),
         }, { entryId: entry.id, attemptKey, event: 'publication_delivered' }),
         clientId: lineage.client.id, websiteId: target.websiteId || null, deliverableId: entry.productionDeliverableId,

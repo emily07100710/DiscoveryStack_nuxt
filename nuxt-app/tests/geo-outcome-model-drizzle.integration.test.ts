@@ -4,7 +4,7 @@ import { executeObservationGovernanceMutation } from '../server/api/geo-outcome-
 import { executeCandidateSetReviewMutation } from '../server/api/geo-outcome-model/candidate-set-review-mutation'
 import { buildCitationSelectionDataset } from '../server/geo-outcome-model/dataset-builder'
 import { DrizzleGeoOutcomeRepository } from '../server/geo-outcome-model/repository-drizzle'
-import { bindAndVerifyObservationEvidence, createTrainingRun, executeTrainingRun, getWorkspace, reviewDataset } from '../server/geo-outcome-model/service'
+import { approveBootstrapFallback, bindAndVerifyObservationEvidence, createBootstrapFallback, createTrainingRun, executeTrainingRun, getWorkspace, reviewDataset, reviewModel } from '../server/geo-outcome-model/service'
 import { normalizeManualObservation } from '../server/geo-outcome-model/normalization'
 import { fingerprint, sha256Hex } from '../server/geo-outcome-model/canonical'
 import { authoritativeLocatorFingerprint } from '../server/geo-outcome-model/evidence-resolver'
@@ -209,27 +209,45 @@ describe('Drizzle GEO outcome durable boundary', () => {
   })
 
   it('preserves business IDs through observation, dataset, training, artifact, decision, workspace and restart', async () => {
-    const { harness, repository } = readyRepository()
-    const savedManifest = (await repository.getDataset(ownerUserId, readyManifestId))!
-    expect(savedManifest.status).toBe('approved')
-    expect((await repository.listDatasetDecisions(ownerUserId))[0]?.manifestId).toBe(savedManifest.manifestId)
-    const queued = await createTrainingRun(ownerUserId, { datasetManifestId: savedManifest.manifestId, modelFamily: 'regularized_logistic_baseline_v1' }, repository)
+    const harness = new StrictGeoDrizzleHarness(readyState)
+    const repository = new DrizzleGeoOutcomeRepository(harness.asDatabase())
+    for (let index = 101; index <= 500; index += 1) {
+      const storedRows: OutcomeObservation[] = []
+      const engine = index % 3 === 0 ? 'chatgpt' : index % 3 === 1 ? 'gemini' : 'perplexity'
+      for (const status of ['cited', 'not_cited'] as const) storedRows.push(await repository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation(`g${index}`, status, { day: index, sourceRecordId: index, engine }), ownerUserId)))
+      await seedAuthority(harness, storedRows[0]!, index)
+      for (const stored of storedRows) await govern(repository, stored, index)
+    }
+    const built = buildCitationSelectionDataset(await repository.listObservations(ownerUserId), ownerUserId)
+    expect(built.members).toHaveLength(1000)
+    const savedManifest = await repository.saveDatasetTransactional(ownerUserId, built.manifest, built.members)
+    await reviewDataset(ownerUserId, savedManifest.manifestId, 'approve', ownerUserId, 'Owner approved the complete 1000-row fixture dataset.', repository)
+    const approvedManifest = (await repository.getDataset(ownerUserId, savedManifest.manifestId))!
+    expect(approvedManifest.status).toBe('approved')
+    expect((await repository.listDatasetDecisions(ownerUserId)).at(-1)?.manifestId).toBe(approvedManifest.manifestId)
+    const fallback = await createBootstrapFallback(ownerUserId, approvedManifest.manifestId, 'regularized_logistic_baseline_v1', repository)
+    const approvedFallback = await approveBootstrapFallback(ownerUserId, fallback.artifactId, ownerUserId, 'Owner explicitly approved the immutable train-only prior fallback.', repository)
+    expect(approvedFallback.artifact.status).toBe('approved_for_shadow')
+    const queued = await createTrainingRun(ownerUserId, { datasetManifestId: approvedManifest.manifestId, modelFamily: 'regularized_logistic_baseline_v1' }, repository)
+    expect(queued.rollbackArtifactHash).toBe(fallback.artifactHash)
     const completed = await executeTrainingRun(ownerUserId, queued.trainingRunId, repository)
     expect(completed.status).toBe('completed')
-    expect(completed.datasetManifestId).toBe(savedManifest.manifestId)
+    expect(completed.datasetManifestId).toBe(approvedManifest.manifestId)
     expect(completed.artifactId).toMatch(/^geo-model-/u)
     const artifact = await repository.getArtifact(ownerUserId, completed.artifactId!)
     expect(artifact?.artifactId).toBe(completed.artifactId)
-    const transitioned = await repository.transitionArtifactWithDecision(ownerUserId, artifact!.artifactId, 'approved_for_shadow', ownerUserId, 'Owner shadow decision.', savedManifest.manifestFingerprint)
-    expect(transitioned.decision.modelArtifactId).toBe(artifact!.artifactId)
+    expect(artifact?.rollbackArtifactHash).toBe(fallback.artifactHash)
+    const transitioned = await reviewModel(ownerUserId, artifact!.artifactId, 'approve_for_shadow', ownerUserId, 'Owner reviewed candidate after verifying the fallback lineage.', repository)
+    expect(transitioned.ledger.modelArtifactId).toBe(artifact!.artifactId)
     const workspace = await getWorkspace(ownerUserId, repository)
-    expect(workspace.trainingRuns[0]?.datasetManifestId).toBe(savedManifest.manifestId)
-    expect(workspace.decisions[0]?.modelArtifactId).toBe(artifact!.artifactId)
+    expect(workspace.trainingRuns[0]?.datasetManifestId).toBe(approvedManifest.manifestId)
+    expect(workspace.decisions.find(decision => decision.modelArtifactId === artifact!.artifactId)?.modelArtifactId).toBe(artifact!.artifactId)
 
     const restarted = new DrizzleGeoOutcomeRepository(new StrictGeoDrizzleHarness(harness.exportState()).asDatabase())
-    expect((await restarted.getTrainingRun(ownerUserId, queued.trainingRunId))?.datasetManifestId).toBe(savedManifest.manifestId)
-    expect((await restarted.listDecisions(ownerUserId))[0]?.modelArtifactId).toBe(artifact!.artifactId)
-  })
+    expect((await restarted.getTrainingRun(ownerUserId, queued.trainingRunId))?.datasetManifestId).toBe(approvedManifest.manifestId)
+    expect((await restarted.getArtifact(ownerUserId, artifact!.artifactId))?.rollbackArtifactHash).toBe(fallback.artifactHash)
+    expect((await restarted.listDecisions(ownerUserId)).find(decision => decision.modelArtifactId === artifact!.artifactId)?.modelArtifactId).toBe(artifact!.artifactId)
+  }, 180_000)
 
   it('recovers an expired running lease through executeTrainingRun and finishes the claimed work', async () => {
     const { harness, repository } = readyRepository()

@@ -262,6 +262,49 @@ export interface FirstPartyDeliveryResult {
   readonly path?: string
   readonly artifactFingerprint: string
   readonly idempotencyKey: string
+  readonly changeSet?: FirstPartyRepositoryChangeSet
+}
+
+export type FirstPartyRepositoryChangeKind = 'added' | 'removed' | 'replaced' | 'unmodified'
+
+export interface FirstPartyRepositoryChangeUnit {
+  readonly kind: FirstPartyRepositoryChangeKind
+  readonly beforeIndex: number | null
+  readonly afterIndex: number | null
+  readonly beforeHash: string | null
+  readonly afterHash: string | null
+}
+
+export interface FirstPartyRepositoryChangeSet {
+  readonly schemaVersion: 'first-party-repository-change-set-v1'
+  readonly comparisonKind: 'repository_revision_diff'
+  readonly liveBeforeState: 'unknown'
+  readonly causalEligibility: false
+  readonly targetIdentityFingerprint: string
+  readonly before: {
+    readonly publicationIdentityFingerprint: string
+    readonly documentFingerprint: string
+    readonly bodyHash: string
+    readonly contentHash: string
+    readonly titleHash: string
+    readonly paragraphHashes: readonly string[]
+    readonly blobSha: string
+    readonly remoteRevision: string | null
+  }
+  readonly after: {
+    readonly publicationIdentityFingerprint: string
+    readonly documentFingerprint: string
+    readonly bodyHash: string
+    readonly contentHash: string
+    readonly titleHash: string
+    readonly paragraphHashes: readonly string[]
+    readonly artifactFingerprint: string
+  }
+  readonly titleChange: FirstPartyRepositoryChangeUnit
+  readonly paragraphChanges: readonly FirstPartyRepositoryChangeUnit[]
+  readonly readAt: string
+  readonly changesetFingerprint: string
+  readonly changeSetId: string
 }
 
 export interface FirstPartyBlockedResult {
@@ -319,7 +362,7 @@ export interface SignedApiResponsePayload {
 }
 
 export type FirstPartyAdapterResult =
-  | { readonly status: 'ok'; readonly remote: FirstPartyRemoteIdentity; readonly remoteState: FirstPartyRemoteState }
+  | { readonly status: 'ok'; readonly remote: FirstPartyRemoteIdentity; readonly remoteState: FirstPartyRemoteState; readonly changeSet?: FirstPartyRepositoryChangeSet }
   | { readonly status: 'blocked'; readonly code: FirstPartyDecisionCode; readonly reasons: readonly string[] }
   | { readonly status: 'failure'; readonly code: FirstPartyDecisionCode; readonly reasons: readonly string[]; readonly httpStatus?: number }
 
@@ -327,6 +370,7 @@ export interface GitAdapterDependencies {
   readonly fetchImpl: FirstPartyFetch
   readonly serverCredentialResolver: ServerCredentialResolver
   readonly timeoutMs?: number
+  readonly readAtProvider?: () => string
 }
 
 export interface SignedApiAdapterDependencies {

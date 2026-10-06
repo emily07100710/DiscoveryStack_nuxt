@@ -49,6 +49,7 @@ function mapAdapterResult(result: FirstPartyAdapterResult, command: FirstPartyAd
     ...(result.remote.path === undefined ? {} : { path: result.remote.path }),
     artifactFingerprint: command.artifactFingerprint,
     idempotencyKey: command.idempotencyKey,
+    ...(result.changeSet === undefined ? {} : { changeSet: result.changeSet }),
   }
 }
 
@@ -79,7 +80,11 @@ export async function executeFirstPartyPublication(context: FirstPartyExecutionC
       fetchImpl: context.fetchImpl,
     }
     if (target.transport === 'first_party_git') {
-      const gitResult = await executeGitContentsPublish(adapterInput, { fetchImpl: context.fetchImpl, serverCredentialResolver: context.serverCredentialResolver })
+      const gitResult = await executeGitContentsPublish(adapterInput, {
+        fetchImpl: context.fetchImpl,
+        serverCredentialResolver: context.serverCredentialResolver,
+        ...(context.serverNow === undefined ? {} : { readAtProvider: () => serverNow.iso }),
+      })
       return mapAdapterResult(gitResult, adapterInput.command)
     }
     const signedResult = await executeSignedApiPublish(adapterInput, { fetchImpl: context.fetchImpl, serverCredentialResolver: context.serverCredentialResolver, nonceProvider: context.nonceProvider as NonNullable<typeof context.nonceProvider>, serverNowProvider: () => serverNow.iso })

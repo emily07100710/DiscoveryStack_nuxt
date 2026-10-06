@@ -8,7 +8,7 @@ import { runInterventionLoopTick } from './tick'
 import { interventionStatuses } from './types'
 import { collectAuthorizedLearningEvidence, createLearningAuthorization, exportStructuralLearningEvidence, getLearningLoopWorkspace, reviewLearningCollection, revokeLearningAuthorization } from '../learning-loop/service'
 import { buildGovernedContentOutcomeRelease, runLearningClientCycle } from '../learning-loop/runtime'
-import { trainApprovedLearningDataset } from '../learning-loop/training'
+import { createLearningCitationFallback, reviewLearningCitationFallback, trainApprovedLearningDataset } from '../learning-loop/training'
 import { getDraftLearningAdvice } from '../learning-loop/model-advice'
 import { approveContentEffectTraining, executeContentEffectTraining, getContentEffectModelWorkspace, revokeContentEffectModel } from '../learning-loop/effect-service'
 
@@ -63,6 +63,8 @@ const routes: InterventionRoute[] = [
   { method: 'POST', pattern: ['closed-loop', 'collections', ':id', 'review'], handle: ({ ownerUserId, params, body }) => reviewLearningCollection(ownerUserId, positiveId(params[0]), body) },
   { method: 'POST', pattern: ['closed-loop', 'client-cycle'], handle: ({ ownerUserId, body }) => runLearningClientCycle(ownerUserId, body) },
   { method: 'POST', pattern: ['closed-loop', 'train'], handle: ({ ownerUserId, body }) => trainApprovedLearningDataset(ownerUserId, body) },
+  { method: 'POST', pattern: ['closed-loop', 'citation-fallback', 'create'], handle: ({ ownerUserId, body }) => createLearningCitationFallback(ownerUserId, body) },
+  { method: 'POST', pattern: ['closed-loop', 'citation-fallback', 'review'], handle: ({ ownerUserId, body }) => reviewLearningCitationFallback(ownerUserId, body) },
   { method: 'POST', pattern: ['closed-loop', 'draft-advice'], handle: ({ ownerUserId, body }) => getDraftLearningAdvice(ownerUserId, body) },
   { method: 'GET', pattern: ['export'], handle: async ({ event, ownerUserId }) => { setHeader(event, 'content-disposition', 'attachment; filename="intervention-outcome-dataset.json"'); return exportInterventionOutcomeDataset(ownerUserId) } },
   { method: 'GET', pattern: ['experiments'], handle: async ({ ownerUserId }) => ({ experiments: await listExperiments(ownerUserId) }) },

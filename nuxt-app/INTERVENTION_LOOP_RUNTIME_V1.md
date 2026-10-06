@@ -56,6 +56,12 @@ URL Inspection 可確認 crawl 時間；手動確認必須附說明。自動查�
 
 本輪本機驗證（2026-10-06）：使用專案已安裝的 Nuxt／Vitest 工具，依序完成 typecheck → fresh `node-server` build → 全量安全回歸，**276 個測試檔通過、5,504 個測試通過、14 個檔案／27 個測試依既有條件跳過**。新增 envelope service 與實際 SFC SSR rendering 的 27 個測試亦通過；尚未做瀏覽器視覺／操作驗收。首次受限環境的全量測試遇到 `listen EPERM: operation not permitted 127.0.0.1`，允許本機測試伺服器後重跑通過；未刪除測試或放寬 skip 條件，外部 `DS_RUN_*` opt-in 保持關閉。這些結果不代表真實 provider／DB、訓練品質或正式部署驗收。
 
+### 2026-10-07：正式回執綁定的 repository action（PARTIAL）
+
+第一方 Git canonical update 的 immutable delivery event 可帶 hash-only 標題／段落 revision diff。Envelope 在 exact publication binding 通過後，重新載入 owner-scoped delivered joins、attempt、持久 publication identity、current draft／target，以及唯一對應的 delivery event；核對所有 identity/hash 欄位、重算 binding，再重讀發布及目前 learning source／grant／PII／retention。中途漂移使證據無效；同意撤回或保存期到期使 learning authority 為 null，營運觀測不會因此冒充仍可訓練的資料。
+
+可接受的 diff 顯示 `recorded_repository_revision`、exact change-set ID、before／after body hashes 與 units，但 `liveBeforeState=unknown`。已部署頁面的 baseline／recrawl／量測 gate 不變：Git 中的舊稿不是已證明的 live before page，repo-only diff 不能建立因果。`modelTrainingAllowed=false`、`primaryCitationLabelAllowed=false`；目前授權只標記為 `current_auxiliary_review_only`，完整 live adapter 及 action admission 仍待完成。缺失證據或 learning authority 讀取失敗不使既有 operational audit 失效。
+
 ## 路由清單
 
 `/api/interventions/list` 提供清單、`/api/interventions/register` 提供登記；`/:id` 提供詳情以及 deployment、recrawl、measurements、pull-metrics、measure、assess、cancel；`/experiments`、`/refresh-queue`、`/refresh-policy`、`/export`、`/tick` 提供對應 owner-only 操作。POST 均要求 same-origin。

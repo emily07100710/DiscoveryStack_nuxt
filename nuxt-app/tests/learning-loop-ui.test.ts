@@ -14,9 +14,9 @@ if (errors.length) throw new Error('Learning workspace did not parse.')
 const compiled = compileScript(descriptor, { id: 'learning-loop-page-render-test', inlineTemplate: true, templateOptions: { ssr: true } })
 const js = transpileModule(compiled.content, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText
 
-async function render(failure?: { statusCode: number; message: string }, effectFixture?: unknown) {
+async function render(failure?: { statusCode: number; message: string }, effectFixture?: unknown, modelFixture?: unknown) {
   const workspace = { configuration: { loopEnabled: false, crawlEnabled: false, retentionEnabled: false, weeklyContentEnabled: false, schedulerEnabled: false }, clients: [], sources: [], authorizations: [], collections: [], limitations: [] }
-  const models = { workspace: { inventory: { verifiedPrimaryCount: 0 }, readiness: { development: { ready: false, missing: ['尚缺真實核准觀測'] }, shadow: { ready: false } }, datasets: [], trainingRuns: [], models: [] } }
+  const models = modelFixture || { workspace: { inventory: { verifiedPrimaryCount: 0 }, readiness: { development: { ready: false, missing: ['尚缺真實核准觀測'] }, shadow: { ready: false } }, datasets: [], trainingRuns: [], models: [] } }
   const effect = effectFixture || { enabled: false, taskType: 'content_effect_direction', release: null, models: [] }
   const fetcher = vi.fn(async (url: string, options: unknown) => ({ data: ref(url.includes('geo-outcome-model') ? models : url.includes('content-operations') ? { entries: [] } : failure ? undefined : url.endsWith('/effect-models') ? effect : workspace), error: ref(url.includes('closed-loop') ? failure : undefined), pending: ref(false), refresh: vi.fn() }))
   const post = vi.fn(() => { throw new Error('Rendering must not perform mutations.') }), meta = vi.fn(), head = vi.fn()
@@ -48,11 +48,26 @@ describe('compiled owner learning workspace', () => {
     expect(post).not.toHaveBeenCalled()
   })
   it('renders real review gates and safe completed-model summaries without granting approval or exposing weights', async () => {
-    const effect = { enabled: true, release: { candidateCount: 180, status: 'ready_for_dataset_review', datasetDigest: 'a'.repeat(64), lineageFingerprint: 'b'.repeat(64) }, models: [{ id: 17, status: 'completed', candidateCount: 180, currentLineageValid: true, artifact: { status: 'verified', temporalHoldout: 'UNAVAILABLE', productionActivation: false, metrics: { test: { brierScore: 0.2 } } } }] }
+    const effect = { enabled: true, release: { candidateCount: 180, status: 'ready_for_dataset_review', datasetDigest: 'a'.repeat(64), lineageFingerprint: 'b'.repeat(64) }, models: [{ id: 17, status: 'completed', candidateCount: 180, currentLineageValid: true, artifact: { status: 'verified', temporalHoldout: { status: 'AVAILABLE', trainingAsOf: '2026-10-06T00:00:00.000Z' }, productionActivation: false, metrics: { test: { brierScore: 0.2 } } } }] }
     const { html, post } = await render(undefined, effect)
     expect(html).toContain('核對並排入下一輪訓練'); expect(html).toContain('成效模型 #17 · 已完成')
-    expect(html).toContain('UNAVAILABLE'); expect(html).toContain('brierScore')
+    expect(html).toContain('AVAILABLE'); expect(html).toContain('brierScore')
     expect(html).not.toMatch(/type="checkbox"[^>]*checked|coefficients|intercept|normalization/)
+    expect(post).not.toHaveBeenCalled()
+  })
+  it('separates fallback review from candidate advice and leaves independent review unchecked', async () => {
+    const fixture = { workspace: { inventory: { verifiedPrimaryCount: 1000 }, readiness: { development: { ready: true, missing: [] }, shadow: { ready: true } }, datasets: [], trainingRuns: [], models: [
+      { artifactId: 'geo-model-fallback', status: 'approved_for_shadow', fallbackOnly: true, modelFamily: 'regularized_logistic_baseline_v1', trainingRowCount: 200, metrics: {} },
+      { artifactId: 'geo-model-review', status: 'ready_for_owner_review', fallbackOnly: true, modelFamily: 'regularized_logistic_baseline_v1', trainingRowCount: 200, metrics: {} },
+      { artifactId: 'geo-model-candidate', status: 'approved_for_shadow', fallbackOnly: false, modelFamily: 'regularized_logistic_baseline_v1', trainingRowCount: 200, metrics: {} },
+    ] } }
+    const { html, post } = await render(undefined, undefined, fixture)
+    expect(html).toContain('第一個模型，也要有安全的回退基準')
+    expect(html).toContain('獨立核准這份回退基準')
+    expect(html).toContain('value="geo-model-candidate"')
+    expect(html).not.toContain('value="geo-model-fallback"')
+    expect(html).not.toContain('value="geo-model-review"')
+    expect(html).not.toMatch(/type="checkbox"[^>]*checked/)
     expect(post).not.toHaveBeenCalled()
   })
 })

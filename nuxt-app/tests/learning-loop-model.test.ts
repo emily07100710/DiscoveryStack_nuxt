@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { buildDataset, normalizeTrustedObservation, reviewDataset } from '../server/geo-outcome-model'
+import { approveBootstrapFallback, buildDataset, createBootstrapFallback, normalizeTrustedObservation, reviewDataset, reviewModel } from '../server/geo-outcome-model'
 import { fingerprint } from '../server/geo-outcome-model/canonical'
 import type { MemoryGeoOutcomeState } from '../server/geo-outcome-model/types'
 import { trainApprovedLearningDataset } from '../server/learning-loop/training'
@@ -25,11 +25,15 @@ function syntheticObservation(index: number, cited: boolean) {
 let approvedState: MemoryGeoOutcomeState, trainedState: MemoryGeoOutcomeState, manifestId: string, artifactId: string
 beforeAll(async () => {
   const repository = createMemoryGeoOutcomeRepository()
-  for (let index = 0; index < 120; index++) for (const cited of [true, false]) await repository.saveObservationTransactional(1, syntheticObservation(index, cited))
+  for (let index = 0; index < 500; index++) for (const cited of [true, false]) await repository.saveObservationTransactional(1, syntheticObservation(index, cited))
   const built = await buildDataset(1, 'citation_selection', repository)
-  expect(built.memberCount).toBe(240); expect(built.manifest.readiness.ready).toBe(true)
+  expect(built.memberCount).toBe(1000); expect(built.manifest.readiness.ready).toBe(true)
   manifestId = built.manifest.manifestId
   await reviewDataset(1, manifestId, 'approve', 1, 'Synthetic fixture only: exercise genuine fitting and holdout evaluation.', repository)
+  for (const family of ['regularized_logistic_baseline_v1', 'pairwise_logistic_ranker_v1'] as const) {
+    const fallback = await createBootstrapFallback(1, manifestId, family, repository)
+    await approveBootstrapFallback(1, fallback.artifactId, 1, 'Synthetic independent owner review of train-only fallback.', repository)
+  }
   approvedState = repository.exportState()
   const result = await trainApprovedLearningDataset(1, { datasetManifestId: manifestId, modelFamily: 'regularized_logistic_baseline_v1' }, repository)
   expect(result.status).toBe('completed'); expect(result.currentLineageValid).toBe(true)
@@ -40,9 +44,9 @@ async function adviceFixture() {
   const f = learningFixture()
   await createLearningAuthorization(1, f.input, { repository: f.repository, now: () => f.now })
   const state = structuredClone(trainedState)
-  // Tests only: advice is independently gated by current model/dataset/grant state.
-  state.artifacts[0]!.status = 'approved_for_shadow'
   const models = createMemoryGeoOutcomeRepository(state)
+  // Synthetic, but use the actual separate owner review and valid immutable fallback chain.
+  await reviewModel(1, artifactId, 'approve_for_shadow', 1, 'Synthetic candidate shadow review with current owner authority.', models)
   const title = 'Synthetic current draft', body = '# Synthetic answer\n\nA bounded evidence-based response.\n\n## Sources\n\n[cite:fixture-source]'
   const hash = contentFingerprint(title, body)
   const lineage = { client: { id: 2, ownerUserId: 1, canonicalSiteOrigin: 'https://client.acme.taipei' }, entry: { id: 17, ownerUserId: 1, contentHash: hash, contentType: 'article', language: 'en', evidenceSnapshotHash: 'e'.repeat(64) }, draft: { id: 29, version: 1, title, body, contentHash: hash }, deliverable: { opportunityKey: 'synthetic-opportunity' } }
@@ -91,7 +95,7 @@ describe('hash-bound draft advice never acts as publication or observed truth', 
     const f = await adviceFixture(), state = f.models.exportState()
     if (kind === 'revoked_grant') await f.repository.revokeAuthorization(1, 1, f.now)
     if (kind === 'edited_draft') f.lineage.draft.body += '\nEdited without a new hash.'
-    if (kind === 'tampered_artifact') { state.artifacts[0]!.coefficients[0] = 999; f.models = createMemoryGeoOutcomeRepository(state) }
+    if (kind === 'tampered_artifact') { state.artifacts.find(row => row.artifactId === artifactId)!.coefficients[0] = 999; f.models = createMemoryGeoOutcomeRepository(state) }
     if (kind === 'revoked_dataset') { await reviewDataset(1, manifestId, 'revoke', 1, 'Synthetic revocation.', f.models) }
     await expect(getDraftLearningAdvice(1, f.input, { operations: f.operations, learning: f.repository, models: f.models, now: f.now })).rejects.toMatchObject({ statusCode: 409 })
   })

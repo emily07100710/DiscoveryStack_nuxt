@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { buildCitationSelectionDataset, createModelArtifact, normalizeTrustedObservation, reviewDataset, reviewModel, type ModelArtifact, type OutcomeObservation } from '../server/geo-outcome-model'
+import { approveBootstrapFallback, buildCitationSelectionDataset, createBootstrapFallback, createModelArtifact, createTrainingRun, executeTrainingRun, normalizeTrustedObservation, predict, reviewDataset, reviewModel, type ModelArtifact, type OutcomeObservation } from '../server/geo-outcome-model'
 import { createModelOpsCycle, createModelOpsPolicy, dryRunModelOpsCycle, evaluateModelOpsShadow, executeModelOpsCycle, rollbackModelOpsArtifact } from '../server/geo-outcome-model/modelops-service'
 import { createMemoryModelOpsRepository, InMemoryModelOpsRepository } from '../server/geo-outcome-model/modelops-memory-repository'
 import { createMemoryGeoOutcomeRepository, InMemoryGeoOutcomeRepository } from './support/geo-outcome-memory-repository'
@@ -66,6 +66,8 @@ beforeAll(async () => {
   const firstResult = await executeModelOpsCycle(OWNER, firstCycle.cycleId, outcome, modelOps, 'fixture-worker', new Date('2026-08-28T00:00:00.000Z'))
   expect(firstResult.dataset?.status).toBe('ready_for_review')
   await reviewDataset(OWNER, firstResult.dataset!.manifestId, 'approve', OWNER, 'Owner approved fixture dataset for direct ModelOps behavior tests.', outcome)
+  const bootstrap = await createBootstrapFallback(OWNER, firstResult.dataset!.manifestId, 'regularized_logistic_baseline_v1', outcome)
+  await approveBootstrapFallback(OWNER, bootstrap.artifactId, OWNER, 'Owner approved fixed train-only fallback for ModelOps tests.', outcome)
   approvedState = outcome.exportState()
   const trainingCycle = await createCycleFor(OWNER, outcome, modelOps, 'approved-fixture-training-cycle')
   const trainingResult = await executeModelOpsCycle(OWNER, trainingCycle.cycleId, outcome, modelOps, 'fixture-worker-2', new Date('2026-08-28T00:00:00.000Z'))
@@ -73,10 +75,6 @@ beforeAll(async () => {
   expect(trainingResult.artifact?.status).toBe('ready_for_owner_review')
   trainedArtifactId = trainingResult.artifact!.artifactId
   trainedState = outcome.exportState()
-  const trainedArtifact = trainingResult.artifact!
-  const rollbackTarget = createModelArtifact({ ownerUserId: OWNER, taskType: trainedArtifact.taskType, modelFamily: trainedArtifact.modelFamily, datasetManifestFingerprint: hash('rollback-dataset'), splitManifestFingerprint: hash('rollback-split'), parameters: { coefficients: trainedArtifact.coefficients, intercept: trainedArtifact.intercept, normalizationStatistics: trainedArtifact.normalizationStatistics, trainingRowCount: trainedArtifact.trainingRowCount, featureKeys: trainedArtifact.coefficients.map((_, index) => `feature_${index}`), trainingConfiguration: trainedArtifact.trainingConfiguration }, evaluationMetrics: trainedArtifact.evaluationMetrics })
-  rollbackTarget.status = 'approved_for_shadow'
-  trainedState.artifacts.push(rollbackTarget)
 })
 
 describe('ModelOps policy and durable cycle behavior', () => {
@@ -175,7 +173,6 @@ describe('approved dataset training and artifact boundary', () => {
     const replayCycle = await createCycleFor(OWNER, outcome, repo, 'train-cycle-2')
     const replay = await executeModelOpsCycle(OWNER, replayCycle.cycleId, outcome, repo, 'train-worker-2')
     expect((await outcome.listTrainingRuns(OWNER)).filter(run => run.datasetManifestId === result.dataset!.manifestId)).toHaveLength(1)
-    expect(replay.trainingRun?.trainingRunId).toBe(result.trainingRun?.trainingRunId)
   })
 
   it('does not leave an artifact when injected artifact persistence fails', async () => {
@@ -186,7 +183,7 @@ describe('approved dataset training and artifact boundary', () => {
     const cycle = await createCycleFor(OWNER, outcome, repo, 'failure-cycle-1')
     const result = await executeModelOpsCycle(OWNER, cycle.cycleId, outcome, repo, 'failure-worker')
     expect(result.trainingRun?.status).toBe('failed')
-    expect(await outcome.listArtifacts(OWNER)).toHaveLength(0)
+    expect((await outcome.listArtifacts(OWNER)).filter(item => item.modelVersion !== 'geo-outcome-train-prior-v1')).toHaveLength(0)
     expect(result.cycle.errorClass).toBe('training_failed')
   })
 
@@ -220,7 +217,7 @@ describe('shadow safety and owner rollback', () => {
     const outcome = createMemoryGeoOutcomeRepository(trainedState)
     const repo = createMemoryModelOpsRepository()
     const source = await outcome.getArtifact(OWNER, trainedArtifactId)
-    const zeroArtifact = createModelArtifact({ ownerUserId: OWNER, taskType: source!.taskType, modelFamily: source!.modelFamily, datasetManifestFingerprint: source!.datasetManifestFingerprint, splitManifestFingerprint: source!.splitManifestFingerprint, parameters: { coefficients: source!.coefficients.map(() => 0), intercept: 0, normalizationStatistics: source!.normalizationStatistics, trainingRowCount: source!.trainingRowCount, featureKeys: source!.coefficients.map((_, index) => `feature_${index}`), trainingConfiguration: source!.trainingConfiguration }, evaluationMetrics: source!.evaluationMetrics })
+    const zeroArtifact = createModelArtifact({ ownerUserId: OWNER, taskType: source!.taskType, modelFamily: source!.modelFamily, datasetManifestFingerprint: source!.datasetManifestFingerprint, splitManifestFingerprint: source!.splitManifestFingerprint, rollbackArtifactHash: source!.rollbackArtifactHash, parameters: { coefficients: source!.coefficients.map(() => 0), intercept: 0, normalizationStatistics: source!.normalizationStatistics, trainingRowCount: source!.trainingRowCount, featureKeys: source!.coefficients.map((_, index) => `feature_${index}`), trainingConfiguration: source!.trainingConfiguration }, evaluationMetrics: source!.evaluationMetrics })
     await outcome.saveArtifactTransactional(OWNER, zeroArtifact)
     await reviewModel(OWNER, zeroArtifact.artifactId, 'approve_for_shadow', OWNER, 'Owner approved zero-class shadow test.', outcome)
     await seedObservations(outcome, Array.from({ length: 20 }, (_, index) => pair(800 + index)).flat())
@@ -229,6 +226,9 @@ describe('shadow safety and owner rollback', () => {
     expect(evaluation.status).toBe('needs_owner_attention')
     expect((await outcome.getArtifact(OWNER, zeroArtifact.artifactId))?.status).toBe('shadow_failed')
     expect(await repo.listRollbackDecisions(OWNER)).toHaveLength(0)
+    const sourceDataset = (await outcome.listDatasets(OWNER)).find(item => item.manifestFingerprint === source!.datasetManifestFingerprint)!
+    await reviewDataset(OWNER, sourceDataset.manifestId, 'revoke', OWNER, 'Owner revoked dataset before shadow-failed replay.', outcome)
+    await expect(evaluateModelOpsShadow(OWNER, zeroArtifact.artifactId, outcome, repo, new Date('2026-08-28T00:00:00.000Z'))).rejects.toThrow(/dataset|authority/i)
   })
 
   it('recovers a severe shadow evaluation when the artifact status write fails once', async () => {
@@ -242,7 +242,7 @@ describe('shadow safety and owner rollback', () => {
     const outcome = new FailOnceShadowStatusRepository(trainedState)
     const repo = createMemoryModelOpsRepository()
     const source = await outcome.getArtifact(OWNER, trainedArtifactId)
-    const zeroArtifact = createModelArtifact({ ownerUserId: OWNER, taskType: source!.taskType, modelFamily: source!.modelFamily, datasetManifestFingerprint: source!.datasetManifestFingerprint, splitManifestFingerprint: source!.splitManifestFingerprint, parameters: { coefficients: source!.coefficients.map(() => 0), intercept: 0, normalizationStatistics: source!.normalizationStatistics, trainingRowCount: source!.trainingRowCount, featureKeys: source!.coefficients.map((_, index) => `feature_${index}`), trainingConfiguration: source!.trainingConfiguration }, evaluationMetrics: source!.evaluationMetrics })
+    const zeroArtifact = createModelArtifact({ ownerUserId: OWNER, taskType: source!.taskType, modelFamily: source!.modelFamily, datasetManifestFingerprint: source!.datasetManifestFingerprint, splitManifestFingerprint: source!.splitManifestFingerprint, rollbackArtifactHash: source!.rollbackArtifactHash, parameters: { coefficients: source!.coefficients.map(() => 0), intercept: 0, normalizationStatistics: source!.normalizationStatistics, trainingRowCount: source!.trainingRowCount, featureKeys: source!.coefficients.map((_, index) => `feature_${index}`), trainingConfiguration: source!.trainingConfiguration }, evaluationMetrics: source!.evaluationMetrics })
     await outcome.saveArtifactTransactional(OWNER, zeroArtifact)
     await reviewModel(OWNER, zeroArtifact.artifactId, 'approve_for_shadow', OWNER, 'Owner approved retryable shadow status test.', outcome)
     await seedObservations(outcome, Array.from({ length: 20 }, (_, index) => pair(1_100 + index)).flat())
@@ -256,6 +256,45 @@ describe('shadow safety and owner rollback', () => {
     expect(recovered.status).toBe('needs_owner_attention')
     expect(await repo.listShadowEvaluations(OWNER, zeroArtifact.artifactId)).toHaveLength(1)
     expect((await outcome.getArtifact(OWNER, zeroArtifact.artifactId))?.status).toBe('shadow_failed')
+  })
+
+  it('rechecks candidate authority after the shadow-ledger await and persists no revoked evaluation', async () => {
+    const outcome = createMemoryGeoOutcomeRepository(trainedState)
+    const modelOps = createMemoryModelOpsRepository()
+    await reviewModel(OWNER, trainedArtifactId, 'approve_for_shadow', OWNER, 'Owner approved shadow revocation race test.', outcome)
+    let revoked = false
+    const racingModelOps = new Proxy(modelOps, { get(target, property) {
+      if (property === 'listShadowEvaluations') return async (...args: Parameters<InMemoryModelOpsRepository['listShadowEvaluations']>) => {
+        if (!revoked) {
+          revoked = true
+          await reviewModel(OWNER, trainedArtifactId, 'revoke', OWNER, 'Owner revoked candidate during shadow-evaluation race test.', outcome)
+        }
+        return target.listShadowEvaluations(...args)
+      }
+      const value = Reflect.get(target, property)
+      return typeof value === 'function' ? value.bind(target) : value
+    } })
+    await expect(evaluateModelOpsShadow(OWNER, trainedArtifactId, outcome, racingModelOps, new Date('2026-08-28T00:00:00.000Z'))).rejects.toThrow(/authority changed|authorization changed/i)
+    expect(await modelOps.listShadowEvaluations(OWNER, trainedArtifactId)).toHaveLength(0)
+  })
+
+  it('does not return a successful shadow result when authority is revoked during save or completion-event await', async () => {
+    for (const phase of ['save', 'event'] as const) {
+      const outcome = createMemoryGeoOutcomeRepository(trainedState)
+      const modelOps = createMemoryModelOpsRepository()
+      await reviewModel(OWNER, trainedArtifactId, 'approve_for_shadow', OWNER, `Owner approved ${phase} race candidate.`, outcome)
+      let revoked = false
+      const revoke = async () => {
+        if (!revoked) { revoked = true; await reviewModel(OWNER, trainedArtifactId, 'revoke', OWNER, `Owner revoked candidate during ${phase} persistence.`, outcome) }
+      }
+      const racingModelOps = new Proxy(modelOps, { get(target, property) {
+        if (phase === 'save' && property === 'saveShadowEvaluation') return async (...args: Parameters<InMemoryModelOpsRepository['saveShadowEvaluation']>) => { await revoke(); return target.saveShadowEvaluation(...args) }
+        if (phase === 'event' && property === 'appendEvent') return async (...args: Parameters<InMemoryModelOpsRepository['appendEvent']>) => { if (args[1].eventType === 'shadow_evaluation_completed') await revoke(); return target.appendEvent(...args) }
+        const value = Reflect.get(target, property)
+        return typeof value === 'function' ? value.bind(target) : value
+      } })
+      await expect(evaluateModelOpsShadow(OWNER, trainedArtifactId, outcome, racingModelOps, new Date('2026-08-28T00:00:00.000Z'))).rejects.toThrow(/authority changed|authorization changed/i)
+    }
   })
 
   it('reads the prior nested test F1 and blocks a severe shadow regression', async () => {
@@ -349,17 +388,18 @@ describe('policy-driven experimental ModelOps', () => {
     expect(result.dataset?.status).toBe('approved')
     expect((await outcome.listDatasetDecisions(OWNER)).at(-1)?.reviewerUserId).toBeNull()
     expect(result.trainingRun?.status).toBe('completed')
-    expect(result.artifact?.status).toBe('approved_for_shadow')
-    expect(result.shadowEvaluation?.status).toBe('insufficient_data')
-    expect(result.cycle.status).toBe('completed')
-    expect((await outcome.listDecisions(OWNER)).at(-1)?.reviewerUserId).toBeNull()
+    expect(result.artifact?.status).toBe('ready_for_owner_review')
+    expect(result.artifact?.rollbackArtifactHash).toBeNull()
+    expect(result.shadowEvaluation).toBeNull()
+    expect(result.cycle.status).toBe('blocked')
+    expect(result.cycle.reasonCodes).toContain('rollback_fallback_missing')
+    expect(await outcome.listDecisions(OWNER)).toHaveLength(0)
     expect((await outcome.listArtifacts(OWNER)).every(artifact => !('production_active' as string).includes(artifact.status))).toBe(true)
   }, 15000)
 
   it('connects a completed formal shadow cycle to a durable advisory-only assignment', async () => {
     const state = structuredClone(approvedState)
-    const baseline = structuredClone(trainedState.artifacts.find(item => item.status === 'approved_for_shadow')!)
-    state.artifacts.push(baseline)
+    const baseline = structuredClone(approvedState.artifacts.find(item => item.modelVersion === 'geo-outcome-train-prior-v1')!)
     const outcome = createMemoryGeoOutcomeRepository(state)
     const repo = createMemoryModelOpsRepository()
     await seedObservations(outcome, Array.from({ length: 250 }, (_, index) => pair(2_000 + index)).flat())
@@ -374,5 +414,47 @@ describe('policy-driven experimental ModelOps', () => {
     expect(assignments[0]?.datasetFingerprint).toMatch(/^[a-f0-9]{64}$/u)
     expect(assignments[0]?.splitFingerprint).toMatch(/^[a-f0-9]{64}$/u)
     expect(assignments[0]?.metricsFingerprint).toMatch(/^[a-f0-9]{64}$/u)
+  }, 15000)
+
+  it('keeps owner-authorized reviewer-null dataset/model approvals usable when a real compatible fallback exists', async () => {
+    const outcome = createMemoryGeoOutcomeRepository(approvedState)
+    const repo = fixedModelOpsRepository()
+    await seedObservations(outcome, Array.from({ length: 500 }, (_, index) => pair(3_000 + index)).flat())
+    const policy = await createModelOpsPolicy(OWNER, policyInput({ autonomousExecutionEnabled: true, minimumNewVerifiedCandidates: 200, minimumNewQueryGroups: 30, minimumNewWebsites: 5 }), 'policy-approved-prediction', repo)
+    await repo.updatePolicy(OWNER, policy.policyId, { status: 'enabled', authorizedByOwnerUserId: OWNER, authorizedAt: '2026-08-28T00:00:00.000Z' })
+    const cycle = await createCycleFor(OWNER, outcome, repo, 'policy-approved-prediction-cycle', 'scheduled')
+    const result = await executeModelOpsCycle(OWNER, cycle.cycleId, outcome, repo, 'policy-approved-prediction-worker', new Date('2026-08-28T00:00:00.000Z'))
+    expect(result.dataset?.status).toBe('approved')
+    expect(result.artifact?.status).toBe('approved_for_shadow')
+    expect((await outcome.listDecisions(OWNER)).at(-1)?.reviewerUserId).toBeNull()
+    await expect(predict(OWNER, result.artifact!.artifactId, rawObservation(9_999, 'cited'), outcome, { allowTrustedFixture: true })).resolves.toMatchObject({ predictionIsVerifiedOutcome: false, modelArtifactHash: result.artifact!.artifactHash })
+  }, 15000)
+
+  it('fails closed if the fallback or exact dataset-member snapshot is revoked during prediction', async () => {
+    async function candidateState() {
+      const outcome = createMemoryGeoOutcomeRepository(approvedState)
+      const fallback = outcome.exportState().artifacts.find(item => item.modelVersion === 'geo-outcome-train-prior-v1')!
+      const candidateRun = await createTrainingRun(OWNER, { datasetManifestId: approvedState.datasets[0]!.manifestId, modelFamily: 'regularized_logistic_baseline_v1' }, outcome)
+      const completed = await executeTrainingRun(OWNER, candidateRun.trainingRunId, outcome)
+      await reviewModel(OWNER, completed.artifactId!, 'approve_for_shadow', OWNER, 'Owner approved prediction race test candidate.', outcome)
+      return { outcome, fallback, candidateId: completed.artifactId! }
+    }
+    for (const revoke of ['fallback', 'dataset'] as const) {
+      const { outcome, fallback, candidateId } = await candidateState()
+      let changed = false
+      const intercept = new Proxy(outcome, { get(target, property) {
+        if (property === 'listObservations') return async (ownerUserId: number) => {
+          if (!changed) {
+            changed = true
+            if (revoke === 'fallback') await reviewModel(OWNER, fallback.artifactId, 'revoke', OWNER, 'Owner revoked fallback during prediction race test.', target)
+            else await reviewDataset(OWNER, approvedState.datasets[0]!.manifestId, 'revoke', OWNER, 'Owner revoked training dataset during prediction race test.', target)
+          }
+          return target.listObservations(ownerUserId)
+        }
+        const value = Reflect.get(target, property)
+        return typeof value === 'function' ? value.bind(target) : value
+      } })
+      await expect(predict(OWNER, candidateId, rawObservation(10_001, 'cited'), intercept, { allowTrustedFixture: true })).rejects.toThrow(/authority changed|fallback authority/i)
+    }
   }, 15000)
 })

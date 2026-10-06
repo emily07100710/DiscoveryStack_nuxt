@@ -8,6 +8,7 @@ import { assessPublishedContentOutcome } from '../server/outcome-learning/engine
 import { outcomeSha256 } from '../server/outcome-learning/normalization'
 import { OUTCOME_DATA_CONTRACT_VERSION } from '../server/outcome-learning/policy-catalog'
 import { fingerprint } from '../server/geo-outcome-model/canonical'
+import { projectEffectPublicationTiming } from '../server/learning-loop/effect-publication-metadata'
 
 type Release = Awaited<ReturnType<typeof buildGovernedContentOutcomeRelease>>
 const NOW = new Date('2026-10-07T00:00:00.000Z'), copy = <T>(value: T): T => structuredClone(value)
@@ -29,8 +30,11 @@ class MemoryModels implements OutcomeModelRepository {
 function fixture(count = 180) {
   const records = Array.from({ length: count }, (_, i) => {
     const positive = i % 2 === 0, subject = outcomeSha256(`synthetic-subject-${Math.floor(i / 6)}`)
-    const publication = { deidentifiedSubjectKey: subject, scheduleEntryId: `entry-${i}`, scheduleKey: `schedule-${i}`, productionPlanId: `plan-${i}`, jobId: `job-${i}`, draftId: `draft-${i}`, draftVersion: '1', contentHash: outcomeSha256(`content-${i}`), evidenceSnapshotHash: outcomeSha256(`evidence-${i}`), publishedAt: '2026-09-01T00:00:00.000Z', contentType: ['article', 'faq', 'service_page'][i % 3]!, language: i % 2 ? 'en' : 'zh-hant', appliedRuleIds: ['direct-answer'], topicClusterCode: 'synthetic-topic' }
-    const measurement = (source: string, phase: string, metrics: Record<string, number>) => { const body = { source, phase, deidentifiedSubjectKey: subject, scopeFingerprint: outcomeSha256(`${source}-${i}`), windowStart: phase === 'baseline' ? '2026-08-01T00:00:00.000Z' : '2026-09-02T00:00:00.000Z', windowEnd: phase === 'baseline' ? '2026-08-29T00:00:00.000Z' : '2026-09-30T00:00:00.000Z', capturedAt: phase === 'baseline' ? '2026-08-30T00:00:00.000Z' : '2026-10-01T00:00:00.000Z', metrics }; return { ...body, sourceHash: outcomeSha256(body) } }
+    // Subjects arrive in genuinely separated synthetic eras; labels are available before the future cohort.
+    const publicationTime = Date.parse('2023-02-01T00:00:00.000Z') + Math.floor(i / 6) * 30 * 86400000 + (i % 6) * 3600000
+    const date = (days: number) => new Date(publicationTime + days * 86400000).toISOString()
+    const publication = { deidentifiedSubjectKey: subject, scheduleEntryId: `entry-${i}`, scheduleKey: `schedule-${i}`, productionPlanId: `plan-${i}`, jobId: `job-${i}`, draftId: `draft-${i}`, draftVersion: '1', contentHash: outcomeSha256(`content-${i}`), evidenceSnapshotHash: outcomeSha256(`evidence-${i}`), publishedAt: date(0), contentType: ['article', 'faq', 'service_page'][i % 3]!, language: i % 2 ? 'en' : 'zh-hant', appliedRuleIds: ['direct-answer'], topicClusterCode: 'synthetic-topic' }
+    const measurement = (source: string, phase: string, metrics: Record<string, number>) => { const body = { source, phase, deidentifiedSubjectKey: subject, scopeFingerprint: outcomeSha256(`${source}-${i}`), windowStart: phase === 'baseline' ? date(-29) : date(1), windowEnd: phase === 'baseline' ? date(-1) : date(15), capturedAt: phase === 'baseline' ? date(-1) : date(16), metrics }; return { ...body, sourceHash: outcomeSha256(body) } }
     const baseline = [measurement('google_search_console', 'baseline', { impressions: 280, clicks: 28, averagePosition: 12 })]
     const followup = [measurement('google_search_console', 'follow_up', positive ? { impressions: 560, clicks: 112, averagePosition: 6 } : { impressions: 140, clicks: 7, averagePosition: 24 })]
     if (i % 3) { baseline.push(measurement('first_party_analytics', 'baseline', { sessions: 280, engagedSessions: 140 })); followup.push(measurement('first_party_analytics', 'follow_up', positive ? { sessions: 560, engagedSessions: 400 } : { sessions: 140, engagedSessions: 50 })) }
@@ -39,7 +43,14 @@ function fixture(count = 180) {
   })
   const dataset = buildContentLearningDataset({ records })
   expect(dataset.status, JSON.stringify(dataset.manifest.reasonCodes)).toBe('ready_for_dataset_review')
-  let current: Release = { contractVersion: 'governed-content-outcome-release-v1', generatedAt: NOW.toISOString(), taskType: 'content_effect_direction', citationTrainingEligible: false, dataset, lineage: [], admittedLineage: dataset.eligibleCandidates.map(candidate => ({ candidateFingerprint: candidate.candidateFingerprint, lineageFingerprint: fingerprint({ receipt: candidate.publicationIdentityHashes, source: 'synthetic-reviewed-source', consent: 'current-synthetic-grant' }) })), blocked: [], limitations: [], releaseFingerprint: fingerprint('synthetic release') }
+  const publicationMetadataEntries = dataset.candidateResults.flatMap((candidate, i) => {
+    if (candidate.candidateStatus !== 'eligible') return []
+    const request = records[i]!.outcomeRequest, followUp = request.followUpMeasurements[0]!
+    const metadata = projectEffectPublicationTiming({ ownerUserId: 1, receiptFingerprint: outcomeSha256(`synthetic-publication-${i}`), assessment: records[i]!.assessment, baselineMeasurements: request.baselineMeasurements, followUpMeasurements: request.followUpMeasurements, measuredAt: new Date(followUp.capturedAt), checkedAt: NOW })
+    expect(metadata).not.toBeNull()
+    return [{ candidateFingerprint: candidate.candidateFingerprint, ...metadata! }]
+  })
+  let current: Release = { contractVersion: 'governed-content-outcome-release-v1', generatedAt: NOW.toISOString(), taskType: 'content_effect_direction', citationTrainingEligible: false, dataset, lineage: [], admittedLineage: dataset.eligibleCandidates.map(candidate => ({ candidateFingerprint: candidate.candidateFingerprint, lineageFingerprint: fingerprint({ receipt: candidate.publicationIdentityHashes, source: 'synthetic-reviewed-source', consent: 'current-synthetic-grant' }) })), publicationMetadataEntries, metadataBlocked: [], blocked: [], limitations: [], releaseFingerprint: fingerprint('synthetic release') }
   const models = new MemoryModels(), release = vi.fn(async () => copy(current)), deps = { models, release, enabled: true, now: () => NOW }
   const review = async () => { const workspace = await getContentEffectModelWorkspace(1, deps); expect(workspace.release).not.toBeNull(); return approveContentEffectTraining(1, { datasetDigest: workspace.release!.datasetDigest, lineageFingerprint: workspace.release!.lineageFingerprint, piiReviewConfirmed: true, observationalOnlyAcknowledged: true, reviewReason: 'Synthetic source, consent, PII and receipt review.' }, deps) }
   return { models, deps, review, get current() { return current }, setCurrent(value: Release) { current = value } }
@@ -64,8 +75,9 @@ describe('durable reviewed observational retraining', () => {
     expect(result.model.status, result.model.reasonCode || '').toBe('completed')
     expect(result.model.artifact).not.toBeNull(); expect(result.productionActivation).toBe(false)
     expect(result.model.automaticDraftModification).toBe(false)
-    const raw = f.models.rows[0]!.artifact as { coefficients: number[]; splits: { temporalHoldout: string } }
-    expect(raw.coefficients.length).toBeGreaterThan(0); expect(raw.splits.temporalHoldout).toBe('UNAVAILABLE')
+    const raw = f.models.rows[0]!.artifact as { coefficients: number[]; splits: { temporalHoldout: unknown } }
+    expect(raw.coefficients.length).toBeGreaterThan(0); expect(raw.splits.temporalHoldout).not.toBe('UNAVAILABLE')
+    expect(raw.splits.temporalHoldout).toBeTypeOf('object')
     const summary = JSON.stringify(result); expect(summary).not.toContain('"coefficients":'); expect(summary).not.toContain('"intercept":'); expect(summary).not.toContain('"normalization":')
     const replay = await executeContentEffectTraining(1, { modelId: approved.model.id }, f.deps)
     expect(replay.replayed).toBe(true)
@@ -96,6 +108,16 @@ describe('durable reviewed observational retraining', () => {
     await expect(executeContentEffectTraining(1, { modelId: approved.model.id }, { ...f.deps, trainer })).rejects.toMatchObject({ data: { code: 'CURRENT_EFFECT_LINEAGE_REQUIRED' } })
     expect(f.models.rows[0]).toMatchObject({ status: 'revoked', artifact: null, artifactHash: null, metrics: null })
   })
+  it('binds trusted timing and publication grouping to approval, even when candidate checksums are unchanged', async () => {
+    for (const field of ['publishedAt', 'capturedAt', 'publicationGroupFingerprint', 'baselineMetadataFingerprint', 'latestBaselineCapturedAt'] as const) {
+      const f = fixture(), approved = await f.review(), trainer = vi.fn()
+      const entries = copy(f.current.publicationMetadataEntries)
+      entries[0]![field] = field === 'publicationGroupFingerprint' || field === 'baselineMetadataFingerprint' ? 'a'.repeat(64) : '2025-01-01T00:00:00.000Z'
+      f.setCurrent({ ...f.current, publicationMetadataEntries: entries })
+      await expect(executeContentEffectTraining(1, { modelId: approved.model.id }, { ...f.deps, trainer })).rejects.toMatchObject({ data: { code: 'CURRENT_EFFECT_LINEAGE_REQUIRED' } })
+      expect(trainer).not.toHaveBeenCalled()
+    }
+  })
   it('keeps a revoked artifact unavailable and fences expired workers on takeover', async () => {
     const f = fixture(), approved = await f.review(), row = f.models.rows[0]!
     Object.assign(row, { status: 'training', leaseToken: 'old-worker', leaseVersion: 2, leaseExpiresAt: new Date(NOW.getTime() - 1) })
@@ -106,6 +128,48 @@ describe('durable reviewed observational retraining', () => {
     const workspace = await getContentEffectModelWorkspace(1, f.deps)
     expect(workspace.models[0]).toMatchObject({ status: 'revoked', currentLineageValid: false, artifact: null })
     expect(row.artifact).toBeNull()
+  })
+  it('reloads stored rows after release reads so concurrent revocation cannot expose cached metrics', async () => {
+    for (const use of ['workspace', 'completed_replay', 'blocked_replay', 'approval_replay'] as const) {
+      const f = fixture(), approved = await f.review()
+      await executeContentEffectTraining(1, { modelId: approved.model.id }, f.deps)
+      if (use === 'blocked_replay') Object.assign(f.models.rows[0]!, { status: 'blocked', artifact: null, artifactHash: null, metrics: null })
+      let reads = 0
+      const release = async () => {
+        reads += 1
+        // Approval refreshes the workspace first, then reserves/replays and performs its final read.
+        if (reads === (use === 'approval_replay' ? 3 : 1)) {
+          const row = f.models.rows[0]!
+          await f.models.revoke(1, row.id, row.leaseVersion, NOW, 'SYNTHETIC_CONCURRENT_REVOKE')
+        }
+        return copy(f.current)
+      }
+      if (use === 'workspace') {
+        const workspace = await getContentEffectModelWorkspace(1, { ...f.deps, release })
+        expect(workspace.models[0]).toMatchObject({ status: 'revoked', currentLineageValid: false, artifact: null })
+      } else if (use === 'approval_replay') {
+        const workspace = await getContentEffectModelWorkspace(1, { ...f.deps, release })
+        await expect(approveContentEffectTraining(1, { datasetDigest: workspace.release!.datasetDigest, lineageFingerprint: workspace.release!.lineageFingerprint, piiReviewConfirmed: true, observationalOnlyAcknowledged: true, reviewReason: 'Synthetic replay with current authorization.' }, { ...f.deps, release })).rejects.toMatchObject({ data: { code: 'EFFECT_APPROVAL_LINEAGE_CHANGED' } })
+      } else {
+        await expect(executeContentEffectTraining(1, { modelId: approved.model.id }, { ...f.deps, release })).rejects.toMatchObject({ data: { code: 'CURRENT_EFFECT_LINEAGE_REQUIRED' } })
+      }
+      expect(f.models.rows[0]).toMatchObject({ status: 'revoked', artifact: null, artifactHash: null, metrics: null })
+    }
+  })
+  it('rechecks every retention row rather than sharing a stale page-wide release', async () => {
+    const f = fixture(), first = await f.review()
+    f.setCurrent(fixture(186).current)
+    const second = await f.review()
+    expect(second.model.id).not.toBe(first.model.id)
+    let reads = 0
+    const release = async () => {
+      reads += 1
+      if (reads === 2) f.setCurrent({ ...f.current, admittedLineage: [] })
+      return copy(f.current)
+    }
+    expect(await cleanInvalidContentEffectModels(1, { ...f.deps, release })).toEqual({ checked: 2, revoked: 1 })
+    expect(reads).toBe(2)
+    expect(f.models.rows[1]).toMatchObject({ status: 'revoked', artifact: null })
   })
   it('erases a completed fit if consent changes during the final response check', async () => {
     const f = fixture(), approved = await f.review()
