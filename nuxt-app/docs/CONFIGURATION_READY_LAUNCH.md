@@ -117,11 +117,12 @@ pnpm test
 - 新版 Live 後正式官網／後台 16 項非破壞性 HTTP 檢查全部通過，包括公開 canonical／handoff、工作台官網回返／noindex、未登入 workspace 與兩個 fallback POST 的 401／no-store、根路由 redirect、精確公共 CORS 及錯誤來源拒絕。另正式 HTML 確實引用 `/_nuxt/xDmkHttW.js`，其 SHA-256 `d3fb0ac6810760b381484c0981375f088c841553536451f0ce39dc8f094584aa` 與本機新正式建置完全一致。這些檢查不代替已登入 owner 的資料讀寫、真 LINE／發布／量測或真模型訓練驗收。
 - 首次遠端 CI 與本機結果分開記錄：`515e4fb` 的遠端 typecheck／build 通過，Vitest 為 5,676 通過、1 失敗、27 跳過（518.46 秒）；唯一失敗是 modelops 的 reviewer-null／真實 fallback CPU 案例 `Test timed out in 15000ms.`。本機同項約 7.7 秒，修正僅將該案例的有界等待上限調為 60 秒；不改 fixture、斷言、資料／holdout／owner／rollback 閘門、正式程式逾時或 skip。這項是測試設定修正，不需要再次套正式資料庫或重部署執行程式；修正後完整重驗與新遠端 CI 結果另行核對，不把舊失敗改寫為通過。
 - 逾時修正後再凍結測試與執行程式，重新依序完成 typecheck（19.956 秒）、fresh node-server build（56.393 秒）及完整安全 Vitest（258.10 秒），全部 exit 0；仍為 295 個檔案／5,677 項通過、14 個檔案／27 項外部整合跳過，309 個檔案／5,704 項總計。原逾時案例在完整執行中為 7.871 秒，18 項模型持久化／重啟 fixture 為 85.574 秒。本次只提交測試等待上限與驗收紀錄，正式執行程式維持 Live 的 `515e4fb`，資料庫維持 0045；未新增 migration 或啟用供應商／模型。
+- 修正提交 `9233757caf032c14e898d35f51da7b95db661887` 已正常推送並核對兩個既有遠端精確 main SHA；2026-10-07 06:03（Asia/Taipei）唯讀核對 [遠端 CI run 37536636498](https://github.com/tendertech2018/DiscoveryStack_nuxt/actions/runs/37536636498) 為 completed／success。後台的 typecheck／build／test 與公開官網的 astro check／build／test 兩個必要 job 均 success；這是新修正提交的結果，沒有改寫 `515e4fb` 的舊失敗。遠端每個 job 的成功與本機完整測試總數分開記錄，不把未擷取的遠端逐項總數冒充本機數字。最後的郵件佇列釐清與這筆驗收紀錄只改文件，不改已部署執行程式或已驗證測試。
 
 仍需處理的缺項：
 
 1. **LINE／實際發布**：正式環境尚缺每週內容所需的 LINE access token、channel secret、bot user ID；仍需實際客戶綁定、內容計畫、精確稿件核准與發布目標。手機按確認到供應商發布、回執與下一輪量測回流，尚未做真實端到端驗收。
-2. **Email／網域**：Resend 與 durable outbox 的程式已存在，正式 key、已驗證寄件網域、From、驗證 pepper 及真實收信驗收仍未完成。公司信箱另需信箱服務，不會由 Resend 自動建立。
+2. **Email／網域**：Resend 寄信 adapter 已實作；DS 平台伺服器的獨立 durable outbox 目前是每週 LINE 通知，不是 Resend 郵件佇列。平台交易郵件由各服務直接呼叫 transport，部分網站上線通知有交付重試與成功回執，但統一郵件佇列／租約重送機制尚未完成。獨立客戶站 SQLite 核心另有每站 Email outbox，已做本機／mock 測試；它尚未整合為 DS 平台郵件佇列，也不代替正式收信驗收。正式 key、已驗證寄件網域、From、驗證 pepper 及真實收信驗收仍未完成。公司信箱另需信箱服務，不會由 Resend 自動建立。
 3. **常駐與備援**：目前私有 Render 服務為 Free，閒置會休眠；持續排程與關閉瀏覽器後的驗收尚未完成。付費升級／新託管與定期異地備份需要選擇、成本與保存責任，這次沒有擅自升級。
 4. **真實學習資料與模型**：正式 public sources、training runs、model artifacts、內容日曆項目、publication targets 均為 0。需要合法授權的來源及可追溯觀測、GSC／GA4 連線與足夠真實標籤，才能評估模型；API 回答／結構分數不能冒充消費者 AI 引用真值。
 5. **尚未完整的學習工程**：已新增成效 trainer 的 server-owned 時間／baseline 譜系、publication 去重及時間外 subject holdout，與首次引用模型獨立 owner 核准的固定 train-only shadow 回退基準。第一方 Git 的正式更新也能保存精確 receipt-bound、hash-only repository change-set；但 repository revision 不是已部署頁面的 live before／after。完整 live action-learning adapter／admission、真實資料上的準確度與效果、production activation 仍未驗收，保留關閉與 owner 核准門檻；不能說只要填 API 就已完成學習品質驗證。
