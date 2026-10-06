@@ -113,7 +113,8 @@ pnpm test
 - 新版 node-server 實際綁定 `127.0.0.1:3197`，工作台未登入狀態、正確官網回返連結及 390 px 手機版已在瀏覽器核對；沒有水平溢位，導覽可展開，切換工作台後自動收合。這是匿名本機 UI 驗收，不是正式 owner session／真手機 LINE 驗收；預覽與臨時分頁已關閉。
 - 三個客戶站核心範例再次執行 `node:test`：53 項通過、0 失敗、0 跳過。涵蓋本機 HTTP／SQLite／庫存訂單／預約部落格／權限及 mock 通知；不包含正式品牌美術、真金流、真收信或一鍵持久部署。
 - 2026-10-07 05:16（Asia/Taipei）正式 TiDB 唯讀核對：195 張表、46 筆 ledger、0045 精確 hash 相符、owner 配置有效；來源、training runs、model artifacts、calendar entries、publication targets 均為 0。沒有新增 migration，也沒有重套 0045 或改寫客戶資料。
-- 本輪執行程式的推送與 Render Live 核對尚待完成；首發 `3123d6e` 的 Live 證據不能代替本輪部署驗收。部署沿用既有 Free 服務，不自動升級、啟用模型或呼叫付費供應商。
+- 本輪執行程式 `515e4fb62f66b8f02ecf3468483bf622eaf02d71` 已以非強制方式推送到既有兩個 GitHub main 遠端。Render 後台 `srv-dab7es3tqb8s73f1orlg` 已直接核對 Last successfully deployed commit 為同一版本，Auto-Deploy 耗時 2m22s，部署 `dep-db2mca3rjlhs73fk8780` 顯示 Live；首發 `3123d6e` 的狀態沒有被當作本輪證明。服務仍為 Docker Free，沒有升級、啟用模型或呼叫付費供應商。
+- 新版 Live 後正式官網／後台 16 項非破壞性 HTTP 檢查全部通過，包括公開 canonical／handoff、工作台官網回返／noindex、未登入 workspace 與兩個 fallback POST 的 401／no-store、根路由 redirect、精確公共 CORS 及錯誤來源拒絕。另正式 HTML 確實引用 `/_nuxt/xDmkHttW.js`，其 SHA-256 `d3fb0ac6810760b381484c0981375f088c841553536451f0ce39dc8f094584aa` 與本機新正式建置完全一致。這些檢查不代替已登入 owner 的資料讀寫、真 LINE／發布／量測或真模型訓練驗收。
 
 仍需處理的缺項：
 
