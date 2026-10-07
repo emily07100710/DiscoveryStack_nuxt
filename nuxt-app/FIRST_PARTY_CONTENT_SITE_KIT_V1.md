@@ -2,7 +2,7 @@
 
 ## 定位
 
-First-party Astro/Nuxt GEO Content Site Kit V1 是一套 **headless、無視覺樣式、純 server-side、deterministic 的內容讀取與 projection 工具**。它讓由 DiscoveryStack first-party publisher 產生的 approved Markdown article，在客戶 Astro 或 Nuxt content site 中被安全解析，並投影為 route、canonical URL、SEO metadata、Open Graph metadata、JSON-LD、breadcrumb、hreflang、sitemap entry 與 deterministic content manifest。
+First-party Astro/Nuxt GEO Content Site Kit V1 是一套 **headless、無視覺樣式、純 server-side、deterministic 的內容讀取與 projection 工具**。它讓由 DiscoveryStack first-party publisher 產生的 approved Markdown article，在客戶 Astro 或 Nuxt content site 中被安全解析，並投影為 route、canonical URL、SEO metadata、Open Graph metadata、JSON-LD、breadcrumb、hreflang、sitemap entry 與 deterministic content manifest。另提供選用的受控 SSR 文章 HTML 片段，供發布前後證據驗證；它不提供頁面外框、版型或美術。
 
 本套件只負責讀取、驗證與轉換輸入資料；不修改 DiscoveryStack 後台、scheduler、資料庫、content calendar、SEO/GEO service、發布 executor、公開官網或客戶網站。所有 public entrypoint 都接受 `unknown`，遇到 malformed input 會回傳結構化 blocked result，不拋出 raw stack、不讀取環境變數、不存取資料庫、不寫檔、不 deploy、不依賴 browser，也不發送 network request。
 
@@ -68,8 +68,17 @@ Article JSON-LD 使用 normalized title、canonical URL、language、publishedAt
 - `buildFirstPartySeoProjection()`
 - `buildAstroContentProjection()`
 - `buildNuxtContentProjection()`
+- `buildFirstPartyLiveArticleProjection()`
 
-所有 entrypoint 都是同步、deterministic、pure data transformation，並以結構化 `status: 'blocked'` 結果表達輸入或 policy failure。`verified` 僅代表格式、hash、路徑、identity 與內部一致性已通過本套件驗證；它不構成密碼學證明，不能單獨證明檔案必定由 DiscoveryStack 產生。真實來源可信度仍依靠 first-party repository、signed transport、review、risk gate 與 delivery provenance。它們不會呼叫 first-party publisher executor，不會觸發 GitHub Contents write，不會執行客戶網站 write，也不會改變現有 scheduler 或資料庫狀態。
+所有 entrypoint 都是同步、deterministic、pure transformation，並以結構化 `status: 'blocked'` 結果表達輸入或 policy failure。`verified` 僅代表格式、hash、路徑、identity 與內部一致性已通過本套件驗證；它不構成密碼學證明，不能單獨證明檔案必定由 DiscoveryStack 產生。真實來源可信度仍依靠 first-party repository、signed transport、review、risk gate 與 delivery provenance。它們不會呼叫 first-party publisher executor，不會觸發 GitHub Contents write，不會執行客戶網站 write，也不會改變現有 scheduler 或資料庫狀態。
+
+## 選用的發布前後證據整合
+
+`buildFirstPartyLiveArticleProjection()` 僅接受 plain data `{ document, siteOrigin, siteName }`。它重新驗證 normalized document、manifest identity/body hash 與 SEO canonical，不信任呼叫者的 `verified` wrapper。成功時回傳 `controlledArticleHtml`、`canonicalUrl`、`documentFingerprint` 與 hash-only `expectedProjection`；片段使用受限 Markdown renderer，保留實際顯示標題／正文及 exact publication/draft/review/content/evidence identity，不是把原文藏在 JSON 中冒充 rendered content。
+
+Astro/Nuxt 客戶網站必須在自己的 server-rendered 頁面中放入這個受控文章片段，並以共用 SEO projection 設定唯一且相同的 canonical link。此 API 只產生片段，不自行修改 route、模板、CSS 或部署；不得把未驗證的任意 HTML 當作此片段插入。未知語法、敏感內容或不一致 identity 會回傳 blocked，不會悄悄改寫已核准文章來通過驗證。
+
+片段產生器會在代表性的 SSR 外框內檢查 semantic parity；這只證明本機純函式的內部一致性。正式發布後仍必須由 governed live-action runtime 讀取真正的同 URL HTTP 頁面，確認實際標題／正文與正式 receipt 對得上。這不構成瀏覽器可見性、索引、AI 引用、客戶網站已部署或成效因果證明。完整擷取、授權、保存期及獨立審查邊界見 `LEARNING_LIVE_PUBLICATION_ACTION_V1.md`。
 
 ## 驗證與限制
 

@@ -6,13 +6,18 @@ import { transpileModule, ModuleKind, ScriptTarget } from 'typescript'
 // Compile and render the actual page with Nuxt's installed Vue, not a string-only mock UI.
 const localRequire = createRequire(import.meta.url), nuxtRequire = createRequire(localRequire.resolve('nuxt/package.json'))
 const { parse, compileScript } = nuxtRequire('vue/compiler-sfc')
-const { createSSRApp, defineComponent, h, computed, ref, reactive } = nuxtRequire('vue')
+const { createSSRApp, defineComponent, h, computed, ref, reactive, watch } = nuxtRequire('vue')
 const { renderToString } = nuxtRequire('vue/server-renderer')
 const path = new URL('../pages/audit-lab/learning-loop.vue', import.meta.url)
 const { descriptor, errors } = parse(readFileSync(path, 'utf8'), { filename: path.pathname })
 if (errors.length) throw new Error('Learning workspace did not parse.')
 const compiled = compileScript(descriptor, { id: 'learning-loop-page-render-test', inlineTemplate: true, templateOptions: { ssr: true } })
 const js = transpileModule(compiled.content, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText
+const panelPath = new URL('../components/owner/LivePublicationActionsPanel.vue', import.meta.url)
+const panel = parse(readFileSync(panelPath, 'utf8'), { filename: panelPath.pathname })
+if (panel.errors.length) throw new Error('Live publication actions panel did not parse.')
+const panelCompiled = compileScript(panel.descriptor, { id: 'learning-loop-action-panel-render-test', inlineTemplate: true, templateOptions: { ssr: true } })
+const panelJs = transpileModule(panelCompiled.content, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText
 
 async function render(failure?: { statusCode: number; message: string }, effectFixture?: unknown, modelFixture?: unknown) {
   const workspace = { configuration: { loopEnabled: false, crawlEnabled: false, retentionEnabled: false, weeklyContentEnabled: false, schedulerEnabled: false }, clients: [], sources: [], authorizations: [], collections: [], limitations: [] }
@@ -20,8 +25,11 @@ async function render(failure?: { statusCode: number; message: string }, effectF
   const effect = effectFixture || { enabled: false, taskType: 'content_effect_direction', release: null, models: [] }
   const fetcher = vi.fn(async (url: string, options: unknown) => ({ data: ref(url.includes('geo-outcome-model') ? models : url.includes('content-operations') ? { entries: [] } : failure ? undefined : url.endsWith('/effect-models') ? effect : workspace), error: ref(url.includes('closed-loop') ? failure : undefined), pending: ref(false), refresh: vi.fn() }))
   const post = vi.fn(() => { throw new Error('Rendering must not perform mutations.') }), meta = vi.fn(), head = vi.fn()
+  const panelModule = { exports: {} as { default?: unknown } }
+  new Function('require', 'module', 'exports', 'ref', 'computed', 'reactive', 'onMounted', '$fetch', panelJs)(nuxtRequire, panelModule, panelModule.exports, ref, computed, reactive, vi.fn(), post)
+  const requirePage = (id: string) => id === '~/components/owner/LivePublicationActionsPanel.vue' ? panelModule.exports : nuxtRequire(id)
   const module = { exports: {} as { default?: unknown } }
-  new Function('require', 'module', 'exports', 'definePageMeta', 'useHead', 'useFetch', '$fetch', 'computed', 'ref', 'reactive', js)(nuxtRequire, module, module.exports, meta, head, fetcher, post, computed, ref, reactive)
+  new Function('require', 'module', 'exports', 'definePageMeta', 'useHead', 'useFetch', '$fetch', 'computed', 'ref', 'reactive', 'watch', js)(requirePage, module, module.exports, meta, head, fetcher, post, computed, ref, reactive, watch)
   const app = createSSRApp(module.exports.default)
   app.component('NuxtLink', defineComponent({ props: ['to'], setup: (props: { to: string }, { slots }: { slots: { default?: () => unknown } }) => () => h('a', { href: props.to }, slots.default?.()) }))
   return { html: await renderToString(app), fetcher, post, meta, head }
@@ -35,6 +43,8 @@ describe('compiled owner learning workspace', () => {
     expect(html).toContain('href="/api/interventions/closed-loop/outcome-release"')
     expect(html).not.toMatch(/type="checkbox"[^>]*checked|>保證排名<|已訓練成功/)
     expect(html).toContain('不保證排名或收入')
+    expect(html).toContain('發布前後證據')
+    expect(html).toContain('另納入已獨立審查的實際改動（新版模型）')
     expect(meta).toHaveBeenCalledWith({ layout: 'owner' })
     expect(head.mock.calls[0]?.[0].meta).toContainEqual({ name: 'robots', content: 'noindex,nofollow,noarchive' })
     expect(fetcher).toHaveBeenCalledTimes(4); expect(post).not.toHaveBeenCalled()

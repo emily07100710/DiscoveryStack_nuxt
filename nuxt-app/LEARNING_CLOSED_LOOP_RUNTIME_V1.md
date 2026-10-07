@@ -81,6 +81,7 @@
 - `DATABASE_URL`、`OWNER_OPEN_ID`、既有 owner 登入配置；確認 migration 順序／備份後才套用 0045。
 - `NUXT_LEARNING_LOOP_ENABLED=true`：每五分鐘有界來源蒐集、正式發布補登、結構投影保存期清理。預設 false。
 - `NUXT_LEARNING_CRAWL_ENABLED=true`：允許已授權來源蒐集。預設 false；暫停新增蒐集時關這個，不必關保存期清理。
+- `NUXT_LEARNING_LIVE_ACTION_ENABLED=true`：選用的受控第一方 HTTP 發布前後證據，預設 false；先審核並套用 0047，再完成客戶 SSR 文章整合與來源授權。發布後背景驗證另需 loop／排程正常運行，並不替代 crawl、模型訓練或發布開關。
 - `NUXT_LEARNING_RETENTION_ENABLED=true`：即使 loop 暫停，仍單獨執行保存期清理。已有蒐集資料時必須保留清理排程。每次最多移除 100 筆已過期的結構投影，保留 hash-only 授權與審查歷史；卡住 worker 被 fencing，不能再寫回過期資料。它不刪客戶網站、訂單或原始內容。
 - `NUXT_LEARNING_EFFECT_TRAINING_ENABLED=true`：允許核准後的成效訓練，預設 false；自動 worker 仍需 loop 開通。每 tick 最多一份訓練；未核准的新資料不自動加入舊核准。保存期／撤回清理與這個開關獨立，每次輪替核對最多 100 筆仍有效模型，使用／展示前則逐次重新驗證。
 - `NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED`、`NUXT_WEEKLY_CONTENT_APPROVAL_ENABLED`：原週更／內容營運流程的開關，預設 false；按「執行這位客戶的流程」也不能越過。
@@ -95,7 +96,7 @@
 
 發布快照證明的是**發布了哪份稿**，不是完整 live before/after patch。第一方 Git 的 canonical 更新現在可記錄 server-read 的 repository revision diff：先以 GET 精確檔案／blob SHA 再以 CAS PUT 更新，只有 PII scan 通過、來源可解析且有 server readAt 的更新能保存 hash-only 標題／段落 added、removed、replaced、unmodified；新增檔案、重播或未知舊內容不虛構 before state。diff 與精確 owner／entry／draft version／content／evidence／target／正式 receipt／artifact 綁定，僅在唯一 immutable delivery event、目前發布身份、來源及同意重新核對後供輔助審查。缺少／撤回授權時保留營運觀測，但 learning authority 為 null。
 
-repository revision 不是已部署的 live-page before state：`liveBeforeState=unknown`、`causalChangeSetEligible=false`、`modelTrainingAllowed=false`。完整 live before/after adapter 與 action-learning admission 仍未完成；不把 repo diff 提升為因果、引用 primary label 或可訓練資料。多發布目標的量測按正式回執隔離；目前 bridge 的介入以 canonical primary delivered publication 為準，未把部分成功但整體尚未完成的 multi-target run 宣稱為已驗收閉環。
+repository revision 不是已部署的 live-page before state：該 diff 路徑仍是 `liveBeforeState=unknown`、`causalChangeSetEligible=false`、`modelTrainingAllowed=false`，不把 repo diff 提升為因果、引用 primary label 或可訓練資料。現在新增獨立、預設關閉的受控第一方 HTTP before/after adapter 與 action-learning admission，見 [發布前後證據規格](LEARNING_LIVE_PUBLICATION_ACTION_V1.md)：必須真的讀取同 URL 受控 SSR 頁面、精確核對 formal receipt、獨立審查權利／個資與目前授權，不能沿用 repository diff 冒充證據。多發布目標的量測仍按正式回執隔離；新 action 路徑只承認各目標的確切 delivered attempt，可處理 terminal partial run，不代表既有 canonical measurement bridge 或真客戶 multi-target 閉環已通過正式驗收。
 
 成效模型沿用原 candidate admission：至少 150 合格候選、article／faq／service_page 與 en／zh-hant 各至少 20、兩種量測來源組合。另要求至少 100 GSC 二元候選、10 個 subject，train 至少正／負各 20、validation／test 各正／負至少 5。固定按 subject hash 分 70／15／15，subject 不跨分區；只用 train 擬合標準化與權重，回 validation／test log loss、Brier、F1、balanced accuracy 及 train-prevalence majority prior 基準。
 
@@ -107,7 +108,9 @@ repository revision 不是已部署的 live-page before state：`liveBeforeState
 
 正式 TiDB 的唯讀 CAST 已確認 `DECIMAL(24,12)` 會改變超過 12 位的小數；模型持久化改以既有 JSON 欄位的版本化 envelope 保留精確 intercept，DECIMAL 只作明確四捨五入的鏡像。讀回先驗證版本、欄位、數值界限與鏡像，再以原精度重算 artifact hash；不修改模型數學或資料表，不回寫歷史模型。舊 raw configuration 仍須通過原 hash 核對，無法驗證或未知版本保持拒絕。存入／讀回測試使用小數取位的本機 harness，沒有向正式資料庫寫入測試模型。
 
-以上仍是合成／mock 驗證的觀察性工程，不宣稱因果或正式模型品質。完整 live action-learning adapter、足夠真實引用／成效資料、供應商端到端與 production 模型 activation 尚未完成正式驗收。本輪沒有從零訓練大型語言模型，文章生成仍由既有 AI provider 提供；成效模型不會直接改寫草稿。
+成效工作台另有明確的「已獨立審查的實際改動」V3 模式；只有目前 action release 的確切候選與十項發布前 planned features 能加入，另綁定 immutable model-data approval。原 outcome-only V2 模式／artifact 驗證保留；V3 不可沿用 V2 核准、不會在資料不足時靜默降級，也不拿 after observation 或後續成效當成預測輸入。action 的獨立審查不等於模型資料核准，更不等於 production activation。
+
+以上仍是合成／mock 驗證的觀察性工程，不宣稱因果或正式模型品質。新 live action-learning adapter 的真客戶／HTTP／瀏覽器整合、足夠真實引用／成效資料、供應商端到端與 production 模型 activation 尚未完成正式驗收。本輪沒有從零訓練大型語言模型，文章生成仍由既有 AI provider 提供；成效模型不會直接改寫草稿。
 
 ## 驗證證據
 

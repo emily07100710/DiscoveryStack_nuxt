@@ -3,9 +3,13 @@ import { buildOutcomeDatasetManifest } from '../outcome-learning/engine'
 import { normalizeOutcomeLearningCandidate, outcomeSha256, isOutcomeSha256 } from '../outcome-learning/normalization'
 import { OUTCOME_FEATURE_FIELDS, OUTCOME_MIN_DATASET_CANDIDATES } from '../outcome-learning/policy-catalog'
 import type { OutcomeLearningCandidate, OutcomeMeasurementSource, OutcomeSignal } from '../outcome-learning/types'
+import { validateEffectLiveActionMetadata } from './effect-live-action-metadata'
+import type { EffectLiveActionFeatures, EffectLiveActionMetadata, EffectLiveActionMetadataSidecar } from './effect-live-action-metadata'
 
 export const CONTENT_EFFECT_ARTIFACT_SCHEMA = 'discoverystack.content-effect-logistic.v2' as const
 export const CONTENT_EFFECT_TASK = 'observational_content_effect_direction_from_gsc_v1' as const
+export const CONTENT_EFFECT_LIVE_ACTION_ARTIFACT_SCHEMA = 'discoverystack.content-effect-logistic.v3' as const
+export const CONTENT_EFFECT_LIVE_ACTION_TASK = 'observational_live_content_action_effect_direction_from_gsc_v1' as const
 const MAX_ROWS = 500
 const MAX_FEATURES = 80
 const EPOCHS = 250
@@ -73,11 +77,18 @@ export type ContentEffectArtifact = {
   artifactHash: string
 }
 
+export type ContentEffectLiveActionArtifact = Omit<ContentEffectArtifact, 'schema' | 'task'> & {
+  schema: typeof CONTENT_EFFECT_LIVE_ACTION_ARTIFACT_SCHEMA
+  task: typeof CONTENT_EFFECT_LIVE_ACTION_TASK
+  liveActionMetadataFingerprint: string
+}
+
 export type TrainContentEffectModelInput = {
   candidates: unknown[]
   datasetDigest: string
   lineageFingerprint: string
   publicationMetadata: EffectPublicationMetadataSidecar
+  liveActionMetadata?: unknown
   deadlineMs?: number
 }
 
@@ -101,7 +112,7 @@ export type EffectPublicationMetadataSidecar = {
 
 export type TrainContentEffectModelResult = {
   status: 'completed' | 'blocked'
-  artifact: ContentEffectArtifact | null
+  artifact: ContentEffectArtifact | ContentEffectLiveActionArtifact | null
   reasonCodes: string[]
   counts: {
     admittedCandidates: number
@@ -117,10 +128,11 @@ export type TrainContentEffectModelResult = {
   }
 }
 
-type Row = { candidate: OutcomeLearningCandidate; metadata: EffectPublicationMetadata; label: 0 | 1; raw: number[] }
+type Row = { candidate: OutcomeLearningCandidate; metadata: EffectPublicationMetadata; label: 0 | 1; raw: number[]; liveAction?: EffectLiveActionMetadata }
 type SplitName = 'train' | 'validation' | 'test'
 type Split = { rows: Row[]; subjects: Set<string> }
 type ArtifactBody = Omit<ContentEffectArtifact, 'artifactHash'>
+type LiveActionArtifactBody = Omit<ContentEffectLiveActionArtifact, 'artifactHash'>
 
 const LIMITATIONS = [
   'observational_not_causal',
@@ -163,8 +175,28 @@ function featureNames(): string[] {
   ]
 }
 
-function vector(candidate: OutcomeLearningCandidate, names: readonly string[]): number[] {
+const LIVE_ACTION_FEATURE_NAMES = [
+  'liveAction.paragraphsAdded.log1p',
+  'liveAction.paragraphsRemoved.log1p',
+  'liveAction.paragraphsReplaced.log1p',
+  'liveAction.paragraphsUnmodified.log1p',
+  'liveAction.beforeTextLength.log1p',
+  'liveAction.plannedTextLength.log1p',
+  'liveAction.beforeParagraphCount.log1p',
+  'liveAction.plannedParagraphCount.log1p',
+  'liveAction.newPage.value',
+  'liveAction.titleChanged.value',
+] as const
+
+function vector(candidate: OutcomeLearningCandidate, names: readonly string[], liveAction?: EffectLiveActionFeatures): number[] {
   return names.map((name) => {
+    if (name.startsWith('liveAction.')) {
+      if (!liveAction) return 0
+      const [field, transform] = name.slice('liveAction.'.length).split('.')
+      const value = liveAction[field as keyof EffectLiveActionFeatures]
+      if (typeof value !== 'number') return 0
+      return transform === 'log1p' ? Math.log1p(value) : value
+    }
     if (name.startsWith('contentType.')) return candidate.contentType === name.slice('contentType.'.length) ? 1 : 0
     if (name.startsWith('language.')) return candidate.language === name.slice('language.'.length) ? 1 : 0
     if (name.endsWith('.missing')) {
@@ -277,6 +309,16 @@ function deduplicatePublications(rows: readonly Row[]): { rows: Row[]; excludedR
       baselineFeatures: Object.fromEntries(Object.entries(row.candidate.aggregateNumericFeatures).filter(([key]) => key.endsWith('.baseline')).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)),
       baselineMetadataFingerprint: row.metadata.baselineMetadataFingerprint,
       latestBaselineCapturedAt: row.metadata.latestBaselineCapturedAt,
+      liveAction: row.liveAction ? {
+        actionEvidenceFingerprint: row.liveAction.actionEvidenceFingerprint,
+        actionReviewFingerprint: row.liveAction.actionReviewFingerprint,
+        actionReleaseFingerprint: row.liveAction.actionReleaseFingerprint,
+        plannedActionFingerprint: row.liveAction.plannedActionFingerprint,
+        receiptFingerprint: row.liveAction.receiptFingerprint,
+        authorizationFingerprint: row.liveAction.authorizationFingerprint,
+        sourceFingerprint: row.liveAction.sourceFingerprint,
+        features: row.liveAction.features,
+      } : null,
     })
     if (group.some((row) => row.candidate.deidentifiedSubjectKey !== first.candidate.deidentifiedSubjectKey || row.metadata.publishedAt !== first.metadata.publishedAt || baselineSignature(row) !== baselineSignature(first))) return { rows: [], excludedRows: [], conflict: true }
     group.sort((a, b) => {
@@ -410,7 +452,7 @@ function majorityMetrics(rows: readonly Row[], majorityPositive: boolean, traini
   return { logLoss, brierScore, f1: 2 * tp + fp + fn > 0 ? (2 * tp) / (2 * tp + fp + fn) : 0, balancedAccuracy: ((positiveCount ? tp / positiveCount : 0) + (negativeCount ? tn / negativeCount : 0)) / 2, positiveCount, negativeCount, rowCount: rows.length }
 }
 
-function bodyForHash(body: ArtifactBody): ArtifactBody {
+function bodyForHash(body: ArtifactBody | LiveActionArtifactBody): ArtifactBody | LiveActionArtifactBody {
   return body
 }
 
@@ -436,13 +478,20 @@ export function trainContentEffectModel(input: TrainContentEffectModelInput): Tr
     if (performance.now() >= deadlineAt) return blocked(['CPU_DEADLINE_REACHED'], { ...emptyCounts, admittedCandidates: canonicalCandidates.length })
     const sidecar = metadataSidecar(input.publicationMetadata, canonicalCandidates)
     if (!sidecar) return blocked(['PUBLICATION_METADATA_INVALID'], { ...emptyCounts, admittedCandidates: canonicalCandidates.length })
+    const liveActionSidecar = input.liveActionMetadata === undefined
+      ? null
+      : validateEffectLiveActionMetadata(input.liveActionMetadata, canonicalCandidates, sidecar)
+    if (input.liveActionMetadata !== undefined && !liveActionSidecar) return blocked(['LIVE_ACTION_METADATA_INVALID'], { ...emptyCounts, admittedCandidates: canonicalCandidates.length })
+    const liveActionByFingerprint = new Map(liveActionSidecar?.entries.map((entry) => [entry.candidateFingerprint, entry]) ?? [])
     const metadataByFingerprint = new Map(sidecar.entries.map((entry) => [entry.candidateFingerprint, entry]))
     const allRows: Row[] = []
     for (const candidate of canonicalCandidates) {
       const metadata = metadataByFingerprint.get(candidate.candidateFingerprint)
       if (!metadata) return blocked(['PUBLICATION_METADATA_MISSING'], emptyCounts)
       const outcome = signalLabel(candidate)
-      allRows.push({ candidate, metadata, label: outcome.label ?? 0, raw: vector(candidate, featureNames()) })
+      const liveAction = liveActionByFingerprint.get(candidate.candidateFingerprint)
+      const initialFeatures = [...featureNames(), ...(liveActionSidecar ? LIVE_ACTION_FEATURE_NAMES : [])]
+      allRows.push({ candidate, metadata, label: outcome.label ?? 0, raw: vector(candidate, initialFeatures, liveAction?.features), ...(liveAction ? { liveAction } : {}) })
     }
     const deduped = deduplicatePublications(allRows)
     if (deduped.conflict) return blocked(['PUBLICATION_GROUP_METADATA_CONFLICT'], { ...emptyCounts, admittedCandidates: canonicalCandidates.length })
@@ -456,15 +505,15 @@ export function trainContentEffectModel(input: TrainContentEffectModelInput): Tr
     if (manifest.status !== 'ready_for_dataset_review' || manifest.eligibleCandidateCount !== uniqueCandidates.length) return blocked(['DATASET_ADMISSION_GATE_BLOCKED', ...manifest.reasonCodes], { ...emptyCounts, admittedCandidates: manifest.eligibleCandidateCount })
     if (uniqueCandidates.length < OUTCOME_MIN_DATASET_CANDIDATES) return blocked(['DATASET_ADMISSION_GATE_BLOCKED'], { ...emptyCounts, admittedCandidates: uniqueCandidates.length })
 
-    const featureList = featureNames()
+    const featureList = [...featureNames(), ...(liveActionSidecar ? LIVE_ACTION_FEATURE_NAMES : [])]
     if (featureList.length === 0 || featureList.length > MAX_FEATURES) return blocked(['FEATURE_CAP_EXCEEDED'], { ...emptyCounts, admittedCandidates: canonicalCandidates.length })
-    const metricNames = featureList.filter((name) => name.endsWith('.log1p') || name.endsWith('.value')).map((name) => name.slice(0, name.endsWith('.log1p') ? -'.log1p'.length : -'.value'.length))
+    const metricNames = featureList.filter((name) => !name.startsWith('liveAction.') && (name.endsWith('.log1p') || name.endsWith('.value'))).map((name) => name.slice(0, name.endsWith('.log1p') ? -'.log1p'.length : -'.value'.length))
     const rows: Row[] = []
     const counts: TrainContentEffectModelResult['counts'] = { ...emptyCounts, admittedCandidates: uniqueCandidates.length, excludedSignals: { ...emptyCounts.excludedSignals } }
     for (const row of uniqueRows) {
       const outcome = signalLabel(row.candidate)
       if (outcome.exclusion) counts.excludedSignals[outcome.exclusion] += 1
-      else rows.push({ ...row, label: outcome.label!, raw: vector(row.candidate, featureList) })
+      else rows.push({ ...row, label: outcome.label!, raw: vector(row.candidate, featureList, row.liveAction?.features) })
     }
     counts.binaryRows = rows.length
     counts.subjects = new Set(rows.map((row) => row.candidate.deidentifiedSubjectKey)).size
@@ -473,8 +522,8 @@ export function trainContentEffectModel(input: TrainContentEffectModelInput): Tr
     if (counts.subjects < MIN_SUBJECTS) return blocked(['SUBJECT_COUNT_INSUFFICIENT'], counts)
     const temporal = temporalPartition(uniqueRows, sidecar.trainingAsOf)
     if (!temporal || !temporal.cutoff) return blocked(['TEMPORAL_HOLDOUT_UNAVAILABLE'], counts)
-    const temporalBinaryRows = temporal.temporalRows.filter((row) => !signalLabel(row.candidate).exclusion).map((row) => ({ ...row, label: signalLabel(row.candidate).label!, raw: vector(row.candidate, featureList) }))
-    const historicalBinaryRows = temporal.historicalRows.filter((row) => !signalLabel(row.candidate).exclusion).map((row) => ({ ...row, label: signalLabel(row.candidate).label!, raw: vector(row.candidate, featureList) }))
+    const temporalBinaryRows = temporal.temporalRows.filter((row) => !signalLabel(row.candidate).exclusion).map((row) => ({ ...row, label: signalLabel(row.candidate).label!, raw: vector(row.candidate, featureList, row.liveAction?.features) }))
+    const historicalBinaryRows = temporal.historicalRows.filter((row) => !signalLabel(row.candidate).exclusion).map((row) => ({ ...row, label: signalLabel(row.candidate).label!, raw: vector(row.candidate, featureList, row.liveAction?.features) }))
     const split = splitRows(historicalBinaryRows)
     const reasons: string[] = []
     const trainClass = classCounts(split.train.rows)
@@ -502,9 +551,9 @@ export function trainContentEffectModel(input: TrainContentEffectModelInput): Tr
     const temporalMetrics = metrics(temporalBinaryRows, temporalX, fitted.weights, fitted.intercept)
     if (performance.now() >= deadlineAt) return blocked(['CPU_DEADLINE_REACHED'], counts)
     const majorityPositive = trainClass.positiveCount >= trainClass.negativeCount
-    const baseBody: ArtifactBody = {
-      schema: CONTENT_EFFECT_ARTIFACT_SCHEMA,
-      task: CONTENT_EFFECT_TASK,
+    const baseBody = {
+      schema: liveActionSidecar ? CONTENT_EFFECT_LIVE_ACTION_ARTIFACT_SCHEMA : CONTENT_EFFECT_ARTIFACT_SCHEMA,
+      task: liveActionSidecar ? CONTENT_EFFECT_LIVE_ACTION_TASK : CONTENT_EFFECT_TASK,
       features: featureList,
       coefficients: fitted.weights,
       intercept: fitted.intercept,
@@ -513,6 +562,7 @@ export function trainContentEffectModel(input: TrainContentEffectModelInput): Tr
       datasetDigest: input.datasetDigest,
       lineageFingerprint: input.lineageFingerprint,
       publicationMetadataFingerprint: sidecar.sidecarFingerprint,
+      ...(liveActionSidecar ? { liveActionMetadataFingerprint: liveActionSidecar.sidecarFingerprint } : {}),
       splits: {
         strategy: 'subject_hash_70_15_15_plus_temporal_subject_holdout',
         uniquePublications: uniqueRows.length,
@@ -545,11 +595,11 @@ export function trainContentEffectModel(input: TrainContentEffectModelInput): Tr
         temporalMajorityBaseline: majorityMetrics(temporalBinaryRows, majorityPositive, trainClass.positiveCount / split.train.rows.length),
       },
       limitations: LIMITATIONS,
-    }
+    } as ArtifactBody | LiveActionArtifactBody
     // Defensive invariant: feature construction and source-policy evolution may never silently exceed the public cap.
-    if (metricNames.length * 2 + 7 !== featureList.length || featureList.length > MAX_FEATURES) return blocked(['FEATURE_SCHEMA_INVALID'], counts)
+    if (metricNames.length * 2 + 7 + (liveActionSidecar ? LIVE_ACTION_FEATURE_NAMES.length : 0) !== featureList.length || featureList.length > MAX_FEATURES) return blocked(['FEATURE_SCHEMA_INVALID'], counts)
     const artifactHash = outcomeSha256(bodyForHash(baseBody))
-    return { status: 'completed', artifact: { ...baseBody, artifactHash }, reasonCodes: [], counts }
+    return { status: 'completed', artifact: { ...baseBody, artifactHash } as ContentEffectArtifact | ContentEffectLiveActionArtifact, reasonCodes: [], counts }
   } catch {
     return blocked(['INVALID_INPUT'], emptyCounts)
   }
@@ -577,14 +627,16 @@ function majorityBaselineMatches(baseline: Record<string, unknown>, target: Reco
   return Object.entries(expected).every(([key, value]) => Math.abs((baseline[key] as number) - value) <= 1e-12 * Math.max(1, Math.abs(value)))
 }
 
-function artifactBodyFromUnknown(value: unknown): ArtifactBody | null {
+function artifactBodyFromUnknown(value: unknown): ArtifactBody | LiveActionArtifactBody | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>
-  const artifactKeys = ['schema', 'task', 'features', 'coefficients', 'intercept', 'normalization', 'config', 'datasetDigest', 'lineageFingerprint', 'publicationMetadataFingerprint', 'splits', 'metrics', 'limitations', 'artifactHash']
-  if (!exactKeys(raw, artifactKeys) || raw.schema !== CONTENT_EFFECT_ARTIFACT_SCHEMA || raw.task !== CONTENT_EFFECT_TASK || !validInputHash(raw.datasetDigest) || !validInputHash(raw.lineageFingerprint) || !validInputHash(raw.publicationMetadataFingerprint) || !validInputHash(raw.artifactHash)) return null
+  const liveAction = raw.schema === CONTENT_EFFECT_LIVE_ACTION_ARTIFACT_SCHEMA
+  const artifactKeys = ['schema', 'task', 'features', 'coefficients', 'intercept', 'normalization', 'config', 'datasetDigest', 'lineageFingerprint', 'publicationMetadataFingerprint', ...(liveAction ? ['liveActionMetadataFingerprint'] : []), 'splits', 'metrics', 'limitations', 'artifactHash']
+  if (!exactKeys(raw, artifactKeys) || raw.schema !== (liveAction ? CONTENT_EFFECT_LIVE_ACTION_ARTIFACT_SCHEMA : CONTENT_EFFECT_ARTIFACT_SCHEMA) || raw.task !== (liveAction ? CONTENT_EFFECT_LIVE_ACTION_TASK : CONTENT_EFFECT_TASK) || !validInputHash(raw.datasetDigest) || !validInputHash(raw.lineageFingerprint) || !validInputHash(raw.publicationMetadataFingerprint) || (liveAction && !validInputHash(raw.liveActionMetadataFingerprint)) || !validInputHash(raw.artifactHash)) return null
   if (!Array.isArray(raw.features) || raw.features.length === 0 || raw.features.length > MAX_FEATURES || raw.features.some((item) => typeof item !== 'string' || item.length > 128)) return null
   const features = raw.features as unknown[]
-  if (features.length !== featureNames().length || features.some((feature, index) => feature !== featureNames()[index])) return null
+  const expectedFeatures = [...featureNames(), ...(liveAction ? LIVE_ACTION_FEATURE_NAMES : [])]
+  if (features.length !== expectedFeatures.length || features.some((feature, index) => feature !== expectedFeatures[index])) return null
   if (!Array.isArray(raw.coefficients) || raw.coefficients.length !== features.length || raw.coefficients.some((item) => typeof item !== 'number' || !Number.isFinite(item))) return null
   if (typeof raw.intercept !== 'number' || !Number.isFinite(raw.intercept)) return null
   if (!Array.isArray(raw.normalization) || raw.normalization.length !== features.length || raw.normalization.some((item, index) => !item || typeof item !== 'object' || Array.isArray(item) || !exactKeys(item as Record<string, unknown>, ['feature', 'mean', 'scale']) || (item as Record<string, unknown>).feature !== features[index] || typeof (item as Record<string, unknown>).mean !== 'number' || !Number.isFinite((item as Record<string, unknown>).mean) || typeof (item as Record<string, unknown>).scale !== 'number' || !Number.isFinite((item as Record<string, unknown>).scale) || ((item as Record<string, unknown>).scale as number) <= 0)) return null
@@ -634,7 +686,7 @@ function artifactBodyFromUnknown(value: unknown): ArtifactBody | null {
   }
   if (!Array.isArray(raw.limitations) || raw.limitations.length !== LIMITATIONS.length || raw.limitations.some((item, index) => item !== LIMITATIONS[index])) return null
   const { artifactHash: _hash, ...body } = raw
-  return { ...body, schema: CONTENT_EFFECT_ARTIFACT_SCHEMA, task: CONTENT_EFFECT_TASK } as ArtifactBody
+  return { ...body, schema: liveAction ? CONTENT_EFFECT_LIVE_ACTION_ARTIFACT_SCHEMA : CONTENT_EFFECT_ARTIFACT_SCHEMA, task: liveAction ? CONTENT_EFFECT_LIVE_ACTION_TASK : CONTENT_EFFECT_TASK } as ArtifactBody | LiveActionArtifactBody
 }
 
 export function verifyContentEffectArtifact(artifact: unknown): boolean {
@@ -648,10 +700,10 @@ export function verifyContentEffectArtifact(artifact: unknown): boolean {
   }
 }
 
-export function summarizeContentEffectArtifact(artifact: unknown): {
+type ContentEffectArtifactSummary = {
   status: 'verified' | 'invalid'
-  schema: typeof CONTENT_EFFECT_ARTIFACT_SCHEMA | null
-  task: typeof CONTENT_EFFECT_TASK | null
+  schema: typeof CONTENT_EFFECT_ARTIFACT_SCHEMA | typeof CONTENT_EFFECT_LIVE_ACTION_ARTIFACT_SCHEMA | null
+  task: typeof CONTENT_EFFECT_TASK | typeof CONTENT_EFFECT_LIVE_ACTION_TASK | null
   artifactHash: string | null
   datasetDigest: string | null
   lineageFingerprint: string | null
@@ -660,8 +712,11 @@ export function summarizeContentEffectArtifact(artifact: unknown): {
   splits: ContentEffectArtifact['splits'] | null
   metrics: ContentEffectArtifact['metrics'] | null
   reasonCodes: string[]
-} {
+}
+
+export function summarizeContentEffectArtifact(artifact: unknown): ContentEffectArtifactSummary | (ContentEffectArtifactSummary & { liveActionMetadataFingerprint: string }) {
   if (!verifyContentEffectArtifact(artifact)) return { status: 'invalid', schema: null, task: null, artifactHash: null, datasetDigest: null, lineageFingerprint: null, productionActivation: false, temporalHoldout: null, splits: null, metrics: null, reasonCodes: ['ARTIFACT_HASH_OR_SCHEMA_INVALID'] }
-  const value = artifact as ContentEffectArtifact
-  return { status: 'verified', schema: value.schema, task: value.task, artifactHash: value.artifactHash, datasetDigest: value.datasetDigest, lineageFingerprint: value.lineageFingerprint, productionActivation: false, temporalHoldout: value.splits.temporalHoldout, splits: value.splits, metrics: value.metrics, reasonCodes: [] }
+  const value = artifact as ContentEffectArtifact | ContentEffectLiveActionArtifact
+  const summary: ContentEffectArtifactSummary = { status: 'verified', schema: value.schema, task: value.task, artifactHash: value.artifactHash, datasetDigest: value.datasetDigest, lineageFingerprint: value.lineageFingerprint, productionActivation: false, temporalHoldout: value.splits.temporalHoldout, splits: value.splits, metrics: value.metrics, reasonCodes: [] }
+  return 'liveActionMetadataFingerprint' in value ? { ...summary, liveActionMetadataFingerprint: value.liveActionMetadataFingerprint } : summary
 }

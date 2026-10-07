@@ -3,6 +3,7 @@ export { buildFirstPartyContentManifest } from './manifest'
 export { buildFirstPartySeoProjection, buildKnowledgeArticleJsonLd, knowledgeEntityJsonLdId } from './seo'
 export { buildAstroContentProjection } from './astro'
 export { buildNuxtContentProjection } from './nuxt'
+export { buildFirstPartyLiveArticleProjection } from './live-article'
 export type {
   ContentSiteKitDecisionCode,
   FirstPartyAstroContentProjection,

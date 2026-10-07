@@ -9,8 +9,11 @@ import { DrizzleLearningLoopRepository } from './repository'
 import type { LearningLoopRepository } from './types'
 import { projectEffectPublicationTiming } from './effect-publication-metadata'
 import type { EffectPublicationMetadata } from './effect-trainer'
+import { DrizzleLiveActionRepository, type LiveActionRepository } from './live-action-repository'
+import { resolveReviewedLivePublicationAction } from './live-action-service'
+import type { EffectLiveActionMetadata } from './effect-live-action-metadata'
 
-type Dependencies = { operations?: ContentOperationsRepository; repository?: LearningLoopRepository; now?: Date | (() => Date) }
+type Dependencies = { operations?: ContentOperationsRepository; repository?: LearningLoopRepository; now?: Date | (() => Date); includeLiveActions?: boolean; liveActions?: LiveActionRepository }
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value))
 
 /** Fresh consent + fresh formal receipt + recomputed assessment, never a historical browser checkbox. */
@@ -22,6 +25,7 @@ export async function buildGovernedContentOutcomeRelease(ownerUserId: number, de
   type CandidateRecord = Parameters<typeof buildContentLearningDataset>[0]['records'][number]
   type CandidateLineage = { candidateInputFingerprint: string; receiptFingerprint: string; authorizationFingerprint: string; sourceFingerprint: string }
   const records: CandidateRecord[] = [], lineage: CandidateLineage[] = []
+  const publicationJoins: Array<{ entryId: number; attemptId: number; targetId: number; draftId: number; draftVersion: number; evidenceSnapshotHash: string }> = []
   const publicationTiming: Array<Omit<EffectPublicationMetadata, 'candidateFingerprint'> | null> = []
   const staged: Array<{ record: CandidateRecord; lineage: CandidateLineage; authorizationId: number; clientId: number; sourceId: number; entryId: number; draftId: number; draftVersion: number; evidenceSnapshotHash: string; publicationFingerprint: string; outcomeFingerprint: string; outcomeId: number; outcomeIdempotencyKey: string; outcomeRecordFingerprint: string; measuredAt: Date }> = []
   const blocked: Array<{ outcomeFingerprint: string; reasonCode: string }> = []
@@ -64,6 +68,7 @@ export async function buildGovernedContentOutcomeRelease(ownerUserId: number, de
       blocked.push({ outcomeFingerprint: candidate.outcomeFingerprint, reasonCode: 'LINEAGE_CHANGED_BEFORE_RELEASE' }); continue
     }
     records.push(candidate.record); lineage.push(candidate.lineage)
+    publicationJoins.push({ entryId: candidate.entryId, attemptId: current.publicationAttempt!.id, targetId: delivered.targetId, draftId: candidate.draftId, draftVersion: candidate.draftVersion, evidenceSnapshotHash: candidate.evidenceSnapshotHash })
     publicationTiming.push(projectEffectPublicationTiming({ ownerUserId, receiptFingerprint: delivered.receiptFingerprint, assessment: candidate.record.assessment as Parameters<typeof projectEffectPublicationTiming>[0]['assessment'], baselineMeasurements: outcome.baselineSnapshot, followUpMeasurements: outcome.followUpSnapshot, measuredAt: candidate.measuredAt, checkedAt }))
   }
   const dataset = buildContentLearningDataset({ records })
@@ -72,7 +77,30 @@ export async function buildGovernedContentOutcomeRelease(ownerUserId: number, de
   const admittedLineage = dataset.candidateResults.flatMap((candidate, index) => candidate.candidateStatus === 'eligible' && lineage[index] ? [{ candidateFingerprint: candidate.candidateFingerprint, lineageFingerprint: fingerprint(lineage[index]) }] : [])
   const publicationMetadataEntries = dataset.candidateResults.flatMap((candidate, index) => candidate.candidateStatus === 'eligible' && publicationTiming[index] ? [{ candidateFingerprint: candidate.candidateFingerprint, ...publicationTiming[index]! }] : [])
   const metadataBlocked = dataset.candidateResults.flatMap((candidate, index) => candidate.candidateStatus === 'eligible' && !publicationTiming[index] ? [{ candidateFingerprint: candidate.candidateFingerprint, reasonCode: 'EXACT_GSC_PUBLICATION_TIMING_REQUIRED' }] : [])
+  const liveActionMetadataEntries: EffectLiveActionMetadata[] = [], liveActionBlocked: Array<{ candidateFingerprint: string; reasonCode: string }> = []
+  if (dependencies.includeLiveActions === true) {
+    let actions: LiveActionRepository | undefined = dependencies.liveActions
+    for (const [index, candidate] of dataset.candidateResults.entries()) {
+      if (candidate.candidateStatus !== 'eligible' || !publicationTiming[index]) continue
+      const join = publicationJoins[index], binding = lineage[index]
+      if (!join || !binding) continue
+      try {
+        actions ||= new DrizzleLiveActionRepository()
+        const row = await actions.findByAttempt(ownerUserId, join.attemptId)
+        const action = row ? await resolveReviewedLivePublicationAction(ownerUserId, row.id, { actions, operations, learning: repository, now: readNow }) : null
+        if (!action || action.entryId !== join.entryId || action.attemptId !== join.attemptId || action.targetId !== join.targetId || action.draftId !== join.draftId || action.draftVersion !== join.draftVersion || action.evidenceSnapshotHash !== join.evidenceSnapshotHash
+          || action.receiptFingerprint !== binding.receiptFingerprint || action.authorizationFingerprint !== binding.authorizationFingerprint || action.sourceFingerprint !== binding.sourceFingerprint || action.deliveredAt !== publicationTiming[index]!.publishedAt) {
+          liveActionBlocked.push({ candidateFingerprint: candidate.candidateFingerprint, reasonCode: 'CURRENT_REVIEWED_LIVE_ACTION_REQUIRED' }); continue
+        }
+        liveActionMetadataEntries.push({ candidateFingerprint: candidate.candidateFingerprint, actionEvidenceFingerprint: action.evidenceFingerprint, actionReviewFingerprint: action.reviewFingerprint, actionReleaseFingerprint: action.releaseFingerprint, plannedActionFingerprint: action.plannedActionFingerprint,
+          receiptFingerprint: action.receiptFingerprint, authorizationFingerprint: action.authorizationFingerprint, sourceFingerprint: action.sourceFingerprint,
+          beforeCapturedAt: action.beforeCapturedAt, dispatchStartedAt: action.dispatchStartedAt, publishedAt: action.deliveredAt, verifiedAt: action.verifiedAt, expiresAt: action.expiresAt, features: action.features })
+      } catch { liveActionBlocked.push({ candidateFingerprint: candidate.candidateFingerprint, reasonCode: 'LIVE_ACTION_RELEASE_DEFERRED' }) }
+    }
+  }
   const finalNow = readNow()
   const projection = { contractVersion: 'governed-content-outcome-release-v1', generatedAt: finalNow.toISOString(), taskType: 'content_effect_direction' as const, citationTrainingEligible: false as const, dataset, lineage, admittedLineage, publicationMetadataEntries, metadataBlocked, blocked, limitations: ['directional_observational_not_causal', 'search_and_analytics_are_not_ai_citation_labels', 'current_consent_rechecked_on_every_release', 'publication_consent_does_not_grant_training_consent'] }
-  return { ...projection, releaseFingerprint: fingerprint(projection) }
+  // The historical outcome-only V1 envelope/fingerprint is unchanged. Actions are a separately
+  // requested versioned sidecar, not silently promoted to fixed outcome-contract-v1 authority.
+  return { ...projection, releaseFingerprint: fingerprint(projection), ...(dependencies.includeLiveActions === true ? { liveActionMetadataEntries, liveActionBlocked } : {}) }
 }

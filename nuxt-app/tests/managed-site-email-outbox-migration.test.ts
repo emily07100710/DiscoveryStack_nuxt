@@ -12,13 +12,17 @@ const journal = JSON.parse(read('meta/_journal.json'))
 
 describe('platform email additive migration', () => {
   it('appends exactly one isolated queue table without changing existing snapshot tables', () => {
+    const outboxJournalIndex = journal.entries.findIndex((entry: { idx: number }) => entry.idx === 46)
     expect(current.prevId).toBe(previous.id)
     expect(Object.keys(current.tables).filter(name => !Object.hasOwn(previous.tables, name))).toEqual(['managedSiteEmailOutbox'])
     // Drizzle snapshots exclude the separate __drizzle_migrations ledger table.
     expect(Object.keys(previous.tables)).toHaveLength(194)
     expect(Object.keys(current.tables)).toHaveLength(195)
     for (const [name, table] of Object.entries(previous.tables)) expect(current.tables[name], name).toEqual(table)
-    expect(journal.entries.at(-1)).toMatchObject({ idx: 46, tag: '0046_managed_email_outbox_v1' })
+    expect(outboxJournalIndex).toBe(46)
+    expect(journal.entries[outboxJournalIndex - 1]).toMatchObject({ idx: 45, tag: '0045_learning_authorized_closed_loop' })
+    expect(journal.entries[outboxJournalIndex]).toMatchObject({ idx: 46, tag: '0046_managed_email_outbox_v1' })
+    expect(journal.entries[outboxJournalIndex + 1]).toMatchObject({ idx: 47, tag: '0047_live_publication_actions_v1' })
   })
   it('contains only the reviewed table and two indexes, with no business-data mutations', () => {
     const statements = migration.split('--> statement-breakpoint').map(value => value.trim()).filter(Boolean)

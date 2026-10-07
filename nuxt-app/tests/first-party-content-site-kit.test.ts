@@ -811,6 +811,7 @@ describe('first-party content site kit repair contracts', () => {
     expect(Object.keys(contentSiteKitApi).sort()).toEqual([
       'buildAstroContentProjection',
       'buildFirstPartyContentManifest',
+      'buildFirstPartyLiveArticleProjection',
       'buildFirstPartySeoProjection',
       'buildKnowledgeArticleJsonLd',
       'buildNuxtContentProjection',

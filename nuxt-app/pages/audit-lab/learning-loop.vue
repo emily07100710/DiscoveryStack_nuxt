@@ -3,6 +3,7 @@ import type { Ref } from "vue";
 import type { getLearningLoopWorkspace } from "~/server/learning-loop/service";
 import type { WorkspaceSummary } from "~/server/geo-outcome-model/types";
 import type { getContentEffectModelWorkspace } from "~/server/learning-loop/effect-service";
+import LivePublicationActionsPanel from "~/components/owner/LivePublicationActionsPanel.vue";
 
 definePageMeta({ layout: "owner" });
 useHead({
@@ -45,11 +46,24 @@ const effect = await read<
   Awaited<ReturnType<typeof getContentEffectModelWorkspace>>
 >("/api/interventions/closed-loop/effect-models", { server: false });
 const effects = computed(() => effect.data.value);
+const effectUseLiveActions = ref(false);
+const effectRelease = computed(() =>
+  effectUseLiveActions.value ? effects.value?.actionRelease : effects.value?.release
+);
 const effectReview = reactive({
   piiReviewConfirmed: false,
   observationalOnlyAcknowledged: false,
   reviewReason: "",
 });
+function resetEffectReview() {
+  effectReview.piiReviewConfirmed = false;
+  effectReview.observationalOnlyAcknowledged = false;
+  effectReview.reviewReason = "";
+}
+watch(
+  () => `${effectUseLiveActions.value}:${effectRelease.value?.datasetDigest || ""}:${effectRelease.value?.lineageFingerprint || ""}`,
+  resetEffectReview
+);
 const workspace = computed(() => data.value),
   models = computed(() => model.data.value?.workspace);
 const busy = ref(false),
@@ -138,6 +152,7 @@ const labels: Record<string, string> = {
 };
 const label = (value: string) => labels[value] || value;
 async function refreshAll() {
+  resetEffectReview();
   await Promise.all([
     refresh(),
     model.refresh(),
@@ -264,12 +279,14 @@ async function approveDataset(id: string) {
   );
 }
 async function reviewEffectDataset() {
-  if (!effects.value?.release) return;
+  const selectedRelease = effectRelease.value;
+  if (!selectedRelease || selectedRelease.status !== "ready_for_dataset_review" || !effectReview.piiReviewConfirmed || !effectReview.observationalOnlyAcknowledged || effectReview.reviewReason.trim().length < 10) return;
   await action(
     "/api/interventions/closed-loop/effect-models/review",
     {
-      datasetDigest: effects.value.release.datasetDigest,
-      lineageFingerprint: effects.value.release.lineageFingerprint,
+      datasetDigest: selectedRelease.datasetDigest,
+      lineageFingerprint: selectedRelease.lineageFingerprint,
+      includeLiveActions: effectUseLiveActions.value,
       ...effectReview,
     },
     "已核准這一份確切成效資料並排入訓練；新資料不會沿用這次核准，模型也不會自動上線。"
@@ -929,15 +946,25 @@ async function approveFallback(artifactId: string) {
       </p>
       <template v-else-if="effects"
         ><div class="status-strip">
-          <span>合格成效候選：{{ effects.release?.candidateCount || 0 }}</span
+          <span>本次選擇的合格候選：{{ effectRelease?.candidateCount || 0 }}</span
           ><span
             >重新訓練：{{
               effects.enabled ? "已開通，仍須核准確切資料" : "尚未開通"
             }}</span
           ><span>正式模型切換：不自動執行</span>
         </div>
+        <label class="wide">
+          這一輪要學習的資料
+          <select v-model="effectUseLiveActions" :disabled="busy">
+            <option :value="false">發布前條件與後續成效（原有模型）</option>
+            <option :value="true">另納入已獨立審查的實際改動（新版模型）</option>
+          </select>
+        </label>
+        <p v-if="effectUseLiveActions" class="empty">
+          只納入同一份正式發布回執、有效授權和已核對的前後頁面證據。請先在「發布前後證據」逐筆審查；此處還要另行核准確切資料集。資料不足時，不會自動改用原有模型。
+        </p>
         <p
-          v-if="effects.release?.status !== 'ready_for_dataset_review'"
+          v-if="effectRelease?.status !== 'ready_for_dataset_review'"
           class="empty"
         >
           資料尚未達到訓練審查門檻。需至少 150
@@ -977,6 +1004,7 @@ async function approveFallback(artifactId: string) {
         </form>
         <article v-for="item in effects.models" :key="item.id" class="record">
           <strong>成效模型 #{{ item.id }} · {{ label(item.status) }}</strong
+          ><small>{{ item.inputMode === "reviewed_live_actions" ? "已審查的實際改動模型" : "原有成效模型" }}</small
           ><span
             >{{ item.candidateCount }} 筆核准候選 ·
             {{
@@ -1027,6 +1055,7 @@ async function approveFallback(artifactId: string) {
       <summary>本次操作的完整結果</summary>
       <pre>{{ JSON.stringify(detail, null, 2) }}</pre>
     </details>
+    <LivePublicationActionsPanel />
   </main>
 </template>
 

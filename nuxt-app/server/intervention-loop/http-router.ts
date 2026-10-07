@@ -11,6 +11,7 @@ import { buildGovernedContentOutcomeRelease, runLearningClientCycle } from '../l
 import { createLearningCitationFallback, reviewLearningCitationFallback, trainApprovedLearningDataset } from '../learning-loop/training'
 import { getDraftLearningAdvice } from '../learning-loop/model-advice'
 import { approveContentEffectTraining, executeContentEffectTraining, getContentEffectModelWorkspace, revokeContentEffectModel } from '../learning-loop/effect-service'
+import { getLivePublicationActionWorkspace, reconcileLivePublicationAction, resolveReviewedLivePublicationAction, reviewLivePublicationAction } from '../learning-loop/live-action-service'
 
 type RouteMethod = 'GET' | 'POST'
 type RouteContext = { event: H3Event, ownerUserId: number, params: string[], body: Record<string, unknown> }
@@ -54,6 +55,10 @@ const routes: InterventionRoute[] = [
   { method: 'GET', pattern: ['closed-loop', 'structural-release'], handle: ({ ownerUserId }) => exportStructuralLearningEvidence(ownerUserId) },
   { method: 'GET', pattern: ['closed-loop', 'outcome-release'], handle: ({ ownerUserId }) => buildGovernedContentOutcomeRelease(ownerUserId) },
   { method: 'GET', pattern: ['closed-loop', 'effect-models'], handle: ({ ownerUserId }) => getContentEffectModelWorkspace(ownerUserId) },
+  { method: 'GET', pattern: ['closed-loop', 'live-actions'], handle: ({ ownerUserId }) => getLivePublicationActionWorkspace(ownerUserId) },
+  { method: 'POST', pattern: ['closed-loop', 'live-actions', 'review'], handle: ({ ownerUserId, body }) => reviewLivePublicationAction(ownerUserId, body) },
+  { method: 'GET', pattern: ['closed-loop', 'live-actions', ':id', 'release'], handle: async ({ ownerUserId, params }) => ({ action: await resolveReviewedLivePublicationAction(ownerUserId, positiveId(params[0])) }) },
+  { method: 'POST', pattern: ['closed-loop', 'live-actions', ':id', 'reconcile'], handle: ({ ownerUserId, params, body }) => { if (Object.keys(body).length) throw createError({ statusCode: 422, statusMessage: '補驗證不接受網址或額外欄位。' }); return reconcileLivePublicationAction(ownerUserId, positiveId(params[0])) } },
   { method: 'POST', pattern: ['closed-loop', 'effect-models', 'review'], handle: ({ ownerUserId, body }) => approveContentEffectTraining(ownerUserId, body) },
   { method: 'POST', pattern: ['closed-loop', 'effect-models', 'train'], handle: ({ ownerUserId, body }) => executeContentEffectTraining(ownerUserId, body) },
   { method: 'POST', pattern: ['closed-loop', 'effect-models', ':id', 'revoke'], handle: ({ ownerUserId, params, body }) => { if (Object.keys(body).length) throw createError({ statusCode: 422, statusMessage: '撤回模型不接受額外欄位。' }); return revokeContentEffectModel(ownerUserId, positiveId(params[0])) } },

@@ -1103,7 +1103,8 @@ export const contentOperationPublicationAttempts = mysqlTable('contentOperationP
   errorCode: varchar('errorCode', { length: 120 }),
   errorSummary: varchar('errorSummary', { length: 500 }),
   startedAt: timestamp('startedAt').defaultNow().notNull(),
-  completedAt: timestamp('completedAt'),
+  // Preserve the actual post-transport boundary; second-only timestamps cannot order live captures.
+  completedAt: timestamp('completedAt', { fsp: 3 }),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
   foreignKey({ name: 'fk_content_operation_public_client_id_027a21ff01', columns: [table.clientId], foreignColumns: [contentOperationClients.id] }),
@@ -4374,3 +4375,66 @@ export const managedSiteEmailOutbox = mysqlTable('managedSiteEmailOutbox', {
 ])
 
 export type ManagedSiteEmailOutbox = typeof managedSiteEmailOutbox.$inferSelect
+
+/** Short-lived, owner-scoped live before/after evidence for one exact execute attempt. */
+export const learningPublicationActions = mysqlTable('learningPublicationActions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  clientId: int('clientId').notNull(),
+  authorizationId: int('authorizationId').notNull(),
+  entryId: int('entryId').notNull(),
+  attemptId: int('attemptId').notNull(),
+  runId: int('runId').notNull(),
+  targetId: int('targetId').notNull(),
+  draftId: int('draftId').notNull(),
+  draftVersion: int('draftVersion').notNull(),
+  inputFingerprint: varchar('inputFingerprint', { length: 64 }).notNull(),
+  draftContentHash: varchar('draftContentHash', { length: 64 }).notNull(),
+  evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 64 }).notNull(),
+  publicationContentHash: varchar('publicationContentHash', { length: 64 }).notNull(),
+  publicationIdentityFingerprint: varchar('publicationIdentityFingerprint', { length: 64 }).notNull(),
+  targetConfigurationFingerprint: varchar('targetConfigurationFingerprint', { length: 64 }).notNull(),
+  publicationUrlHash: varchar('publicationUrlHash', { length: 64 }).notNull(),
+  authorizationFingerprint: varchar('authorizationFingerprint', { length: 64 }).notNull(),
+  sourceFingerprint: varchar('sourceFingerprint', { length: 64 }).notNull(),
+  expectedProjection: json('expectedProjection'),
+  beforeProjection: json('beforeProjection'),
+  afterProjection: json('afterProjection'),
+  plannedAction: json('plannedAction'),
+  status: mysqlEnum('status', ['capturing_before', 'before_ready', 'dispatch_started', 'awaiting_after', 'capturing_after', 'observed', 'blocked', 'expired']).default('capturing_before').notNull(),
+  reasonCode: varchar('reasonCode', { length: 80 }),
+  dispatchStartedAt: timestamp('dispatchStartedAt', { fsp: 3 }),
+  beforeCapturedAt: timestamp('beforeCapturedAt', { fsp: 3 }),
+  deliveredAt: timestamp('deliveredAt', { fsp: 3 }),
+  afterCapturedAt: timestamp('afterCapturedAt', { fsp: 3 }),
+  nextAttemptAt: timestamp('nextAttemptAt', { fsp: 3 }),
+  receiptFingerprint: varchar('receiptFingerprint', { length: 64 }),
+  evidenceFingerprint: varchar('evidenceFingerprint', { length: 64 }),
+  afterAttemptCount: int('afterAttemptCount').default(0).notNull(),
+  leaseToken: varchar('leaseToken', { length: 96 }),
+  leaseVersion: int('leaseVersion').default(0).notNull(),
+  leaseExpiresAt: timestamp('leaseExpiresAt', { fsp: 3 }),
+  expiresAt: timestamp('expiresAt', { fsp: 3 }).notNull(),
+  reviewStatus: mysqlEnum('reviewStatus', ['pending', 'approved', 'rejected']).default('pending').notNull(),
+  reviewFingerprint: varchar('reviewFingerprint', { length: 64 }),
+  reviewEvidenceFingerprint: varchar('reviewEvidenceFingerprint', { length: 64 }),
+  reviewReasonHash: varchar('reviewReasonHash', { length: 64 }),
+  reviewedAt: timestamp('reviewedAt', { fsp: 3 }),
+  // Explicit fsp avoids TiDB's rejection of timestamp(3) DEFAULT (now()).
+  createdAt: timestamp('createdAt', { fsp: 3 }).default(sql`CURRENT_TIMESTAMP(3)`).notNull(),
+  updatedAt: timestamp('updatedAt', { fsp: 3 }).default(sql`CURRENT_TIMESTAMP(3)`).onUpdateNow().notNull(),
+}, t => [
+  foreignKey({ name: 'learning_pub_action_owner_fk', columns: [t.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'learning_pub_action_client_fk', columns: [t.clientId], foreignColumns: [contentOperationClients.id] }),
+  foreignKey({ name: 'learning_pub_action_auth_fk', columns: [t.authorizationId], foreignColumns: [learningSourceAuthorizations.id] }),
+  foreignKey({ name: 'learning_pub_action_entry_fk', columns: [t.entryId], foreignColumns: [contentOperationCalendarEntries.id] }),
+  foreignKey({ name: 'learning_pub_action_attempt_fk', columns: [t.attemptId], foreignColumns: [contentOperationPublicationAttempts.id] }),
+  foreignKey({ name: 'learning_pub_action_run_fk', columns: [t.runId], foreignColumns: [contentOperationRuns.id] }),
+  foreignKey({ name: 'learning_pub_action_target_fk', columns: [t.targetId], foreignColumns: [contentOperationPublicationTargets.id] }),
+  foreignKey({ name: 'learning_pub_action_draft_fk', columns: [t.draftId], foreignColumns: [seoGeoContentDrafts.id] }),
+  uniqueIndex('learning_pub_action_owner_attempt_uq').on(t.ownerUserId, t.attemptId),
+  index('learning_pub_action_due_idx').on(t.ownerUserId, t.status, t.nextAttemptAt, t.id),
+  index('learning_pub_action_retention_idx').on(t.ownerUserId, t.expiresAt),
+])
+
+export type LearningPublicationAction = typeof learningPublicationActions.$inferSelect

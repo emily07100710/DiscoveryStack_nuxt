@@ -330,6 +330,13 @@
       "when": 1791325531294,
       "tag": "0046_managed_email_outbox_v1",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "5",
+      "when": 1791332286275,
+      "tag": "0047_live_publication_actions_v1",
+      "breakpoints": true
     }
   ]
 }
