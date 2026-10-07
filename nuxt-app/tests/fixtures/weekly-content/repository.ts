@@ -25,6 +25,7 @@ export class WeeklyFixture {
       getConfig:vi.fn(async(owner,client)=>owner===1&&client===1?this.state.config:null),
       saveConfig:vi.fn(async(value)=>this.state.config={...row(value),id:this.state.config?.id||this.state.nextId}),
       listConfigs:vi.fn(async(owner)=>owner===1&&this.state.config?[this.state.config]:[]),
+      claimSchedulerConfigs:vi.fn(async(owner,limit=10)=>owner===1&&this.state.config?.status==='active'?[this.state.config].slice(0,limit):[]),
       getTargetPolicy:vi.fn(async(owner,client,target,policy)=>owner===1&&client===1&&target===3&&policy===this.state.policy.policyId?{target:this.state.target,policy:this.state.policy}:null),
       findInbox:vi.fn(async(hash)=>this.state.inbox.find(value=>value.eventHash===hash)||null),
       insertInbox:vi.fn(async(value)=>{if(this.state.inbox.some(item=>item.eventHash===value.eventHash))throw new WeeklyWebhookInboxRaceError({cause:new Error('duplicate')});const saved=row(value);this.state.inbox.push(saved);return saved}),

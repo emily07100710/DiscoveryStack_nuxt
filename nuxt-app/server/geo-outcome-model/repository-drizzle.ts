@@ -23,6 +23,7 @@ import {
   type GeoOutcomeTrainingRun,
 } from '../database/schema'
 import { canonicalJson, fingerprint, isSha256, sha256Hex } from './canonical'
+import { decodeDurableJson, encodeDurableJson } from './durable-json'
 import { isFallbackOnlyArtifact } from './artifact'
 import { isExactTrainOnlyPriorArtifact } from './bootstrap-baseline'
 import { canBePrimaryCitationTruth } from './observation-contract'
@@ -107,10 +108,47 @@ function featureVector(value: unknown): FeatureVector {
   return row as unknown as FeatureVector
 }
 function evaluationBundle(value: unknown): EvaluationBundle {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Corrupt durable evaluation metrics.')
-  const required = ['validation', 'test', 'siteHoldout', 'queryHoldout', 'temporalHoldout', 'rankingValidation', 'rankingTest', 'rankingTemporalHoldout', 'evaluationScope']
-  const row = value as Record<string, unknown>
-  if (required.some(key => !(key in row))) throw new Error('Corrupt durable evaluation metrics.')
+  const fail = (): never => { throw new Error('Corrupt durable evaluation metrics.') }
+  const record = (input: unknown, keys: readonly string[]): Record<string, unknown> => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return fail()
+    const result = input as Record<string, unknown>
+    if (Object.keys(result).sort().join(',') !== [...keys].sort().join(',')) return fail()
+    return result
+  }
+  const count = (input: unknown): number => {
+    if (typeof input !== 'number' || !Number.isSafeInteger(input) || input < 0) return fail()
+    return input
+  }
+  const metric = (input: unknown, probability = false): void => {
+    if (input !== null && (typeof input !== 'number' || !Number.isFinite(input) || input < 0 || probability && input > 1)) fail()
+  }
+  const binaryNames = ['rocAuc', 'prAuc', 'logLoss', 'brierScore', 'expectedCalibrationError', 'precision', 'recall', 'f1'] as const
+  const rankingNames = ['mrr', 'ndcgAt5', 'ndcgAt10', 'precisionAt1', 'precisionAt3', 'recallAt5'] as const
+  const metadata = (input: unknown, names: readonly string[], denominator: boolean): void => {
+    const entries = record(input, names)
+    for (const name of names) { metric(entries[name]); if (denominator && entries[name] !== null) count(entries[name]) }
+  }
+  const row = record(value, ['validation', 'test', 'siteHoldout', 'queryHoldout', 'temporalHoldout', 'rankingValidation', 'rankingTest', 'rankingTemporalHoldout', 'evaluationScope'])
+  if (row.evaluationScope !== 'citation_selection' && row.evaluationScope !== 'structural_auxiliary') fail()
+  for (const name of ['validation', 'test', 'siteHoldout', 'queryHoldout', 'temporalHoldout']) {
+    const split = record(row[name], ['status', 'positiveCount', 'negativeCount', ...binaryNames, 'confusionMatrix', 'numerators', 'denominators'])
+    const positive = count(split.positiveCount), negative = count(split.negativeCount)
+    if (split.status !== (positive && negative ? 'ok' : 'insufficient_data')) fail()
+    const confusion = record(split.confusionMatrix, ['truePositive', 'falsePositive', 'trueNegative', 'falseNegative'])
+    if (count(confusion.truePositive) + count(confusion.falseNegative) !== positive || count(confusion.trueNegative) + count(confusion.falsePositive) !== negative) fail()
+    for (const field of binaryNames) {
+      metric(split[field], field !== 'logLoss')
+      if (['rocAuc', 'prAuc', 'logLoss', 'brierScore', 'expectedCalibrationError'].includes(field) && (split.status === 'ok' ? split[field] === null : split[field] !== null)) fail()
+    }
+    metadata(split.numerators, binaryNames, false); metadata(split.denominators, binaryNames, true)
+  }
+  for (const name of ['rankingValidation', 'rankingTest', 'rankingTemporalHoldout']) {
+    const split = record(row[name], ['status', 'queryGroupCount', ...rankingNames, 'numerators', 'denominators'])
+    const groups = count(split.queryGroupCount)
+    if (split.status !== (groups ? 'ok' : 'insufficient_data')) fail()
+    for (const field of rankingNames) { metric(split[field], true); if (groups ? split[field] === null : split[field] !== null) fail() }
+    metadata(split.numerators, rankingNames, false); metadata(split.denominators, rankingNames, true)
+  }
   return row as unknown as EvaluationBundle
 }
 function splitKeyToDb(key: DomainSplit): 'train' | 'validation' | 'test' | 'site_holdout' | 'query_holdout' | 'temporal_holdout' {
@@ -187,7 +225,7 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
       verificationStatus: 'unverified',
       evidenceLocatorHashes: stringArray(candidate.evidenceLocatorHashes, 'evidence locator hashes'),
       appliedRuleHashes: stringArray(candidate.appliedRuleHashes, 'applied rule hashes'),
-      contentFeatureVector: candidate.contentFeatureVector,
+      contentFeatureVector: decodeDurableJson(candidate.contentFeatureVector),
     }
     const validated = normalizeManualObservation(publicInput, run.ownerUserId)
     const immutable: OutcomeObservation = { ...validated, intakeFingerprint: candidate.intakeFingerprint, observationFingerprint: candidate.observationFingerprint }
@@ -220,12 +258,15 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     }))
   }
 
-  private async readObservation(ownerUserId: number, observationFingerprint: string, revalidateEvidence: boolean): Promise<OutcomeObservation | null> {
-    const [candidate] = await this.db.select().from(geoOutcomeObservationCandidates).where(and(eq(geoOutcomeObservationCandidates.ownerUserId, ownerUserId), eq(geoOutcomeObservationCandidates.observationFingerprint, observationFingerprint))).limit(1)
+  private async readObservation(ownerUserId: number, observationFingerprint: string, revalidateEvidence: boolean, currentRead = false): Promise<OutcomeObservation | null> {
+    const candidateQuery = this.db.select().from(geoOutcomeObservationCandidates).where(and(eq(geoOutcomeObservationCandidates.ownerUserId, ownerUserId), eq(geoOutcomeObservationCandidates.observationFingerprint, observationFingerprint))).limit(1)
+    const [candidate] = await (currentRead ? candidateQuery.for('update') : candidateQuery)
     if (!candidate) return null
-    const [run] = await this.db.select().from(geoOutcomeObservationRuns).where(and(eq(geoOutcomeObservationRuns.ownerUserId, ownerUserId), eq(geoOutcomeObservationRuns.id, candidate.observationRunId))).limit(1)
+    const runQuery = this.db.select().from(geoOutcomeObservationRuns).where(and(eq(geoOutcomeObservationRuns.ownerUserId, ownerUserId), eq(geoOutcomeObservationRuns.id, candidate.observationRunId))).limit(1)
+    const [run] = await (currentRead ? runQuery.for('update') : runQuery)
     if (!run) throw new Error('Dangling observation run.')
-    const facts = await this.db.select().from(geoOutcomeObservationVerifications).where(and(eq(geoOutcomeObservationVerifications.ownerUserId, ownerUserId), eq(geoOutcomeObservationVerifications.observationFingerprint, observationFingerprint)))
+    const factsQuery = this.db.select().from(geoOutcomeObservationVerifications).where(and(eq(geoOutcomeObservationVerifications.ownerUserId, ownerUserId), eq(geoOutcomeObservationVerifications.observationFingerprint, observationFingerprint)))
+    const facts = await (currentRead ? factsQuery.for('update') : factsQuery)
     const observation = this.mapObservation(run, candidate, facts)
     return revalidateEvidence ? this.revalidateAuthoritativeEvidence(observation, facts) : observation
   }
@@ -236,29 +277,31 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     assertObservationIsUsable(observation)
     return this.db.transaction(async tx => {
       const repo = new DrizzleGeoOutcomeRepository(tx)
-      const existing = await repo.getObservation(ownerUserId, observation.observationFingerprint)
-      if (existing) return existing
       const runFingerprint = fingerprint({ ownerUserId, projectId: observation.projectId, clientId: observation.clientId, runIdentity: observation.runIdentity, engine: observation.engine, model: observation.model, modelVersion: observation.modelVersion, interface: observation.interface, locale: observation.locale, region: observation.region, observationWindow: observation.observationWindow, runTimestamp: observation.runTimestamp, evidenceSnapshotHash: observation.evidenceSnapshotHash })
-      let [run] = await tx.select().from(geoOutcomeObservationRuns).where(and(eq(geoOutcomeObservationRuns.ownerUserId, ownerUserId), eq(geoOutcomeObservationRuns.runIdentity, observation.runIdentity))).limit(1)
-      if (!run) {
-        try {
-          await tx.insert(geoOutcomeObservationRuns).values({ ownerUserId, projectId: observation.projectId, clientId: observation.clientId, runIdentity: observation.runIdentity, engine: observation.engine, model: observation.model, modelVersion: observation.modelVersion, interface: observation.interface, locale: observation.locale, region: observation.region, observationWindowStart: new Date(observation.observationWindow.start), observationWindowEnd: new Date(observation.observationWindow.end), runTimestamp: new Date(observation.runTimestamp), evidenceSnapshotHash: observation.evidenceSnapshotHash, status: 'received', runFingerprint, createdAt: new Date() })
-        } catch {
-          // Concurrent first writers converge through the unique run identity.
-        }
-        ;[run] = await tx.select().from(geoOutcomeObservationRuns).where(and(eq(geoOutcomeObservationRuns.ownerUserId, ownerUserId), eq(geoOutcomeObservationRuns.runIdentity, observation.runIdentity))).limit(1)
+      // Serialize first writers on the existing owner/run unique key. A no-op
+      // upsert never rewrites evidence, status or immutable run metadata. Do not
+      // establish a REPEATABLE READ snapshot before waiting for that row: a
+      // duplicate INSERT followed by a plain SELECT can retain the old snapshot.
+      try {
+        await tx.insert(geoOutcomeObservationRuns).values({ ownerUserId, projectId: observation.projectId, clientId: observation.clientId, runIdentity: observation.runIdentity, engine: observation.engine, model: observation.model, modelVersion: observation.modelVersion, interface: observation.interface, locale: observation.locale, region: observation.region, observationWindowStart: new Date(observation.observationWindow.start), observationWindowEnd: new Date(observation.observationWindow.end), runTimestamp: new Date(observation.runTimestamp), evidenceSnapshotHash: observation.evidenceSnapshotHash, status: 'received', runFingerprint, createdAt: new Date() }).onDuplicateKeyUpdate({ set: { id: sql`${geoOutcomeObservationRuns.id}` } })
+      } catch {
+        // In particular, never swallow a deadlock/transport failure and continue
+        // writing after the server may have rolled back the transaction.
+        throw new Error('Observation run persistence failed.')
       }
+      const [run] = await tx.select().from(geoOutcomeObservationRuns).where(and(eq(geoOutcomeObservationRuns.ownerUserId, ownerUserId), eq(geoOutcomeObservationRuns.runIdentity, observation.runIdentity))).limit(1).for('update')
       if (!run) throw new Error('Observation run was not persisted.')
       if (run.runFingerprint !== runFingerprint) throw new Error('Observation run identity collision.')
       try {
-        await tx.insert(geoOutcomeObservationCandidates).values({ ownerUserId, observationRunId: run.id, websiteIdentityHash: observation.websiteIdentityHash, queryIdentityHash: observation.queryIdentityHash, normalizedQueryHash: observation.normalizedQueryHash, candidatePageIdentityHash: observation.candidatePageIdentityHash, canonicalPageHash: observation.canonicalPageHash, contentHash: observation.contentHash, evidenceSnapshotHash: observation.evidenceSnapshotHash, publicationReceiptFingerprint: observation.publicationReceiptFingerprint, observableStatus: observation.observableStatus, retrievalStatus: observation.retrievalStatus, citationStatus: observation.citationStatus, citationPosition: observation.citationPosition, mentionStatus: observation.mentionStatus, recommendationStatus: observation.recommendationStatus, labelBasis: observation.labelBasis, verificationStatus: 'unverified', consentStatus: 'unknown', piiStatus: 'unknown', verificationAuthority: 'intake', intakeFingerprint: observation.intakeFingerprint, reviewFingerprint: null, observationPayload: { schemaVersion: observation.schemaVersion }, evidenceLocatorHashes: observation.evidenceLocatorHashes, appliedRuleHashes: observation.appliedRuleHashes, contentFeatureVector: observation.contentFeatureVector, observationFingerprint: observation.observationFingerprint, createdAt: new Date() })
+        await tx.insert(geoOutcomeObservationCandidates).values({ ownerUserId, observationRunId: run.id, websiteIdentityHash: observation.websiteIdentityHash, queryIdentityHash: observation.queryIdentityHash, normalizedQueryHash: observation.normalizedQueryHash, candidatePageIdentityHash: observation.candidatePageIdentityHash, canonicalPageHash: observation.canonicalPageHash, contentHash: observation.contentHash, evidenceSnapshotHash: observation.evidenceSnapshotHash, publicationReceiptFingerprint: observation.publicationReceiptFingerprint, observableStatus: observation.observableStatus, retrievalStatus: observation.retrievalStatus, citationStatus: observation.citationStatus, citationPosition: observation.citationPosition, mentionStatus: observation.mentionStatus, recommendationStatus: observation.recommendationStatus, labelBasis: observation.labelBasis, verificationStatus: 'unverified', consentStatus: 'unknown', piiStatus: 'unknown', verificationAuthority: 'intake', intakeFingerprint: observation.intakeFingerprint, reviewFingerprint: null, observationPayload: { schemaVersion: observation.schemaVersion }, evidenceLocatorHashes: observation.evidenceLocatorHashes, appliedRuleHashes: observation.appliedRuleHashes, contentFeatureVector: encodeDurableJson(observation.contentFeatureVector), observationFingerprint: observation.observationFingerprint, createdAt: new Date() }).onDuplicateKeyUpdate({ set: { id: sql`${geoOutcomeObservationCandidates.id}` } })
       } catch {
-        const replay = await repo.getObservation(ownerUserId, observation.observationFingerprint)
-        if (replay) return replay
-        throw new Error('Observation candidate identity collision.')
+        throw new Error('Observation candidate persistence failed.')
       }
-      const saved = await repo.getObservation(ownerUserId, observation.observationFingerprint)
-      if (!saved) throw new Error('Observation was not persisted.')
+      // Also use current reads when an outer idempotency transaction already
+      // established a snapshot before another writer committed this candidate.
+      // No-op upserts preserve the stored governance and immutable payload.
+      const saved = await repo.readObservation(ownerUserId, observation.observationFingerprint, true, true)
+      if (!saved) throw new Error('Observation candidate identity collision.')
       return saved
     })
   }
@@ -374,7 +417,7 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     return rows.map((row: GeoOutcomeDatasetMember): DatasetMember => {
       const observation = observations.find(item => item.observationFingerprint === row.observationFingerprint)
       if (!observation) throw new Error('Dangling dataset member.')
-      const vector = featureVector(row.featureVector)
+      const vector = featureVector(decodeDurableJson(row.featureVector))
       if (fingerprint(vector) !== fingerprint(deriveFeatureVector(observation))) throw new Error('Corrupt durable member feature provenance.')
       if (row.websiteIdentityHash !== observation.websiteIdentityHash || row.normalizedQueryHash !== observation.normalizedQueryHash || row.runIdentity !== observation.runIdentity) throw new Error('Corrupt durable member identity provenance.')
       const expectedQueryGroupKey = fingerprint({ runIdentity: observation.runIdentity, normalizedQueryHash: observation.normalizedQueryHash, engine: observation.engine, model: observation.model, modelVersion: observation.modelVersion, interface: observation.interface, locale: observation.locale, region: observation.region, observationWindow: observation.observationWindow })
@@ -388,10 +431,12 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
       const repo = new DrizzleGeoOutcomeRepository(tx)
       const [existing] = await tx.select().from(geoOutcomeDatasetManifests).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, ownerUserId), eq(geoOutcomeDatasetManifests.manifestFingerprint, manifest.manifestFingerprint))).limit(1)
       if (existing) return repo.mapDataset(existing)
-      await tx.insert(geoOutcomeDatasetManifests).values({ ownerUserId, manifestId: manifest.manifestId, schemaVersion: manifest.schemaVersion, taskType: manifest.taskType, featureCatalogVersion: manifest.featureCatalogVersion, labelContractVersion: manifest.labelContractVersion, hardNegativePolicyVersion: manifest.hardNegativePolicyVersion, sourceObservationFingerprints: manifest.sourceObservationFingerprints, sourceBasisCounts: manifest.sourceBasisCounts, engineCounts: manifest.engineCounts, localeCounts: manifest.localeCounts, websiteCount: manifest.websiteCount, queryGroupCount: manifest.queryGroupCount, positiveCount: manifest.positiveCount, hardNegativeCount: manifest.hardNegativeCount, observationStart: manifest.observationStart ? new Date(manifest.observationStart) : null, observationEnd: manifest.observationEnd ? new Date(manifest.observationEnd) : null, splitPolicyVersion: manifest.splitPolicyVersion, splitFingerprints: { train: manifest.trainFingerprints, validation: manifest.validationFingerprints, test: manifest.testFingerprints, siteHoldout: manifest.siteHoldoutFingerprints, queryHoldout: manifest.queryHoldoutFingerprints, temporalHoldout: manifest.temporalHoldoutFingerprints }, manifestFingerprint: manifest.manifestFingerprint, limitations: manifest.limitations, readiness: manifest.readiness, status: manifest.status, createdAt: new Date(manifest.createdAt) })
+      // The pure builder uses an epoch placeholder for determinism; creation time is not part of the manifest fingerprint.
+      // Persist the server-owned creation time instead of the placeholder, which strict MySQL TIMESTAMP rejects.
+      await tx.insert(geoOutcomeDatasetManifests).values({ ownerUserId, manifestId: manifest.manifestId, schemaVersion: manifest.schemaVersion, taskType: manifest.taskType, featureCatalogVersion: manifest.featureCatalogVersion, labelContractVersion: manifest.labelContractVersion, hardNegativePolicyVersion: manifest.hardNegativePolicyVersion, sourceObservationFingerprints: manifest.sourceObservationFingerprints, sourceBasisCounts: manifest.sourceBasisCounts, engineCounts: manifest.engineCounts, localeCounts: manifest.localeCounts, websiteCount: manifest.websiteCount, queryGroupCount: manifest.queryGroupCount, positiveCount: manifest.positiveCount, hardNegativeCount: manifest.hardNegativeCount, observationStart: manifest.observationStart ? new Date(manifest.observationStart) : null, observationEnd: manifest.observationEnd ? new Date(manifest.observationEnd) : null, splitPolicyVersion: manifest.splitPolicyVersion, splitFingerprints: { train: manifest.trainFingerprints, validation: manifest.validationFingerprints, test: manifest.testFingerprints, siteHoldout: manifest.siteHoldoutFingerprints, queryHoldout: manifest.queryHoldoutFingerprints, temporalHoldout: manifest.temporalHoldoutFingerprints }, manifestFingerprint: manifest.manifestFingerprint, limitations: manifest.limitations, readiness: manifest.readiness, status: manifest.status, createdAt: new Date() })
       const [row] = await tx.select().from(geoOutcomeDatasetManifests).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, ownerUserId), eq(geoOutcomeDatasetManifests.manifestId, manifest.manifestId))).limit(1)
       if (!row) throw new Error('Dataset manifest id was not returned.')
-      for (const member of members) await tx.insert(geoOutcomeDatasetMembers).values({ ownerUserId, datasetManifestId: row.id, observationFingerprint: member.observationFingerprint, websiteIdentityHash: member.websiteIdentityHash, normalizedQueryHash: member.normalizedQueryHash, runIdentity: member.runIdentity, queryGroupKey: member.queryGroupKey, label: member.label === 1 ? 'positive' : 'hard_negative', splitAssignment: splitKeyToDb(member.splitAssignment || 'train'), consentStatus: member.consentStatus || 'unknown', piiStatus: member.piiStatus || 'unknown', reviewFingerprint: member.reviewFingerprint || null, featureVector: member.featureVector })
+      for (const member of members) await tx.insert(geoOutcomeDatasetMembers).values({ ownerUserId, datasetManifestId: row.id, observationFingerprint: member.observationFingerprint, websiteIdentityHash: member.websiteIdentityHash, normalizedQueryHash: member.normalizedQueryHash, runIdentity: member.runIdentity, queryGroupKey: member.queryGroupKey, label: member.label === 1 ? 'positive' : 'hard_negative', splitAssignment: splitKeyToDb(member.splitAssignment || 'train'), consentStatus: member.consentStatus || 'unknown', piiStatus: member.piiStatus || 'unknown', reviewFingerprint: member.reviewFingerprint || null, featureVector: encodeDurableJson(member.featureVector) })
       return repo.mapDataset(row)
     })
   }
@@ -427,29 +472,33 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
   }
 
   private async mapTraining(row: GeoOutcomeTrainingRun): Promise<TrainingRun> {
-    const [dataset] = await this.db.select({ manifestId: geoOutcomeDatasetManifests.manifestId }).from(geoOutcomeDatasetManifests).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, row.ownerUserId), eq(geoOutcomeDatasetManifests.id, row.datasetManifestId))).limit(1)
+    const [dataset] = await this.db.select({ manifestId: geoOutcomeDatasetManifests.manifestId, manifestFingerprint: geoOutcomeDatasetManifests.manifestFingerprint }).from(geoOutcomeDatasetManifests).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, row.ownerUserId), eq(geoOutcomeDatasetManifests.id, row.datasetManifestId))).limit(1)
     if (!dataset) throw new Error('Dangling training dataset foreign key.')
     const rawConfiguration = row.configuration as unknown
-    const isVersioned = Boolean(rawConfiguration && typeof rawConfiguration === 'object' && !Array.isArray(rawConfiguration) && (rawConfiguration as Record<string, unknown>).schemaVersion === 'geo-outcome-training-configuration-v2')
+    const isVersioned = Boolean(rawConfiguration && typeof rawConfiguration === 'object' && !Array.isArray(rawConfiguration) && 'schemaVersion' in rawConfiguration)
     const configuration = isVersioned ? rawConfiguration as Record<string, unknown> : null
-    if (isVersioned && (Object.keys(configuration!).sort().join(',') !== 'config,rollbackArtifactHash,schemaVersion' || (configuration!.rollbackArtifactHash !== null && (typeof configuration!.rollbackArtifactHash !== 'string' || !isSha256(configuration!.rollbackArtifactHash))))) throw new Error('Corrupt durable training configuration snapshot.')
-    const config = parseTrainingConfig(isVersioned ? configuration!.config : rawConfiguration)
+    if (isVersioned && (!['geo-outcome-training-configuration-v2', 'geo-outcome-training-configuration-v3'].includes(String(configuration!.schemaVersion)) || Object.keys(configuration!).sort().join(',') !== 'config,rollbackArtifactHash,schemaVersion' || (configuration!.rollbackArtifactHash !== null && (typeof configuration!.rollbackArtifactHash !== 'string' || !isSha256(configuration!.rollbackArtifactHash))))) throw new Error('Corrupt durable training configuration snapshot.')
+    const config = parseTrainingConfig(isVersioned ? decodeDurableJson(configuration!.config, configuration!.schemaVersion === 'geo-outcome-training-configuration-v3') : rawConfiguration)
     const rollbackArtifactHash = isVersioned ? configuration!.rollbackArtifactHash as string | null : undefined
     const expectedFingerprint = isVersioned
       ? fingerprint({ ownerUserId: row.ownerUserId, datasetManifestId: dataset.manifestId, modelFamily: row.modelFamily, config, rollbackArtifactHash })
       : fingerprint({ ownerUserId: row.ownerUserId, datasetManifestId: dataset.manifestId, modelFamily: row.modelFamily, config })
     const expectedTrainingRunId = `geo-training-${expectedFingerprint.slice(0, 20)}`
     if (row.trainingRunId !== expectedTrainingRunId) throw new Error('Corrupt durable training business id.')
-    const mapped = { trainingRunId: row.trainingRunId, ownerUserId: row.ownerUserId, datasetManifestId: dataset.manifestId, modelFamily: row.modelFamily, status: row.status, config, ...(isVersioned ? { rollbackArtifactHash } : {}), artifactId: row.artifactId, artifactHash: row.artifactHash, metrics: row.metrics === null ? null : evaluationBundle(row.metrics), reason: row.reason, createdAt: toIso(row.createdAt)!, startedAt: toIso(row.startedAt), completedAt: toIso(row.completedAt), leaseOwner: row.leaseOwner, leaseExpiresAt: toIso(row.leaseExpiresAt), version: row.version } satisfies TrainingRun
+    const mapped = { trainingRunId: row.trainingRunId, ownerUserId: row.ownerUserId, datasetManifestId: dataset.manifestId, modelFamily: row.modelFamily, status: row.status, config, ...(isVersioned ? { rollbackArtifactHash } : {}), artifactId: row.artifactId, artifactHash: row.artifactHash, metrics: row.metrics === null ? null : evaluationBundle(decodeDurableJson(row.metrics)), reason: row.reason, createdAt: toIso(row.createdAt)!, startedAt: toIso(row.startedAt), completedAt: toIso(row.completedAt), leaseOwner: row.leaseOwner, leaseExpiresAt: toIso(row.leaseExpiresAt), version: row.version } satisfies TrainingRun
     if (mapped.status === 'running' && (!mapped.leaseOwner || !mapped.leaseExpiresAt || !mapped.startedAt)) throw new Error('Corrupt durable training lease state.')
     if (mapped.status === 'completed' && (!mapped.artifactId || !mapped.artifactHash || !mapped.metrics || !mapped.completedAt)) throw new Error('Corrupt durable completed training state.')
     if (mapped.status === 'queued' && (mapped.artifactId || mapped.artifactHash || mapped.metrics || mapped.completedAt)) throw new Error('Corrupt durable queued training state.')
+    if (mapped.status === 'completed') {
+      const artifact = await this.getArtifact(row.ownerUserId, mapped.artifactId!)
+      if (!artifact || artifact.artifactHash !== mapped.artifactHash || artifact.datasetManifestFingerprint !== dataset.manifestFingerprint || artifact.modelFamily !== mapped.modelFamily || fingerprint(artifact.trainingConfiguration) !== fingerprint(mapped.config) || fingerprint(artifact.evaluationMetrics) !== fingerprint(mapped.metrics) || mapped.rollbackArtifactHash !== undefined && artifact.rollbackArtifactHash !== mapped.rollbackArtifactHash) throw new Error('Corrupt durable training artifact or metrics lineage.')
+    }
     return mapped
   }
   async createTrainingRun(ownerUserId: number, run: TrainingRun) {
     const [dataset] = await this.db.select({ id: geoOutcomeDatasetManifests.id }).from(geoOutcomeDatasetManifests).where(and(eq(geoOutcomeDatasetManifests.ownerUserId, ownerUserId), eq(geoOutcomeDatasetManifests.manifestId, run.datasetManifestId))).limit(1)
     if (!dataset) throw new Error('Dataset manifest not found.')
-    const configuration = run.rollbackArtifactHash === undefined ? run.config : { schemaVersion: 'geo-outcome-training-configuration-v2', config: run.config, rollbackArtifactHash: run.rollbackArtifactHash }
+    const configuration = run.rollbackArtifactHash === undefined ? run.config : { schemaVersion: 'geo-outcome-training-configuration-v3', config: encodeDurableJson(run.config), rollbackArtifactHash: run.rollbackArtifactHash }
     try { await this.db.insert(geoOutcomeTrainingRuns).values({ ownerUserId, trainingRunId: run.trainingRunId, datasetManifestId: dataset.id, modelFamily: run.modelFamily, status: run.status, startedAt: null, completedAt: null, leaseOwner: null, leaseExpiresAt: null, version: 0, configuration, artifactId: null, artifactHash: null, metrics: null, reason: null, createdAt: new Date(run.createdAt) }) } catch { const replay = await this.getTrainingRun(ownerUserId, run.trainingRunId); if (replay && replay.datasetManifestId === run.datasetManifestId && replay.modelFamily === run.modelFamily && fingerprint(replay.config) === fingerprint(run.config) && replay.rollbackArtifactHash === run.rollbackArtifactHash) return replay; throw new Error('Training run collision.') }
     return (await this.getTrainingRun(ownerUserId, run.trainingRunId))!
   }
@@ -481,11 +530,11 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
     if (patch.leaseExpiresAt !== undefined) update.leaseExpiresAt = patch.leaseExpiresAt ? new Date(patch.leaseExpiresAt) : null
     if (patch.artifactId !== undefined) update.artifactId = patch.artifactId
     if (patch.artifactHash !== undefined) update.artifactHash = patch.artifactHash
-    if (patch.metrics !== undefined) update.metrics = patch.metrics
+    if (patch.metrics !== undefined) update.metrics = patch.metrics === null ? null : encodeDurableJson(patch.metrics)
     if (patch.reason !== undefined) update.reason = patch.reason
     if (patch.config !== undefined) {
       const config = parseTrainingConfig(patch.config)
-      update.configuration = current.rollbackArtifactHash === undefined ? config : { schemaVersion: 'geo-outcome-training-configuration-v2', config, rollbackArtifactHash: current.rollbackArtifactHash }
+      update.configuration = current.rollbackArtifactHash === undefined ? config : { schemaVersion: 'geo-outcome-training-configuration-v3', config: encodeDurableJson(config), rollbackArtifactHash: current.rollbackArtifactHash }
     }
     const result = await this.db.update(geoOutcomeTrainingRuns).set(update).where(and(eq(geoOutcomeTrainingRuns.ownerUserId, ownerUserId), eq(geoOutcomeTrainingRuns.trainingRunId, trainingRunId), eq(geoOutcomeTrainingRuns.version, expectedVersion)))
     if (affectedRows(result) !== 1) throw new Error('Training run transition lost its compare-and-swap.')
@@ -494,30 +543,33 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
   async listTrainingRuns(ownerUserId: number) { const rows = await this.db.select().from(geoOutcomeTrainingRuns).where(eq(geoOutcomeTrainingRuns.ownerUserId, ownerUserId)); return Promise.all(rows.map(row => this.mapTraining(row))) }
 
   private mapArtifact(row: GeoOutcomeModelArtifact): ModelArtifact {
-    const normalization = row.normalizationStatistics as Record<string, unknown>
+    const rawTrainingConfiguration = row.trainingConfiguration as unknown
+    const exactStorage = Boolean(rawTrainingConfiguration && typeof rawTrainingConfiguration === 'object' && !Array.isArray(rawTrainingConfiguration) && (rawTrainingConfiguration as Record<string, unknown>).schemaVersion === 'geo-outcome-artifact-training-configuration-v3')
+    const normalization = decodeDurableJson(row.normalizationStatistics, exactStorage) as Record<string, unknown>
     if (!normalization || typeof normalization !== 'object' || Array.isArray(normalization)) throw new Error('Corrupt durable normalization statistics.')
     const normalizationStatistics = { mean: numberArray(normalization.mean, 'normalization mean'), standardDeviation: numberArray(normalization.standardDeviation, 'normalization standard deviation') }
     if (normalizationStatistics.mean.length !== normalizationStatistics.standardDeviation.length || normalizationStatistics.standardDeviation.some(value => value <= 0)) throw new Error('Corrupt durable normalization statistics.')
-    const rawTrainingConfiguration = row.trainingConfiguration as unknown
     const versionedConfiguration = Boolean(rawTrainingConfiguration && typeof rawTrainingConfiguration === 'object' && !Array.isArray(rawTrainingConfiguration) && 'schemaVersion' in rawTrainingConfiguration)
     let trainingConfiguration: TrainingRun['config']
     let intercept: number
     if (versionedConfiguration) {
       const envelope = rawTrainingConfiguration as Record<string, unknown>
-      if (envelope.schemaVersion !== 'geo-outcome-artifact-training-configuration-v2' || Object.keys(envelope).sort().join(',') !== 'config,exactIntercept,schemaVersion') throw new Error('Corrupt durable artifact training configuration envelope.')
-      if (typeof envelope.exactIntercept !== 'number' || !Number.isFinite(envelope.exactIntercept) || Math.abs(envelope.exactIntercept) > 1_000_000 || Object.is(envelope.exactIntercept, -0)) throw new Error('Corrupt durable exact artifact intercept.')
-      const expectedMirror = envelope.exactIntercept.toFixed(12)
+      if (!['geo-outcome-artifact-training-configuration-v2', 'geo-outcome-artifact-training-configuration-v3'].includes(String(envelope.schemaVersion)) || Object.keys(envelope).sort().join(',') !== 'config,exactIntercept,schemaVersion') throw new Error('Corrupt durable artifact training configuration envelope.')
+      const exactIntercept = exactStorage ? Number(envelope.exactIntercept) : envelope.exactIntercept
+      if (exactStorage && (typeof envelope.exactIntercept !== 'string' || envelope.exactIntercept.length > 64 || String(exactIntercept) !== envelope.exactIntercept)) throw new Error('Corrupt durable exact artifact intercept encoding.')
+      if (typeof exactIntercept !== 'number' || !Number.isFinite(exactIntercept) || Math.abs(exactIntercept) > 1_000_000 || Object.is(exactIntercept, -0)) throw new Error('Corrupt durable exact artifact intercept.')
+      const expectedMirror = exactIntercept.toFixed(12)
       const storedMirror = String(row.intercept)
       const negativeZeroMirror = Number(expectedMirror) === 0 && storedMirror === '0.000000000000'
       if (storedMirror !== expectedMirror && !negativeZeroMirror) throw new Error('Corrupt durable artifact DECIMAL intercept mirror.')
-      intercept = envelope.exactIntercept
-      trainingConfiguration = parseTrainingConfig(envelope.config)
+      intercept = exactIntercept
+      trainingConfiguration = parseTrainingConfig(exactStorage ? decodeDurableJson(envelope.config, true) : envelope.config)
     } else {
       if (rawTrainingConfiguration && typeof rawTrainingConfiguration === 'object' && !Array.isArray(rawTrainingConfiguration) && 'schemaVersion' in rawTrainingConfiguration) throw new Error('Unknown durable artifact training configuration marker.')
       intercept = Number(row.intercept)
       trainingConfiguration = parseTrainingConfig(rawTrainingConfiguration)
     }
-    const base = { artifactSchemaVersion: row.artifactSchemaVersion, taskType: row.taskType, modelFamily: row.modelFamily, modelVersion: row.modelVersion, featureCatalogVersion: row.featureCatalogVersion, labelContractVersion: row.labelContractVersion, datasetManifestFingerprint: row.datasetManifestFingerprint, splitManifestFingerprint: row.splitManifestFingerprint, coefficients: numberArray(row.coefficients, 'artifact coefficients'), intercept, normalizationStatistics, trainingConfiguration, trainingRowCount: row.trainingRowCount, evaluationMetrics: evaluationBundle(row.evaluationMetrics), limitations: stringArray(row.limitations, 'artifact limitations'), rollbackArtifactHash: row.rollbackArtifactHash }
+    const base = { artifactSchemaVersion: row.artifactSchemaVersion, taskType: row.taskType, modelFamily: row.modelFamily, modelVersion: row.modelVersion, featureCatalogVersion: row.featureCatalogVersion, labelContractVersion: row.labelContractVersion, datasetManifestFingerprint: row.datasetManifestFingerprint, splitManifestFingerprint: row.splitManifestFingerprint, coefficients: numberArray(decodeDurableJson(row.coefficients, exactStorage), 'artifact coefficients'), intercept, normalizationStatistics, trainingConfiguration, trainingRowCount: row.trainingRowCount, evaluationMetrics: evaluationBundle(decodeDurableJson(row.evaluationMetrics, exactStorage)), limitations: stringArray(row.limitations, 'artifact limitations'), rollbackArtifactHash: row.rollbackArtifactHash }
     if (base.coefficients.some(value => !Number.isFinite(value)) || !Number.isFinite(base.intercept)) throw new Error('Corrupt durable artifact parameters.')
     const artifactFingerprint = fingerprint(base)
     const artifactHash = sha256Hex(canonicalJson({ ...base, artifactFingerprint }))
@@ -535,7 +587,7 @@ export class DrizzleGeoOutcomeRepository implements GeoOutcomeRepositoryPort {
   async saveArtifactTransactional(ownerUserId: number, artifact: ModelArtifact) {
     if (artifact.ownerUserId !== ownerUserId) throw new Error('Owner scope mismatch.')
     if (!Number.isFinite(artifact.intercept) || Math.abs(artifact.intercept) > 1_000_000 || Object.is(artifact.intercept, -0)) throw new Error('Artifact intercept is outside the durable exact-value bounds.')
-    await this.db.insert(geoOutcomeModelArtifacts).values({ ownerUserId, artifactId: artifact.artifactId, artifactSchemaVersion: artifact.artifactSchemaVersion, taskType: artifact.taskType, modelFamily: artifact.modelFamily, modelVersion: artifact.modelVersion, featureCatalogVersion: artifact.featureCatalogVersion, labelContractVersion: artifact.labelContractVersion, datasetManifestFingerprint: artifact.datasetManifestFingerprint, splitManifestFingerprint: artifact.splitManifestFingerprint, coefficients: artifact.coefficients, intercept: artifact.intercept.toFixed(12), normalizationStatistics: artifact.normalizationStatistics, trainingConfiguration: { schemaVersion: 'geo-outcome-artifact-training-configuration-v2', config: artifact.trainingConfiguration, exactIntercept: artifact.intercept }, trainingRowCount: artifact.trainingRowCount, evaluationMetrics: artifact.evaluationMetrics, limitations: artifact.limitations, artifactFingerprint: artifact.artifactFingerprint, artifactHash: artifact.artifactHash, rollbackArtifactHash: artifact.rollbackArtifactHash, status: artifact.status, revokedAt: artifact.revokedAt ? new Date(artifact.revokedAt) : null, createdAt: new Date() })
+    await this.db.insert(geoOutcomeModelArtifacts).values({ ownerUserId, artifactId: artifact.artifactId, artifactSchemaVersion: artifact.artifactSchemaVersion, taskType: artifact.taskType, modelFamily: artifact.modelFamily, modelVersion: artifact.modelVersion, featureCatalogVersion: artifact.featureCatalogVersion, labelContractVersion: artifact.labelContractVersion, datasetManifestFingerprint: artifact.datasetManifestFingerprint, splitManifestFingerprint: artifact.splitManifestFingerprint, coefficients: encodeDurableJson(artifact.coefficients), intercept: artifact.intercept.toFixed(12), normalizationStatistics: encodeDurableJson(artifact.normalizationStatistics), trainingConfiguration: { schemaVersion: 'geo-outcome-artifact-training-configuration-v3', config: encodeDurableJson(artifact.trainingConfiguration), exactIntercept: String(artifact.intercept) }, trainingRowCount: artifact.trainingRowCount, evaluationMetrics: encodeDurableJson(artifact.evaluationMetrics), limitations: artifact.limitations, artifactFingerprint: artifact.artifactFingerprint, artifactHash: artifact.artifactHash, rollbackArtifactHash: artifact.rollbackArtifactHash, status: artifact.status, revokedAt: artifact.revokedAt ? new Date(artifact.revokedAt) : null, createdAt: new Date() })
     return (await this.getArtifact(ownerUserId, artifact.artifactId))!
   }
   async getArtifact(ownerUserId: number, artifactId: string) { const [row] = await this.db.select().from(geoOutcomeModelArtifacts).where(and(eq(geoOutcomeModelArtifacts.ownerUserId, ownerUserId), eq(geoOutcomeModelArtifacts.artifactId, artifactId))).limit(1); return row ? this.validateArtifactLineage(this.mapArtifact(row)) : null }

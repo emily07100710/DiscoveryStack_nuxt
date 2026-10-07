@@ -1,6 +1,7 @@
-import { getTableName, type SQL } from 'drizzle-orm'
+import { getTableName, sql, type SQL } from 'drizzle-orm'
 import { MySqlDialect } from 'drizzle-orm/mysql-core'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { geoOutcomeObservationCandidates, geoOutcomeObservationRuns } from '../../server/database/schema'
 import type { GeoOutcomeDrizzleDatabase } from '../../server/geo-outcome-model/repository-drizzle'
 
 type Row = Record<string, unknown>
@@ -50,8 +51,29 @@ class SelectBuilder implements PromiseLike<Row[]> {
   where(condition: SQL): this { this.condition = condition; return this }
   orderBy(..._columns: unknown[]): this { return this }
   limit(maximum: number): this { this.maximum = maximum; return this }
+  for(lock: 'update'): this {
+    if (lock !== 'update') throw new Error('Strict harness rejected an unsupported row lock.')
+    this.harness.assertUpdateLockContext()
+    return this
+  }
   then<TResult1 = Row[], TResult2 = never>(onfulfilled?: ((value: Row[]) => TResult1 | PromiseLike<TResult1>) | null, onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null): PromiseLike<TResult1 | TResult2> {
     return this.harness.selectRows(this.tableName, this.projection, this.condition, this.maximum).then(onfulfilled, onrejected)
+  }
+}
+
+class InsertBuilder implements PromiseLike<Array<{ insertId: number, affectedRows: number }>> {
+  private input: Row | undefined
+  private noOpOnDuplicate = false
+  constructor(private readonly harness: StrictGeoDrizzleHarness, private readonly tableName: string) {}
+  values(value: Row): this { this.input = value; return this }
+  onDuplicateKeyUpdate(input: { set: Row }): this {
+    this.harness.assertExactObservationRunNoOp(this.tableName, input.set)
+    this.noOpOnDuplicate = true
+    return this
+  }
+  then<TResult1 = Array<{ insertId: number, affectedRows: number }>, TResult2 = never>(onfulfilled?: ((value: Array<{ insertId: number, affectedRows: number }>) => TResult1 | PromiseLike<TResult1>) | null, onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null): PromiseLike<TResult1 | TResult2> {
+    if (!this.input) return Promise.reject(new Error('Strict harness rejected insert without values.')).then(onfulfilled, onrejected)
+    return this.harness.insertRow(this.tableName, this.input, this.noOpOnDuplicate).then(onfulfilled, onrejected)
   }
 }
 
@@ -73,12 +95,31 @@ export class StrictGeoDrizzleHarness {
   }
   count(tableName: string): number { return (this.state.tables[tableName] || []).length }
 
+  assertUpdateLockContext(): void {
+    // The strict harness models lock serialization with its transaction-wide mutex, not a row-level/MySQL lock.
+    if (!this.transactionContext.getStore()) throw new Error('Strict harness FOR UPDATE requires an active harness transaction.')
+  }
+  assertExactObservationRunNoOp(tableName: string, patch: Row): void {
+    const column = tableName === 'geoOutcomeObservationRuns'
+      ? geoOutcomeObservationRuns.id
+      : tableName === 'geoOutcomeObservationCandidates'
+        ? geoOutcomeObservationCandidates.id
+        : null
+    if (!column || Object.keys(patch).length !== 1 || !patch.id || typeof patch.id !== 'object') throw new Error('Strict harness only supports exact observation run/candidate id=id duplicate no-ops.')
+    try {
+      const actual = this.dialect.sqlToQuery(patch.id as SQL)
+      const expected = this.dialect.sqlToQuery(sql`${column}`)
+      if (actual.sql !== expected.sql || actual.params.length !== 0) throw new Error('mismatch')
+    } catch {
+      throw new Error('Strict harness only supports exact observation run/candidate id=id duplicate no-ops.')
+    }
+  }
+
   select(projection?: unknown) {
     return { from: (table: object) => new SelectBuilder(this, getTableName(table as never), projection) }
   }
   insert(table: object) {
-    const tableName = getTableName(table as never)
-    return { values: async (value: Row) => this.insertRow(tableName, value) }
+    return new InsertBuilder(this, getTableName(table as never))
   }
   update(table: object) {
     const tableName = getTableName(table as never)
@@ -121,10 +162,20 @@ export class StrictGeoDrizzleHarness {
     if (tableName === 'llmVisibilityObservations' && (!has('llmVisibilityProjects', row.projectId) || !has('llmVisibilityQueries', row.queryId) || !has('llmVisibilityRuns', row.runId))) throw new Error('Strict harness foreign key violation: LLM visibility observation provenance.')
     if (tableName === 'llmVisibilityObservationReviews' && !has('llmVisibilityObservations', row.observationId)) throw new Error('Strict harness foreign key violation: LLM visibility review observation.')
   }
-  private async insertRow(tableName: string, value: Row) {
+  async insertRow(tableName: string, value: Row, noOpOnDuplicate = false) {
     const rows = this.state.tables[tableName] || (this.state.tables[tableName] = [])
     const row = copy(value)
-    for (const keys of UNIQUE_KEYS[tableName] || []) if (rows.some(existing => keys.every(key => same(existing[key], row[key])))) throw new Error(`Strict harness unique constraint: ${tableName}(${keys.join(',')}).`)
+    if (noOpOnDuplicate) this.validateForeignKeys(tableName, row)
+    const duplicates = (UNIQUE_KEYS[tableName] || []).flatMap(keys => {
+      const matching = rows.find(existing => keys.every(key => same(existing[key], row[key])))
+      return matching ? [{ keys, row: matching }] : []
+    })
+    if (duplicates.length) {
+      if (!noOpOnDuplicate || !['geoOutcomeObservationRuns', 'geoOutcomeObservationCandidates'].includes(tableName) || duplicates.some(item => item.row !== duplicates[0]!.row)) {
+        throw new Error(`Strict harness unique constraint: ${tableName}(${duplicates[0]!.keys.join(',')}).`)
+      }
+      return [{ insertId: Number(duplicates[0]!.row.id), affectedRows: 0 }]
+    }
     this.validateForeignKeys(tableName, row)
     const id = this.state.nextIds[tableName] || 1
     this.state.nextIds[tableName] = id + 1

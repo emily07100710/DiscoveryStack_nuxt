@@ -157,7 +157,7 @@ export type ContentOperationsRepository = {
   updateCalendar(ownerUserId: number, calendarId: number, patch: Partial<CalendarInsert>): Promise<ContentOperationCalendarRow>
   updateCalendarIfFingerprint(ownerUserId: number, calendarId: number, expectedPlanFingerprint: string, patch: Partial<CalendarInsert>): Promise<ContentOperationCalendarRow | null>
   claimOperation(input: OperationClaimInput): Promise<OperationClaim>
-  listCalendars(ownerUserId: number): Promise<ContentOperationCalendarRow[]>
+  listCalendars(ownerUserId: number, clientId?: number): Promise<ContentOperationCalendarRow[]>
   findEntry(ownerUserId: number, entryId: number): Promise<ContentOperationCalendarEntryRow | null>
   listEntries(ownerUserId: number, calendarId?: number): Promise<ContentOperationCalendarEntryRow[]>
   listEntryTargetBindings(ownerUserId: number, entryId: number): Promise<ContentOperationCalendarEntryTargetRow[]>
@@ -490,8 +490,20 @@ function makeRepository(database: any, currentTime: () => Date = () => new Date(
         return { claimed: false, requestFingerprint: existingMetadata.requestFingerprint, operation: input.operation, ownerUserId: input.ownerUserId, calendarId: input.calendarId, idempotencyKey: input.idempotencyKey }
       }
     },
-    async listCalendars(ownerUserId) {
-      return database.select().from(contentOperationCalendars).where(eq(contentOperationCalendars.ownerUserId, ownerUserId)).orderBy(desc(contentOperationCalendars.createdAt)).limit(100)
+    async listCalendars(ownerUserId, clientId) {
+      if (clientId === undefined) {
+        return database.select().from(contentOperationCalendars).where(eq(contentOperationCalendars.ownerUserId, ownerUserId)).orderBy(desc(contentOperationCalendars.createdAt)).limit(100)
+      }
+      if (!Number.isSafeInteger(ownerUserId) || ownerUserId < 1 || !Number.isSafeInteger(clientId) || clientId < 1) {
+        throw createError({ statusCode: 422, statusMessage: 'Client calendar scope is invalid.' })
+      }
+      const calendars = await database.select().from(contentOperationCalendars)
+        .where(and(eq(contentOperationCalendars.ownerUserId, ownerUserId), eq(contentOperationCalendars.clientId, clientId)))
+        .orderBy(desc(contentOperationCalendars.createdAt)).limit(101)
+      if (calendars.length > 100) {
+        throw createError({ statusCode: 409, statusMessage: 'Client calendar history exceeds the safe weekly processing limit.' })
+      }
+      return calendars
     },
     async findEntry(ownerUserId, entryId) {
       const [row] = await database.select().from(contentOperationCalendarEntries).where(and(eq(contentOperationCalendarEntries.ownerUserId, ownerUserId), eq(contentOperationCalendarEntries.id, entryId))).limit(1)

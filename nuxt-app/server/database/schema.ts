@@ -4196,6 +4196,15 @@ export const refreshPolicies = mysqlTable('refreshPolicies', {
 
 
 /** Weekly review is an opt-in layer over canonical Content Operations, not a second publisher. */
+/** Durable owner-scoped selection position only; advancing it grants no generation or publication authority. */
+export const weeklyContentSchedulerCursors = mysqlTable('weeklyContentSchedulerCursors', {
+  ownerUserId: int('ownerUserId').primaryKey(),
+  afterConfigId: int('afterConfigId').default(0).notNull(),
+  updatedAt: timestamp('updatedAt', { fsp: 3 }).default(sql`CURRENT_TIMESTAMP(3)`).notNull(),
+}, table => [
+  foreignKey({ name: 'weekly_scheduler_cursor_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+])
+
 export const weeklyContentConfigs = mysqlTable('weeklyContentConfigs', {
   id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull(), clientId: int('clientId').notNull(),
   publicationTargetId: int('publicationTargetId').notNull(), policyId: varchar('policyId', { length: 160 }).notNull(),
@@ -4372,6 +4381,7 @@ export const managedSiteEmailOutbox = mysqlTable('managedSiteEmailOutbox', {
   uniqueIndex('managed_email_outbox_key_uq').on(t.purpose, t.idempotencyKey),
   index('managed_email_outbox_due_idx').on(t.status, t.nextAttemptAt, t.id),
   index('managed_email_outbox_owner_idx').on(t.ownerUserId, t.projectId, t.createdAt),
+  index('managed_email_outbox_receipt_idx').on(t.providerConfigurationFingerprint, t.providerReceiptId),
 ])
 
 export type ManagedSiteEmailOutbox = typeof managedSiteEmailOutbox.$inferSelect
@@ -4438,3 +4448,35 @@ export const learningPublicationActions = mysqlTable('learningPublicationActions
 ])
 
 export type LearningPublicationAction = typeof learningPublicationActions.$inferSelect
+
+/** Append-only, reduced Resend observations. Ownership comes only from an exact durable outbox receipt join. */
+export const managedSiteEmailProviderEvents = mysqlTable('managedSiteEmailProviderEvents', {
+  id: varchar('id', { length: 64 }).primaryKey(),
+  providerReceiptId: varchar('providerReceiptId', { length: 36 }).notNull(),
+  eventType: mysqlEnum('eventType', ['email.sent', 'email.delivered', 'email.delivery_delayed', 'email.bounced', 'email.complained', 'email.failed', 'email.suppressed']).notNull(),
+  payloadFingerprint: varchar('payloadFingerprint', { length: 64 }).notNull(),
+  providerConfigurationFingerprint: varchar('providerConfigurationFingerprint', { length: 64 }).notNull(),
+  verificationFingerprint: varchar('verificationFingerprint', { length: 64 }).notNull(),
+  occurredAt: datetime('occurredAt', { fsp: 3 }).notNull(),
+  receivedAt: datetime('receivedAt', { fsp: 3 }).notNull(),
+}, t => [
+  index('managed_email_event_receipt_idx').on(t.providerConfigurationFingerprint, t.providerReceiptId, t.occurredAt),
+  index('managed_email_event_received_idx').on(t.receivedAt, t.id),
+])
+
+export type ManagedSiteEmailProviderEvent = typeof managedSiteEmailProviderEvents.$inferSelect
+
+/** One immutable owner investigation closure. Never modifies the queue or provider observations. */
+export const managedSiteEmailManualReviews = mysqlTable('managedSiteEmailManualReviews', {
+  outboxId: varchar('outboxId', { length: 36 }).primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  requestId: varchar('requestId', { length: 36 }).notNull(),
+  outboxVersion: varchar('outboxVersion', { length: 64 }).notNull(),
+  reason: mysqlEnum('reason', ['reviewed_no_resend', 'handled_outside_platform']).notNull(),
+  closedAt: datetime('closedAt', { fsp: 3 }).notNull(),
+}, t => [
+  uniqueIndex('managed_email_review_request_uq').on(t.ownerUserId, t.requestId),
+  index('managed_email_review_owner_idx').on(t.ownerUserId, t.closedAt, t.outboxId),
+])
+
+export type ManagedSiteEmailManualReview = typeof managedSiteEmailManualReviews.$inferSelect

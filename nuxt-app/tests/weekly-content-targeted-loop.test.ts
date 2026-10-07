@@ -47,6 +47,7 @@ function runtimeDeps(weekly: WeeklyFixture, values: { owner?: number; client?: n
   const repository = weekly.repository
   vi.mocked(repository.getConfig).mockImplementation(async (requestedOwner, requestedClient) => requestedOwner === owner && requestedClient === client ? config : null)
   vi.mocked(repository.listConfigs).mockResolvedValue(Array.from({ length: 50 }, (_, index) => ({ ...config, id: index + 1, clientId: index + 1 })))
+  vi.mocked(repository.claimSchedulerConfigs).mockResolvedValue([config])
   vi.mocked(repository.getTargetPolicy).mockImplementation(async (requestedOwner, requestedClient, targetId, policyId) => requestedOwner === owner && requestedClient === client && targetId === target.id && policyId === policy.policyId ? { target, policy } : null)
   vi.mocked(repository.getBinding).mockImplementation(async (requestedOwner, requestedClient) => requestedOwner === owner && requestedClient === client ? binding as never : null)
 
@@ -148,12 +149,13 @@ describe('client targeted weekly worker', () => {
     expect(getDependencies).not.toHaveBeenCalled()
   })
 
-  it('leaves legacy untargeted dependency call arity and batch behavior intact', async () => {
+  it('uses the persistent fair scheduler claim for untargeted ticks', async () => {
     const weekly = new WeeklyFixture()
     await activateWeeklyReviewConfig({ ownerUserId: OWNER, clientId: 1, publicationTargetId: 3, policyId: 'policy-1', idempotencyKey: 'legacy-tick' }, weekly.deps())
     const f = runtimeDeps(weekly, { client: 1 })
     await runWeeklyContentTick({ ownerUserId: OWNER, maxClients: 1, now: WEEKLY_NOW }, { featureEnabled: true, schedulerEnabled: true, configurationReady: true, getDependencies: () => f.deps })
-    expect(weekly.repository.listConfigs).toHaveBeenCalledWith(OWNER, 50)
+    expect(weekly.repository.claimSchedulerConfigs).toHaveBeenCalledWith(OWNER, 1)
+    expect(weekly.repository.listConfigs).not.toHaveBeenCalled()
     expect(f.send).toHaveBeenCalledWith({ ownerUserId: OWNER, maxMessages: 1 }, expect.any(Object))
   })
 })

@@ -21,22 +21,37 @@ export async function runWeeklyContentTick(input:{ownerUserId:number;clientId?:n
   // Flags and static credential readiness precede all owner-scoped storage/provider construction.
   if(!(options.featureEnabled ?? weeklyFeatureEnabled()) || !(options.schedulerEnabled ?? process.env.NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED==='true'))return result
   if(!(options.configurationReady ?? isWeeklyLineConfigurationReady()))return {...result,status:'not_configured'}
+  if(!Number.isSafeInteger(input.ownerUserId) || input.ownerUserId<1)throw createError({statusCode:422,statusMessage:'Weekly owner is invalid.'})
   if(input.clientId!==undefined && (!Number.isSafeInteger(input.clientId) || input.clientId<1))throw createError({statusCode:422,statusMessage:'Weekly client is invalid.'})
+  if(input.maxClients!==undefined && (!Number.isSafeInteger(input.maxClients) || input.maxClients<1))throw createError({statusCode:422,statusMessage:'Weekly client limit is invalid.'})
+  if(input.now!==undefined && (!(input.now instanceof Date) || !Number.isFinite(input.now.getTime())))throw createError({statusCode:422,statusMessage:'Weekly clock is invalid.'})
   const deps=(options.getDependencies || productionDependencies)()
   const phaseNow=()=>input.now || new Date()
   const weekly={...deps.weekly,now:input.now}
-  const maximum=Math.max(1,Math.min(10,input.maxClients || 10))
+  const maximum=Math.min(10,input.maxClients ?? 10)
   let configs:WeeklyConfig[]
   if(input.clientId!==undefined){
     const config=await weekly.repository.getConfig(input.ownerUserId,input.clientId)
     if(!config || config.ownerUserId!==input.ownerUserId || config.clientId!==input.clientId){result.status='completed';result.clients.push({clientId:input.clientId,status:'not_configured'});return result}
     if(config.status!=='active'){result.status='completed';result.clients.push({clientId:input.clientId,status:'paused'});return result}
     configs=[config]
-  }else configs=selectWeeklyClientBatch(await weekly.repository.listConfigs(input.ownerUserId,50),input.ownerUserId,maximum,phaseNow())
+  }else configs=await weekly.repository.claimSchedulerConfigs(input.ownerUserId,maximum)
+  if(!Array.isArray(configs) || configs.length>maximum)throw createError({statusCode:503,statusMessage:'Weekly scheduler selection is unavailable.'})
+  const configIds=new Set<number>(), clientIds=new Set<number>()
+  for(const config of configs){
+    if(!config || !Number.isSafeInteger(config.id) || config.id<1 || !Number.isSafeInteger(config.clientId) || config.clientId<1 || config.ownerUserId!==input.ownerUserId || config.status!=='active' || configIds.has(config.id) || clientIds.has(config.clientId))throw createError({statusCode:503,statusMessage:'Weekly scheduler selection is unavailable.'})
+    configIds.add(config.id);clientIds.add(config.clientId)
+  }
   result.status='completed'
   for(const config of configs){
     if(config.ownerUserId!==input.ownerUserId || config.status!=='active'){result.clients.push({clientId:config.clientId,status:'paused'});continue}
     try{
+      // A scheduler cursor selects candidates only. Re-read before any planning or generation
+      // so a pause, owner/client drift, or changed governed binding fails closed.
+      const current=await weekly.repository.getConfig(input.ownerUserId,config.clientId)
+      if(!current || current.ownerUserId!==input.ownerUserId || current.clientId!==config.clientId || current.id!==config.id || current.status!=='active' || current.publicationTargetId!==config.publicationTargetId || current.policyId!==config.policyId || current.policyConfigurationFingerprint!==config.policyConfigurationFingerprint || current.configurationFingerprint!==config.configurationFingerprint){
+        result.clients.push({clientId:config.clientId,status:'configuration_changed'});continue
+      }
       const scope=await weekly.repository.getTargetPolicy(input.ownerUserId,config.clientId,config.publicationTargetId,config.policyId)
       const binding=await weekly.repository.getBinding(input.ownerUserId,config.clientId)
       if(!binding || binding.status!=='active'){result.clients.push({clientId:config.clientId,status:'line_not_bound'});continue}
@@ -44,7 +59,7 @@ export async function runWeeklyContentTick(input:{ownerUserId:number;clientId?:n
       const policy=projectAutopilotPolicy(scope.policy,scope.target.targetId)
       const workflowDependencies={repository:deps.operations,...deps.runtime,autopilotPolicy:policy,autopilotPoliciesByTarget:{[scope.target.id]:policy}}
       const planning=await deps.roll(input.ownerUserId,config.clientId,phaseNow()) as {status?:string}
-      const calendars=(await deps.operations.listCalendars(input.ownerUserId)).filter(c=>c.clientId===config.clientId&&!['paused','archived'].includes(c.status))
+      const calendars=(await deps.operations.listCalendars(input.ownerUserId,config.clientId)).filter(c=>c.clientId===config.clientId&&!['paused','archived'].includes(c.status))
       const entries=(await Promise.all(calendars.map(c=>deps.operations.listEntries(input.ownerUserId,c.id)))).flat().sort((a,b)=>a.plannedLocalDate.localeCompare(b.plannedLocalDate)||a.id-b.id)
       let entry=entries.find(e=>!['delivered','completed','cancelled','skipped'].includes(e.status))
       if(!entry){result.clients.push({clientId:config.clientId,status:planning.status || 'needs_approved_topics'});continue}

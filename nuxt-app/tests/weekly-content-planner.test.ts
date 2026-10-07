@@ -37,7 +37,15 @@ describe('weekly schedule creation authority and historical usage',()=>{
  it('rejects a new date while an archived calendar still has an unresolved article',async()=>{
   const {ops,deps}=setup();ops.listCalendars.mockResolvedValue([{id:7,clientId:2,status:'archived',defaultCostUnits:1}] as never);ops.listEntries.mockResolvedValue([row('2026-10-04','ready_to_publish')] as never)
   await expect(createInitialWeeklyCalendar(1,2,input,new Date('2026-10-04'),deps)).rejects.toMatchObject({statusCode:409})
+  expect(ops.listCalendars).toHaveBeenCalledWith(1,2)
   expect(ops.getPlanBundle).not.toHaveBeenCalled();expect(ops.insertCalendar).not.toHaveBeenCalled()
+ })
+ it('stops before plan/topic reads or insertion when client history exceeds the safe 100-calendar window',async()=>{
+  const {ops,deps}=setup()
+  ops.listCalendars.mockRejectedValue(Object.assign(new Error('Client calendar history exceeds the safe weekly processing limit.'),{statusCode:409,statusMessage:'Client calendar history exceeds the safe weekly processing limit.'}))
+  await expect(createInitialWeeklyCalendar(1,2,input,new Date('2026-10-04'),deps)).rejects.toMatchObject({statusCode:409,statusMessage:'Client calendar history exceeds the safe weekly processing limit.'})
+  expect(ops.listCalendars).toHaveBeenCalledWith(1,2)
+  expect(ops.listEntries).not.toHaveBeenCalled();expect(ops.getPlanBundle).not.toHaveBeenCalled();expect(ops.insertCalendar).not.toHaveBeenCalled()
  })
  it('requires a current exact stored policy before reading approved plan topics',async()=>{
   const {ops,deps}=setup();ops.listAutopilotPolicies.mockResolvedValue([{policyId:'p',publicationTargetId:3,configurationFingerprint:'changed',status:'enabled',expiresAt:new Date('2027-01-01')}] as never)

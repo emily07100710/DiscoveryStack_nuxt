@@ -1,11 +1,16 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { emailManualReviewVersion } from '../server/managed-sites/email-review/model'
+import type { EmailManualReviewSnapshot } from '../server/managed-sites/email-review/types'
 
-const calls = vi.hoisted(() => ({ auth: vi.fn(), owner: vi.fn(), list: vi.fn(), factory: vi.fn(), readiness: vi.fn(), headers: vi.fn() }))
+const calls = vi.hoisted(() => ({ auth: vi.fn(), owner: vi.fn(), list: vi.fn(), factory: vi.fn(), readiness: vi.fn(), eventReadiness: vi.fn(), eventFactory: vi.fn(), facts: vi.fn(), reviewFactory: vi.fn(), reviews: vi.fn(), headers: vi.fn() }))
 vi.mock('../server/utils/auth', () => ({ requireOwner: calls.auth }))
 vi.mock('../server/audit/repository', () => ({ getOwnerDatabaseUserId: calls.owner }))
 vi.mock('../server/managed-sites/email-outbox/repository', () => ({ createManagedSiteEmailOutboxRepository: calls.factory }))
 vi.mock('../server/managed-sites/email-outbox/configuration', () => ({ managedSiteEmailOutboxReadinessFromEnv: calls.readiness }))
+vi.mock('../server/managed-sites/email-events/configuration', () => ({ managedSiteEmailEventsReadinessFromEnv: calls.eventReadiness }))
+vi.mock('../server/managed-sites/email-events/repository', () => ({ createEmailProviderEventsRepository: calls.eventFactory }))
+vi.mock('../server/managed-sites/email-review/repository', () => ({ createEmailManualReviewRepository: calls.reviewFactory }))
 vi.mock('h3', async () => { const original = await vi.importActual<typeof import('h3')>('h3'); return { ...original, setResponseHeaders: calls.headers } })
 let handler: (event: unknown) => Promise<any>
 beforeAll(async () => {
@@ -13,13 +18,20 @@ beforeAll(async () => {
   handler = (await import('../server/api/managed-sites/email-outbox/index.get')).default as unknown as typeof handler
 })
 afterAll(() => { vi.unstubAllGlobals() })
+afterEach(() => vi.unstubAllEnvs())
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubEnv('NUXT_MANAGED_SITE_EMAIL_REVIEW_ENABLED', 'false')
   calls.auth.mockResolvedValue({ openId: 'fixture-owner' })
   calls.owner.mockResolvedValue(7)
   calls.factory.mockReturnValue({ listSafeMetadata: calls.list })
   calls.list.mockResolvedValue([])
   calls.readiness.mockReturnValue({ configured: false, enabled: false })
+  calls.eventReadiness.mockReturnValue({ configured: false, enabled: false })
+  calls.eventFactory.mockReturnValue({ listOwnerFacts: calls.facts })
+  calls.facts.mockResolvedValue([])
+  calls.reviewFactory.mockReturnValue({ listOwnerReviews: calls.reviews })
+  calls.reviews.mockResolvedValue([])
 })
 describe('owner mail status inspection', () => {
   it('authenticates before owner storage queries and ignores client owner/limit hints', async () => {
@@ -33,7 +45,7 @@ describe('owner mail status inspection', () => {
   it('refuses storage work for a missing owner session', async () => {
     calls.auth.mockRejectedValueOnce(new Error('owner-session-required'))
     await expect(handler({})).rejects.toThrow('owner-session-required')
-    for (const call of [calls.owner, calls.factory, calls.list, calls.readiness]) expect(call).not.toHaveBeenCalled()
+    for (const call of [calls.owner, calls.factory, calls.list, calls.readiness, calls.eventReadiness, calls.eventFactory, calls.facts, calls.reviewFactory, calls.reviews]) expect(call).not.toHaveBeenCalled()
   })
   it('projects fields explicitly, even when a repository accidentally adds private fields', async () => {
     calls.list.mockResolvedValue([{ id: 'safe-id', purpose: 'member_invitation', status: 'accepted', createdAt: new Date(), updatedAt: new Date(), nextAttemptAt: new Date(), expiresAt: new Date(), attemptCount: 1, lastErrorCode: null, encryptedPayload: 'private-ciphertext', idempotencyKey: 'private-key', context: { token: 'bearer' }, to: 'private@example.test', providerReceiptId: 'private-receipt', payloadFingerprint: 'private-fingerprint' }])
@@ -46,13 +58,88 @@ describe('owner mail status inspection', () => {
     calls.list.mockRejectedValueOnce(new Error('mysql://private-token@host/db'))
     await expect(handler({})).rejects.toMatchObject({ statusCode: 503, statusMessage: '郵件紀錄暫時無法讀取，請確認資料庫更新與設定。' })
   })
-  it('keeps the UI read-only, private and honest about provider acceptance', () => {
+  it.each([{ configured: true, enabled: false }, { configured: false, enabled: true }])('does not query an unapplied event table when observation is gated: %j', async readiness => {
+    calls.eventReadiness.mockReturnValue(readiness)
+    calls.list.mockResolvedValue([{ id: '12345678-90ab-cdef-1234-567890abcdef', status: 'accepted' }])
+    const result = await handler({})
+    expect(calls.eventFactory).not.toHaveBeenCalled()
+    expect(result.items[0]).toMatchObject({ providerState: 'unknown', providerEventCount: 0, inboxDeliveryVerified: false })
+  })
+  it('skips event storage for an empty owner queue even when observation is ready', async () => {
+    calls.eventReadiness.mockReturnValue({ configured: true, enabled: true })
+    expect((await handler({})).items).toEqual([])
+    expect(calls.eventFactory).not.toHaveBeenCalled()
+  })
+  it('projects only exact owner queue observations, with persistent complaint and independent delivery facts', async () => {
+    const id = '12345678-90ab-cdef-1234-567890abcdef'
+    calls.eventReadiness.mockReturnValue({ configured: true, enabled: true })
+    calls.list.mockResolvedValue([{ id, status: 'accepted', providerReceiptId: 'private-receipt' }])
+    const facts = { eventCount: 3, sent: true, delivered: true, deliveryDelayed: false, bounced: false, complained: true, failed: false, suppressed: false, lastEventAt: new Date('2026-10-06T12:40:00.125Z'), deliveredAt: new Date('2026-10-06T12:39:00.025Z'), to: 'private@example.test', rawBody: 'private-body' }
+    calls.facts.mockResolvedValue([{ outboxId: id, facts }, { outboxId: 'someone-else', facts }])
+    const result = await handler({ query: { ownerUserId: 777, outboxIds: ['someone-else'] } })
+    expect(calls.facts).toHaveBeenCalledExactlyOnceWith({ ownerUserId: 7, outboxIds: [id] })
+    expect(result).toMatchObject({ providerEventsConfigured: true, providerEventsEnabled: true, inboxDeliveryVerified: false })
+    expect(result.items).toHaveLength(1)
+    expect(result.items[0]).toMatchObject({ providerState: 'complained', providerEventCount: 3, providerAttentionRequired: true, providerReportedDeliveredAt: '2026-10-06T12:39:00.025Z', providerLastEventAt: '2026-10-06T12:40:00.125Z', inboxDeliveryVerified: false })
+    for (const forbidden of ['private-receipt', 'private@example', 'private-body', 'someone-else', 'providerReceiptId', 'rawBody']) expect(JSON.stringify(result)).not.toContain(forbidden)
+  })
+  it('returns generic 503 rather than inventing observation success when event storage fails', async () => {
+    calls.eventReadiness.mockReturnValue({ configured: true, enabled: true })
+    calls.list.mockResolvedValue([{ id: '12345678-90ab-cdef-1234-567890abcdef' }])
+    calls.facts.mockRejectedValueOnce(new Error('mysql://private-token@host/db'))
+    await expect(handler({})).rejects.toMatchObject({ statusCode: 503, statusMessage: '郵件紀錄暫時無法讀取，請確認資料庫更新與設定。' })
+  })
+  it('does not query unapplied review storage or accept caller enablement hints when the review gate is off', async () => {
+    calls.list.mockResolvedValue([{ id: 'invalid-snapshot-is-not-read', status: 'manual_required' }])
+    const result = await handler({ query: { manualReviewEnabled: true, ownerUserId: 777 } })
+    expect(result).toMatchObject({ manualReviewEnabled: false, items: [{ manualReviewStatus: 'disabled', manualReviewVersion: null }] })
+    expect(calls.reviewFactory).not.toHaveBeenCalled()
+  })
+  it('reads only owned manual rows and keeps closure independent of persistent adverse provider evidence', async () => {
+    vi.stubEnv('NUXT_MANAGED_SITE_EMAIL_REVIEW_ENABLED', 'true')
+    calls.eventReadiness.mockReturnValue({ configured: true, enabled: true })
+    const row: EmailManualReviewSnapshot = { id: '12345678-90ab-cdef-1234-567890abcdef', purpose: 'customer_reaccess', status: 'manual_required', updatedAt: new Date('2026-10-07T01:00:00.001Z'), expiresAt: new Date('2026-10-07T02:00:00.001Z'), attemptCount: 6, lastErrorCode: 'attempt_limit' }
+    calls.list.mockResolvedValue([row, { id: '11111111-1111-1111-1111-111111111111', status: 'accepted' }])
+    calls.reviews.mockResolvedValue([{ outboxId: row.id, ownerUserId: 7, requestId: 'abcdefab-cdef-abcd-efab-cdefabcdefab', outboxVersion: emailManualReviewVersion(row), reason: 'handled_outside_platform', closedAt: new Date('2026-10-07T03:00:00.123Z'), privateNote: 'private-token@example.test' }])
+    calls.facts.mockResolvedValue([{ outboxId: row.id, facts: { eventCount: 1, sent: false, delivered: false, deliveryDelayed: false, bounced: false, complained: true, failed: false, suppressed: false, lastEventAt: new Date('2026-10-07T02:30:00.123Z'), deliveredAt: null } }])
+    const result = await handler({ query: { ownerUserId: 777, outboxIds: ['someone-else'] } })
+    expect(calls.reviews).toHaveBeenCalledExactlyOnceWith({ ownerUserId: 7, outboxIds: [row.id] })
+    expect(result.items[0]).toMatchObject({ status: 'manual_required', manualReviewStatus: 'closed_no_resend', manualReviewReason: 'handled_outside_platform', providerState: 'complained', providerAttentionRequired: true, inboxDeliveryVerified: false })
+    for (const forbidden of ['requestId', 'ownerUserId', 'privateNote', 'private-token@example.test', 'outboxVersion']) expect(JSON.stringify(result)).not.toContain(forbidden)
+  })
+  it('skips review storage for empty/nonmanual queues and fails closed on corrupt owner binding or storage failure', async () => {
+    vi.stubEnv('NUXT_MANAGED_SITE_EMAIL_REVIEW_ENABLED', 'true')
+    await handler({})
+    calls.list.mockResolvedValue([{ id: '11111111-1111-1111-1111-111111111111', status: 'accepted' }])
+    await handler({})
+    expect(calls.reviewFactory).not.toHaveBeenCalled()
+    const row: EmailManualReviewSnapshot = { id: '12345678-90ab-cdef-1234-567890abcdef', purpose: 'member_invitation', status: 'manual_required', updatedAt: new Date(), expiresAt: new Date(), attemptCount: 6, lastErrorCode: 'attempt_limit' }
+    calls.list.mockResolvedValue([row])
+    calls.reviews.mockResolvedValue([{ outboxId: row.id, ownerUserId: 8, requestId: 'abcdefab-cdef-abcd-efab-cdefabcdefab', outboxVersion: emailManualReviewVersion(row), reason: 'reviewed_no_resend', closedAt: new Date() }])
+    await expect(handler({})).rejects.toMatchObject({ statusCode: 503 })
+    calls.reviews.mockRejectedValueOnce(new Error('private-db-secret'))
+    await expect(handler({})).rejects.toMatchObject({ statusCode: 503, statusMessage: '郵件紀錄暫時無法讀取，請確認資料庫更新與設定。' })
+  })
+  it('keeps refreshing read-only and permits only explicit gated no-resend investigation submission', () => {
     const source = readFileSync(new URL('../pages/audit-lab/email-delivery.vue', import.meta.url), 'utf8')
     expect(source).toContain("definePageMeta({ layout: 'owner' })")
     expect(source).toContain('/api/managed-sites/email-outbox')
     expect(source).toContain('尚不代表客戶實際收到郵件')
+    expect(source).toContain('不保證信箱入件或已讀')
+    expect(source).toContain('退信或投訴不會被後來的送達回報清除')
+    expect(source).toContain('供應商回報')
     expect(source).toContain('不是全平台總數')
-    expect(source).not.toContain('$fetch')
-    expect(source).not.toContain('method:')
+    expect(source.match(/writeManualReview\(/gu)).toHaveLength(1)
+    expect(source).toContain("writeManualReview('/api/managed-sites/email-outbox/manual-resolution', { method: 'POST', credentials: 'same-origin', body: command })")
+    expect(source).toContain('!reviewDraft.value.confirmNoResend')
+    expect(source).toContain('await nextTick()')
+    expect(source).toContain('ref="reviewPanel"')
+    expect(source).toContain('tabindex="-1"')
+    expect(source).toContain("panel.scrollIntoView({ block: 'center' })")
+    expect(source).toContain('panel.focus({ preventScroll: true })')
+    expect(source).toContain('不會重寄，也不能證明郵件已送達或已讀')
+    expect(source).toContain('@click="refresh()"')
+    expect(source).not.toContain('/resend-webhook')
+    expect(source).not.toMatch(/\$fetch\([^\n]*(?:retry|send-email|learning|publish)/u)
   })
 })

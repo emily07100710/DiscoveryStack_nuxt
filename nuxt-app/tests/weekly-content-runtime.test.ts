@@ -17,13 +17,13 @@ import {runWeeklyContentTick,selectWeeklyClientBatch} from '../server/weekly-con
 const NOW=new Date('2026-10-04T00:00:00Z')
 const REQUEST_ID=`wcr_${'x'.repeat(32)}`
 function fixture(status='ready_to_publish'){
- const config={ownerUserId:1,clientId:2,status:'active',publicationTargetId:3,policyId:'policy-1',policyConfigurationFingerprint:'a'.repeat(64)} as WeeklyConfig
+ const config={id:22,ownerUserId:1,clientId:2,status:'active',publicationTargetId:3,policyId:'policy-1',policyConfigurationFingerprint:'a'.repeat(64)} as WeeklyConfig
  const policy={ownerUserId:1,clientId:2,publicationTargetId:3,policyId:'policy-1',policyVersion:'governed-autopilot-policy-v4',authorizedByOwnerUserId:1,cadenceDays:7,configurationFingerprint:'a'.repeat(64),status:'enabled',expiresAt:new Date('2027-01-01T00:00:00Z'),revokedAt:null}
  const target={id:3,ownerUserId:1,clientId:2,targetId:'primary',status:'active',executionEnabled:true}
  const binding={id:4,ownerUserId:1,clientId:2,status:'active'}
  const calendar={id:5,ownerUserId:1,clientId:2,status:'active',planFingerprint:'b'.repeat(64),timeZone:'UTC'}
  const entry={id:6,ownerUserId:1,calendarId:5,plannedLocalDate:'2026-10-04',status}
- const weeklyRepository={listConfigs:vi.fn(async()=>[config]),getBinding:vi.fn(async()=>binding),getTargetPolicy:vi.fn(async()=>({target,policy}))}
+ const weeklyRepository={listConfigs:vi.fn(async()=>[config]),claimSchedulerConfigs:vi.fn(async()=>[config]),getConfig:vi.fn(async()=>config),getBinding:vi.fn(async()=>binding),getTargetPolicy:vi.fn(async()=>({target,policy}))}
  const operations={listCalendars:vi.fn(async()=>[calendar]),listEntries:vi.fn(async()=>[entry]),findEntry:vi.fn(async()=>entry)}
  const roll=vi.fn(async()=>({status:'waiting_for_current_article'}))
  const workflow=vi.fn(async()=>{entry.status='ready_to_publish';return {outcome:'ready_to_publish'}})
@@ -41,11 +41,23 @@ describe('weekly content mock runtime authority and pipeline ordering',()=>{
   const f=fixture();const result=await runWeeklyContentTick({ownerUserId:1}, {...f.options,...patch})
   expect(result.status).toBe(patch.configurationReady===false?'not_configured':'disabled');expect(f.getDependencies).not.toHaveBeenCalled();expect(seams.production).not.toHaveBeenCalled();expect(f.send).not.toHaveBeenCalled()
  })
+ it.each([
+  [{ownerUserId:0},'owner'],
+  [{ownerUserId:1,maxClients:0},'limit'],
+  [{ownerUserId:1,maxClients:1.5},'limit'],
+  [{ownerUserId:1,maxClients:Number.NaN},'limit'],
+  [{ownerUserId:1,now:new Date(Number.NaN)},'clock'],
+ ] as const)('rejects invalid %s after static gates but before constructing runtime dependencies',async(input,_kind)=>{
+  const f=fixture()
+  await expect(runWeeklyContentTick(input as {ownerUserId:number;maxClients?:number;now?:Date},f.options)).rejects.toMatchObject({statusCode:422})
+  expect(f.getDependencies).not.toHaveBeenCalled()
+ })
  it('keeps pending customer consent separate from publication and sends only after review creation',async()=>{
   const f=fixture();const result=await runWeeklyContentTick({ownerUserId:1,now:NOW},f.options)
   expect(result).toMatchObject({reviewQueued:1,publicationAttempted:0,clients:[{clientId:2,status:'awaiting_customer'}]})
   expect(seams.createReview).toHaveBeenCalledWith({ownerUserId:1,clientId:2,entryId:6},expect.any(Object));expect(f.workflow).not.toHaveBeenCalled();expect(f.publish).not.toHaveBeenCalled()
   expect(seams.createReview.mock.invocationCallOrder[0]).toBeLessThan(f.send.mock.invocationCallOrder[0]!)
+  expect(f.operations.listCalendars).toHaveBeenCalledWith(1,2)
  })
  it('uses queueOnly for generation quality preparation before creating a review',async()=>{
   const f=fixture('awaiting_generation');await runWeeklyContentTick({ownerUserId:1,now:NOW},f.options)
@@ -75,7 +87,7 @@ describe('weekly content mock runtime authority and pipeline ordering',()=>{
   if(kind==='expired_policy')f.policy.expiresAt=NOW
   if(kind==='paused_target')f.target.status='paused'
   if(kind==='changed_policy')f.policy.configurationFingerprint='c'.repeat(64)
-  if(kind==='foreign_config')f.config.ownerUserId=99
+  if(kind==='foreign_config')f.weeklyRepository.getConfig.mockResolvedValueOnce({...f.config,ownerUserId:99} as never)
   await runWeeklyContentTick({ownerUserId:1,now:NOW},f.options)
   expect(f.roll).not.toHaveBeenCalled();expect(f.workflow).not.toHaveBeenCalled();expect(f.publish).not.toHaveBeenCalled();expect(seams.createReview).not.toHaveBeenCalled()
  })
@@ -83,6 +95,36 @@ describe('weekly content mock runtime authority and pipeline ordering',()=>{
   const f=fixture();f.operations.listEntries.mockRejectedValueOnce(new Error('synthetic private storage detail'))
   const result=await runWeeklyContentTick({ownerUserId:1,now:NOW},f.options)
   expect(result).toMatchObject({failed:1,publicationAttempted:0});expect(JSON.stringify(result)).not.toContain('private storage detail');expect(f.send).toHaveBeenCalledTimes(1)
+ })
+ it.each(['missing','paused','identity','fingerprint'] as const)('does not plan or generate when the selected config has %s drifted',async kind=>{
+  const f=fixture('awaiting_generation')
+  const changed={...f.config}
+  if(kind==='missing')f.weeklyRepository.getConfig.mockResolvedValueOnce(null as never)
+  else if(kind==='paused')changed.status='paused'
+  else if(kind==='identity')changed.id++
+  else changed.policyConfigurationFingerprint='b'.repeat(64)
+  if(kind!=='missing')f.weeklyRepository.getConfig.mockResolvedValueOnce(changed)
+  await runWeeklyContentTick({ownerUserId:1,now:NOW},f.options)
+  expect(f.roll).not.toHaveBeenCalled();expect(f.workflow).not.toHaveBeenCalled();expect(f.publish).not.toHaveBeenCalled();expect(seams.createReview).not.toHaveBeenCalled()
+ })
+ it.each([
+  ['foreign owner',[{ownerUserId:99}]],
+  ['paused',[{status:'paused'}]],
+  ['invalid id',[{id:0}]],
+  ['duplicate id',[{id:22},{id:22,clientId:3}]],
+  ['duplicate client',[{id:22},{id:23,clientId:2}]],
+ ] as const)('fails closed before client work for a malformed scheduler candidate (%s)',async(_label,patches)=>{
+  const f=fixture('awaiting_generation')
+  const malformed=patches.map(patch=>({...f.config,...patch}))
+  f.weeklyRepository.claimSchedulerConfigs.mockResolvedValueOnce(malformed as never)
+  await expect(runWeeklyContentTick({ownerUserId:1,now:NOW},f.options)).rejects.toMatchObject({statusCode:503})
+  expect(f.roll).not.toHaveBeenCalled();expect(f.workflow).not.toHaveBeenCalled();expect(f.publish).not.toHaveBeenCalled();expect(f.send).not.toHaveBeenCalled()
+ })
+ it('rejects an oversized candidate batch without sorting or doing any client work',async()=>{
+  const f=fixture('awaiting_generation')
+  f.weeklyRepository.claimSchedulerConfigs.mockResolvedValueOnce(Array.from({length:11},(_,index)=>({...f.config,id:22+index,clientId:2+index})) as never)
+  await expect(runWeeklyContentTick({ownerUserId:1,now:NOW},f.options)).rejects.toMatchObject({statusCode:503})
+  expect(f.roll).not.toHaveBeenCalled();expect(f.workflow).not.toHaveBeenCalled();expect(f.publish).not.toHaveBeenCalled()
  })
  it('rechecks actual current consent time after a slow exact draft revalidation',async()=>{
   const f=fixture();const expiresAt=new Date(NOW.getTime()+60_000)
@@ -94,7 +136,7 @@ describe('weekly content mock runtime authority and pipeline ordering',()=>{
  })
 })
 
-describe('weekly customer batch fairness',()=>{
+describe('legacy weekly customer batch selector',()=>{
  it('serves customers beyond the first ten within successive bounded ticks',()=>{
   const configs=Array.from({length:25},(_,i)=>({clientId:i+1,ownerUserId:1,status:'active'})) as WeeklyConfig[]
   const visited=new Set<number>()

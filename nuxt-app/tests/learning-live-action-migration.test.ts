@@ -105,7 +105,9 @@ describe('live publication action additive migration', () => {
     expect(actionIndex).toBe(47)
     expect(journal.entries[actionIndex - 1]).toMatchObject({ idx: 46, tag: '0046_managed_email_outbox_v1' })
     expect(journal.entries[actionIndex]).toMatchObject({ idx: 47, tag: '0047_live_publication_actions_v1', breakpoints: true })
-    expect(journal.entries[actionIndex + 1]).toBeUndefined()
+    // Preserve this historical migration's exact position without preventing the
+    // independently tested additive event migration from following it.
+    expect(journal.entries[actionIndex + 1]).toMatchObject({ idx: 48, tag: '0048_managed_email_provider_events_v1', breakpoints: true })
     expect(current.prevId).toBe(previous.id)
   })
 })

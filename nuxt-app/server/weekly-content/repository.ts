@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gt, isNull, lte, or, sql } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDatabase } from '../database'
-import { contentOperationClients, contentOperationAutopilotPolicies, contentOperationPublicationTargets, contentOperationPublicationAttempts, seoGeoContentJobs, weeklyContentConfigs as configs, weeklyContentInvitations as invitations, weeklyContentBindings as bindings, weeklyContentReviewRequests as requests, weeklyContentConsents as consents, weeklyContentOutbox as outbox, weeklyContentWebhookInbox as inbox, contentOperationRuns } from '../database/schema'
+import { contentOperationClients, contentOperationAutopilotPolicies, contentOperationPublicationTargets, contentOperationPublicationAttempts, seoGeoContentJobs, weeklyContentConfigs as configs, weeklyContentSchedulerCursors as schedulerCursors, weeklyContentInvitations as invitations, weeklyContentBindings as bindings, weeklyContentReviewRequests as requests, weeklyContentConsents as consents, weeklyContentOutbox as outbox, weeklyContentWebhookInbox as inbox, contentOperationRuns } from '../database/schema'
 import { createContentOperationsRepositoryFromDatabase } from '../content-operations/repository'
 import type { ContentOperationClientRow } from '../content-operations/types'
 import type { WeeklyConfig, LineBindingInvitation, PrivateLineBinding, WeeklyIdentityBinding, WeeklyReviewRequest, WeeklyConsent, WeeklyOutbox, WeeklyDraft, WeeklyWebhookInbox } from './types'
@@ -14,6 +14,7 @@ export interface WeeklyContentRepository {
   getConfig(ownerUserId: number, clientId: number, lock?: boolean): Promise<WeeklyConfig | null>
   saveConfig(row: InsertRow<WeeklyConfig>): Promise<WeeklyConfig>
   listConfigs(ownerUserId: number, limit?: number): Promise<WeeklyConfig[]>
+  claimSchedulerConfigs(ownerUserId: number, limit?: number): Promise<WeeklyConfig[]>
   getTargetPolicy(ownerUserId: number, clientId: number, targetId: number, policyId: string): Promise<{ target: WeeklyDraft['target']; policy: WeeklyDraft['policy'] } | null>
   findInbox(eventHash: string): Promise<WeeklyWebhookInbox | null>
   insertInbox(row: InsertRow<WeeklyWebhookInbox>): Promise<WeeklyWebhookInbox>
@@ -67,6 +68,41 @@ function makeRepository(database: any, transactional = false): WeeklyContentRepo
     getConfig: (owner, client, lock) => one(configs, and(eq(configs.ownerUserId, owner), eq(configs.clientId, client)), lock),
     async saveConfig(row) { await database.insert(configs).values(row).onDuplicateKeyUpdate({ set: row }); return (await repository.getConfig(row.ownerUserId, row.clientId))! },
     listConfigs: (owner, limit = 50) => database.select().from(configs).where(eq(configs.ownerUserId, owner)).orderBy(asc(configs.id)).limit(Math.min(50, Math.max(1, limit))),
+    async claimSchedulerConfigs(owner, limit = 10) {
+      if (!Number.isSafeInteger(owner) || owner < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 10) throw createError({ statusCode: 422, statusMessage: 'Weekly scheduler scope is invalid.' })
+      const claim = async (tx: any): Promise<WeeklyConfig[]> => {
+        // Insert-first creates the per-owner cursor without ever resetting an existing cursor.
+        await tx.insert(schedulerCursors).values({ ownerUserId: owner, afterConfigId: 0 }).onDuplicateKeyUpdate({ set: { ownerUserId: owner } })
+        const [cursor] = await tx.select().from(schedulerCursors).where(eq(schedulerCursors.ownerUserId, owner)).limit(1).for('update')
+        if (!cursor || cursor.ownerUserId !== owner || !Number.isSafeInteger(cursor.afterConfigId) || cursor.afterConfigId < 0) throw createError({ statusCode: 503, statusMessage: 'Weekly scheduler storage is unavailable.' })
+        const selected: WeeklyConfig[] = await tx.select().from(configs).where(and(eq(configs.ownerUserId, owner), eq(configs.status, 'active'), gt(configs.id, cursor.afterConfigId))).orderBy(asc(configs.id)).limit(limit)
+        const validPage = (rows: WeeklyConfig[], maximum: number, inRange: (id: number) => boolean): boolean => {
+          if (!Array.isArray(rows) || rows.length > maximum) return false
+          let previous = 0
+          for (const row of rows) {
+            if (!row || !Number.isSafeInteger(row.id) || row.id < 1 || !inRange(row.id) || row.id <= previous) return false
+            previous = row.id
+          }
+          return true
+        }
+        if (!validPage(selected, limit, id => id > cursor.afterConfigId)) throw createError({ statusCode: 503, statusMessage: 'Weekly scheduler storage is unavailable.' })
+        if (selected.length < limit) {
+          const wrapped: WeeklyConfig[] = await tx.select().from(configs).where(and(eq(configs.ownerUserId, owner), eq(configs.status, 'active'), lte(configs.id, cursor.afterConfigId))).orderBy(asc(configs.id)).limit(limit - selected.length)
+          if (!validPage(wrapped, limit - selected.length, id => id <= cursor.afterConfigId)) throw createError({ statusCode: 503, statusMessage: 'Weekly scheduler storage is unavailable.' })
+          selected.push(...wrapped)
+        }
+        const ids = new Set<number>(), clientIds = new Set<number>()
+        for (const row of selected) {
+          if (!row || row.ownerUserId !== owner || row.status !== 'active' || !Number.isSafeInteger(row.id) || row.id < 1 || !Number.isSafeInteger(row.clientId) || row.clientId < 1 || ids.has(row.id) || clientIds.has(row.clientId)) throw createError({ statusCode: 503, statusMessage: 'Weekly scheduler storage is unavailable.' })
+          ids.add(row.id); clientIds.add(row.clientId)
+        }
+        if (selected.length > limit) throw createError({ statusCode: 503, statusMessage: 'Weekly scheduler storage is unavailable.' })
+        const afterConfigId = selected.length ? selected[selected.length - 1]!.id : 0
+        await tx.update(schedulerCursors).set({ afterConfigId, updatedAt: new Date() }).where(eq(schedulerCursors.ownerUserId, owner))
+        return selected
+      }
+      return transactional ? claim(database) : database.transaction(claim)
+    },
     async getTargetPolicy(owner, clientId, targetId, policyId) {
       const target = await one(contentOperationPublicationTargets, and(eq(contentOperationPublicationTargets.ownerUserId,owner),eq(contentOperationPublicationTargets.clientId,clientId),eq(contentOperationPublicationTargets.id,targetId)))
       if (!target) return null

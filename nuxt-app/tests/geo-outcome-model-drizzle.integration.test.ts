@@ -7,6 +7,7 @@ import { DrizzleGeoOutcomeRepository } from '../server/geo-outcome-model/reposit
 import { approveBootstrapFallback, bindAndVerifyObservationEvidence, createBootstrapFallback, createTrainingRun, executeTrainingRun, getWorkspace, reviewDataset, reviewModel } from '../server/geo-outcome-model/service'
 import { normalizeManualObservation } from '../server/geo-outcome-model/normalization'
 import { fingerprint, sha256Hex } from '../server/geo-outcome-model/canonical'
+import { encodeDurableJson } from '../server/geo-outcome-model/durable-json'
 import { authoritativeLocatorFingerprint } from '../server/geo-outcome-model/evidence-resolver'
 import { canonicalCandidateIdentity, reviewCandidateSet } from '../server/geo-outcome-model/candidate-authority'
 import { reviewVisibilityObservation } from '../server/llm-visibility/repository'
@@ -270,6 +271,55 @@ describe('Drizzle GEO outcome durable boundary', () => {
     await Promise.all([executeTrainingRun(ownerUserId, run.trainingRunId, concurrent.repository), executeTrainingRun(ownerUserId, run.trainingRunId, concurrent.repository)])
     expect((await concurrent.repository.getTrainingRun(ownerUserId, run.trainingRunId))?.status).toBe('completed')
     expect(concurrent.harness.count('geoOutcomeModelArtifacts')).toBe(1)
+  })
+
+  it('rejects corrupt completed metrics and artifact lineage while preserving valid raw legacy metrics', async () => {
+    const { harness, repository } = readyRepository()
+    const queued = await createTrainingRun(ownerUserId, { datasetManifestId: readyManifestId, modelFamily: 'regularized_logistic_baseline_v1' }, repository)
+    const completed = await executeTrainingRun(ownerUserId, queued.trainingRunId, repository)
+    expect(completed.status).toBe('completed')
+    expect(completed.metrics).not.toBeNull()
+    const persistedState = harness.exportState()
+
+    const malformedHarness = new StrictGeoDrizzleHarness(persistedState)
+    malformedHarness.corrupt('geoOutcomeTrainingRuns', row => row.trainingRunId === queued.trainingRunId, {
+      metrics: {
+        validation: {}, test: {}, siteHoldout: {}, queryHoldout: {}, temporalHoldout: {},
+        rankingValidation: {}, rankingTest: {}, rankingTemporalHoldout: {}, evaluationScope: 'invalid_scope',
+      },
+    })
+    await expect(new DrizzleGeoOutcomeRepository(malformedHarness.asDatabase()).getTrainingRun(ownerUserId, queued.trainingRunId)).rejects.toThrow(/corrupt durable evaluation metrics/i)
+
+    const wrapperHarness = new StrictGeoDrizzleHarness(persistedState)
+    wrapperHarness.corrupt('geoOutcomeTrainingRuns', row => row.trainingRunId === queued.trainingRunId, {
+      metrics: { schemaVersion: 'geo-outcome-exact-json-v2', canonicalJson: '{}' },
+    })
+    await expect(new DrizzleGeoOutcomeRepository(wrapperHarness.asDatabase()).getTrainingRun(ownerUserId, queued.trainingRunId)).rejects.toThrow(/exact json envelope/i)
+
+    const malformedWrapperHarness = new StrictGeoDrizzleHarness(persistedState)
+    malformedWrapperHarness.corrupt('geoOutcomeTrainingRuns', row => row.trainingRunId === queued.trainingRunId, {
+      metrics: { schemaVersion: 'geo-outcome-exact-json-v1', canonicalJson: '{"validation":' },
+    })
+    await expect(new DrizzleGeoOutcomeRepository(malformedWrapperHarness.asDatabase()).getTrainingRun(ownerUserId, queued.trainingRunId)).rejects.toThrow(/exact json payload/i)
+
+    const changedMetricsHarness = new StrictGeoDrizzleHarness(persistedState)
+    const changedMetrics = structuredClone(completed.metrics!)
+    const originalLogLoss = changedMetrics.validation.logLoss
+    expect(typeof originalLogLoss).toBe('number')
+    if (typeof originalLogLoss !== 'number') throw new Error('Synthetic completed fixture must have finite validation log loss.')
+    changedMetrics.validation.logLoss = originalLogLoss + 0.25
+    changedMetricsHarness.corrupt('geoOutcomeTrainingRuns', row => row.trainingRunId === queued.trainingRunId, { metrics: encodeDurableJson(changedMetrics) })
+    await expect(new DrizzleGeoOutcomeRepository(changedMetricsHarness.asDatabase()).getTrainingRun(ownerUserId, queued.trainingRunId)).rejects.toThrow(/artifact or metrics lineage/i)
+
+    const artifactHashHarness = new StrictGeoDrizzleHarness(persistedState)
+    artifactHashHarness.corrupt('geoOutcomeTrainingRuns', row => row.trainingRunId === queued.trainingRunId, { artifactHash: hash('tampered-training-run-artifact-hash') })
+    await expect(new DrizzleGeoOutcomeRepository(artifactHashHarness.asDatabase()).getTrainingRun(ownerUserId, queued.trainingRunId)).rejects.toThrow(/artifact or metrics lineage/i)
+
+    const legacyHarness = new StrictGeoDrizzleHarness(persistedState)
+    legacyHarness.corrupt('geoOutcomeTrainingRuns', row => row.trainingRunId === queued.trainingRunId, { metrics: completed.metrics })
+    await expect(new DrizzleGeoOutcomeRepository(legacyHarness.asDatabase()).getTrainingRun(ownerUserId, queued.trainingRunId)).resolves.toMatchObject({
+      status: 'completed', artifactId: completed.artifactId, artifactHash: completed.artifactHash, metrics: completed.metrics,
+    })
   })
 
   it('deduplicates workspace readiness across replayed and overlapping manifests and ignores revoked datasets', async () => {

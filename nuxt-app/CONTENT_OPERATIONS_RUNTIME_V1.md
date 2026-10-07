@@ -14,6 +14,8 @@ Public site origins are canonicalized to HTTPS origins and reject credentials, p
 
 All six new tables are owner-scoped. Repository queries include owner predicates, and services verify cross-table ownership for clients, calendars, plans, deliverables, jobs, drafts, reviews, runs, and outcome records. Events are append-only: the repository exposes insert/list behavior but no update/delete operation.
 
+The optional server-owned `listCalendars(ownerUserId, clientId)` boundary scopes both owner and client before the SQL limit. Existing owner-only callers retain their original 100-row read and call contract. Weekly processing needs complete topic/budget history, so a client-scoped read requests at most 101 rows and fails closed when a 101st row shows that the 100-calendar history limit is exceeded. It never returns a silently truncated history as complete, and it does not increase the existing general workbench read limit.
+
 ## Persistence model
 
 `contentOperationClients` stores the public site origin, Astro/Nuxt framework, first-party transport declaration, timezone, cadence, local publish time, and budget. `contentOperationCalendars` stores the pure engine request/result snapshots, evidence lineage, revision chain, fingerprint, and idempotency key. `contentOperationCalendarEntries` stores the durable projection of engine entries and server-owned SEO/GEO linkages; it begins without a draft, review, job, or content hash.

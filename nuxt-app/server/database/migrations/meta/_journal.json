@@ -337,6 +337,27 @@
       "when": 1791332286275,
       "tag": "0047_live_publication_actions_v1",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "5",
+      "when": 1791378080065,
+      "tag": "0048_managed_email_provider_events_v1",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "5",
+      "when": 1791381668050,
+      "tag": "0049_managed_email_manual_review_v1",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "5",
+      "when": 1791385601599,
+      "tag": "0050_weekly_content_scheduler_cursor_v1",
+      "breakpoints": true
     }
   ]
 }

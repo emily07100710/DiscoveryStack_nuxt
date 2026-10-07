@@ -4,6 +4,7 @@ import type { Readable } from 'node:stream'
 const RAW_BODY = Symbol.for('h3RawBody')
 const PARSED_BODY = Symbol.for('h3ParsedBody')
 const BOUNDED_RAW_BODY = Symbol('boundedRequestRawBody')
+const DERIVED_RAW_BODY = Symbol('derivedRequestRawBody')
 
 type BodyOptions = {
   maxBytes: number
@@ -11,7 +12,7 @@ type BodyOptions = {
   invalidMessage: string
   invalidStatusCode: 400 | 422
 }
-type CachedRequest = H3Event['node']['req'] & { [RAW_BODY]?: unknown; [PARSED_BODY]?: unknown; [BOUNDED_RAW_BODY]?: Promise<Buffer | undefined>; rawBody?: unknown; body?: unknown }
+type CachedRequest = H3Event['node']['req'] & { [RAW_BODY]?: unknown; [PARSED_BODY]?: unknown; [BOUNDED_RAW_BODY]?: Promise<Buffer | undefined>; [DERIVED_RAW_BODY]?: boolean; rawBody?: unknown; body?: unknown }
 
 function oversized(options: BodyOptions): never { throw createError({ statusCode: 413, statusMessage: options.oversizedMessage }) }
 function invalid(options: BodyOptions): never { throw createError({ statusCode: options.invalidStatusCode, statusMessage: options.invalidMessage }) }
@@ -99,7 +100,7 @@ function assertFormDataSize(form: FormData, options: BodyOptions) {
   }
 }
 
-async function materialize(event: H3Event, source: unknown, options: BodyOptions): Promise<Buffer | undefined> {
+async function materialize(event: H3Event, source: unknown, options: BodyOptions, rawOnly = false): Promise<Buffer | undefined> {
   const value = await source
   if (value === undefined || value === null) return undefined
   if (Buffer.isBuffer(value)) { checkSize(value.byteLength, options); return value }
@@ -110,6 +111,11 @@ async function materialize(event: H3Event, source: unknown, options: BodyOptions
     await (value as ReadableStream<Uint8Array>).pipeTo(new WritableStream({ write(chunk: Uint8Array) { checkSize(bytes + chunk.byteLength, options); const buffer = Buffer.from(chunk); bytes += buffer.byteLength; chunks.push(buffer) } }))
     return Buffer.concat(chunks, bytes)
   }
+  // A signature cannot be checked against reconstructed JSON/form encoding. Remember
+  // legacy JSON-reader materialization too, so its later cache cannot masquerade as raw bytes.
+  const byteSource = typeof value === 'string' || value instanceof Uint8Array || value instanceof ArrayBuffer
+  if (rawOnly && !byteSource) return invalid(options)
+  if (!byteSource) (event.node.req as CachedRequest)[DERIVED_RAW_BODY] = true
   let serialized: unknown = value
   if ((value as object).constructor === Object) serialized = jsonBytes(value, options)
   else if (value instanceof URLSearchParams) serialized = value.toString()
@@ -125,6 +131,29 @@ async function materialize(event: H3Event, source: unknown, options: BodyOptions
   const buffer = Buffer.from(serialized as string)
   checkSize(buffer.byteLength, options)
   return buffer
+}
+
+/** Preserve the original signed bytes. Parsed-object-only adapter bodies are never reserialized. */
+export async function readBoundedRequestRawBody(event: H3Event, options: BodyOptions): Promise<Buffer> {
+  assertMethod(event, ['PATCH', 'POST', 'PUT', 'DELETE'])
+  const length = Number(getRequestHeader(event, 'content-length') || 0)
+  if (length > options.maxBytes) oversized(options)
+  const request = event.node.req as CachedRequest
+  if (request[DERIVED_RAW_BODY]) return invalid(options)
+  if (!request[BOUNDED_RAW_BODY]) {
+    const source = event._requestBody || event.web?.request?.body || request[RAW_BODY] || request.rawBody || request.body
+    const hasIncomingBody = Boolean(Number.parseInt(String(request.headers['content-length'] || ''))) || /\bchunked\b/iu.test(String(request.headers['transfer-encoding'] || ''))
+    if (!source && PARSED_BODY in request) return invalid(options)
+    const raw = source ? materialize(event, source, options, true) : hasIncomingBody ? readNodeStream(event, request, options) : Promise.resolve(Buffer.alloc(0))
+    request[BOUNDED_RAW_BODY] = raw
+    request[RAW_BODY] = raw
+  }
+  const raw = await request[BOUNDED_RAW_BODY]
+  if (request[DERIVED_RAW_BODY]) return invalid(options)
+  if (raw) checkSize(raw.byteLength, options)
+  const bytes = raw ?? Buffer.alloc(0)
+  event._requestBody = new Uint8Array(bytes)
+  return bytes
 }
 
 /** Bound h3's authoritative body before parsing, including bodies already cached by another adapter. */

@@ -52,7 +52,7 @@ export async function rollApprovedWeeklyCalendar(owner:number,clientId:number,no
     const policies=await ops.listAutopilotPolicies(owner,clientId)
     const policy=policies.find(p=>p.policyId===config.policyId&&p.configurationFingerprint===config.policyConfigurationFingerprint&&p.publicationTargetId===target?.id)
     if(!target || target.status!=='active' || !target.executionEnabled || !policy || policy.status!=='enabled' || policy.expiresAt.getTime()<=now.getTime())return {status:'policy_expired'}
-    const calendars=(await ops.listCalendars(owner)).filter(c=>c.clientId===clientId).sort((a,b)=>b.id-a.id)
+    const calendars=(await ops.listCalendars(owner,clientId)).filter(c=>c.clientId===clientId).sort((a,b)=>b.id-a.id)
     const template=calendars.find(c=>c.status!=='archived')
     if(!template)return {status:'not_configured'}
     if(template.status==='paused' || template.cadenceDays!==7)return {status:'paused'}
@@ -83,7 +83,7 @@ export async function createInitialWeeklyCalendar(owner:number,clientId:number,i
   // A retry must use the original payload; canonical service verifies the entire calendar identity.
   if(await ops.findCalendarByIdempotency(owner,values.idempotencyKey))return createCalendarFromProductionPlan(owner,values,ops)
   if(input.startDate<getDefaultContentOperationsClock().localDate(now,client.timeZone))throw createError({statusCode:422,statusMessage:'Choose today or a future weekly start date.'})
-  const calendars=(await ops.listCalendars(owner)).filter(c=>c.clientId===clientId)
+  const calendars=(await ops.listCalendars(owner,clientId)).filter(c=>c.clientId===clientId)
   const entries=await weeklyCalendarHistory(calendars,id=>ops.listEntries(owner,id))
   if(entries.some(e=>!TERMINAL.has(e.status)))throw createError({statusCode:409,statusMessage:'Resolve the current article before scheduling another.'})
   const bundle=unusedApprovedDeliverables(await ops.getPlanBundle(owner,input.productionPlanId),entries)

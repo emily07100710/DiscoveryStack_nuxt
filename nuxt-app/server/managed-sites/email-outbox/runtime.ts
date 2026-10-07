@@ -19,8 +19,7 @@ export function setManagedSiteEmailOutboxRuntimeForTests(options: ManagedSiteEma
   testRuntimeOptions = options
 }
 
-function emailConfigurationFingerprint(): string {
-  const environment = process.env
+export function emailConfigurationFingerprint(environment: Record<string, string | undefined> = process.env): string {
   const endpoint = environment.NUXT_MANAGED_SITE_EMAIL_ENDPOINT || 'https://api.resend.com/emails'
   const from = environment.NUXT_MANAGED_SITE_EMAIL_FROM || ''
   const allowlist = (environment.DISCOVERYSTACK_MANAGED_SITE_ALLOWED_PROVIDER_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean).sort()

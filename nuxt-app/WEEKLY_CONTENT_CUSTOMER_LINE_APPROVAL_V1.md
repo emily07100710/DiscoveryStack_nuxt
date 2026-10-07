@@ -24,7 +24,9 @@
 
 - `NUXT_WEEKLY_CONTENT_APPROVAL_ENABLED` 必須精確為 `true`，才開啟 LINE 與 weekly domain。
 - 背景 tick 另需既有 `NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED` 精確為 `true`；註冊 cron 不代表啟用。所有旗標及金鑰僅 server 使用。 此開關同時放行既有 Content Operations materialize／execution 背景工作，不是單一客戶開關；正式開啟前必須盤點同 owner 已啟用客戶、政策、待處理 entries 與費用範圍。
-- 固定每五分鐘觸發一次 weekly tick；每輪先按配置 ID 讀取該 owner 最早五十筆配置，再在其中 active 的配置輪替最多十位客戶，並處理最多十筆通知。這是試行版掃描上限，不保證第五十一筆及之後會被排程；paused 等非 active 配置也會占用前五十筆掃描位置。它不代表主機持續運作、準時送稿或只產生一篇，仍需獨立主機與真實範圍驗收。
+- 固定每五分鐘觸發一次 weekly tick；全域 worker 以該 owner 的持久配置游標，按穩定配置 ID 讀取目前 active 配置，每輪最多十位客戶、尾端回繞，paused/revoked 不占處理名額。候選選取與游標前移共用一個短 SQL 交易及 exact-owner row lock，不把 AI、LINE 或發布放進該交易；commit 失敗不能開始處理。第 51 筆以後不再被清單上限永久排除，程序重啟不會重設游標，但游標本身不是作業租約、同意、成本或發布權限。每位客戶開始處理前重新查目前配置；owner、ID、政策、目標、指紋或 active 狀態漂移即停止該客戶。通知仍最多十筆。擁有人介面 `listConfigs` 的五十筆讀取上限不是 worker 的選取來源。
+- 每週流程的日曆在 SQL `LIMIT` 前以 owner/client 限縮，不再從 owner 全域前一百筆中事後篩客戶。每位客戶的歷史上限仍為一百張；多讀一筆作截斷哨兵，若無法證明歷史完整就停止排程，不能把已用選題或預算當成未使用。這不是無上限歷史或大規模 worker fleet 的承諾。
+- 持久游標需要另行審查及套用新增式 `0050`；未套用時保持全域 scheduler 關閉。任何新增式 migration 都不由啟動自動套用。公平候選選取不證明主機持續運作、準時送稿、睡眠期間補跑或每次只產生一篇；仍需獨立主機與真實範圍驗收。游標及候選選取契約見 [Scheduler Cursor V1](WEEKLY_CONTENT_SCHEDULER_CURSOR_V1.md)。
 - `NUXT_WEEKLY_CONTENT_TOKEN_KEY` 至少 32 bytes；HMAC 派生的 read/action token 只存 hash，變更 token key 後舊派生 token 無法重新送出或使用。
 - `requireCustomerApproval` 為 server-owned client flag，預設 false。舊客戶不查 weekly 表。已 opt-in 客戶即使功能關閉、配置暫停／撤銷或資料缺失，仍 fail closed，不能回到無客戶同意的發文路徑。
 - 七張 weekly 表保存配置、邀約 hash、私密 sender binding、精確審稿 request、append-only decision、LINE outbox 與 verified semantic event inbox。不得保存原始 webhook、LINE/channel keys 或 raw action/read token 到事件或公開 DTO。

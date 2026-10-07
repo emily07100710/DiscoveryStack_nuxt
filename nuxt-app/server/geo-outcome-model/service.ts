@@ -33,7 +33,15 @@ export async function bindAndVerifyObservationEvidence(ownerUserId: number, obse
   })
 }
 
-export async function buildDataset(ownerUserId: number, taskType: TaskType = 'citation_selection', repository?: GeoOutcomeRepositoryPort): Promise<{ manifest: DatasetManifest, memberCount: number }> { if (taskType !== 'citation_selection') throw new Error('Structural auxiliary datasets require an approved structural adapter and cannot be created from citation observations.'); const repo = repoOrProduction(repository); const result = buildCitationSelectionDataset(await repo.listObservations(ownerUserId), ownerUserId); await repo.saveDatasetTransactional(ownerUserId, result.manifest, result.members); return { manifest: result.manifest, memberCount: result.members.length } }
+export async function buildDataset(ownerUserId: number, taskType: TaskType = 'citation_selection', repository?: GeoOutcomeRepositoryPort): Promise<{ manifest: DatasetManifest, memberCount: number }> {
+  if (taskType !== 'citation_selection') throw new Error('Structural auxiliary datasets require an approved structural adapter and cannot be created from citation observations.')
+  const repo = repoOrProduction(repository)
+  const result = buildCitationSelectionDataset(await repo.listObservations(ownerUserId), ownerUserId)
+  const manifest = await repo.saveDatasetTransactional(ownerUserId, result.manifest, result.members)
+  // Report committed metadata and lifecycle state, including an immutable replay,
+  // rather than the pure builder's pre-persistence timestamp/status placeholders.
+  return { manifest, memberCount: result.members.length }
+}
 export async function reviewDataset(ownerUserId: number, manifestId: string, decision: 'approve' | 'revoke', reviewerUserId: number, reason: string, repository?: GeoOutcomeRepositoryPort): Promise<{ manifest: DatasetManifest, decision: DatasetDecision }> { if (!Number.isSafeInteger(reviewerUserId) || reviewerUserId <= 0) throw new Error('reviewerUserId must be server-derived.'); if (!reason || reason.length > 500) throw new Error('Owner review reason is required and bounded.'); const repo = repoOrProduction(repository); const current = await repo.getDataset(ownerUserId, manifestId); if (!current) throw new Error('Dataset manifest not found.'); return repo.transitionDatasetWithDecision(ownerUserId, manifestId, decision === 'approve' ? 'approved' : 'revoked', reviewerUserId, reason) }
 
 function latestDatasetDecision(decisions: DatasetDecision[], manifest: DatasetManifest): DatasetDecision | null { return decisions.filter(item => item.manifestId === manifest.manifestId && item.manifestFingerprint === manifest.manifestFingerprint).at(-1) || null }
