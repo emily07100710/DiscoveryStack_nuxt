@@ -23,6 +23,25 @@ describe('owner home work guide integration contract', () => {
     expect(template.slice(advanced, advanced + 350)).toContain('需要建立來源、人工標註或審核訓練資料時再展開')
   })
 
+  it('uses the configured same-origin owner login as primary and keeps OAuth sign-in explicit and secondary', () => {
+    const signinStart = template.indexOf('v-else-if="state === \'signin\'"')
+    const signinEnd = template.indexOf('v-else-if="state === \'error\'"', signinStart)
+    const signin = template.slice(signinStart, signinEnd)
+    const primary = signin.indexOf('<a class="audit-button" href="/owner-login">登入工作台')
+    const oauth = signin.indexOf('<button class="audit-button" type="button" @click="startAuditSignIn">身分服務登入')
+    expect(primary).toBeGreaterThan(-1)
+    expect(oauth).toBeGreaterThan(primary)
+    const primaryAnchor = signin.slice(primary, signin.indexOf('</a>', primary) + '</a>'.length)
+    expect(primaryAnchor).not.toContain('?')
+    expect(primaryAnchor).not.toContain('origin=')
+    expect(signin).toContain('身分服務登入需先完成 OAuth 設定。')
+    expect(signin).toContain('這次介面整理不會新增員工權限。')
+    expect(source).toContain('function startAuditSignIn()')
+    expect(source).toMatch(/window\.location\.assign\(`\/api\/auth\/login\?origin=\$\{encodeURIComponent\(origin\)\}`\)/)
+    expect(source.match(/startAuditSignIn\(/g)).toHaveLength(1)
+    expect(source).toContain('.audit-signin-actions { display:flex; flex-wrap:wrap;')
+  })
+
   it('keeps nested audit pages mounted through NuxtPage and reloads the overview on return', () => {
     expect(source).toContain("const isNestedAuditRoute = computed(() => route.path.startsWith('/audit-lab/'))")
     expect(template).toMatch(/<NuxtPage\s+v-if="isNestedAuditRoute"\s*\/>/)

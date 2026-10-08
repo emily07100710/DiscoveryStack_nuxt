@@ -426,7 +426,13 @@ watch(isNestedAuditRoute, (isNested) => { if (!isNested) void loadOverview() })
       <p class="eyebrow">需要擁有人登入</p>
       <h2>請先登入營運工作台。</h2>
       <p>客戶資料、文章審核與學習資料不是公開內容。這次介面整理不會新增員工權限。</p>
-      <button class="audit-button" type="button" @click="startAuditSignIn">登入工作台 <span aria-hidden="true">↗</span></button>
+      <div class="audit-signin-actions">
+        <a class="audit-button" href="/owner-login">登入工作台 <span aria-hidden="true">↗</span></a>
+        <div class="audit-signin-secondary">
+          <p class="audit-signin-note">身分服務登入需先完成 OAuth 設定。</p>
+          <button class="audit-button" type="button" @click="startAuditSignIn">身分服務登入 <span aria-hidden="true">↗</span></button>
+        </div>
+      </div>
     </div>
     <div v-else-if="state === 'error'" class="audit-state audit-error" role="alert">{{ errorMessage }}</div>
 
@@ -568,6 +574,9 @@ watch(isNestedAuditRoute, (isNested) => { if (!isNested) void loadOverview() })
 .audit-lab-head h1 { font-size:clamp(2rem,4vw,3.2rem); line-height:1.15; }
 .audit-state { padding:1.2rem; border:1px solid #dce3eb; border-radius:1rem; background:#fff; line-height:1.7; }
 .audit-auth h2 { font-size:1.25rem; }
+.audit-signin-actions { display:flex; flex-wrap:wrap; align-items:center; gap:.8rem; }
+.audit-signin-secondary { display:grid; justify-items:start; gap:.2rem; }
+.audit-signin-note { margin:0; color:#586676; font-size:.8rem; line-height:1.4; }
 .audit-button { padding:.7rem 1rem; border:0; border-radius:.65rem; background:#285e70; color:#fff; font:inherit; font-weight:700; cursor:pointer; }
 .audit-error { color:#843939; border-color:#e3bdbd; }
 .audit-advanced-tools { margin-top:2rem; border:1px solid #dce3eb; border-radius:1rem; background:#fff; }

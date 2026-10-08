@@ -89,9 +89,9 @@ function blockCode(error: unknown): string {
   return 'source_provenance_unavailable'
 }
 
-async function checkedSource(database: GeoOutcomeDrizzleDatabase, ownerUserId: number, sourceRecordId: number) {
+async function checkedSource(database: AdmissionReadDatabase, ownerUserId: number, sourceRecordId: number) {
   try {
-    const snapshot = await resolveReviewedManualSnapshot(database, ownerUserId, sourceRecordId)
+    const snapshot = await resolveReviewedManualSnapshot(database as GeoOutcomeDrizzleDatabase, ownerUserId, sourceRecordId)
     return { snapshot, reasonCodes: [] as string[] }
   } catch (error) {
     if (!(error instanceof GeoCandidateAuthorityError)) throw storageUnavailable()
@@ -138,6 +138,14 @@ async function readFeatureProjection(database: GeoOutcomeDrizzleDatabase, ownerU
 
 type ReviewedManualSnapshot = Awaited<ReturnType<typeof resolveReviewedManualSnapshot>>
 
+type AdmissionReadDatabase = Pick<GeoOutcomeDrizzleDatabase, 'select'>
+
+export function createAdmissionReadFacade(database: GeoOutcomeDrizzleDatabase): AdmissionReadDatabase {
+  // The admission collector receives only the Drizzle read capability. The
+  // outer transaction remains responsible for snapshot consistency/lifecycle.
+  return Object.freeze({ select: database.select.bind(database) })
+}
+
 function ambiguousObservation(candidate: { observationFingerprint: string, candidatePageIdentityHash: string, contentHash: string, citationStatus: string }): AdmissionObservationSummary {
   return {
     observationFingerprint: candidate.observationFingerprint,
@@ -153,7 +161,7 @@ function ambiguousObservation(candidate: { observationFingerprint: string, candi
   }
 }
 
-async function readExistingObservations(database: GeoOutcomeDrizzleDatabase, ownerUserId: number, source: ReviewedManualSnapshot): Promise<Map<string, AdmissionObservationSummary>> {
+async function readExistingObservations(database: AdmissionReadDatabase, ownerUserId: number, source: ReviewedManualSnapshot): Promise<Map<string, AdmissionObservationSummary>> {
   const { run: sourceRun, source: sourceRow, project, query, citations } = source
   const runProjection = { id: geoOutcomeObservationRuns.id, projectId: geoOutcomeObservationRuns.projectId, clientId: geoOutcomeObservationRuns.clientId, runIdentity: geoOutcomeObservationRuns.runIdentity, engine: geoOutcomeObservationRuns.engine, model: geoOutcomeObservationRuns.model, modelVersion: geoOutcomeObservationRuns.modelVersion, interface: geoOutcomeObservationRuns.interface, locale: geoOutcomeObservationRuns.locale, region: geoOutcomeObservationRuns.region, observationWindowStart: geoOutcomeObservationRuns.observationWindowStart, observationWindowEnd: geoOutcomeObservationRuns.observationWindowEnd, runTimestamp: geoOutcomeObservationRuns.runTimestamp, evidenceSnapshotHash: geoOutcomeObservationRuns.evidenceSnapshotHash }
   const [legacyRuns, sourceScopedRuns] = await Promise.all([
@@ -187,7 +195,9 @@ async function readExistingObservations(database: GeoOutcomeDrizzleDatabase, own
     .limit(GEO_ADMISSION_MAX_CANDIDATES + 1)))).flat()
   if (candidates.length > GEO_ADMISSION_MAX_CANDIDATES) throw new GeoAdmissionError(409, 'Admission history exceeds the safe source limit.', 'source_history_too_large')
   const result = new Map<string, AdmissionObservationSummary>()
-  const repository = new DrizzleGeoOutcomeRepository(database)
+  // getObservation is read-only. This repository instance sees only the
+  // select-only facade, so accidental mutation calls cannot reach the driver.
+  const repository = new DrizzleGeoOutcomeRepository(database as GeoOutcomeDrizzleDatabase)
   const citationPositions = new Map(citations.map((item, index) => [item.candidatePageIdentityHash, index + 1]))
   for (const candidate of candidates) {
     const candidateLocatorHashes = Array.isArray(candidate.evidenceLocatorHashes) ? candidate.evidenceLocatorHashes : []
@@ -230,7 +240,7 @@ async function readExistingObservations(database: GeoOutcomeDrizzleDatabase, own
         result.set(candidate.candidatePageIdentityHash, ambiguousObservation(candidate))
         continue
       }
-      resolved = await resolveCandidateAuthority(database, ownerUserId, sourceRow.id, candidate.candidatePageIdentityHash)
+      resolved = await resolveCandidateAuthority(database as GeoOutcomeDrizzleDatabase, ownerUserId, sourceRow.id, candidate.candidatePageIdentityHash)
       if (resolved.authority.contentHash !== candidate.contentHash || resolved.authority.canonicalPageHash !== candidate.canonicalPageHash
         || resolved.authority.websiteIdentityHash !== candidate.websiteIdentityHash || resolved.authority.publicationReceiptFingerprint !== candidate.publicationReceiptFingerprint) {
         result.set(candidate.candidatePageIdentityHash, ambiguousObservation(candidate))
@@ -245,14 +255,14 @@ async function readExistingObservations(database: GeoOutcomeDrizzleDatabase, own
       result.set(candidate.candidatePageIdentityHash, ambiguousObservation(candidate))
       continue
     }
-    const projection = await readFeatureProjection(database, ownerUserId, resolved)
+    const projection = await readFeatureProjection(database as GeoOutcomeDrizzleDatabase, ownerUserId, resolved)
     const origin = persistedFeatureOrigin(current, projection)
     result.set(candidate.candidatePageIdentityHash, observationSummary(current, origin))
   }
   return result
 }
 
-async function currentSourceDecisions(database: GeoOutcomeDrizzleDatabase, ownerUserId: number, sourceRecordId: number) {
+async function currentSourceDecisions(database: AdmissionReadDatabase, ownerUserId: number, sourceRecordId: number) {
   const decisions = await database.select().from(geoOutcomeCandidateSetDecisions)
     .where(and(eq(geoOutcomeCandidateSetDecisions.ownerUserId, ownerUserId), eq(geoOutcomeCandidateSetDecisions.sourceObservationId, sourceRecordId)))
     .orderBy(desc(geoOutcomeCandidateSetDecisions.createdAt), desc(geoOutcomeCandidateSetDecisions.id))
@@ -269,7 +279,7 @@ function sourceSummary(input: { sourceRecordId: number, provider: string, model:
   return { ...input, observedAt, eligible: reasonCodes.length === 0, reasonCodes: [...new Set(reasonCodes)] }
 }
 
-async function buildSourceSummary(database: GeoOutcomeDrizzleDatabase, ownerUserId: number, row: typeof llmVisibilityObservations.$inferSelect): Promise<AdmissionSourceSummary> {
+async function buildSourceSummary(database: AdmissionReadDatabase, ownerUserId: number, row: typeof llmVisibilityObservations.$inferSelect): Promise<AdmissionSourceSummary> {
   const [run] = await database.select().from(llmVisibilityRuns).where(and(eq(llmVisibilityRuns.id, row.runId), eq(llmVisibilityRuns.ownerUserId, ownerUserId))).limit(1)
   if (!run) return sourceSummary({ sourceRecordId: row.id, provider: 'other', model: 'unavailable', locale: 'unknown', observedAt: row.createdAt, responseHash: row.responseHash, citationCount: 0, reasonCodes: ['source_unavailable'] })
   const [query] = await database.select({ locale: llmVisibilityQueries.locale }).from(llmVisibilityQueries).where(and(eq(llmVisibilityQueries.id, row.queryId), eq(llmVisibilityQueries.ownerUserId, ownerUserId))).limit(1)
@@ -281,7 +291,7 @@ async function buildSourceSummary(database: GeoOutcomeDrizzleDatabase, ownerUser
   return sourceSummary({ sourceRecordId: row.id, provider: run.provider, model: run.modelLabel, locale: query?.locale || 'unknown', observedAt: run.observedAt, responseHash: row.responseHash, citationCount, reasonCodes })
 }
 
-async function collectGeoObservationAdmissionWorkspace(ownerUserId: number, input: unknown, database: GeoOutcomeDrizzleDatabase): Promise<AdmissionWorkspace> {
+async function collectGeoObservationAdmissionWorkspace(ownerUserId: number, input: unknown, database: AdmissionReadDatabase): Promise<AdmissionWorkspace> {
   if (!Number.isSafeInteger(ownerUserId) || ownerUserId <= 0) throw new GeoAdmissionError(422, 'Owner scope is invalid.', 'invalid_owner')
   const query = parseAdmissionWorkspaceQuery(input)
   let rows: Array<typeof llmVisibilityObservations.$inferSelect>
@@ -331,7 +341,7 @@ async function collectGeoObservationAdmissionWorkspace(ownerUserId: number, inpu
   if (checked.snapshot) {
     for (const row of authorities.filter(item => activeSetFingerprints.has(item.candidateSetFingerprint))) {
       try {
-        const resolved = await resolveCandidateAuthority(database, ownerUserId, selectedRow.id, row.candidatePageIdentityHash)
+        const resolved = await resolveCandidateAuthority(database as GeoOutcomeDrizzleDatabase, ownerUserId, selectedRow.id, row.candidatePageIdentityHash)
         if (resolved.authority.id !== row.id || resolved.authority.contentHash !== row.contentHash || resolved.authority.canonicalPageHash !== row.canonicalPageHash
           || resolved.authority.websiteIdentityHash !== row.websiteIdentityHash || resolved.authority.publicationReceiptFingerprint !== row.publicationReceiptFingerprint) {
           staleCandidateAuthority = true
@@ -380,10 +390,9 @@ export async function getGeoObservationAdmissionWorkspace(ownerUserId: number, i
   parseAdmissionWorkspaceQuery(input)
   const appDatabase = database as NonNullable<ReturnType<typeof getDatabase>>
   try {
-    return await appDatabase.transaction(transaction => collectGeoObservationAdmissionWorkspace(ownerUserId, input, transaction), {
+    return await appDatabase.transaction(transaction => collectGeoObservationAdmissionWorkspace(ownerUserId, input, createAdmissionReadFacade(transaction)), {
       isolationLevel: 'repeatable read',
       withConsistentSnapshot: true,
-      accessMode: 'read only',
     })
   } catch (error) {
     if (error instanceof GeoAdmissionError) throw error

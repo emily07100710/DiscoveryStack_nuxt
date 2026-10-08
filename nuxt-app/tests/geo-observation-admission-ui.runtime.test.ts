@@ -617,13 +617,38 @@ describe('Geo observation admission mounted runtime', () => {
       if (path.endsWith('/admission/intake')) return { status: 'success', observation: { ...pendingObservation, candidatePageIdentityHash: uncitedIdentity, citationStatus: 'not_cited', citationPosition: null, sourceRecordId: 41, governanceIndependent: true, trainingAdmission: false, productionActivation: false, replayed: false } }
       throw new Error('unexpected local mocked request')
     })
-    const { app, root } = mount(compileComponent(fetcher))
+    let signalDigestStarted!: () => void
+    let releaseDigest!: () => void
+    let digestCompletion: Promise<ArrayBuffer> | undefined
+    const digestStarted = new Promise<void>(resolve => { signalDigestStarted = resolve })
+    const digestGate = new Promise<void>(resolve => { releaseDigest = resolve })
+    const deferredCrypto = {
+      randomUUID: webcrypto.randomUUID.bind(webcrypto),
+      subtle: {
+        digest: (algorithm: Parameters<SubtleCrypto['digest']>[0], data: Parameters<SubtleCrypto['digest']>[1]) => {
+          digestCompletion = webcrypto.subtle.digest(algorithm, data).then(digest => {
+            signalDigestStarted()
+            return digestGate.then(() => digest)
+          })
+          return digestCompletion
+        },
+      },
+    }
+    const { app, root } = mount(compileComponent(fetcher, () => {}, deferredCrypto))
     await settle(); await select(root, '41')
     expect(textContent(root)).toContain(uncitedIdentity)
     expect(textContent(root)).not.toContain(uncitedUrl)
     labeledInput(root, '已核准候選 URL', 'input', enteredUrl)
     ;(button(root, '核對目前既有 authority').props.onClick as () => void)()
-    await settle()
+    await digestStarted
+    await nextTick()
+    expect(button(root, '安全核對中').props.disabled).toBe(true)
+    expect(textContent(root)).not.toContain('已和目前核准的未引用 authority 精確比對')
+    expect(fetcher.mock.calls.some(call => (call[1] as { method?: string } | undefined)?.method === 'POST')).toBe(false)
+    if (!digestCompletion) throw new Error('The Web Crypto digest did not start')
+    releaseDigest()
+    await digestCompletion
+    await vi.waitFor(() => expect(textContent(root)).toContain('已和目前核准的未引用 authority 精確比對'))
     expect(textContent(root)).toContain('已和目前核准的未引用 authority 精確比對')
     ;(button(root, '建立待審 observation').props.onClick as () => void)()
     await settle()
@@ -655,7 +680,11 @@ describe('Geo observation admission mounted runtime', () => {
     const inputUrl = useDifferentUrl ? 'https://unknown.example/not-approved' : uncitedUrl
     labeledInput(root, '已核准候選 URL', 'input', inputUrl)
     ;(button(root, '核對目前既有 authority').props.onClick as () => void)()
-    await settle()
+    if (cryptoImpl !== webcrypto) {
+      await vi.waitFor(() => expect(textContent(root)).toContain('此瀏覽器無法安全核對既有 authority'))
+    } else {
+      await vi.waitFor(() => expect(textContent(root)).toContain('找不到符合此 URL 的目前有效未引用核准 authority'))
+    }
     expect(fetcher.mock.calls.some(call => (call[1] as { method?: string } | undefined)?.method === 'POST')).toBe(false)
     expect(all(root, node => node.type === 'button' && textContent(node).includes('建立待審 observation'))).toHaveLength(0)
     if (cryptoImpl !== webcrypto) expect(textContent(root)).toContain('此瀏覽器無法安全核對既有 authority')

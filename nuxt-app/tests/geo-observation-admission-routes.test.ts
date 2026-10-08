@@ -70,6 +70,15 @@ describe('GEO observation admission owner routes', () => {
     expect(mocks.workspace).toHaveBeenCalledWith(42, { sourceRecordId: ['41', '42'] }, database)
   })
 
+  it('fails closed with 503 when storage is not configured', async () => {
+    mocks.owner.mockResolvedValue({ ownerUserId: 42, openId: 'opaque-owner' })
+    mocks.getDatabase.mockReturnValue(null)
+    const handler = await loadWorkspace()
+    await expect(handler(event('/api/geo-outcome-model/admission/workspace')))
+      .rejects.toMatchObject({ statusCode: 503, statusMessage: 'GEO admission workspace is unavailable.' })
+    expect(mocks.workspace).not.toHaveBeenCalled()
+  })
+
   it('checks owner authority before parsing or consuming intake body', async () => {
     mocks.owner.mockRejectedValueOnce(createError({ statusCode: 401, statusMessage: 'Owner required.' }))
     const handler = await loadIntake()
