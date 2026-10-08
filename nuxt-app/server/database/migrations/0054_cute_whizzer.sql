@@ -1,0 +1,1 @@
+ALTER TABLE `geoOutcomeDatasetDecisions` ADD `knowledgeAuthority` json;

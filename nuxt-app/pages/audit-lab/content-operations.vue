@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { buildContentOperationsAuthorization, contentTargetFrameworkDefaults, newWeeklyAuthorizationTargets, type ContentAuthorizationProfile, type ContentAuthorizationInput, type ContentAuthorizationMode } from '../../utils/contentOperationsAuthorization'
+import type { FirstPartyDraftReceipt } from '../../server/first-party-publishing/draft-receipt'
 type WorkbenchFetch = <T = unknown>(path: string, options?: { method?: 'GET' | 'POST'; body?: Record<string, unknown> }) => Promise<T>
 // Preserve Nuxt's runtime fetch while keeping this page's existing DTO contract local.
 const fetchContent = $fetch as unknown as WorkbenchFetch
@@ -8,6 +9,22 @@ type PublicationTransport = 'first_party_git' | 'first_party_signed_api' | 'word
 type CadenceDays = 3 | 7 | 15 | 30
 type CatchUpPolicy = 'skip_missed' | 'one_catch_up'
 type ActionState = 'idle' | 'saving' | 'success' | 'error'
+type SitePublicationCheckState = {
+  state: 'published' | 'private' | 'archived'
+  contentMatch: 'matched' | 'changed' | 'unverifiable' | 'not_published'
+  observedAt: string
+  publishedAt: string | null
+  postVersion: number
+  publishedVersion: number | null
+  hasUnpublishedChanges: boolean
+  receiptIsCurrentState: false
+}
+type SiteMeasurementHandoffState = {
+  state: 'available' | 'confirmed' | 'blocked'
+  publicationFingerprint: string | null
+  confirmedAt: string | null
+  reason: 'not_verified' | 'not_published' | 'content_changed' | 'observation_expired' | 'authority_invalid' | 'confirmed' | 'available'
+}
 
 type Client = {
   id: string | number
@@ -61,10 +78,15 @@ type ContentEntry = {
   idempotencyKey?: string | null
   contentHash?: string | null
   evidenceSnapshotHash?: string | null
+  publicationTargetId?: string | number | null
+  latestDraftReceipt?: FirstPartyDraftReceipt | null
+  latestSitePublication?: SitePublicationCheckState | null
+  sitePublicationCheckAvailable?: boolean
+  siteMeasurement?: SiteMeasurementHandoffState | null
   publicationTargetBindings?: EntryTargetBinding[]
 }
 
-type AttemptSummary = { attemptId: string | number, status: string, attemptNumber: number, receiptFingerprint?: string | null, publicationUrl?: string | null, remoteRevision?: string | null, errorCode?: string | null, errorSummary?: string | null, completedAt?: string | null, retryEligibleAt?: string | null }
+type AttemptSummary = { attemptId: string | number, status: string, attemptNumber: number, receiptFingerprint?: string | null, publicationUrl?: string | null, remoteRevision?: string | null, draftReceipt?: FirstPartyDraftReceipt | null, sitePublication?: SitePublicationCheckState | null, sitePublicationCheckAvailable?: boolean, siteMeasurement?: SiteMeasurementHandoffState | null, errorCode?: string | null, errorSummary?: string | null, completedAt?: string | null, retryEligibleAt?: string | null }
 type EntryTargetBinding = { bindingId: string | number, slot: number, targetRowId: string | number, targetId: string, websiteId?: string | null, framework: string, transport: string, targetOrigin: string, status: string, executionEnabled: boolean, credentialConfigured: boolean, destinationPublicationIdentityConfigured: boolean, serviceReferenceConfigured: boolean, bindingFingerprint: string, latestAttempt?: AttemptSummary | null }
 
 type Run = { id: string | number, entryId?: string | number, state: string, retryEligibleAt?: string | null }
@@ -241,7 +263,8 @@ const capabilityItems = computed(() => [
 
 const cadenceOptions: CadenceDays[] = [3, 7, 15, 30]
 const statusLabels: Record<string, string> = {
-  planned: '已排程', materialized: '已建立工作', awaiting_generation: '等待產生', awaiting_review: '等待人工審核', ready_to_publish: '可以發布',
+  planned: '已排程', materialized: '已建立工作', awaiting_generation: '等待產生', awaiting_review: '等待人工審核', awaiting_site_review: '網站已收稿；發布結果另見核驗紀錄', ready_to_publish: '可以發布',
+  draft_received: '網站已收稿；發布結果另見核驗紀錄',
   publishing: '發布中', delivered: '已發布', completed: '已完成', cancelled: '已取消', skipped: '已略過', blocked: '已阻擋',
   queued: '已排隊', processing: '處理中', succeeded: '已成功', failed: '執行失敗', retry_wait: '等待重試',
 }
@@ -289,9 +312,9 @@ const targetBindingStatus = (binding: EntryTargetBinding) => binding.latestAttem
 const calendarName = (calendarId: string | number | undefined) => workspace.value.calendars.find(calendar => String(calendar.id) === String(calendarId))?.productionPlanId || '未指定月曆'
 const runForEntry = (entryId: string | number) => workspace.value.runs.find(run => String(run.entryId) === String(entryId))
 const assessmentForEntry = (entryId: string | number) => workspace.value.outcomeAssessments.find(assessment => String(assessment.entryId) === String(entryId))
-const entryNextAction = (entry: ContentEntry) => entry.nextAction || (entry.status === 'awaiting_review' ? '請人工審核草稿' : entry.status === 'ready_to_publish' ? '等待第一方發布器處理' : entry.status === 'failed' ? '檢查失敗原因並決定是否重試' : entry.status === 'delivered' ? '等待成效資料' : entry.status === 'completed' ? '查看 Outcome assessment' : entry.status === 'awaiting_generation' ? '等待內容生成工作' : '查看內容詳細狀態')
+const entryNextAction = (entry: ContentEntry) => entry.nextAction || (entry.status === 'awaiting_site_review' ? '網站已收稿；發布結果另見核驗紀錄' : entry.status === 'awaiting_review' ? '請人工審核草稿' : entry.status === 'ready_to_publish' ? '等待第一方發布器處理' : entry.status === 'failed' ? '檢查失敗原因並決定是否重試' : entry.status === 'delivered' ? '等待成效資料' : entry.status === 'completed' ? '查看 Outcome assessment' : entry.status === 'awaiting_generation' ? '等待內容生成工作' : '查看內容詳細狀態')
 const pipelineSteps = [
-  { key: 'scheduled', label: '已排程' }, { key: 'awaiting_generation', label: '等待產生' }, { key: 'awaiting_review', label: '等待人工審核' },
+  { key: 'scheduled', label: '已排程' }, { key: 'awaiting_generation', label: '等待產生' }, { key: 'awaiting_review', label: '等待人工審核' }, { key: 'awaiting_site_review', label: '網站審核／發布核驗' },
   { key: 'ready_to_publish', label: '可以發布' }, { key: 'publishing', label: '發布中' }, { key: 'delivered', label: '已發布' },
   { key: 'measurement', label: '成效觀察' }, { key: 'learning', label: '學習候選' },
 ]
@@ -327,8 +350,129 @@ const calendarRequestKey = ref('')
 const replanRequestKeys = reactive<Record<string, string>>({})
 const materializeRequestKeys = reactive<Record<string, string>>({})
 const executeRequestKeys = reactive<Record<string, string>>({})
+const sitePublicationCheckKeys = reactive<Record<string, string>>({})
+const sitePublicationCheckBusyKey = ref('')
+const siteMeasurementHandoffKeys = reactive<Record<string, string>>({})
+const siteMeasurementHandoffBusyKey = ref('')
+const siteMeasurementHandoffErrorKey = ref('')
+const siteMeasurementHandoffError = ref('')
 function retainedRequestKey(store: Record<string, string>, identity: string, prefix: string) {
   return store[identity] || (store[identity] = idempotencyKey(prefix))
+}
+
+function sitePublicationCheckIdentity(entryId: string | number, targetRowId: string | number) {
+  return `${String(entryId)}:${String(targetRowId)}`
+}
+
+function siteMeasurementHandoffIdentity(entryId: string | number, targetRowId: string | number, publicationFingerprint: string | null | undefined) {
+  return `${String(entryId)}:${String(targetRowId)}:${publicationFingerprint || 'unavailable'}`
+}
+
+function validSiteMeasurementConfirmation(value: unknown): value is { status: 'confirmed'; replayed: boolean; workflowChanged: false; learningAuthorized: false; receiptIsCurrentAuthority: false; confirmedAt: string } {
+  try {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+    const keys = ['status', 'replayed', 'workflowChanged', 'learningAuthorized', 'receiptIsCurrentAuthority', 'confirmedAt']
+    const ownKeys = Reflect.ownKeys(value)
+    if (ownKeys.length !== keys.length || ownKeys.some(key => typeof key !== 'string' || !keys.includes(key))) return false
+    const record = value as Record<string, unknown>
+    const timestamp = record.confirmedAt
+    return record.status === 'confirmed' && typeof record.replayed === 'boolean' && record.workflowChanged === false
+      && record.learningAuthorized === false && record.receiptIsCurrentAuthority === false
+      && typeof timestamp === 'string' && Number.isFinite(Date.parse(timestamp)) && new Date(Date.parse(timestamp)).toISOString() === timestamp
+  } catch { return false }
+}
+
+function currentSiteMeasurementHandoff(entryId: string | number, targetRowId: number): SiteMeasurementHandoffState | null {
+  const entry = workspace.value.entries.find(candidate => String(candidate.id) === String(entryId))
+  if (!entry) return null
+  if (entry.publicationTargetBindings?.length) {
+    const binding = entry.publicationTargetBindings.find(candidate => String(candidate.targetRowId) === String(targetRowId))
+    return binding?.latestAttempt?.siteMeasurement || null
+  }
+  return entry.siteMeasurement || null
+}
+
+async function confirmSiteMeasurementHandoff(entry: ContentEntry, targetRowId: string | number, measurement: SiteMeasurementHandoffState | null | undefined) {
+  if (actionState.value === 'saving' || !measurement || measurement.state !== 'available'
+    || typeof measurement.publicationFingerprint !== 'string' || !/^[a-f0-9]{64}$/u.test(measurement.publicationFingerprint)) return
+  const numericTargetRowId = Number(targetRowId)
+  if (!Number.isSafeInteger(numericTargetRowId) || numericTargetRowId < 1) return
+  const identity = siteMeasurementHandoffIdentity(entry.id, numericTargetRowId, measurement.publicationFingerprint)
+  let requestKey: string
+  try {
+    requestKey = retainedRequestKey(siteMeasurementHandoffKeys, identity, `measurement-confirm-${String(entry.id)}-${numericTargetRowId}`)
+  } catch {
+    siteMeasurementHandoffErrorKey.value = identity
+    siteMeasurementHandoffError.value = '無法安全建立確認識別碼，尚未送出請求。'
+    return
+  }
+  siteMeasurementHandoffBusyKey.value = identity
+  siteMeasurementHandoffErrorKey.value = ''
+  siteMeasurementHandoffError.value = ''
+  actionState.value = 'saving'; actionNotice.value = ''; actionError.value = ''
+  try {
+    const response = await fetchContent<unknown>(`/api/content-operations/entries/${encodeURIComponent(String(entry.id))}/site-measurement-confirm`, {
+      method: 'POST',
+      body: { targetRowId: numericTargetRowId, expectedPublicationFingerprint: measurement.publicationFingerprint, confirmed: true, idempotencyKey: requestKey },
+    })
+    if (!validSiteMeasurementConfirmation(response)) throw new Error('Measurement handoff response was not confirmed.')
+    await refresh()
+    if (workspaceError.value) throw new Error('Workspace reload was not verified.')
+    const projected = currentSiteMeasurementHandoff(entry.id, numericTargetRowId)
+    if (projected?.state !== 'confirmed' || projected.publicationFingerprint !== measurement.publicationFingerprint || projected.confirmedAt !== response.confirmedAt) {
+      throw new Error('Confirmed handoff was not present in refreshed workspace.')
+    }
+    delete siteMeasurementHandoffKeys[identity]
+    actionState.value = 'success'
+    actionNotice.value = '已保存成效觀察接入確認；尚未收數，後續授權工作執行前仍會重新核驗。'
+  } catch {
+    siteMeasurementHandoffErrorKey.value = identity
+    siteMeasurementHandoffError.value = '接入確認尚未核實；目前不會宣告已收數。重新嘗試會沿用同一識別碼。'
+    actionState.value = 'error'
+    actionError.value = siteMeasurementHandoffError.value
+  } finally {
+    siteMeasurementHandoffBusyKey.value = ''
+    if (actionState.value === 'saving') actionState.value = 'idle'
+  }
+}
+
+async function checkSitePublication(entry: ContentEntry, targetRowId: string | number) {
+  if (actionState.value === 'saving') return
+  const numericTargetRowId = Number(targetRowId)
+  if (!Number.isSafeInteger(numericTargetRowId) || numericTargetRowId < 1) return
+  const identity = sitePublicationCheckIdentity(entry.id, numericTargetRowId)
+  let requestKey: string
+  try {
+    requestKey = retainedRequestKey(sitePublicationCheckKeys, identity, `site-check-${String(entry.id)}-${numericTargetRowId}`)
+  } catch {
+    actionState.value = 'error'; actionNotice.value = ''; actionError.value = '無法安全建立網站核對識別碼，尚未送出請求。'
+    return
+  }
+  sitePublicationCheckBusyKey.value = identity
+  actionState.value = 'saving'; actionNotice.value = ''; actionError.value = ''
+  try {
+    const response = await fetchContent<unknown>(`/api/content-operations/entries/${encodeURIComponent(String(entry.id))}/site-publication-check`, {
+      method: 'POST',
+      body: { targetRowId: numericTargetRowId, idempotencyKey: requestKey },
+    })
+    if (!response || typeof response !== 'object' || Array.isArray(response)
+      || (response as Record<string, unknown>).status !== 'verified'
+      || (response as Record<string, unknown>).workflowChanged !== false
+      || (response as Record<string, unknown>).learningAuthorized !== false) {
+      throw new Error('Site publication verification response was not verified.')
+    }
+    await refresh()
+    if (workspaceError.value) throw new Error('Workspace reload was not verified.')
+    delete sitePublicationCheckKeys[identity]
+    actionState.value = 'success'
+    actionNotice.value = '網站發布狀態核對已完成；畫面中的紀錄只代表核對當時。'
+  } catch {
+    actionState.value = 'error'
+    actionError.value = '網站發布狀態未能確認；畫面不會推定文章已發布。重新嘗試會沿用同一請求識別碼。'
+  } finally {
+    sitePublicationCheckBusyKey.value = ''
+    if (actionState.value === 'saving') actionState.value = 'idle'
+  }
 }
 
 async function post<T = unknown>(route: string, body: Record<string, unknown>, successMessage: string): Promise<T | undefined> {
@@ -564,7 +708,61 @@ async function executeEntry(entry: ContentEntry, mode: 'dry_run' | 'execute') {
 
       <section class="section-block" aria-labelledby="calendar-title"><div class="section-heading"><div><p class="eyebrow">CALENDARS</p><h2 id="calendar-title">內容月曆</h2></div></div><div v-if="workspace.calendars.length === 0" class="empty-card"><strong>尚未建立內容月曆</strong><span>建立後會在這裡看到計畫期間、發布頻率與下一步操作。</span></div><div v-else class="calendar-list"><article v-for="calendar in workspace.calendars" :key="calendar.id" class="calendar-card"><div class="calendar-card__top"><div><h3>{{ clientName(calendar.clientId) }}</h3><p>{{ calendar.planStartDate }} → {{ calendar.planEndDate }} · 每 {{ calendar.cadenceDays }} 天</p></div><span :class="statusClass(calendar.status || '')">{{ calendar.status || '狀態未提供' }}</span></div><div class="calendar-facts"><span><strong>發布時間</strong>{{ calendar.publishLocalTime }}</span><span><strong>每月預算</strong>{{ calendar.monthlyBudgetUnits }}</span><span><strong>單篇成本</strong>{{ calendar.defaultCostUnits }}</span><span><strong>Missed policy</strong>{{ calendar.catchUpPolicy === 'one_catch_up' ? 'One catch-up' : 'Skip missed' }}</span></div><details class="replan-panel"><summary>調整排程</summary><form class="form-grid replan-form" @submit.prevent="replanCalendar(calendar)"><label>開始日期<input v-model="replanFormFor(calendar).planStartDate" required type="date"></label><label>結束日期<input v-model="replanFormFor(calendar).planEndDate" required type="date"></label><label>發布時間<input v-model="replanFormFor(calendar).publishLocalTime" required type="time"></label><label>發布頻率<select v-model.number="replanFormFor(calendar).cadenceDays"><option v-for="days in cadenceOptions" :key="days" :value="days">每 {{ days }} 天</option></select></label><label>每月預算<input v-model.number="replanFormFor(calendar).monthlyBudgetUnits" required type="number" min="1" step="1"></label><label>單篇成本<input v-model.number="replanFormFor(calendar).defaultCostUnits" required type="number" min="1" step="1"></label><label>每月最多篇數<input v-model.number="replanFormFor(calendar).maxItemsPerCalendarMonth" required type="number" min="1" step="1"></label><label>全計畫最多篇數<input v-model.number="replanFormFor(calendar).maximumTotalItems" required type="number" min="1" step="1"></label><label>Missed policy<select v-model="replanFormFor(calendar).catchUpPolicy"><option value="skip_missed">Skip missed</option><option value="one_catch_up">One catch-up</option></select></label><button class="secondary-button" type="submit" :disabled="isSaving || !calendar.planFingerprint">套用重新規劃</button></form></details><div class="button-row"><button class="secondary-button" type="button" :disabled="isSaving || !calendar.planFingerprint || ['blocked', 'paused', 'archived'].includes(calendar.status || '')" @click="materializeCalendar(calendar)">建立到期內容工作</button></div><details><summary>Advanced details</summary><dl><div><dt>Calendar ID</dt><dd>{{ calendar.id }}</dd></div><div><dt>Production Plan ID</dt><dd>{{ calendar.productionPlanId }}</dd></div><div><dt>Plan fingerprint</dt><dd>{{ calendar.planFingerprint || '尚未提供' }}</dd></div></dl></details></article></div></section>
 
-      <section class="section-block" aria-labelledby="entries-title"><div class="section-heading"><div><p class="eyebrow">CONTENT PIPELINE</p><h2 id="entries-title">每篇內容目前走到哪裡？</h2></div><span class="data-note">blocked、failed、retry_wait 會獨立顯示</span></div><div v-if="workspace.entries.length === 0" class="empty-card"><strong>還沒有內容項目</strong><span>先建立月曆，再由 runtime materialize 內容項目。</span></div><div v-else class="entry-list"><article v-for="entry in workspace.entries" :key="entry.id" class="entry-card"><div class="entry-card__header"><div><p class="entry-date">{{ formatLocalDate(entry.plannedLocalDate) }}</p><h3>{{ entry.title || entry.topic || '未命名內容' }}</h3><p>{{ entry.contentType }} · {{ entry.language }} · {{ frameworkLabel(entry.framework) }}{{ entry.target ? ` · ${entry.target}` : '' }}</p></div><span :class="statusClass(entry.status)">{{ statusLabel(entry.status) }}</span></div><div class="pipeline" aria-label="內容 pipeline"><span v-for="step in pipelineSteps" :key="step.key" class="pipeline-step" :class="{ 'pipeline-step--active': pipelineStage(entry) === step.key, 'pipeline-step--complete': pipelineSteps.findIndex(item => item.key === pipelineStage(entry)) > pipelineSteps.findIndex(item => item.key === step.key) }">{{ step.label }}</span></div><div class="entry-checks"><span :class="entry.hasApprovedDraft === true ? 'check check--yes' : 'check check--no'">{{ entry.hasApprovedDraft === true ? '✓ 已有 approved draft' : '— 尚無 approved draft' }}</span><span :class="entry.hasPassedRiskGate === true ? 'check check--yes' : 'check check--no'">{{ entry.hasPassedRiskGate === true ? '✓ risk gate passed' : '— risk gate 尚未通過' }}</span><span v-if="runForEntry(entry.id)" class="check">Run：{{ statusLabel(runForEntry(entry.id)!.state) }}</span></div><div class="entry-bindings"><div class="entry-bindings__heading"><div><strong>Publication target bindings</strong><span>server contract：1–20 個 target，binding 會在 generation 開始後鎖定</span></div><button class="secondary-button" type="button" :disabled="isSaving || !entryTargetsFor(entry).length || !entryBindingSelectionFor(entry).length" @click="bindEntryTargets(entry)">儲存 target bindings</button></div><div v-if="entryTargetsFor(entry).length" class="binding-options"><label v-for="target in entryTargetsFor(entry)" :key="target.id" class="binding-option"><input type="checkbox" :checked="isEntryTargetSelected(entry, target.id)" :disabled="isSaving || !['planned', 'materialized', 'awaiting_generation'].includes(entry.status)" @change="toggleEntryBinding(entry, target.id, $event)"><span><strong>{{ target.targetId }}</strong> · {{ frameworkLabel(target.framework) }} · {{ transportLabel(target.transport) }}<small>{{ target.executionEnabled ? 'execute enabled' : 'dry-run only' }} · {{ target.status }} · website {{ target.websiteId || '尚未提供' }}</small></span></label></div><p v-else class="inline-help">此 entry 所屬 client 尚無可綁定 target；請先在 target registry 建立 active target。</p><div v-if="entry.publicationTargetBindings?.length" class="binding-receipts"><div v-for="binding in entry.publicationTargetBindings" :key="binding.bindingId" class="binding-receipt"><span><strong>#{{ binding.slot }} {{ binding.targetId }}</strong> · {{ frameworkLabel(binding.framework) }} · {{ transportLabel(binding.transport) }}</span><span :class="statusClass(binding.latestAttempt?.status || binding.status)">{{ targetBindingStatus(binding) }}</span><small v-if="binding.latestAttempt?.receiptFingerprint">receipt {{ binding.latestAttempt.receiptFingerprint }}<template v-if="binding.latestAttempt.publicationUrl"> · {{ binding.latestAttempt.publicationUrl }}</template></small><small v-else-if="binding.latestAttempt?.errorSummary">{{ binding.latestAttempt.errorSummary }}</small><small v-else>尚未產生 verified receipt</small></div></div></div><div v-if="!['delivered', 'completed', 'cancelled', 'skipped', 'blocked'].includes(entry.status)" class="button-row entry-actions"><button class="secondary-button" type="button" :disabled="isSaving || !workspace.readiness.generationExecutorAvailable" @click="executeEntry(entry, 'dry_run')">執行下一步 dry-run</button><button v-if="entry.status === 'ready_to_publish'" class="primary-button" type="button" :disabled="isSaving || !workspace.readiness.publicationExecutionEnabled" @click="executeEntry(entry, 'execute')">執行 publication</button></div><p class="next-action"><strong>下一動作</strong>{{ entryNextAction(entry) }}</p><div v-if="assessmentForEntry(entry.id)" class="outcome-note"><strong>Outcome Learning</strong><span>{{ assessmentForEntry(entry.id)!.assessmentStatus }}<template v-if="assessmentForEntry(entry.id)!.validPairCount !== undefined"> · {{ assessmentForEntry(entry.id)!.validPairCount }} 個有效資料配對</template></span></div><details><summary>Advanced details</summary><dl><div><dt>Entry ID</dt><dd>{{ entry.id }}</dd></div><div><dt>Calendar</dt><dd>{{ calendarName(entry.calendarId) }}</dd></div><div><dt>Draft ID</dt><dd>{{ entry.draftId || '尚未提供' }}</dd></div><div><dt>Review ID</dt><dd>{{ entry.reviewId || '尚未提供' }}</dd></div><div><dt>Evidence hash</dt><dd>{{ entry.evidenceSnapshotHash || '尚未提供' }}</dd></div><div><dt>Content hash</dt><dd>{{ entry.contentHash || '尚未提供' }}</dd></div><div><dt>Idempotency key</dt><dd>{{ entry.idempotencyKey || '尚未提供' }}</dd></div><div v-if="runForEntry(entry.id)"><dt>Run ID</dt><dd>{{ runForEntry(entry.id)!.id }}</dd></div></dl></details></article></div></section>
+      <section class="section-block" aria-labelledby="entries-title">
+        <div class="section-heading"><div><p class="eyebrow">CONTENT PIPELINE</p><h2 id="entries-title">每篇內容目前走到哪裡？</h2></div><span class="data-note">blocked、failed、retry_wait 會獨立顯示</span></div>
+        <div v-if="workspace.entries.length === 0" class="empty-card"><strong>還沒有內容項目</strong><span>先建立月曆，再由 runtime materialize 內容項目。</span></div>
+        <div v-else class="entry-list">
+          <article v-for="entry in workspace.entries" :key="entry.id" class="entry-card">
+            <div class="entry-card__header"><div><p class="entry-date">{{ formatLocalDate(entry.plannedLocalDate) }}</p><h3>{{ entry.title || entry.topic || '未命名內容' }}</h3><p>{{ entry.contentType }} · {{ entry.language }} · {{ frameworkLabel(entry.framework) }}{{ entry.target ? ` · ${entry.target}` : '' }}</p></div><span :class="statusClass(entry.status)">{{ statusLabel(entry.status) }}</span></div>
+            <OwnerDraftReceipt v-if="entry.latestDraftReceipt" :receipt="entry.latestDraftReceipt" />
+            <OwnerSitePublicationState v-if="entry.latestSitePublication" :value="entry.latestSitePublication" />
+            <OwnerSiteMeasurementHandoff
+              v-if="entry.publicationTargetId && entry.siteMeasurement"
+              :value="entry.siteMeasurement"
+              :busy="siteMeasurementHandoffBusyKey === siteMeasurementHandoffIdentity(entry.id, entry.publicationTargetId, entry.siteMeasurement.publicationFingerprint)"
+              :error="siteMeasurementHandoffErrorKey === siteMeasurementHandoffIdentity(entry.id, entry.publicationTargetId, entry.siteMeasurement.publicationFingerprint) ? siteMeasurementHandoffError : ''"
+              @confirm="confirmSiteMeasurementHandoff(entry, entry.publicationTargetId, entry.siteMeasurement)"
+            />
+            <div v-if="!entry.publicationTargetBindings?.length && entry.sitePublicationCheckAvailable === true && entry.publicationTargetId" class="button-row site-publication-check">
+              <button class="secondary-button" type="button" :disabled="isSaving" @click="checkSitePublication(entry, entry.publicationTargetId)">{{ sitePublicationCheckBusyKey === sitePublicationCheckIdentity(entry.id, entry.publicationTargetId) ? '正在核對…' : '核對網站發布狀態' }}</button>
+              <span class="inline-help">此要求只核對網站發布狀態，不會發布文章或代替網站老師核准。</span>
+            </div>
+            <div class="pipeline" aria-label="內容 pipeline"><span v-for="step in pipelineSteps" :key="step.key" class="pipeline-step" :class="{ 'pipeline-step--active': pipelineStage(entry) === step.key, 'pipeline-step--complete': pipelineSteps.findIndex(item => item.key === pipelineStage(entry)) > pipelineSteps.findIndex(item => item.key === step.key) }">{{ step.label }}</span></div>
+            <div class="entry-checks"><span :class="entry.hasApprovedDraft === true ? 'check check--yes' : 'check check--no'">{{ entry.hasApprovedDraft === true ? '✓ 已有 approved draft' : '— 尚無 approved draft' }}</span><span :class="entry.hasPassedRiskGate === true ? 'check check--yes' : 'check check--no'">{{ entry.hasPassedRiskGate === true ? '✓ risk gate passed' : '— risk gate 尚未通過' }}</span><span v-if="runForEntry(entry.id)" class="check">Run：{{ statusLabel(runForEntry(entry.id)!.state) }}</span></div>
+            <div class="entry-bindings">
+              <div class="entry-bindings__heading"><div><strong>Publication target bindings</strong><span>server contract：1–20 個 target，binding 會在 generation 開始後鎖定</span></div><button class="secondary-button" type="button" :disabled="isSaving || !entryTargetsFor(entry).length || !entryBindingSelectionFor(entry).length" @click="bindEntryTargets(entry)">儲存 target bindings</button></div>
+              <div v-if="entryTargetsFor(entry).length" class="binding-options"><label v-for="target in entryTargetsFor(entry)" :key="target.id" class="binding-option"><input type="checkbox" :checked="isEntryTargetSelected(entry, target.id)" :disabled="isSaving || !['planned', 'materialized', 'awaiting_generation'].includes(entry.status)" @change="toggleEntryBinding(entry, target.id, $event)"><span><strong>{{ target.targetId }}</strong> · {{ frameworkLabel(target.framework) }} · {{ transportLabel(target.transport) }}<small>{{ target.executionEnabled ? 'execute enabled' : 'dry-run only' }} · {{ target.status }} · website {{ target.websiteId || '尚未提供' }}</small></span></label></div>
+              <p v-else class="inline-help">此 entry 所屬 client 尚無可綁定 target；請先在 target registry 建立 active target。</p>
+              <div v-if="entry.publicationTargetBindings?.length" class="binding-receipts">
+                <div v-for="binding in entry.publicationTargetBindings" :key="binding.bindingId" class="binding-receipt">
+                  <span><strong>#{{ binding.slot }} {{ binding.targetId }}</strong> · {{ frameworkLabel(binding.framework) }} · {{ transportLabel(binding.transport) }}</span>
+                  <span :class="statusClass(binding.latestAttempt?.status || binding.status)">{{ targetBindingStatus(binding) }}</span>
+                  <OwnerDraftReceipt v-if="binding.latestAttempt?.draftReceipt" :receipt="binding.latestAttempt.draftReceipt" />
+                  <OwnerSitePublicationState v-if="binding.latestAttempt?.sitePublication" :value="binding.latestAttempt.sitePublication" />
+                  <OwnerSiteMeasurementHandoff
+                    v-if="binding.latestAttempt?.siteMeasurement"
+                    :value="binding.latestAttempt.siteMeasurement"
+                    :busy="siteMeasurementHandoffBusyKey === siteMeasurementHandoffIdentity(entry.id, binding.targetRowId, binding.latestAttempt.siteMeasurement.publicationFingerprint)"
+                    :error="siteMeasurementHandoffErrorKey === siteMeasurementHandoffIdentity(entry.id, binding.targetRowId, binding.latestAttempt.siteMeasurement.publicationFingerprint) ? siteMeasurementHandoffError : ''"
+                    @confirm="confirmSiteMeasurementHandoff(entry, binding.targetRowId, binding.latestAttempt.siteMeasurement)"
+                  />
+                  <div v-if="binding.latestAttempt?.sitePublicationCheckAvailable === true" class="button-row site-publication-check">
+                    <button class="secondary-button" type="button" :disabled="isSaving" @click="checkSitePublication(entry, binding.targetRowId)">{{ sitePublicationCheckBusyKey === sitePublicationCheckIdentity(entry.id, binding.targetRowId) ? '正在核對…' : '核對網站發布狀態' }}</button>
+                    <span class="inline-help">此要求只核對網站發布狀態，不會發布文章或代替網站老師核准。</span>
+                  </div>
+                  <small v-if="binding.latestAttempt?.receiptFingerprint && !binding.latestAttempt?.draftReceipt">receipt {{ binding.latestAttempt.receiptFingerprint }}<template v-if="binding.latestAttempt.publicationUrl"> · {{ binding.latestAttempt.publicationUrl }}</template></small>
+                  <small v-else-if="binding.latestAttempt?.errorSummary && !binding.latestAttempt?.draftReceipt">{{ binding.latestAttempt.errorSummary }}</small>
+                  <small v-else-if="!binding.latestAttempt?.draftReceipt">尚未產生 verified receipt</small>
+                </div>
+              </div>
+            </div>
+            <div v-if="!['delivered', 'completed', 'cancelled', 'skipped', 'blocked', 'awaiting_site_review'].includes(entry.status)" class="button-row entry-actions"><button class="secondary-button" type="button" :disabled="isSaving || !workspace.readiness.generationExecutorAvailable" @click="executeEntry(entry, 'dry_run')">執行下一步 dry-run</button><button v-if="entry.status === 'ready_to_publish'" class="primary-button" type="button" :disabled="isSaving || !workspace.readiness.publicationExecutionEnabled" @click="executeEntry(entry, 'execute')">執行 publication</button></div>
+            <p class="next-action"><strong>下一動作</strong>{{ entryNextAction(entry) }}</p>
+            <div v-if="assessmentForEntry(entry.id)" class="outcome-note"><strong>Outcome Learning</strong><span>{{ assessmentForEntry(entry.id)!.assessmentStatus }}<template v-if="assessmentForEntry(entry.id)!.validPairCount !== undefined"> · {{ assessmentForEntry(entry.id)!.validPairCount }} 個有效資料配對</template></span></div>
+            <details><summary>Advanced details</summary><dl><div><dt>Entry ID</dt><dd>{{ entry.id }}</dd></div><div><dt>Calendar</dt><dd>{{ calendarName(entry.calendarId) }}</dd></div><div><dt>Draft ID</dt><dd>{{ entry.draftId || '尚未提供' }}</dd></div><div><dt>Review ID</dt><dd>{{ entry.reviewId || '尚未提供' }}</dd></div><div><dt>Evidence hash</dt><dd>{{ entry.evidenceSnapshotHash || '尚未提供' }}</dd></div><div><dt>Content hash</dt><dd>{{ entry.contentHash || '尚未提供' }}</dd></div><div><dt>Idempotency key</dt><dd>{{ entry.idempotencyKey || '尚未提供' }}</dd></div><div v-if="runForEntry(entry.id)"><dt>Run ID</dt><dd>{{ runForEntry(entry.id)!.id }}</dd></div></dl></details>
+          </article>
+        </div>
+      </section>
 
       <section v-if="workspace.entries.length" class="section-block outcome-summary" aria-labelledby="outcome-title"><div class="section-heading"><div><p class="eyebrow">OUTCOME LEARNING</p><h2 id="outcome-title">成效資料是否足夠？</h2></div></div><div class="outcome-grid"><article><strong>{{ outcomeEntries.length }}</strong><span>目前具有 ready 或 partial assessment 的內容</span></article><article><strong>{{ workspace.readiness.outcomeCollectionStatus === 'unverified' ? '設定尚未確認' : workspace.readiness.outcomeCollectionConfigured ? '收數設定已備妥' : '尚未設定自動收數' }}</strong><span>GSC／GA4 的設定狀態；真實收數、供應商權限與主機持續執行仍待驗證。</span></article></div><p class="section-copy">可保存成效資料不代表已自動收數。這裡只呈現設定、已有資料與 assessment 狀態，不把 observational signal 說成因果成效，也不推估排名、流量、轉換或 ROI。</p></section>
     </template>

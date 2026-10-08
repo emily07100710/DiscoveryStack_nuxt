@@ -4,6 +4,7 @@ import type { getLearningLoopWorkspace } from "~/server/learning-loop/service";
 import type { WorkspaceSummary } from "~/server/geo-outcome-model/types";
 import type { getContentEffectModelWorkspace } from "~/server/learning-loop/effect-service";
 import LivePublicationActionsPanel from "~/components/owner/LivePublicationActionsPanel.vue";
+import OwnerSiteLearningAdmission from "~/components/OwnerSiteLearningAdmission.vue";
 
 definePageMeta({ layout: "owner" });
 useHead({
@@ -45,6 +46,9 @@ const content = await read<{
 const effect = await read<
   Awaited<ReturnType<typeof getContentEffectModelWorkspace>>
 >("/api/interventions/closed-loop/effect-models", { server: false });
+const siteLearning = await read<unknown>("/api/content-operations/site-learning/workspace", { server: false });
+const siteLearningResult = ref<unknown>(null);
+const siteLearningError = ref("");
 const effects = computed(() => effect.data.value);
 const effectUseLiveActions = ref(false);
 const effectRelease = computed(() =>
@@ -120,6 +124,141 @@ const keyFor = (operation: string) => {
     requestKeys.set(operation, `learning-ui:${crypto.randomUUID()}`);
   return requestKeys.get(operation)!;
 };
+const siteLearningHash = /^[a-f0-9]{64}$/u;
+function siteLearningResponse(value: unknown, keys: readonly string[]): Record<string, unknown> | null {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.length !== keys.length || ownKeys.some(key => typeof key !== "string" || !keys.includes(key))) return null;
+    const output: Record<string, unknown> = Object.create(null);
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) return null;
+      output[key] = descriptor.value;
+    }
+    return output;
+  } catch { return null; }
+}
+function siteLearningReleaseResponse(value: unknown): Record<string, unknown> | null {
+  const keys = ["status", "manifest", "candidateResults", "eligibleCandidateCount", "blockedOutcomeCount", "datasetDigest", "releaseFingerprint", "modelTrainingAllowed", "citationTrainingEligible", "limitations"];
+  const row = siteLearningResponse(value, keys);
+  const hash = (item: unknown) => typeof item === "string" && siteLearningHash.test(item);
+  const count = (item: unknown) => Number.isSafeInteger(item) && Number(item) >= 0;
+  if (!row || !["gate_blocked", "ready_for_dataset_review"].includes(String(row.status))
+    || !Array.isArray(row.candidateResults) || row.candidateResults.length > 500
+    || !count(row.eligibleCandidateCount) || !count(row.blockedOutcomeCount)
+    || !hash(row.datasetDigest) || !hash(row.releaseFingerprint)
+    || row.modelTrainingAllowed !== false || row.citationTrainingEligible !== false
+    || !Array.isArray(row.limitations) || row.limitations.length > 40 || row.limitations.some(item => typeof item !== "string" || item.length > 160)) return null;
+  const manifestKeys = ["status", "eligibleCandidateCount", "trainCandidateFingerprints", "validationCandidateFingerprints", "testCandidateFingerprints", "candidateFingerprints", "sourceCombinationCount", "contentTypeCounts", "languageCounts", "policyVersion", "engineVersion", "reasonCodes", "limitations", "manifestFingerprint"];
+  const manifest = siteLearningResponse(row.manifest, manifestKeys);
+  const hashes = (items: unknown) => Array.isArray(items) && items.length <= 500 && items.every(hash);
+  const codeList = (items: unknown, limit: number) => Array.isArray(items) && items.length <= limit && items.every(item => typeof item === "string" && item.length <= 200);
+  const safeCounts = (items: unknown) => {
+    const record = items && typeof items === "object" && !Array.isArray(items) ? siteLearningResponse(items, Reflect.ownKeys(items).filter((key): key is string => typeof key === "string")) : null;
+    return Boolean(record && Object.keys(record).length <= 80 && Object.values(record).every(count));
+  };
+  if (!manifest || !["gate_blocked", "ready_for_dataset_review"].includes(String(manifest.status)) || !count(manifest.eligibleCandidateCount)
+    || !hashes(manifest.trainCandidateFingerprints) || !hashes(manifest.validationCandidateFingerprints) || !hashes(manifest.testCandidateFingerprints) || !hashes(manifest.candidateFingerprints)
+    || !count(manifest.sourceCombinationCount) || !safeCounts(manifest.contentTypeCounts) || !safeCounts(manifest.languageCounts)
+    || typeof manifest.policyVersion !== "string" || manifest.policyVersion.length > 80 || typeof manifest.engineVersion !== "string" || manifest.engineVersion.length > 80
+    || !codeList(manifest.reasonCodes, 80) || !codeList(manifest.limitations, 80) || !hash(manifest.manifestFingerprint)) return null;
+  for (const candidate of row.candidateResults) {
+    const item = siteLearningResponse(candidate, ["candidateStatus", "candidateFingerprint", "reasonCodes"]);
+    if (!item || typeof item.candidateStatus !== "string" || item.candidateStatus.length > 80
+      || (item.candidateFingerprint !== null && !hash(item.candidateFingerprint)) || !codeList(item.reasonCodes, 40)) return null;
+  }
+  return row;
+}
+function siteLearningIdentity(action: string, payload: Record<string, string | number>) {
+  return `${action}:${Object.keys(payload).sort().map(key => `${key}=${String(payload[key])}`).join("|")}`;
+}
+async function refreshSiteLearning() {
+  await siteLearning.refresh();
+  if (siteLearning.error.value) throw new Error("准入工作區重新讀取未核實");
+}
+function siteLearningEntry(entryId: number, targetRowId: number) {
+  const current = siteLearning.data.value;
+  if (!current || typeof current !== "object" || Array.isArray(current) || !Array.isArray((current as { entries?: unknown }).entries)) return null;
+  return ((current as { entries: Array<Record<string, unknown>> }).entries).find(entry => entry.entryId === entryId && entry.targetRowId === targetRowId) || null;
+}
+function siteLearningOutcome(id: number) {
+  const current = siteLearning.data.value;
+  if (!current || typeof current !== "object" || Array.isArray(current) || !Array.isArray((current as { outcomes?: unknown }).outcomes)) return null;
+  return ((current as { outcomes: Array<Record<string, unknown>> }).outcomes).find(outcome => outcome.id === id) || null;
+}
+async function siteLearningOptIn(value: { entryId: number; targetRowId: number; confirmationFingerprint: string; authorizationId: number; authorizationFingerprint: string }) {
+  if (busy.value || !Number.isSafeInteger(value.entryId) || value.entryId < 1 || !Number.isSafeInteger(value.targetRowId) || value.targetRowId < 1
+    || !Number.isSafeInteger(value.authorizationId) || value.authorizationId < 1 || !siteLearningHash.test(value.confirmationFingerprint) || !siteLearningHash.test(value.authorizationFingerprint)) return;
+  const operation = siteLearningIdentity("opt-in", value);
+  const body = { targetRowId: value.targetRowId, expectedConfirmationFingerprint: value.confirmationFingerprint, authorizationId: value.authorizationId, expectedAuthorizationFingerprint: value.authorizationFingerprint, customerEvidenceConfirmed: true, scopeConfirmed: true, idempotencyKey: keyFor(operation) };
+  busy.value = true; siteLearningError.value = ""; notice.value = "";
+  try {
+    const response = await mutate(`/api/content-operations/entries/${value.entryId}/site-learning-opt-in`, { method: "POST", body });
+    const result = siteLearningResponse(response, ["state", "replayed", "grantFingerprint"]);
+    if (!result || result.state !== "granted" || typeof result.replayed !== "boolean" || typeof result.grantFingerprint !== "string" || !siteLearningHash.test(result.grantFingerprint)) throw new Error("invalid response");
+    await refreshSiteLearning();
+    const projected = siteLearningEntry(value.entryId, value.targetRowId)?.grant;
+    if (!projected || typeof projected !== "object" || (projected as Record<string, unknown>).state !== "active" || (projected as Record<string, unknown>).fingerprint !== result.grantFingerprint) throw new Error("missing grant projection");
+    requestKeys.delete(operation);
+    notice.value = "已記錄此網站版本的成效資料接入授權；尚未收集資料、訓練或部署。";
+  } catch {
+    siteLearningError.value = "接入授權結果尚未核實；沒有宣稱已准入或開始收數。重新確認會沿用同一識別碼。";
+  } finally { busy.value = false; }
+}
+async function siteLearningRevoke(value: { entryId: number; targetRowId: number; grantFingerprint: string }) {
+  if (busy.value || !Number.isSafeInteger(value.entryId) || value.entryId < 1 || !Number.isSafeInteger(value.targetRowId) || value.targetRowId < 1 || !siteLearningHash.test(value.grantFingerprint)) return;
+  const operation = siteLearningIdentity("revoke", value);
+  const body = { targetRowId: value.targetRowId, expectedGrantFingerprint: value.grantFingerprint, confirmed: true, idempotencyKey: keyFor(operation) };
+  busy.value = true; siteLearningError.value = ""; notice.value = "";
+  try {
+    const response = await mutate(`/api/content-operations/entries/${value.entryId}/site-learning-revoke`, { method: "POST", body });
+    const result = siteLearningResponse(response, ["state", "replayed", "grantFingerprint"]);
+    if (!result || result.state !== "revoked" || typeof result.replayed !== "boolean" || result.grantFingerprint !== value.grantFingerprint) throw new Error("invalid response");
+    await refreshSiteLearning();
+    const projected = siteLearningEntry(value.entryId, value.targetRowId)?.grant;
+    if (projected && typeof projected === "object" && (projected as Record<string, unknown>).fingerprint === value.grantFingerprint) throw new Error("revocation not projected");
+    requestKeys.delete(operation);
+    notice.value = "已記錄撤銷；收數前仍會重新核對，歷史紀錄不代表資料已刪除。";
+  } catch {
+    siteLearningError.value = "撤銷結果尚未核實；重新讀取狀態前不會宣稱成功，重試會沿用同一識別碼。";
+  } finally { busy.value = false; }
+}
+async function siteLearningReview(value: { id: number; entryId: number; targetRowId: number; assessmentFingerprint: string; grantFingerprint: string; decision: "approve" | "reject" }) {
+  if (busy.value || !Number.isSafeInteger(value.id) || value.id < 1 || !siteLearningHash.test(value.assessmentFingerprint) || !siteLearningHash.test(value.grantFingerprint)) return;
+  const operation = siteLearningIdentity("review", value);
+  const body = { expectedAssessmentFingerprint: value.assessmentFingerprint, expectedGrantFingerprint: value.grantFingerprint, decision: value.decision, piiReviewed: true, limitationsUnderstood: true, idempotencyKey: keyFor(operation) };
+  busy.value = true; siteLearningError.value = ""; notice.value = "";
+  try {
+    const response = await mutate(`/api/content-operations/site-learning/outcomes/${value.id}/review`, { method: "POST", body });
+    const result = siteLearningResponse(response, ["state", "replayed", "reviewFingerprint"]);
+    const expected = value.decision === "approve" ? "approved" : "rejected";
+    if (!result || result.state !== expected || typeof result.replayed !== "boolean" || typeof result.reviewFingerprint !== "string" || !siteLearningHash.test(result.reviewFingerprint)) throw new Error("invalid response");
+    await refreshSiteLearning();
+    if (siteLearningOutcome(value.id)?.state !== expected) throw new Error("review not projected");
+    requestKeys.delete(operation);
+    notice.value = value.decision === "approve" ? "已核准這份確切成效資料准入候選；尚未訓練或部署。" : "已排除此筆成效資料候選。";
+  } catch {
+    siteLearningError.value = "成效資料審查結果尚未核實；沒有宣稱已准入，重試會沿用同一識別碼。";
+  } finally { busy.value = false; }
+}
+async function buildSiteLearningRelease() {
+  if (busy.value) return;
+  busy.value = true; siteLearningError.value = ""; siteLearningResult.value = null; notice.value = "";
+  try {
+    const response = await mutate("/api/content-operations/site-learning/release", { method: "POST", body: { confirmed: true } });
+    const result = siteLearningReleaseResponse(response);
+    if (!result) throw new Error("invalid release projection");
+    siteLearningResult.value = result;
+    await refreshSiteLearning();
+    notice.value = "最新成效資料釋出已重新核對；此操作未執行訓練或正式部署。";
+  } catch {
+    siteLearningResult.value = null;
+    siteLearningError.value = "成效資料釋出結果尚未核實；請重新讀取狀態，不會宣稱已建立資料集。";
+  } finally { busy.value = false; }
+}
 const canSave = computed(
   () =>
     form.clientId > 0 &&
@@ -158,6 +297,7 @@ async function refreshAll() {
     model.refresh(),
     content.refresh(),
     effect.refresh(),
+    siteLearning.refresh(),
   ]);
 }
 async function action(
@@ -327,7 +467,7 @@ async function approveFallback(artifactId: string) {
     <nav class="steps" aria-label="閉環步驟">
       <a href="#authority">01 資料授權</a><a href="#collection">02 蒐集與檢視</a
       ><a href="#training">03 訓練與驗證</a><a href="#publish">04 LINE 確認</a
-      ><a href="#feedback">05 成效回收</a>
+      ><a href="#feedback">05 成效回收</a><a href="#site-learning-admission">06 網站成效資料准入</a>
     </nav>
     <p v-if="notice" class="success" role="status">{{ notice }}</p>
     <p v-if="actionError" class="error" role="alert">{{ actionError }}</p>
@@ -365,6 +505,17 @@ async function approveFallback(artifactId: string) {
           }}</span
         >
       </div>
+      <OwnerSiteLearningAdmission
+        :workspace="siteLearning.data.value"
+        :release-result="siteLearningResult"
+        :busy="busy"
+        :error="siteLearningError || (siteLearning.error.value ? '目前無法讀取網站成效准入狀態；沒有新增授權或審查。' : '')"
+        @refresh="refreshSiteLearning"
+        @opt-in="siteLearningOptIn"
+        @revoke="siteLearningRevoke"
+        @review="siteLearningReview"
+        @build-release="buildSiteLearningRelease"
+      />
       <section id="authority" class="panel">
         <div class="heading">
           <div>

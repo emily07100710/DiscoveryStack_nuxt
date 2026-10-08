@@ -3,6 +3,7 @@ import { withMutationIdempotency } from '../server/api/geo-outcome-model/_helper
 import { executeObservationGovernanceMutation } from '../server/api/geo-outcome-model/observation-governance-mutation'
 import { executeCandidateSetReviewMutation } from '../server/api/geo-outcome-model/candidate-set-review-mutation'
 import { buildCitationSelectionDataset } from '../server/geo-outcome-model/dataset-builder'
+import { buildDatasetKnowledgeAuthority } from '../server/geo-outcome-model/knowledge-authority'
 import { DrizzleGeoOutcomeRepository } from '../server/geo-outcome-model/repository-drizzle'
 import { approveBootstrapFallback, bindAndVerifyObservationEvidence, createBootstrapFallback, createTrainingRun, executeTrainingRun, getWorkspace, reviewDataset, reviewModel } from '../server/geo-outcome-model/service'
 import { normalizeManualObservation } from '../server/geo-outcome-model/normalization'
@@ -101,7 +102,7 @@ beforeAll(async () => {
   }
   const built = buildCitationSelectionDataset(await repository.listObservations(ownerUserId), ownerUserId)
   const saved = await repository.saveDatasetTransactional(ownerUserId, built.manifest, built.members)
-  await reviewDataset(ownerUserId, saved.manifestId, 'approve', ownerUserId, 'Owner approved durable dataset.', repository)
+  await reviewDataset(ownerUserId, saved.manifestId, 'approve', ownerUserId, 'Owner approved durable dataset.', repository, { knowledgeMode: 'declared_none_v1' })
   readyState = harness.exportState()
   readyManifestId = saved.manifestId
 }, 30_000)
@@ -222,7 +223,7 @@ describe('Drizzle GEO outcome durable boundary', () => {
     const built = buildCitationSelectionDataset(await repository.listObservations(ownerUserId), ownerUserId)
     expect(built.members).toHaveLength(1000)
     const savedManifest = await repository.saveDatasetTransactional(ownerUserId, built.manifest, built.members)
-    await reviewDataset(ownerUserId, savedManifest.manifestId, 'approve', ownerUserId, 'Owner approved the complete 1000-row fixture dataset.', repository)
+    await reviewDataset(ownerUserId, savedManifest.manifestId, 'approve', ownerUserId, 'Owner approved the complete 1000-row fixture dataset.', repository, { knowledgeMode: 'declared_none_v1' })
     const approvedManifest = (await repository.getDataset(ownerUserId, savedManifest.manifestId))!
     expect(approvedManifest.status).toBe('approved')
     expect((await repository.listDatasetDecisions(ownerUserId)).at(-1)?.manifestId).toBe(approvedManifest.manifestId)
@@ -240,6 +241,11 @@ describe('Drizzle GEO outcome durable boundary', () => {
     expect(artifact?.rollbackArtifactHash).toBe(fallback.artifactHash)
     const transitioned = await reviewModel(ownerUserId, artifact!.artifactId, 'approve_for_shadow', ownerUserId, 'Owner reviewed candidate after verifying the fallback lineage.', repository)
     expect(transitioned.ledger.modelArtifactId).toBe(artifact!.artifactId)
+    await expect(repository.transitionArtifactWithDecision(ownerUserId, artifact!.artifactId, 'approved_for_shadow', ownerUserId + 1, 'Wrong owner cannot admit policy artifact.', approvedManifest.manifestFingerprint, fallback.artifactHash)).rejects.toThrow(/reviewer/i)
+    const policyAdmission = await repository.transitionArtifactWithDecision(ownerUserId, artifact!.artifactId, 'approved_for_shadow', null, 'Owner-authorized policy admission with current immutable references.', approvedManifest.manifestFingerprint, fallback.artifactHash)
+    expect(policyAdmission.decision.reviewerUserId).toBeNull()
+    expect(policyAdmission.artifact.datasetDecisionId).toBe(artifact!.datasetDecisionId)
+    expect(policyAdmission.artifact.knowledgeAuthorityFingerprint).toBe(artifact!.knowledgeAuthorityFingerprint)
     const workspace = await getWorkspace(ownerUserId, repository)
     expect(workspace.trainingRuns[0]?.datasetManifestId).toBe(approvedManifest.manifestId)
     expect(workspace.decisions.find(decision => decision.modelArtifactId === artifact!.artifactId)?.modelArtifactId).toBe(artifact!.artifactId)
@@ -328,7 +334,7 @@ describe('Drizzle GEO outcome durable boundary', () => {
     await repository.saveDatasetTransactional(ownerUserId, manifest, members)
     const duplicate = variantManifest(manifest, 'overlap')
     await repository.saveDatasetTransactional(ownerUserId, duplicate, members)
-    await reviewDataset(ownerUserId, duplicate.manifestId, 'approve', ownerUserId, 'Approve overlapping manifest for dedupe test.', repository)
+    await reviewDataset(ownerUserId, duplicate.manifestId, 'approve', ownerUserId, 'Approve overlapping manifest for dedupe test.', repository, { knowledgeMode: 'declared_none_v1' })
     const afterApproval = await getWorkspace(ownerUserId, repository)
     expect(afterApproval.inventory.positiveCount).toBe(before.inventory.positiveCount)
     expect(afterApproval.inventory.hardNegativeCount).toBe(before.inventory.hardNegativeCount)
@@ -337,17 +343,21 @@ describe('Drizzle GEO outcome durable boundary', () => {
     expect((await getWorkspace(ownerUserId, repository)).readiness.shadow).toEqual(before.readiness.shadow)
   })
 
-  it('persists dataset decision business lineage, rejects concurrent decisions and makes revoke terminal', async () => {
+  it('persists dataset decision business lineage, supports explicit reapproval, and makes revoke terminal', async () => {
     const { harness, repository } = readyRepository(); const manifest = (await repository.getDataset(ownerUserId, readyManifestId))!; const members = await repository.getDatasetMembers(ownerUserId, readyManifestId)
     const duplicate = variantManifest(manifest, 'ledger'); await repository.saveDatasetTransactional(ownerUserId, duplicate, members)
-    const attempts = await Promise.allSettled([reviewDataset(ownerUserId, duplicate.manifestId, 'approve', ownerUserId, 'Concurrent owner approval.', repository), reviewDataset(ownerUserId, duplicate.manifestId, 'approve', ownerUserId, 'Concurrent owner approval.', repository)])
-    expect(attempts.filter(item => item.status === 'fulfilled')).toHaveLength(1)
-    const decisions = await repository.listDatasetDecisions(ownerUserId); const projected = decisions.find(item => item.manifestId === duplicate.manifestId)
+    const attempts = await Promise.allSettled([reviewDataset(ownerUserId, duplicate.manifestId, 'approve', ownerUserId, 'Concurrent owner approval.', repository, { knowledgeMode: 'declared_none_v1' }), reviewDataset(ownerUserId, duplicate.manifestId, 'approve', ownerUserId, 'Concurrent owner approval.', repository, { knowledgeMode: 'declared_none_v1' })])
+    expect(attempts.filter(item => item.status === 'fulfilled')).toHaveLength(2)
+    const decisions = await repository.listDatasetDecisions(ownerUserId); const approvals = decisions.filter(item => item.manifestId === duplicate.manifestId)
+    expect(approvals).toHaveLength(2)
+    expect(approvals.map(item => [item.previousStatus, item.newStatus])).toEqual([['ready_for_review', 'approved'], ['approved', 'approved']])
+    const projected = approvals.at(-1)
     expect(projected?.manifestFingerprint).toBe(duplicate.manifestFingerprint)
+    expect(projected?.knowledgeAuthority).toEqual(buildDatasetKnowledgeAuthority(await repository.readDatasetKnowledgeState(ownerUserId, duplicate.manifestId), 'declared_none_v1'))
     const restarted = new DrizzleGeoOutcomeRepository(new StrictGeoDrizzleHarness(harness.exportState()).asDatabase())
-    expect((await restarted.listDatasetDecisions(ownerUserId)).find(item => item.manifestId === duplicate.manifestId)?.decisionId).toBe(projected?.decisionId)
+    expect((await restarted.listDatasetDecisions(ownerUserId)).filter(item => item.manifestId === duplicate.manifestId).at(-1)).toMatchObject({ decisionId: projected?.decisionId, knowledgeAuthority: projected?.knowledgeAuthority })
     await reviewDataset(ownerUserId, duplicate.manifestId, 'revoke', ownerUserId, 'Terminal dataset revoke.', repository)
-    await expect(reviewDataset(ownerUserId, duplicate.manifestId, 'approve', ownerUserId, 'Cannot restore.', repository)).rejects.toThrow(/terminal/i)
+    await expect(reviewDataset(ownerUserId, duplicate.manifestId, 'approve', ownerUserId, 'Cannot restore.', repository, { knowledgeMode: 'declared_none_v1' })).rejects.toThrow(/terminal/i)
     const corruptHarness = new StrictGeoDrizzleHarness(harness.exportState()); corruptHarness.corrupt('geoOutcomeDatasetDecisions', row => row.manifestFingerprint === duplicate.manifestFingerprint, { datasetManifestId: 999999 })
     await expect(new DrizzleGeoOutcomeRepository(corruptHarness.asDatabase()).listDatasetDecisions(ownerUserId)).rejects.toThrow(/dangling|corrupt/i)
   })
@@ -426,15 +436,15 @@ describe('Drizzle GEO outcome durable boundary', () => {
   })
 
   it('allows one training claim winner and recovers a stale lease with CAS versioning', async () => {
-    const harness = new StrictGeoDrizzleHarness()
-    const repository = new DrizzleGeoOutcomeRepository(harness.asDatabase())
-    const observation = await repository.saveObservationTransactional(ownerUserId, normalizeManualObservation(rawObservation('claim1', 'cited'), ownerUserId))
-    await seedAuthority(harness, observation, 1)
-    await govern(repository, observation, 1)
-    const built = buildCitationSelectionDataset(await repository.listObservations(ownerUserId), ownerUserId)
-    const manifest = built.manifest
-    await repository.saveDatasetTransactional(ownerUserId, manifest, built.members)
-    const run = await createTrainingRun(ownerUserId, { datasetManifestId: manifest.manifestId, modelFamily: 'regularized_logistic_baseline_v1', config: { epochs: 2, learningRate: .1, l2: .01, seed: 0, featureCatalogVersion: 'geo-outcome-feature-catalog-v1' } }, repository)
+    const { repository } = readyRepository()
+    const approved = (await repository.getDataset(ownerUserId, readyManifestId))!
+    const members = await repository.getDatasetMembers(ownerUserId, readyManifestId)
+    const manifest = variantManifest(approved, 'claim-requires-approved-knowledge')
+    await repository.saveDatasetTransactional(ownerUserId, manifest, members)
+    const input = { datasetManifestId: manifest.manifestId, modelFamily: 'regularized_logistic_baseline_v1', config: { epochs: 2, learningRate: .1, l2: .01, seed: 0, featureCatalogVersion: 'geo-outcome-feature-catalog-v1' } }
+    await expect(createTrainingRun(ownerUserId, input, repository)).rejects.toThrow(/approved/i)
+    await reviewDataset(ownerUserId, manifest.manifestId, 'approve', ownerUserId, 'Explicit owner dependency declaration.', repository, { knowledgeMode: 'declared_none_v1' })
+    const run = await createTrainingRun(ownerUserId, input, repository)
     const claims = await Promise.all(Array.from({ length: 8 }, (_, index) => repository.claimTrainingRun(ownerUserId, run.trainingRunId, `worker-${index}`, new Date(Date.now() + 60_000).toISOString())))
     expect(claims.filter(item => item.outcome === 'claimed')).toHaveLength(1)
     expect(claims.filter(item => item.outcome === 'in_progress')).toHaveLength(7)

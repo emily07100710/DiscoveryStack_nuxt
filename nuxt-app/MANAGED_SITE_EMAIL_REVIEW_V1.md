@@ -1,6 +1,6 @@
 # Managed Site Email Manual Review V1
 
-Status: **IMPLEMENTED / NOT_DATABASE_APPLIED / NOT_DEPLOYED / EXECUTION_GATED**. This is a separate owner-authorized investigation workflow, not a sending or recovery authority. Executed validation must be recorded independently; this specification alone is not a passing-test claim.
+Status: **IMPLEMENTED / DATABASE_APPLIED / DEPLOYED / EXECUTION_GATED**. Migrations 0048–0050 and the corresponding application release are verified as of 2026-10-08 in [the current release record](docs/CONFIGURATION_READY_LAUNCH.md#2026-10-08-release-and-activation-checklist). The review feature remains gated and was not enabled by that release. It is a separate owner-authorized investigation workflow, not a sending or recovery authority; real owner closure remains unverified.
 
 ## Scope and immutable evidence boundary
 
@@ -8,7 +8,7 @@ Complete the private platform's handling of an owned outbox item in `manual_requ
 
 Two fixed classifications are permitted: `reviewed_no_resend` (investigation reviewed; no additional send) and `handled_outside_platform` (owner reports handling through another channel; not independently verified). Neither asserts whether the original email was sent. No free text, email content, receipt, token, signature or credential is accepted or stored. A customer who needs a new access link must use the existing current-authority access workflow; this operation cannot recover or resend an expired original message.
 
-The existing audit table cannot represent legitimate owner-scoped reaccess notices with projectId null. Add one separate reduced `managedSiteEmailManualReviews` ledger. Exactly one immutable closure per outbox ID: columns outboxId, ownerUserId (also the authenticated actor), requestId, outboxVersion, reason and closedAt. Primary key outboxId, unique owner/requestId, bounded owner/time index. There is no UPDATE/DELETE/reopen operation. The pending 0048 event migration remains unchanged; generate a separate additive 0049 migration with no database connection.
+The existing audit table cannot represent legitimate owner-scoped reaccess notices with projectId null. Migration 0049 added one separate reduced `managedSiteEmailManualReviews` ledger: one immutable closure per outbox ID, with outboxId, ownerUserId (also the authenticated actor), requestId, outboxVersion, reason and closedAt; primary key outboxId, unique owner/requestId, and bounded owner/time index. There is no UPDATE/DELETE/reopen operation. Migration 0048 remains a separate provider-event increment. Both schema increments are applied; see the current release record above. Historical local acceptance continues to describe the earlier pre-release checkpoint.
 
 ## Server-owned authority and concurrency
 
@@ -22,7 +22,7 @@ In one short SQL transaction, lock the exact owned outbox row for update, load a
 
 Add exactly POST `/api/managed-sites/email-outbox/manual-resolution` to the existing catch-all file, preserving the signed Resend branch unchanged. No new public-browser CORS capability. Require exact canonical same-origin and compatible Sec-Fetch-Site, authenticated owner, JSON content type and an actual 2 KiB streamed/cached body bound. Never process a mutation through GET or OPTIONS. Private no-store/noindex/no-referrer headers apply to all branches.
 
-`NUXT_MANAGED_SITE_EMAIL_REVIEW_ENABLED` defaults false and is independent of sending and observations. When off, no review-table query or write occurs; the owner GET continues to work without 0049. Enabling requires separately reviewed 0049 schema application and explicit owner rollout approval. The gate does not need provider secrets and grants no resend, LINE, publication, crawl or training authority.
+`NUXT_MANAGED_SITE_EMAIL_REVIEW_ENABLED` defaults false and is independent of sending and observations. When off, no review query or write occurs, and the owner GET also works in environments where migration 0049 has not yet been applied. Migration 0049 is applied in the current formal environment; enabling still requires separate owner rollout approval. The gate does not need provider secrets and grants no resend, LINE, publication, crawl or training authority.
 
 ## Safe owner read and UI
 
@@ -37,7 +37,7 @@ The page separates original queue status, unchanged provider evidence, and owner
 - Owned/null-project review; foreign/null-owner/missing row indistinguishability; all nonmanual and lease-bearing rows rejected.
 - Same command replay preserves time; different payload/key conflicts; same owner key cannot close another item; parallel commands produce one durable record.
 - Snapshot drift, transaction failure/rollback, SQL uniqueness, actual reduced schema/indexes and unchanged full outbox values, including acceptedAt/receipt when present.
-- Bounded owner read ignores client scope hints, filters foreign/corrupt projections, and does not query unapplied review schema when disabled.
+- Bounded owner read ignores client scope hints, filters foreign/corrupt projections, and does not query the review table when disabled.
 - UI GET/refresh/cancel cause zero writes; explicit submit only the permitted review action; no send/retry/learning endpoint; honest failure and immutable closure display.
 - Installed-tool typecheck, fresh node-server build, then full safe Vitest from a frozen source; opt-in isolated SQL and loopback HTTP reported separately from skipped real-provider checks.
 

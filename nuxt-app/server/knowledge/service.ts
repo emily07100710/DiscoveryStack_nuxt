@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import { generateUlid } from './ulid'
+import { captureKnowledgeRevisionBefore, flushKnowledgeRevisionAudit, type KnowledgeRevisionAuditChange } from './revision-audit'
+import type { KnowledgeRevisionSubject } from './revision-types'
 import type {
   CreateKnowledgeClaimInput,
   CreateKnowledgeEntityInput,
@@ -91,10 +93,107 @@ export class KnowledgeService {
 
   private timestamp(): Date { return new Date(this.clock()) }
 
+  /** Every canonical Knowledge write and its immutable revision/event commit together. */
+  private async auditedTransaction<T>(work: (repository: KnowledgeRepository) => Promise<T>): Promise<T> {
+    return this.repository.transaction(async repository => {
+      const changes = new Map<string, KnowledgeRevisionAuditChange>()
+      const keyOf = (subject: KnowledgeRevisionSubject) => `${subject.kind}:${subject.id}`
+      const track = async (subject: KnowledgeRevisionSubject, operation: string, created = false): Promise<void> => {
+        const key = keyOf(subject)
+        let change = changes.get(key)
+        if (!change) {
+          if (created) await repository.lockRevisionSubject(this.ownerUserId, subject)
+          change = created
+            ? { subject, beforeSnapshot: null, beforeHash: null, operations: new Set<string>() }
+            : await captureKnowledgeRevisionBefore(this.ownerUserId, repository, subject)
+          changes.set(key, change)
+        }
+        change.operations.add(operation)
+      }
+      const methodOperations: Record<string, string> = {
+        insertEntity: 'insertEntity', updateEntity: 'updateEntity',
+        insertEntityAlias: 'insertEntityAlias', insertEntityExternalId: 'insertEntityExternalId',
+        insertClaim: 'insertClaim', updateClaim: 'updateClaim',
+        insertClaimEntityLink: 'insertClaimEntityLink', insertClaimEvidence: 'insertClaimEvidence',
+        insertSource: 'insertSource', insertSourceVersion: 'insertSourceVersion',
+        insertContentEntityLink: 'insertContentEntityLink', deleteContentEntityLink: 'deleteContentEntityLink',
+        upsertPublisherSetting: 'upsertPublisherSetting',
+      }
+      const audited = new Proxy(repository, {
+        get: (target, property) => {
+          const original = Reflect.get(target, property, target) as unknown
+          if (typeof property !== 'string' || typeof original !== 'function' || !(property in methodOperations)) {
+            return typeof original === 'function' ? original.bind(target) : original
+          }
+          return async (...args: unknown[]) => {
+            const operation = methodOperations[property]!
+            const trackExisting = (kind: KnowledgeRevisionSubject['kind'], id: unknown) => {
+              if (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) return track({ kind, id }, operation)
+            }
+            if (property === 'insertEntity') {
+              const result = await original.apply(target, args) as KnowledgeEntity
+              await track({ kind: 'entity', id: result.id }, operation, true)
+              return result
+            }
+            if (property === 'insertClaim') {
+              const result = await original.apply(target, args) as KnowledgeClaim
+              await track({ kind: 'claim', id: result.id }, operation, true)
+              return result
+            }
+            if (property === 'insertSource') {
+              const result = await original.apply(target, args) as import('./types').KnowledgeSource
+              await track({ kind: 'source', id: result.id }, operation, true)
+              return result
+            }
+            if (property === 'upsertPublisherSetting') {
+              const [record] = args as [import('./types').NewKnowledgeRecord<import('./types').KnowledgePublisherSetting>]
+              const previous = await target.getPublisherSetting(this.ownerUserId)
+              if (previous) await trackExisting('entity', previous.organizationEntityId)
+              await trackExisting('entity', record.organizationEntityId)
+              return original.apply(target, args)
+            }
+            if (property === 'deleteContentEntityLink') {
+              const [, , entityId] = args
+              await trackExisting('entity', entityId)
+              return original.apply(target, args)
+            }
+            if (property === 'insertClaimEntityLink') {
+              const [record] = args as [import('./types').NewKnowledgeRecord<import('./types').KnowledgeClaimEntityLink>]
+              await trackExisting('claim', record.claimId)
+              await trackExisting('entity', record.entityId)
+              return original.apply(target, args)
+            }
+            if (property === 'insertEntityAlias' || property === 'insertEntityExternalId' || property === 'insertContentEntityLink') {
+              const [record] = args as [{ readonly entityId: number }]
+              await trackExisting('entity', record.entityId)
+              return original.apply(target, args)
+            }
+            if (property === 'insertClaimEvidence') {
+              const [record] = args as [import('./types').NewKnowledgeRecord<import('./types').KnowledgeClaimEvidence>]
+              await trackExisting('claim', record.claimId)
+              return original.apply(target, args)
+            }
+            if (property === 'insertSourceVersion') {
+              const [record] = args as [import('./types').NewKnowledgeRecord<import('./types').KnowledgeSourceVersion>]
+              await trackExisting('source', record.sourceId)
+              return original.apply(target, args)
+            }
+            if (property === 'updateEntity') { await trackExisting('entity', args[1]); return original.apply(target, args) }
+            if (property === 'updateClaim') { await trackExisting('claim', args[1]); return original.apply(target, args) }
+            return original.apply(target, args)
+          }
+        },
+      }) as KnowledgeRepository
+      const result = await work(audited)
+      await flushKnowledgeRevisionAudit(this.ownerUserId, repository, changes, this.timestamp())
+      return result
+    }, { auditedMutation: true })
+  }
+
   /** Rejected results thrown out of this wrapper roll the transaction back before being returned; the plain repository.transaction commits on a rejected return, which addExternalId relies on to persist its review-queue candidate. */
   private async atomicTransaction<T>(work: (repository: KnowledgeRepository) => Promise<KnowledgeResult<T>>): Promise<KnowledgeResult<T>> {
     try {
-      return await this.repository.transaction(async repository => {
+      return await this.auditedTransaction(async repository => {
         const result = await work(repository)
         if (result.status === 'rejected') throw new KnowledgeRejection(result)
         return result
@@ -154,7 +253,7 @@ export class KnowledgeService {
     const aliases = [...new Map((input.aliases ?? []).map(item => [normalizeKnowledgeName(item.alias), { alias: item.alias.trim(), locale: item.locale?.trim() || null }])).values()]
     if (aliases.some(item => !bounded(item.alias, 255) || !normalizeKnowledgeName(item.alias))) return rejected('INVALID_INPUT', 'Aliases must be bounded non-empty strings.')
 
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       const exact = await this.findExactMatch(repository, canonicalUri, externalIds)
       if (exact) return rejected('DUPLICATE_ENTITY', 'An exact owner-scoped entity identity already exists.', { existingEntityId: exact.entity.id, matchedOn: exact.matchedOn })
       const beforeEntities = await repository.listEntities(this.ownerUserId)
@@ -212,7 +311,7 @@ export class KnowledgeService {
     const idType = input.idType.trim()
     const idValue = input.idValue.trim()
     if (!bounded(idType, 64) || !bounded(idValue, 255)) return rejected('INVALID_INPUT', 'External identifier type and value are required and bounded.')
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       const entityResult = await this.resolveWith(repository, input.entityId)
       if (entityResult.status !== 'ok') return entityResult
       const existing = (await repository.listEntityExternalIds(this.ownerUserId)).find(item => item.idType === idType && item.idValue === idValue)
@@ -233,7 +332,7 @@ export class KnowledgeService {
     const alias = input.alias.trim()
     const aliasNormalized = normalizeKnowledgeName(alias)
     if (!bounded(alias, 255) || !aliasNormalized) return rejected('INVALID_INPUT', 'Alias must be a bounded non-empty string.')
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       const entityResult = await this.resolveWith(repository, input.entityId)
       if (entityResult.status !== 'ok') return entityResult
       const aliases = await repository.listEntityAliases(this.ownerUserId)
@@ -255,9 +354,14 @@ export class KnowledgeService {
   async mergeEntities(input: { sourceEntityId: number; targetEntityId: number; reason: string; candidateId?: number }): Promise<KnowledgeResult<KnowledgeEntityMergeEvent>> {
     const reason = input.reason.trim()
     if (input.sourceEntityId === input.targetEntityId || !bounded(reason, 500)) return rejected('INVALID_INPUT', 'Merge requires distinct entities and a bounded reason.')
-    return this.repository.transaction(async repository => {
-      const source = await repository.getEntity(this.ownerUserId, input.sourceEntityId)
-      const target = await repository.getEntity(this.ownerUserId, input.targetEntityId)
+    return this.auditedTransaction(async repository => {
+      const locked = new Map<number, KnowledgeEntity>()
+      for (const id of [input.sourceEntityId, input.targetEntityId].sort((left, right) => left - right)) {
+        const entity = await repository.getEntity(this.ownerUserId, id)
+        if (entity) locked.set(id, entity)
+      }
+      const source = locked.get(input.sourceEntityId)
+      const target = locked.get(input.targetEntityId)
       if (!source || !target) return rejected('ENTITY_NOT_FOUND', 'Both merge entities must belong to this owner.')
       if (source.status !== 'active' || target.status !== 'active') return rejected('MERGE_NOT_ACTIVE', 'Both source and target entities must be active.')
       const resolvedTarget = await this.resolveWith(repository, target.id)
@@ -305,9 +409,9 @@ export class KnowledgeService {
 
   async createClaim(input: CreateKnowledgeClaimInput): Promise<KnowledgeResult<KnowledgeClaim>> {
     const statement = input.statement.trim()
-    const entityIds = [...new Set(input.entityIds)]
+    const entityIds = [...new Set(input.entityIds)].sort((left, right) => left - right)
     if (!statement || entityIds.length < 1 || (input.validFrom && input.validTo && input.validFrom > input.validTo)) return rejected('INVALID_INPUT', 'Claim statement, linked entities, and validity range are invalid.')
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       const canonicalEntityIds: number[] = []
       for (const entityId of entityIds) {
         const entity = await this.resolveWith(repository, entityId)
@@ -324,7 +428,7 @@ export class KnowledgeService {
   async transitionClaim(input: { claimId: number; toStatus: KnowledgeClaimStatus; reason: string }): Promise<KnowledgeResult<KnowledgeClaim>> {
     const reason = input.reason.trim()
     if (!bounded(reason, 500)) return rejected('INVALID_INPUT', 'Manual claim transition reason is required and bounded.')
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       const claim = await repository.getClaim(this.ownerUserId, input.claimId)
       if (!claim) return rejected('CLAIM_NOT_FOUND', 'Claim does not exist for this owner.')
       const allowed = (claim.status === 'source_backed' && input.toStatus === 'independently_confirmed')
@@ -398,7 +502,7 @@ export class KnowledgeService {
   async createManualDispute(input: { claimAId: number; claimBId: number; reason: string }): Promise<KnowledgeResult<KnowledgeClaimDispute>> {
     const reason = input.reason.trim()
     if (!bounded(reason, 500)) return rejected('INVALID_INPUT', 'Manual dispute reason is required and bounded.')
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       const claimA = await repository.getClaim(this.ownerUserId, input.claimAId)
       const claimB = await repository.getClaim(this.ownerUserId, input.claimBId)
       if (!claimA || !claimB) return rejected('CLAIM_NOT_FOUND', 'Both claims must belong to this owner.')
@@ -409,7 +513,7 @@ export class KnowledgeService {
   async resolveDispute(input: { disputeId: number; resolution: 'kept_a' | 'kept_b' | 'both_stand' | 'other'; resolutionNote: string; retractClaimId?: number }): Promise<KnowledgeResult<KnowledgeClaimDispute>> {
     const resolutionNote = input.resolutionNote.trim()
     if (!bounded(resolutionNote, 500)) return rejected('INVALID_INPUT', 'Dispute resolution note is required and bounded.')
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       const dispute = await repository.getDispute(this.ownerUserId, input.disputeId)
       if (!dispute) return rejected('DISPUTE_NOT_FOUND', 'Dispute does not exist for this owner.')
       if (dispute.status !== 'open') return rejected('INVALID_TRANSITION', 'Only an open dispute can be resolved.')
@@ -437,7 +541,7 @@ export class KnowledgeService {
   async registerSource(input: { canonicalUrl: string; title?: string; sourceClass: KnowledgeSourceClass; notes?: string }): Promise<KnowledgeResult<import('./types').KnowledgeSource>> {
     const canonicalUrl = normalizeKnowledgeUrl(input.canonicalUrl)
     if (!canonicalUrl || canonicalUrl.length > 500) return rejected('INVALID_INPUT', 'Source canonicalUrl must be a bounded HTTP(S) URL.')
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       const urlHash = sha256(canonicalUrl)
       if ((await repository.listSources(this.ownerUserId)).some(item => item.urlHash === urlHash)) return rejected('DUPLICATE_SOURCE', 'This normalized source URL is already registered.')
       const now = this.timestamp()
@@ -447,7 +551,7 @@ export class KnowledgeService {
 
   async addSourceVersion(input: { sourceId: number; contentHash: string; retrievedAt: Date; excerpt?: string; metadata?: unknown }): Promise<KnowledgeResult<import('./types').KnowledgeSourceVersion>> {
     if (!validHash(input.contentHash) || !Number.isFinite(input.retrievedAt.getTime()) || (input.excerpt !== undefined && input.excerpt.length > 5_000)) return rejected('INVALID_INPUT', 'Source version requires a lowercase SHA-256 hash, valid retrieval time, and bounded excerpt.')
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       if (!await repository.getSource(this.ownerUserId, input.sourceId)) return rejected('SOURCE_NOT_FOUND', 'Source does not exist for this owner.')
       const versions = await repository.listSourceVersions(this.ownerUserId, input.sourceId)
       const versionNumber = versions.reduce((maximum, item) => Math.max(maximum, item.versionNumber), 0) + 1
@@ -457,7 +561,7 @@ export class KnowledgeService {
   }
 
   async setPublisherEntity(input: { organizationEntityId: number }): Promise<KnowledgeResult<KnowledgeEntity>> {
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       const entity = await this.resolveWith(repository, input.organizationEntityId)
       if (entity.status !== 'ok') return entity
       if (entity.value.status !== 'active' || !ORGANIZATION_ENTITY_TYPES.has(entity.value.entityType)) return rejected('PUBLISHER_ENTITY_INVALID', 'Publisher must resolve to an active Organization or Brand entity.')
@@ -475,7 +579,7 @@ export class KnowledgeService {
   }
 
   async linkContentEntity(input: { briefId: number; entityId: number; role: KnowledgeContentEntityRole }): Promise<KnowledgeResult<KnowledgeContentEntityLink>> {
-    return this.repository.transaction(async repository => {
+    return this.auditedTransaction(async repository => {
       if (!await repository.getContentAnchor({ ownerUserId: this.ownerUserId, briefId: input.briefId })) return rejected('CONTENT_ANCHOR_NOT_FOUND', 'Brief has no owner-scoped draft anchor.')
       const entity = await this.resolveWith(repository, input.entityId)
       if (entity.status !== 'ok') return entity
@@ -487,16 +591,18 @@ export class KnowledgeService {
   }
 
   async unlinkContentEntity(input: { briefId: number; entityId: number; role: KnowledgeContentEntityRole }): Promise<KnowledgeResult<true>> {
-    const requested = await this.resolveWith(this.repository, input.entityId)
-    if (requested.status !== 'ok') return requested
-    const links = await this.repository.listContentEntityLinks(this.ownerUserId, input.briefId)
-    for (const link of links) {
-      if (link.role !== input.role) continue
-      const linked = await this.resolveWith(this.repository, link.entityId)
-      if (linked.status !== 'ok' || linked.value.id !== requested.value.id) continue
-      if (await this.repository.deleteContentEntityLink(this.ownerUserId, input.briefId, link.entityId, input.role)) return ok(true)
-    }
-    return rejected('CONTENT_LINK_NOT_FOUND', 'Content entity link does not exist for this owner.')
+    return this.auditedTransaction(async repository => {
+      const requested = await this.resolveWith(repository, input.entityId)
+      if (requested.status !== 'ok') return requested
+      const links = await repository.listContentEntityLinks(this.ownerUserId, input.briefId)
+      for (const link of links) {
+        if (link.role !== input.role) continue
+        const linked = await this.resolveWith(repository, link.entityId)
+        if (linked.status !== 'ok' || linked.value.id !== requested.value.id) continue
+        if (await repository.deleteContentEntityLink(this.ownerUserId, input.briefId, link.entityId, input.role)) return ok(true)
+      }
+      return rejected('CONTENT_LINK_NOT_FOUND', 'Content entity link does not exist for this owner.')
+    })
   }
 
   async listContentEntityLinks(input: { briefId: number }): Promise<KnowledgeContentEntityLink[]> {

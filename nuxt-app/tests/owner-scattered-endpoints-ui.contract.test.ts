@@ -191,7 +191,9 @@ describe('owner scattered endpoint UI contract', () => {
     expect(auditLab).toContain('authorizationConfirmed: true')
     expect(auditLab).toContain('<NuxtPage')
     expect(auditLab).toContain('isNestedAuditRoute')
-    expect(auditLab).toContain('私有／旅程洞察')
+    expect(auditLab).toContain('DiscoveryStack 營運工作台')
+    expect(auditLab).toContain('<OwnerWorkGuide')
+    expect(auditLab).toContain('id="audit-advanced-tools"')
     expect(auditLab).toContain('登錄稽核工作')
   })
 

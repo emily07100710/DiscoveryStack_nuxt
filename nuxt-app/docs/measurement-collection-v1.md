@@ -66,3 +66,21 @@ pnpm build
 ```
 
 The tests use mocked fetchers and synthetic repository seams. They do not claim production credentials, customer-site connectivity, or provider quota validation.
+
+## 2026-10-08：網站確認交接（本機實作）
+
+量測 lineage 分為 `formal_delivered` 與 `site_publication_confirmation`，不合成已交付 attempt/run。後者必須有 owner 明確且仍符合目前授權的獨立確認，逐 target／public version／confirmation fingerprint 配對 active connection 與 exact allowed page scope。
+
+Dry-run 與建立 7／15／30／60／90 天佇列只讀取已確認的歷史身份和目前本機權威，不查網站、不解析 credentials、不呼叫成效 provider。啟用後的 bounded tick 才處理已明確確認的 `awaiting_site_review` entries；只有原始 matching observation 不會自動 opt-in。網站狀態查核並非監控服務或準時 worker 的證明。
+
+實際處理前、每次 provider 呼叫前／回應後及 snapshot 寫入前，重新核對網站簽章公開版本、目前 consent/review/source、connection owner/status/configuration/page。公開版本、日期、時區、client 或 connection 設定漂移會 blocked；失敗不以舊確認替代。先前合法 phase snapshot 可保留為歷史，不宣稱整個 run 是跨 provider／資料庫原子交易。已撤銷或暫停的 connection 不被成功或重新授權回應恢復為 configured。
+
+網站確認 outcome 使用獨立 aggregate writer，保存 explicit evidence kind、target、confirmation fingerprint、`runId: null`、`learningCandidate: false`，並在寫入交易內重核 cached authority。它不呼叫正式 delivery outcome／intervention／learning bridge，亦排除於 owner content learning dataset；LINE 逐篇發布同意不是 model improvement 同意。GSC／GA4 aggregate 可供觀察；provider API LLM observations 仍為 secondary-only，不冒稱真實消費者搜尋結果或因果效果。
+
+本輪沒有 DB migration、正式 provider credentials、收數、背景啟用、部署或訓練；只支援完整單一網站人工審稿的原身份，routing／machine 接入需另行完成精確歷史權威。正式運作仍須 Google 權限、來源 connection、Do status receiver 與獨立 worker 範圍驗收。
+
+## 2026-10-08：收數時的模型用途證據
+
+網站確認 collector 新增伺服器授權 resolver：每個 phase 在供應商呼叫前後都重新核對完整十一欄用途證據，相符且 capture／expiry／retention 合格才保存最小 marker。供應商回應自帶的 marker 先剝除，不可冒充授權。注入本機測試 repository 時若缺少 resolver，不會連正式資料庫。
+
+assessment 只在所有 baseline／follow-up 快照與目前授權完整一致時保存同一 marker；交易前及交易內重查。中途撤銷只保留營運觀察，不生成學習准入證據。原本未知 consent、`runId: null`、`learningCandidate: false` 不變；獨立審查與候選摘要詳見 [准入契約](../SITE_LEARNING_ADMISSION_V1.md)。

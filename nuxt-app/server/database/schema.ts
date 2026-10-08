@@ -1051,7 +1051,7 @@ export const contentOperationMachineAuthorizations = mysqlTable('contentOperatio
   targetId: varchar('targetId', { length: 160 }).notNull(),
   authorizationPayload: json('authorizationPayload').notNull(),
   authorizationFingerprint: varchar('authorizationFingerprint', { length: 128 }).notNull(),
-  status: mysqlEnum('status', ['authorized', 'executing', 'published', 'revoked']).default('authorized').notNull(),
+  status: mysqlEnum('status', ['authorized', 'executing', 'published', 'revoked', 'draft_received']).default('authorized').notNull(),
   decidedAt: timestamp('decidedAt').notNull(),
   authorizationExpiresAt: timestamp('authorizationExpiresAt'),
   claimedAt: timestamp('claimedAt'),
@@ -1097,7 +1097,7 @@ export const contentOperationPublicationAttempts = mysqlTable('contentOperationP
   publicationContentHash: varchar('publicationContentHash', { length: 128 }),
   evidenceSnapshotHash: varchar('evidenceSnapshotHash', { length: 128 }).notNull(),
   artifactFingerprint: varchar('artifactFingerprint', { length: 128 }),
-  status: mysqlEnum('status', ['planned', 'dry_run_succeeded', 'delivered', 'retryable_failure', 'permanent_failure', 'blocked']).notNull(),
+  status: mysqlEnum('status', ['planned', 'dry_run_succeeded', 'delivered', 'retryable_failure', 'permanent_failure', 'blocked', 'draft_received']).notNull(),
   remoteState: varchar('remoteState', { length: 64 }),
   remoteRevision: varchar('remoteRevision', { length: 256 }),
   errorCode: varchar('errorCode', { length: 120 }),
@@ -1184,7 +1184,7 @@ export const contentOperationCalendarEntries = mysqlTable('contentOperationCalen
   publicationTargetCount: int('publicationTargetCount').default(0).notNull(),
   replacementOfEntryId: int('replacementOfEntryId'),
   replacementFingerprint: varchar('replacementFingerprint', { length: 128 }),
-  status: mysqlEnum('status', ['planned', 'materialized', 'awaiting_generation', 'awaiting_review', 'ready_to_publish', 'publishing', 'delivered', 'completed', 'cancelled', 'skipped', 'blocked']).default('planned').notNull(),
+  status: mysqlEnum('status', ['planned', 'materialized', 'awaiting_generation', 'awaiting_review', 'ready_to_publish', 'publishing', 'delivered', 'completed', 'cancelled', 'skipped', 'blocked', 'awaiting_site_review']).default('planned').notNull(),
   engineEntryId: varchar('engineEntryId', { length: 128 }).notNull(),
   idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
@@ -2992,6 +2992,8 @@ export const geoOutcomeDatasetDecisions = mysqlTable('geoOutcomeDatasetDecisions
   newStatus: varchar('newStatus', { length: 96 }).notNull(),
   reason: varchar('reason', { length: 500 }).notNull(),
   manifestFingerprint: varchar('manifestFingerprint', { length: 128 }).notNull(),
+  /** Immutable owner-reviewed dataset knowledge dependency envelope; null is legacy. */
+  knowledgeAuthority: json('knowledgeAuthority'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 }, table => [
   foreignKey({ name: 'fk_geo_outcome_dataset_deci_dataset_manifest_i_4255ddaa11', columns: [table.datasetManifestId], foreignColumns: [geoOutcomeDatasetManifests.id] }),
@@ -3988,6 +3990,101 @@ export const knowledgePublisherSettings = mysqlTable('knowledgePublisherSettings
   foreignKey({ name: 'fk_knowledge_publisher_settings_owner', columns: [table.ownerUserId], foreignColumns: [users.id] }),
   foreignKey({ name: 'fk_knowledge_publisher_organization', columns: [table.organizationEntityId], foreignColumns: [knowledgeEntities.id] }),
   uniqueIndex('knowledge_publisher_settings_owner_unique').on(table.ownerUserId),
+])
+
+/** Private immutable semantic state; legacy baselines are explicit and are not invented past history. */
+export const knowledgeSubjectRevisions = mysqlTable('knowledgeSubjectRevisions', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  subjectKind: mysqlEnum('subjectKind', ['entity', 'claim', 'source']).notNull(),
+  subjectId: int('subjectId').notNull(),
+  schemaVersion: varchar('schemaVersion', { length: 64 }).notNull(),
+  revisionNumber: int('revisionNumber').notNull(),
+  revisionKind: mysqlEnum('revisionKind', ['legacy_baseline', 'mutation']).notNull(),
+  canonicalSnapshot: longtext('canonicalSnapshot').notNull(),
+  contentHash: varchar('contentHash', { length: 64 }).notNull(),
+  previousRevisionFingerprint: varchar('previousRevisionFingerprint', { length: 64 }),
+  revisionFingerprint: varchar('revisionFingerprint', { length: 64 }).notNull(),
+  operations: json('operations').$type<readonly string[]>().notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'ksr_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  uniqueIndex('ksr_subject_version_uq').on(table.ownerUserId, table.subjectKind, table.subjectId, table.revisionNumber),
+  uniqueIndex('ksr_owner_fingerprint_uq').on(table.ownerUserId, table.revisionFingerprint),
+  index('ksr_subject_history_idx').on(table.ownerUserId, table.subjectKind, table.subjectId, table.id),
+])
+
+/** Append-only event and revision are committed together; neither is an approval or a release. */
+export const knowledgeMutationEvents = mysqlTable('knowledgeMutationEvents', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  subjectKind: mysqlEnum('subjectKind', ['entity', 'claim', 'source']).notNull(),
+  subjectId: int('subjectId').notNull(),
+  revisionId: int('revisionId').notNull(),
+  revisionNumber: int('revisionNumber').notNull(),
+  previousRevisionFingerprint: varchar('previousRevisionFingerprint', { length: 64 }),
+  newRevisionFingerprint: varchar('newRevisionFingerprint', { length: 64 }).notNull(),
+  eventFingerprint: varchar('eventFingerprint', { length: 64 }).notNull(),
+  operations: json('operations').$type<readonly string[]>().notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'kme_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'kme_revision_fk', columns: [table.revisionId], foreignColumns: [knowledgeSubjectRevisions.id] }),
+  uniqueIndex('kme_owner_event_uq').on(table.ownerUserId, table.eventFingerprint),
+  uniqueIndex('kme_revision_uq').on(table.revisionId),
+  uniqueIndex('kme_owner_revision_fp_uq').on(table.ownerUserId, table.newRevisionFingerprint),
+  index('kme_subject_history_idx').on(table.ownerUserId, table.subjectKind, table.subjectId, table.id),
+])
+
+/** Append-only exact native consumer dependencies and their revoke/repin command receipts. */
+export const knowledgeConsumerBindings = mysqlTable('knowledgeConsumerBindings', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  consumerKind: mysqlEnum('consumerKind', ['geo_dataset', 'benchmark_prompt']).notNull(),
+  consumerId: int('consumerId').notNull(),
+  consumerVersion: varchar('consumerVersion', { length: 80 }).notNull(),
+  consumerContentHash: varchar('consumerContentHash', { length: 64 }).notNull(),
+  subjectKind: mysqlEnum('subjectKind', ['entity', 'claim', 'source']).notNull(),
+  subjectId: int('subjectId').notNull(),
+  revisionId: int('revisionId').notNull(),
+  revisionNumber: int('revisionNumber').notNull(),
+  revisionContentHash: varchar('revisionContentHash', { length: 64 }).notNull(),
+  revisionFingerprint: varchar('revisionFingerprint', { length: 64 }).notNull(),
+  operation: mysqlEnum('operation', ['bind', 'revoke']).notNull(),
+  sequenceNumber: int('sequenceNumber').notNull(),
+  previousBindingFingerprint: varchar('previousBindingFingerprint', { length: 64 }),
+  bindingFingerprint: varchar('bindingFingerprint', { length: 64 }).notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(),
+  idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  idempotencyKeyHash: varchar('idempotencyKeyHash', { length: 64 }).notNull(),
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+}, table => [
+  foreignKey({ name: 'kcb_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'kcb_revision_fk', columns: [table.revisionId], foreignColumns: [knowledgeSubjectRevisions.id] }),
+  uniqueIndex('kcb_sequence_uq').on(table.ownerUserId, table.consumerKind, table.consumerId, table.subjectKind, table.subjectId, table.sequenceNumber),
+  uniqueIndex('kcb_command_hash_uq').on(table.ownerUserId, table.idempotencyKeyHash),
+  uniqueIndex('kcb_fingerprint_uq').on(table.ownerUserId, table.bindingFingerprint),
+  index('kcb_owner_consumer_idx').on(table.ownerUserId, table.consumerKind, table.consumerId),
+])
+
+/** Current pointer is committed with its immutable command, avoiding history aggregation on reads. */
+export const knowledgeConsumerBindingHeads = mysqlTable('knowledgeConsumerBindingHeads', {
+  id: int('id').autoincrement().primaryKey(),
+  ownerUserId: int('ownerUserId').notNull(),
+  consumerKind: mysqlEnum('consumerKind', ['geo_dataset', 'benchmark_prompt']).notNull(),
+  consumerId: int('consumerId').notNull(),
+  subjectKind: mysqlEnum('subjectKind', ['entity', 'claim', 'source']).notNull(),
+  subjectId: int('subjectId').notNull(),
+  sequenceNumber: int('sequenceNumber').notNull(),
+  bindingId: int('bindingId').notNull(),
+  bindingFingerprint: varchar('bindingFingerprint', { length: 64 }).notNull(),
+}, table => [
+  foreignKey({ name: 'kcbh_owner_fk', columns: [table.ownerUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: 'kcbh_binding_fk', columns: [table.bindingId], foreignColumns: [knowledgeConsumerBindings.id] }),
+  uniqueIndex('kcbh_identity_uq').on(table.ownerUserId, table.consumerKind, table.consumerId, table.subjectKind, table.subjectId),
+  uniqueIndex('kcbh_binding_uq').on(table.bindingId),
 ])
 
 export type KnowledgeEntityRecord = typeof knowledgeEntities.$inferSelect

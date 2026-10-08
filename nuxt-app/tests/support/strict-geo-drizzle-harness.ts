@@ -34,10 +34,17 @@ function same(left: unknown, right: unknown): boolean {
   if (left instanceof Date || right instanceof Date) return new Date(left as string | Date).getTime() === new Date(right as string | Date).getTime()
   return left === right
 }
-function projectedRow(row: Row, projection: unknown): Row {
+function projectedRow(row: Row, projection: unknown, mainTableName: string, joinedRow?: Row | null, joinedTableName?: string): Row {
   if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return copy(row)
   const output: Row = {}
   for (const [alias, column] of Object.entries(projection as Record<string, { name?: string }>)) {
+    if (column && typeof column === 'object' && !('name' in column)) {
+      try {
+        const tableName = getTableName(column as never)
+        if (tableName === mainTableName) { output[alias] = copy(row); continue }
+        if (tableName === joinedTableName) { output[alias] = joinedRow ? copy(joinedRow) : null; continue }
+      } catch { /* not a table projection */ }
+    }
     if (!column || typeof column.name !== 'string') throw new Error('Strict harness rejected an invalid projection.')
     output[alias] = copy(row[column.name])
   }
@@ -47,9 +54,11 @@ function projectedRow(row: Row, projection: unknown): Row {
 class SelectBuilder implements PromiseLike<Row[]> {
   private condition: SQL | undefined
   private maximum: number | undefined
+  private join: { tableName: string, condition: SQL } | undefined
   constructor(private readonly harness: StrictGeoDrizzleHarness, private readonly tableName: string, private readonly projection: unknown) {}
   where(condition: SQL): this { this.condition = condition; return this }
   orderBy(..._columns: unknown[]): this { return this }
+  leftJoin(table: object, condition: SQL): this { this.join = { tableName: getTableName(table as never), condition }; return this }
   limit(maximum: number): this { this.maximum = maximum; return this }
   for(lock: 'update'): this {
     if (lock !== 'update') throw new Error('Strict harness rejected an unsupported row lock.')
@@ -57,7 +66,7 @@ class SelectBuilder implements PromiseLike<Row[]> {
     return this
   }
   then<TResult1 = Row[], TResult2 = never>(onfulfilled?: ((value: Row[]) => TResult1 | PromiseLike<TResult1>) | null, onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null): PromiseLike<TResult1 | TResult2> {
-    return this.harness.selectRows(this.tableName, this.projection, this.condition, this.maximum).then(onfulfilled, onrejected)
+    return this.harness.selectRows(this.tableName, this.projection, this.condition, this.maximum, this.join).then(onfulfilled, onrejected)
   }
 }
 
@@ -135,16 +144,46 @@ export class StrictGeoDrizzleHarness {
     try { return await this.transactionContext.run(true, () => work(this.asDatabase())) } catch (error) { this.state = snapshot; throw error } finally { release() }
   }
 
-  async selectRows(tableName: string, projection: unknown, condition?: SQL, maximum?: number): Promise<Row[]> {
+  async selectRows(tableName: string, projection: unknown, condition?: SQL, maximum?: number, join?: { tableName: string, condition: SQL }): Promise<Row[]> {
     const predicate = condition ? this.predicate(condition) : () => true
     const rows = (this.state.tables[tableName] || []).filter(predicate)
-    return (maximum === undefined ? rows : rows.slice(0, maximum)).map(row => projectedRow(row, projection))
+    const bounded = maximum === undefined ? rows : rows.slice(0, maximum)
+    if (!join) return bounded.map(row => projectedRow(row, projection, tableName))
+    const joinQuery = this.dialect.sqlToQuery(join.condition)
+    let joinParamIndex = 0
+    const equalities = [...joinQuery.sql.matchAll(/`([^`]+)`\.`([^`]+)` = (?:`([^`]+)`\.`([^`]+)`|\?)/gu)].map(match => ({ leftTable: match[1]!, leftColumn: match[2]!, rightTable: match[3] ?? null, rightColumn: match[4] ?? null, expected: match[3] ? undefined : joinQuery.params[joinParamIndex++] }))
+    if (!equalities.length) throw new Error(`Strict harness rejected unsupported JOIN SQL: ${joinQuery.sql}`)
+    if (joinParamIndex !== joinQuery.params.length) throw new Error(`Strict harness rejected unsupported JOIN parameters: ${joinQuery.sql}`)
+    const joined = this.state.tables[join.tableName] || []
+    return bounded.map(row => {
+      const match = joined.find(candidate => equalities.every(item => {
+        const left = item.leftTable === tableName ? row[item.leftColumn] : item.leftTable === join.tableName ? candidate[item.leftColumn] : undefined
+        if (!item.rightTable) return same(left, item.expected)
+        const right = item.rightTable === tableName ? row[item.rightColumn!] : item.rightTable === join.tableName ? candidate[item.rightColumn!] : undefined
+        return same(left, right)
+      })) || null
+      return projectedRow(row, projection, tableName, match, join.tableName)
+    })
   }
   private predicate(condition: SQL): (row: Row) => boolean {
     const query = this.dialect.sqlToQuery(condition)
-    const columns = [...query.sql.matchAll(/`[^`]+`\.`([^`]+)` = \?/gu)].map(match => match[1]!)
-    if (columns.length !== query.params.length) throw new Error(`Strict harness rejected unsupported WHERE SQL: ${query.sql}`)
-    return row => columns.every((column, index) => same(row[column], query.params[index]))
+    const checks: Array<(row: Row) => boolean> = []
+    let paramIndex = 0
+    const placeholders = [...query.sql.matchAll(/`[^`]+`\.`([^`]+)` = \?/gu)]
+    for (const match of placeholders) {
+      const column = match[1]!
+      const expected = query.params[paramIndex++]
+      checks.push(row => same(row[column], expected))
+    }
+    for (const match of query.sql.matchAll(/`[^`]+`\.`([^`]+)` in \(([^)]+)\)/giu)) {
+      const column = match[1]!
+      const count = (match[2]!.match(/\?/gu) || []).length
+      const expected = query.params.slice(paramIndex, paramIndex + count)
+      paramIndex += count
+      checks.push(row => expected.some(item => same(row[column], item)))
+    }
+    if (!checks.length || paramIndex !== query.params.length) throw new Error(`Strict harness rejected unsupported WHERE SQL: ${query.sql}`)
+    return row => checks.every(check => check(row))
   }
   private validateForeignKeys(tableName: string, row: Row): void {
     const has = (target: string, id: unknown) => (this.state.tables[target] || []).some(item => item.id === id)

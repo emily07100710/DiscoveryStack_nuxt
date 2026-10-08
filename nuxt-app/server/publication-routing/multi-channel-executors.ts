@@ -1,12 +1,13 @@
-import { sha256Hex, fingerprint, validateReceipt, validateRoutingPlan, type DeliveryReceipt, type Executor, type RouteIntent, type RoutingPlan } from './index'
+import { sha256Hex, fingerprint, normalizeReceiptForPlan, validateReceipt, validateRoutingPlan, type DeliveryReceipt, type Executor, type RouteIntent, type RoutingPlan } from './index'
 import { guardTarget } from './target-guard'
 import { normalizeMarkdownContent, normalizeOpaqueReference, normalizeTarget, type NormalizedTarget } from './normalization'
+import { normalizeFirstPartyDraftReceipt, type FirstPartyDraftReceipt } from '../first-party-publishing/draft-receipt'
 
 export const MULTI_CHANNEL_EXECUTOR_VERSION = 'publication-multi-channel-executor-v1'
 export const MULTI_CHANNEL_MAX_RESPONSE_BYTES = 64_000
 export const MULTI_CHANNEL_MAX_REASONS = 4
 
-export type MultiChannelStatus = 'planned' | 'delivered' | 'blocked' | 'failed' | 'retry_wait'
+export type MultiChannelStatus = 'planned' | 'delivered' | 'draft_received' | 'blocked' | 'failed' | 'retry_wait'
 
 export type MultiChannelAdapterInput = {
   route: RouteIntent
@@ -20,6 +21,7 @@ export type MultiChannelAdapterInput = {
 
 export type MultiChannelAdapterResult =
   | { status: 'delivered'; remote: { publicationId: string; contentHash: string; remoteRevision: string } }
+  | { status: 'draft_received'; receipt: FirstPartyDraftReceipt }
   | { status: 'blocked'; reason: string }
   | { status: 'failed'; retryable: boolean; reason: string }
   | { status: 'retry_wait'; reason: string }
@@ -47,7 +49,7 @@ export type MultiChannelDispatchInput = {
 }
 
 export type MultiChannelFanoutResult = {
-  status: 'delivered' | 'partial_failure' | 'retry_wait' | 'blocked'
+  status: 'delivered' | 'awaiting_site_review' | 'partial_failure' | 'retry_wait' | 'blocked'
   results: MultiChannelDispatchResult[]
   receipts: DeliveryReceipt[]
   reasons: string[]
@@ -87,7 +89,7 @@ function targetForRoute(route: RouteIntent): { target: NormalizedTarget; reasons
   }
 }
 
-function receiptFor(plan: RoutingPlan, route: RouteIntent, input: MultiChannelDispatchInput, status: Exclude<MultiChannelStatus, 'planned'>): DeliveryReceipt {
+function receiptFor(plan: RoutingPlan, route: RouteIntent, input: MultiChannelDispatchInput, status: Exclude<MultiChannelStatus, 'planned'>, draftReceipt?: FirstPartyDraftReceipt): DeliveryReceipt {
   return {
     planFingerprint: plan.planFingerprint,
     routeId: route.routeId,
@@ -104,17 +106,26 @@ function receiptFor(plan: RoutingPlan, route: RouteIntent, input: MultiChannelDi
     executorRunId: normalizeOpaqueReference(input.executorRunId, 'executorRunId') as DeliveryReceipt['executorRunId'],
     attempt: input.attempt,
     status,
+    ...(status === 'draft_received' && draftReceipt ? { draftReceipt } : {}),
     plannedAt: plan.plannedAt,
     completedAt: input.now,
     occurredAt: input.now,
   }
 }
 
-function resultWithReceipt(plan: RoutingPlan, route: RouteIntent, input: MultiChannelDispatchInput, status: Exclude<MultiChannelStatus, 'planned'>, why: string[]): MultiChannelDispatchResult {
-  const receipt = receiptFor(plan, route, input, status)
+function resultWithReceipt(plan: RoutingPlan, route: RouteIntent, input: MultiChannelDispatchInput, status: Exclude<MultiChannelStatus, 'planned'>, why: string[], draftReceipt?: FirstPartyDraftReceipt): MultiChannelDispatchResult {
+  const receipt = receiptFor(plan, route, input, status, draftReceipt)
   const checked = validateReceipt(plan, receipt, input.knownReceipts || [])
   if (!checked.valid) return { status: 'blocked', routeId: route.routeId, executor: route.executor, attempt: input.attempt, receipt: null, receiptFingerprint: null, replay: false, collision: checked.collision, reasons: reasons(...checked.reasonCodes) }
   return { status, routeId: route.routeId, executor: route.executor, attempt: input.attempt, receipt, receiptFingerprint: checked.receiptFingerprint, replay: checked.replay, collision: checked.collision, reasons: reasons(...why) }
+}
+
+function replayResult(plan: RoutingPlan, route: RouteIntent, input: MultiChannelDispatchInput, value: unknown): MultiChannelDispatchResult {
+  const checked = validateReceipt(plan, value, input.knownReceipts || [])
+  if (!checked.valid || !checked.receiptFingerprint) return { status: 'blocked', routeId: route.routeId, executor: route.executor, attempt: input.attempt, receipt: null, receiptFingerprint: null, replay: false, collision: checked.collision, reasons: reasons(...checked.reasonCodes) }
+  const stored = normalizeReceiptForPlan(plan, value)
+  if (!stored) return { status: 'blocked', routeId: route.routeId, executor: route.executor, attempt: input.attempt, receipt: null, receiptFingerprint: null, replay: false, collision: false, reasons: ['stored receipt replay could not be normalized'] }
+  return { status: stored.status, routeId: route.routeId, executor: route.executor, attempt: stored.attempt, receipt: stored, receiptFingerprint: checked.receiptFingerprint, replay: checked.replay, collision: checked.collision, reasons: ['replayed from the append-only receipt ledger; no executor was called'] }
 }
 
 function dryRun(plan: RoutingPlan, route: RouteIntent, input: MultiChannelDispatchInput): MultiChannelDispatchResult {
@@ -212,8 +223,7 @@ export async function executeMultiChannelPublication(input: MultiChannelDispatch
     return receipt.planFingerprint === plan.planFingerprint && receipt.routeId === route.routeId && receipt.attempt === input.attempt && receipt.executorRunId === input.executorRunId
   })
   if (knownReplay) {
-    const replayed = resultWithReceipt(plan, route, input, 'delivered', ['replayed from the append-only receipt ledger; no executor was called'])
-    return replayed.replay ? replayed : { ...replayed, status: 'blocked', reasons: ['stored receipt replay could not be validated'] }
+    return replayResult(plan, route, input, knownReplay)
   }
   const adapter = input.registry?.[route.executor]
   if (!adapter) return resultWithReceipt(plan, route, input, 'blocked', ['executor is not configured; no external transport was called'])
@@ -231,11 +241,18 @@ export async function executeMultiChannelPublication(input: MultiChannelDispatch
     if (adapterResult.remote.publicationId !== route.destinationPublicationIdentity || adapterResult.remote.contentHash !== route.contentHash || !adapterResult.remote.remoteRevision.trim()) return resultWithReceipt(plan, route, input, 'blocked', ['remote identity did not match the approved route lineage'])
     return resultWithReceipt(plan, route, input, 'delivered', ['remote identity, content hash, and revision were verified'])
   }
+  if (adapterResult.status === 'draft_received') {
+    const receipt = normalizeFirstPartyDraftReceipt(adapterResult.receipt)
+    if (route.framework !== 'nextjs' || route.transport !== 'first_party_signed_api' || route.executor !== 'first_party_signed_api') return resultWithReceipt(plan, route, input, 'blocked', ['draft-only receipts are limited to the Next.js signed API executor'])
+    if (!receipt || receipt.publicationId !== route.destinationPublicationIdentity || receipt.contentHash !== route.contentHash) return resultWithReceipt(plan, route, input, 'blocked', ['draft receipt did not match the approved destination identity and content hash'])
+    return resultWithReceipt(plan, route, input, 'draft_received', ['receiver accepted a draft for site review; publication was not confirmed'], receipt)
+  }
   const status: Exclude<MultiChannelStatus, 'planned' | 'delivered'> = adapterResult.status === 'retry_wait' ? 'retry_wait' : adapterResult.status === 'failed' ? 'failed' : 'blocked'
   return resultWithReceipt(plan, route, input, status, [adapterResult.reason])
 }
 
 export async function executeMultiChannelFanout(input: Omit<MultiChannelDispatchInput, 'routeId' | 'executorRunId' | 'idempotencyKey'> & { routeIds: readonly string[]; idempotencyKey: string; executorRunIdPrefix: string }): Promise<MultiChannelFanoutResult> {
+  if (new Set(input.routeIds).size !== input.routeIds.length) return { status: 'blocked', results: [], receipts: [], reasons: ['duplicate route IDs are forbidden; no adapter was called'] }
   const results: MultiChannelDispatchResult[] = []
   for (const routeId of input.routeIds) {
     const suffix = sha256Hex(routeId).slice(0, 16)
@@ -243,9 +260,11 @@ export async function executeMultiChannelFanout(input: Omit<MultiChannelDispatch
   }
   const receipts = results.flatMap(result => result.receipt ? [result.receipt] : [])
   const delivered = results.filter(result => result.status === 'delivered').length
+  const hasDraftReceipt = results.some(result => result.status === 'draft_received')
+  const allDeliveredOrDraftReceived = results.length > 0 && results.every(result => result.status === 'delivered' || result.status === 'draft_received')
   const retryWait = results.some(result => result.status === 'retry_wait')
   const blocked = results.some(result => result.status === 'blocked' || result.status === 'failed')
-  const status = delivered === results.length && results.length > 0 ? 'delivered' : delivered > 0 ? 'partial_failure' : retryWait ? 'retry_wait' : 'blocked'
+  const status = allDeliveredOrDraftReceived && hasDraftReceipt ? 'awaiting_site_review' : delivered === results.length && results.length > 0 ? 'delivered' : delivered > 0 ? 'partial_failure' : retryWait ? 'retry_wait' : 'blocked'
   return { status, results, receipts, reasons: reasons(...results.flatMap(result => result.reasons)) }
 }
 

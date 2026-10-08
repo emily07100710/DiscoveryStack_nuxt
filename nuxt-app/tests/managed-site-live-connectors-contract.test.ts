@@ -105,7 +105,9 @@ describe('managed-site live connectors durable and private contracts', () => {
     expect(page).not.toMatch(/API key[^<]*<input/iu)
     expect(page).not.toContain('已付款成功')
     expect(page).not.toContain('已部署成功')
-    expect(read('layouts/owner.vue')).toContain('/audit-lab/managed-sites')
+    expect(read('layouts/owner.vue')).toContain('OWNER_NAVIGATION_GROUPS')
+    expect(read('layouts/owner.vue')).toContain(':to="item.to"')
+    expect(read('utils/owner-navigation.ts')).toContain("to: '/audit-lab/managed-sites'")
   })
 
   it('keeps exact live receipt authority and GEO activation gates in the single orchestrator', () => {

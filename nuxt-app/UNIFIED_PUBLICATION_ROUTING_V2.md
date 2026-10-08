@@ -95,6 +95,12 @@ A future executor must re-resolve the server-side credential only after re-valid
 
 `aggregateEvents(plan, events, receipts)` first validates every supplied receipt with the complete history validator. It then maps every result event to exactly one normalized receipt by fingerprint and passes that receipt through the ledger binding checks. Planned events cannot map to receipts. Missing receipts, unused receipts, receipts from another plan, receipts from another route, conflicting duplicates, and cross-route pairings are rejected rather than silently ignored. Exact duplicate receipts collapse deterministically as replay. Aggregation uses only events accepted by the receipt-backed ledger.
 
+## 2026-10-08: private draft receipts
+
+`draft_received` is a distinct, terminal route/receipt/event status permitted only for a matching Next.js `first_party_signed_api` route. Its exact nine-field nested receipt binds destination publication identity and body hash, explicitly states `published=false` and historical `receiptIsCurrentState=false`, and never supplies a public URL or revision. Legacy receipt shapes and fingerprints remain unchanged for other statuses. Exact history replay returns the stored receipt, not a fabricated delivered result or a new timestamp; later retries after this terminal receipt are rejected.
+
+All routes delivered or draft-received with at least one draft aggregate to `awaiting_site_review`; failures/retry-wait remain separately visible. Fanout rejects duplicate route IDs before adapters or credentials to avoid repeating side effects. This contract does not authorize teacher approval or publication.
+
 ## Verification and non-execution boundary
 
 The direct V2 suite retains the existing 387 baseline tests and adds the third-round adversarial coverage for multiline Markdown, exact bytes, unknown routes, planned-event gating, exact receipt timestamps, immutable event/receipt storage, complete retry history, credential references, projection mutation, and one-to-one aggregate receipts.

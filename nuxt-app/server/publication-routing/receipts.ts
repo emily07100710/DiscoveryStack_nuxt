@@ -3,9 +3,11 @@ import { canonicalJson, fingerprint } from './canonical'
 import { exactKeys, isPlainObject, normalizeHash, normalizeId, normalizeLineage, normalizeOpaqueReference } from './normalization'
 import { validateRoutingPlan } from './planner'
 import type { DeliveryReceipt, ReceiptHistoryValidationResult, ReceiptStatus, ReceiptValidationResult, RetryValidationResult, RouteIntent, RoutingPlan } from './types'
+import { normalizeFirstPartyDraftReceipt } from '../first-party-publishing/draft-receipt'
 
 const RECEIPT_KEYS = ['planFingerprint', 'routeId', 'targetId', 'siteIdentity', 'sourcePublicationIdentity', 'destinationPublicationIdentity', 'draftId', 'reviewId', 'evidenceSnapshotHash', 'contentHash', 'executor', 'executorAuthority', 'executorRunId', 'attempt', 'status', 'plannedAt', 'completedAt', 'occurredAt'] as const
-const RECEIPT_STATUSES: readonly ReceiptStatus[] = ['delivered', 'blocked', 'failed', 'retry_wait']
+const DRAFT_RECEIPT_KEYS = [...RECEIPT_KEYS, 'draftReceipt'] as const
+const RECEIPT_STATUSES: readonly ReceiptStatus[] = ['delivered', 'draft_received', 'blocked', 'failed', 'retry_wait']
 
 type NormalizedReceiptResult = { readonly receipt: DeliveryReceipt | null; readonly reasonCodes: readonly string[] }
 
@@ -75,11 +77,19 @@ function sameLineage(left: DeliveryReceipt, right: DeliveryReceipt): boolean {
 
 function normalizeReceiptCore(plan: RoutingPlan, value: unknown): NormalizedReceiptResult {
   try {
-    if (!isPlainObject(value) || !exactKeys(value, RECEIPT_KEYS)) return { receipt: null, reasonCodes: ['RECEIPT_SHAPE_INVALID'] }
+    if (!isPlainObject(value)) return { receipt: null, reasonCodes: ['RECEIPT_SHAPE_INVALID'] }
     const raw = value as Record<string, unknown>
+    const expectedKeys = raw.status === 'draft_received' ? DRAFT_RECEIPT_KEYS : RECEIPT_KEYS
+    if (!exactKeys(value, expectedKeys)) return { receipt: null, reasonCodes: ['RECEIPT_SHAPE_INVALID'] }
     if (typeof raw.planFingerprint !== 'string' || !SHA256_PATTERN.test(raw.planFingerprint) || raw.planFingerprint !== plan.planFingerprint) return { receipt: null, reasonCodes: ['RECEIPT_PLAN_FINGERPRINT_INVALID'] }
     const route = plan.routes.find((candidate) => candidate.routeId === raw.routeId)
     if (!route) return { receipt: null, reasonCodes: ['RECEIPT_ROUTE_UNKNOWN'] }
+    let draftReceipt: DeliveryReceipt['draftReceipt']
+    if (raw.status === 'draft_received') {
+      if (route.framework !== 'nextjs' || route.transport !== 'first_party_signed_api' || route.executor !== 'first_party_signed_api') return { receipt: null, reasonCodes: ['RECEIPT_DRAFT_ROUTE_INVALID'] }
+      draftReceipt = normalizeFirstPartyDraftReceipt(raw.draftReceipt) ?? undefined
+      if (!draftReceipt || draftReceipt.publicationId !== route.destinationPublicationIdentity || draftReceipt.contentHash !== route.contentHash) return { receipt: null, reasonCodes: ['RECEIPT_DRAFT_RECEIPT_INVALID'] }
+    }
     const routeId = normalizeId(raw.routeId, 'receipt.routeId')
     const targetId = normalizeId(raw.targetId, 'receipt.targetId')
     const siteIdentity = normalizeId(raw.siteIdentity, 'receipt.siteIdentity')
@@ -116,6 +126,7 @@ function normalizeReceiptCore(plan: RoutingPlan, value: unknown): NormalizedRece
       executorRunId: executorRunId as DeliveryReceipt['executorRunId'],
       attempt,
       status: raw.status,
+      ...(draftReceipt ? { draftReceipt } : {}),
       plannedAt,
       completedAt,
       occurredAt,

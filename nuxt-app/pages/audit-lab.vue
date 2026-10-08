@@ -96,7 +96,7 @@ const auditRunWorkspace = computed(() => overview.value?.workspaces.find(workspa
 const auditRunTarget = computed(() => auditRunWorkspace.value?.displayName || '')
 
 definePageMeta({ i18n: false, layout: 'owner' })
-useHead({ title: '私有稽核實驗室 · 發現方式Stack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
+useHead({ title: '工作總覽 · DiscoveryStack', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }] })
 
 async function loadOverview() {
   state.value = 'loading'
@@ -409,28 +409,32 @@ async function approvePublicDataset(datasetId: number) {
 }
 
 onMounted(() => { if (!isNestedAuditRoute.value) void loadOverview() })
+watch(isNestedAuditRoute, (isNested) => { if (!isNested) void loadOverview() })
 </script>
 
 <template>
   <NuxtPage v-if="isNestedAuditRoute" />
   <section v-else class="audit-lab" aria-labelledby="audit-title">
     <div class="audit-lab-head">
-      <p class="eyebrow">私有／旅程洞察</p>
-      <h1 id="audit-title">稽核路徑。<br><em>治理證據。</em></h1>
-      <p>此私有作業空間僅用於已授權公開頁面的結構、策略師審核與去識別模型就緒度；不會推論私有轉換成果。</p>
-      <p><NuxtLink to="/leads" class="audit-button">查看客戶名單 <span aria-hidden="true">↗</span></NuxtLink></p>
+      <p class="eyebrow">DiscoveryStack 營運工作台</p>
+      <h1 id="audit-title">工作總覽</h1>
+      <p>先處理客戶與文章，再查看發布成效。資料審核和模型設定放在進階工具，不需要一次理解所有功能。</p>
     </div>
 
-    <div v-if="state === 'loading'" class="audit-state" aria-live="polite">正在載入私有稽核實驗室…</div>
+    <div v-if="state === 'loading'" class="audit-state" aria-live="polite">正在確認工作台登入與資料…</div>
     <div v-else-if="state === 'signin'" class="audit-state audit-auth">
-      <p class="eyebrow">需要 owner 工作階段</p>
-      <h2>此系統僅在私有登入後開放。</h2>
-      <p>稽核證據、審核決策與未來訓練候選資料都不是公開網站內容。</p>
-      <button class="audit-button" type="button" @click="startAuditSignIn">登入稽核實驗室 <span aria-hidden="true">↗</span></button>
+      <p class="eyebrow">需要擁有人登入</p>
+      <h2>請先登入營運工作台。</h2>
+      <p>客戶資料、文章審核與學習資料不是公開內容。這次介面整理不會新增員工權限。</p>
+      <button class="audit-button" type="button" @click="startAuditSignIn">登入工作台 <span aria-hidden="true">↗</span></button>
     </div>
     <div v-else-if="state === 'error'" class="audit-state audit-error" role="alert">{{ errorMessage }}</div>
 
     <template v-else-if="overview">
+      <OwnerWorkGuide />
+      <details class="audit-advanced-tools" id="audit-advanced-tools">
+        <summary><span>進階資料審核與稽核工具</span><small>需要建立來源、人工標註或審核訓練資料時再展開；原有功能全部保留。</small></summary>
+        <div class="audit-advanced-tools__content">
       <section class="audit-summary" aria-label="ML readiness summary">
         <div><span>已核准多維標註</span><strong>{{ overview.readiness.approvedHumanAnnotations }}</strong><small>僅計入已通過來源、PII、品質與去重檢查的 SEO／GEO 人工標註。</small></div>
         <div><span>資料集 manifest</span><strong>{{ displayLabel(overview.readiness.manifestAdmission.status) }}</strong><small>尚未建立或核准的資料集不會進入遠端訓練。</small></div>
@@ -549,6 +553,27 @@ onMounted(() => { if (!isNestedAuditRoute.value) void loadOverview() })
           </article>
         </div>
       </section>
+        </div>
+      </details>
     </template>
   </section>
 </template>
+
+<style scoped>
+.audit-lab { width:100%; max-width:1240px; margin:0 auto; padding:clamp(1rem,3vw,2.5rem); color:#17253d; }
+.audit-lab-head { margin-bottom:1.75rem; }
+.audit-lab-head .eyebrow { margin:0 0 .5rem; color:#466c7a; font-size:.75rem; font-weight:750; letter-spacing:.08em; }
+.audit-lab-head h1 { margin:0 0 .7rem; }
+.audit-lab-head > p:last-child { max-width:48rem; margin:0; color:#627084; font-size:.95rem; line-height:1.7; }
+.audit-lab-head h1 { font-size:clamp(2rem,4vw,3.2rem); line-height:1.15; }
+.audit-state { padding:1.2rem; border:1px solid #dce3eb; border-radius:1rem; background:#fff; line-height:1.7; }
+.audit-auth h2 { font-size:1.25rem; }
+.audit-button { padding:.7rem 1rem; border:0; border-radius:.65rem; background:#285e70; color:#fff; font:inherit; font-weight:700; cursor:pointer; }
+.audit-error { color:#843939; border-color:#e3bdbd; }
+.audit-advanced-tools { margin-top:2rem; border:1px solid #dce3eb; border-radius:1rem; background:#fff; }
+.audit-advanced-tools > summary { display:flex; flex-direction:column; gap:.3rem; padding:1.2rem; color:#17253d; cursor:pointer; font-size:1rem; font-weight:750; }
+.audit-advanced-tools > summary small { color:#627084; font-size:.8rem; font-weight:400; }
+.audit-advanced-tools > summary:focus-visible { outline:3px solid #70a0b2; outline-offset:3px; }
+.audit-advanced-tools__content { padding:0 1.2rem 1.2rem; }
+@media(max-width:760px) { .audit-advanced-tools__content { padding:0 .75rem .75rem; } }
+</style>

@@ -1,0 +1,3 @@
+ALTER TABLE `contentOperationCalendarEntries` MODIFY COLUMN `status` enum('planned','materialized','awaiting_generation','awaiting_review','ready_to_publish','publishing','delivered','completed','cancelled','skipped','blocked','awaiting_site_review') NOT NULL DEFAULT 'planned';--> statement-breakpoint
+ALTER TABLE `contentOperationMachineAuthorizations` MODIFY COLUMN `status` enum('authorized','executing','published','revoked','draft_received') NOT NULL DEFAULT 'authorized';--> statement-breakpoint
+ALTER TABLE `contentOperationPublicationAttempts` MODIFY COLUMN `status` enum('planned','dry_run_succeeded','delivered','retryable_failure','permanent_failure','blocked','draft_received') NOT NULL;

@@ -1,3 +1,5 @@
+import type { FirstPartyDraftReceipt } from '../first-party-publishing/draft-receipt'
+
 export const PUBLICATION_ROUTING_VERSION = 'publication-routing-v2' as const
 export const GEOFlow_PINNED_SOURCE_SHA = '9d70db04ee9c5d308f5fa29b4c65834229af9eea' as const
 
@@ -6,7 +8,7 @@ export type Framework = 'astro' | 'nuxt' | 'nextjs' | 'wordpress' | 'php_agent' 
 export type Transport = 'first_party_git' | 'first_party_signed_api' | 'wordpress_rest' | 'geoflow_agent' | 'generic_http' | 'geoflow_local'
 export type Executor = 'first_party_git' | 'first_party_signed_api' | 'wordpress_rest' | 'geoflow_agent' | 'generic_http' | 'geoflow_local'
 export type ExecutorAuthority = 'discoverystack_first_party' | 'geoflow_content_engine'
-export type RouteStatus = 'planned' | 'delivered' | 'blocked' | 'failed' | 'retry_wait'
+export type RouteStatus = 'planned' | 'delivered' | 'draft_received' | 'blocked' | 'failed' | 'retry_wait'
 export type ReceiptStatus = Exclude<RouteStatus, 'planned'>
 export type EventKind = RouteStatus
 export type ProjectionKind = 'first_party' | 'geoflow'
@@ -185,6 +187,7 @@ export interface DeliveryReceipt {
   readonly executorRunId: OpaqueReference
   readonly attempt: number
   readonly status: ReceiptStatus
+  readonly draftReceipt?: FirstPartyDraftReceipt
   readonly plannedAt: number
   readonly completedAt: number
   readonly occurredAt: number
@@ -221,7 +224,7 @@ export interface ResultRouteEvent {
   readonly planFingerprint: string
   readonly routeId: string
   readonly sequence: number
-  readonly kind: 'delivered' | 'blocked' | 'failed' | 'retry_wait'
+  readonly kind: 'delivered' | 'draft_received' | 'blocked' | 'failed' | 'retry_wait'
   readonly attempt: number
   readonly executorRunId: OpaqueReference
   readonly receiptFingerprint: string
@@ -252,7 +255,7 @@ export interface RouteEventAggregate {
 
 export interface PlanEventAggregate {
   readonly planFingerprint: string
-  readonly overall: 'planned' | 'partial' | 'delivered' | 'blocked' | 'failed' | 'retry_wait'
+  readonly overall: 'planned' | 'partial' | 'delivered' | 'awaiting_site_review' | 'blocked' | 'failed' | 'retry_wait'
   readonly routes: readonly RouteEventAggregate[]
 }
 

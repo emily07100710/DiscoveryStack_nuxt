@@ -1,4 +1,5 @@
 import { fingerprint } from './canonical'
+import { approvalReference, assertDatasetKnowledgeAuthorityCurrent } from './knowledge-authority'
 import type { GeoOutcomeRepositoryPort } from './types'
 import type { ModelOpsAdvisoryAssignment, ModelOpsRepositoryPort } from './modelops-types'
 
@@ -16,6 +17,7 @@ export async function assignModelOpsAdvisory(input: { ownerUserId: number; polic
   if (!cycle || cycle.policyId !== policy.policyId || cycle.policyFingerprint !== policy.configurationFingerprint || cycle.status !== 'running' || cycle.modelArtifactId !== input.candidateArtifactId || !cycle.artifactHash || !cycle.generatedDatasetFingerprint || !cycle.shadowEvaluationFingerprint) throw new Error('Durable cycle lineage does not authorize advisory assignment.')
   const candidate = await outcomeRepository.getArtifact(input.ownerUserId, input.candidateArtifactId)
   if (!candidate || candidate.artifactHash !== cycle.artifactHash || candidate.status !== 'approved_for_shadow') throw new Error('Durable candidate artifact lineage is missing or inconsistent.')
+  const candidateReference = approvalReference(candidate)
   const candidateArtifactHash = sha(candidate.artifactHash, 'candidateArtifactHash')
   if (currentArtifactHash === candidateArtifactHash) throw new Error('Candidate and current artifacts must differ.')
   const current = (await outcomeRepository.listArtifacts(input.ownerUserId)).find(item => item.artifactHash === currentArtifactHash)
@@ -23,18 +25,36 @@ export async function assignModelOpsAdvisory(input: { ownerUserId: number; polic
 
   const dataset = (await outcomeRepository.listDatasets(input.ownerUserId)).find(item => item.manifestFingerprint === candidate.datasetManifestFingerprint)
   if (!dataset || dataset.manifestFingerprint !== cycle.generatedDatasetFingerprint) throw new Error('Durable candidate dataset lineage is missing or inconsistent.')
+  const authority = await assertDatasetKnowledgeAuthorityCurrent(input.ownerUserId, dataset, outcomeRepository, candidateReference)
+  const currentDataset = (await outcomeRepository.listDatasets(input.ownerUserId)).find(item => item.manifestFingerprint === current.datasetManifestFingerprint)
+  if (!currentDataset) throw new Error('Durable current artifact dataset lineage is missing.')
+  const currentAuthority = await assertDatasetKnowledgeAuthorityCurrent(input.ownerUserId, currentDataset, outcomeRepository, approvalReference(current))
   const members = await outcomeRepository.getDatasetMembers(input.ownerUserId, dataset.manifestId)
+  await assertDatasetKnowledgeAuthorityCurrent(input.ownerUserId, dataset, outcomeRepository, authority.reference)
+  await assertDatasetKnowledgeAuthorityCurrent(input.ownerUserId, currentDataset, outcomeRepository, currentAuthority.reference)
   const durableRowCount = dataset.trainRowCount + dataset.validationRowCount + dataset.testRowCount + dataset.siteHoldoutRowCount + dataset.queryHoldoutRowCount + dataset.temporalHoldoutRowCount
   if (members.length !== durableRowCount) throw new Error('Durable dataset member count is inconsistent.')
   const datasetFingerprint = sha(dataset.manifestFingerprint, 'datasetFingerprint')
   const splitFingerprint = fingerprint(splitFor(dataset))
 
   const evaluation = (await repository.listShadowEvaluations(input.ownerUserId, candidate.artifactId)).filter(item => item.artifactHash === candidateArtifactHash && item.evaluationFingerprint === cycle.shadowEvaluationFingerprint).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1)
+  await assertDatasetKnowledgeAuthorityCurrent(input.ownerUserId, dataset, outcomeRepository, authority.reference)
+  await assertDatasetKnowledgeAuthorityCurrent(input.ownerUserId, currentDataset, outcomeRepository, currentAuthority.reference)
   if (!evaluation || evaluation.status !== 'completed' || evaluation.reasonCodes.some(code => /degrad|drift|zero_prediction|insufficient/iu.test(code))) throw new Error('Candidate shadow evaluation is missing, incomplete, or degraded; advisory assignment stopped.')
   const metricsFingerprint = fingerprint({ binaryMetrics: evaluation.binaryMetrics, rankingMetrics: evaluation.rankingMetrics, calibrationDiagnostics: evaluation.calibrationDiagnostics, driftDiagnostics: evaluation.driftDiagnostics })
   const base = { contractVersion: 'modelops-advisory-assignment-v3', ownerUserId: input.ownerUserId, policyId: policy.policyId, policyFingerprint: policy.configurationFingerprint, cycleId: cycle.cycleId, candidateArtifactId: candidate.artifactId, currentArtifactHash, candidateArtifactHash, datasetFingerprint, splitFingerprint, metricsFingerprint, shadowEvaluationFingerprint: evaluation.evaluationFingerprint, reasonCodes: ['shadow_completed', 'advisory_only'], productionActivation: false as const, status: 'advisory' as const }
   const assignmentFingerprint = fingerprint(base)
-  return repository.saveAdvisoryAssignment(input.ownerUserId, { ...base, assignmentId: `geo-modelops-advisory-${assignmentFingerprint.slice(0, 24)}`, activeScopeKey: `owner-${input.ownerUserId}:advisory`, version: 1, rollbackFromAssignmentId: null, assignmentFingerprint, createdAt: at.toISOString(), rolledBackAt: null })
+  await assertDatasetKnowledgeAuthorityCurrent(input.ownerUserId, dataset, outcomeRepository, authority.reference)
+  await assertDatasetKnowledgeAuthorityCurrent(input.ownerUserId, currentDataset, outcomeRepository, currentAuthority.reference)
+  const saved = await repository.saveAdvisoryAssignment(input.ownerUserId, { ...base, assignmentId: `geo-modelops-advisory-${assignmentFingerprint.slice(0, 24)}`, activeScopeKey: `owner-${input.ownerUserId}:advisory`, version: 1, rollbackFromAssignmentId: null, assignmentFingerprint, createdAt: at.toISOString(), rolledBackAt: null })
+  try {
+    await assertDatasetKnowledgeAuthorityCurrent(input.ownerUserId, dataset, outcomeRepository, authority.reference)
+    await assertDatasetKnowledgeAuthorityCurrent(input.ownerUserId, currentDataset, outcomeRepository, currentAuthority.reference)
+  } catch (error) {
+    await rollbackModelOpsAdvisory({ ownerUserId: input.ownerUserId, assignmentId: saved.assignmentId, expectedVersion: saved.version, reasonCodes: ['dataset_knowledge_authority_changed'], now: at }, repository)
+    throw error
+  }
+  return saved
 }
 
 export async function rollbackModelOpsAdvisory(input: { ownerUserId: number; assignmentId: string; expectedVersion: number; reasonCodes?: string[]; now?: Date }, repository: ModelOpsRepositoryPort): Promise<ModelOpsAdvisoryAssignment> {

@@ -265,6 +265,13 @@ export interface FirstPartyDeliveryResult {
   readonly changeSet?: FirstPartyRepositoryChangeSet
 }
 
+export interface FirstPartyDraftReceivedResult {
+  readonly status: 'draft_received'
+  readonly receipt: import('./draft-receipt').FirstPartyDraftReceipt
+  readonly artifactFingerprint: string
+  readonly idempotencyKey: string
+}
+
 export type FirstPartyRepositoryChangeKind = 'added' | 'removed' | 'replaced' | 'unmodified'
 
 export interface FirstPartyRepositoryChangeUnit {
@@ -320,7 +327,7 @@ export interface FirstPartyFailureResult {
   readonly httpStatus?: number
 }
 
-export type FirstPartyExecutionResult = FirstPartyDeliveryResult | FirstPartyBlockedResult | FirstPartyFailureResult | { readonly status: 'dry_run'; readonly preview: FirstPartyRequestPreview }
+export type FirstPartyExecutionResult = FirstPartyDeliveryResult | FirstPartyDraftReceivedResult | FirstPartyBlockedResult | FirstPartyFailureResult | { readonly status: 'dry_run'; readonly preview: FirstPartyRequestPreview }
 
 export interface FirstPartyAdapterInput {
   readonly target: ValidatedFirstPartyTarget
@@ -363,6 +370,7 @@ export interface SignedApiResponsePayload {
 
 export type FirstPartyAdapterResult =
   | { readonly status: 'ok'; readonly remote: FirstPartyRemoteIdentity; readonly remoteState: FirstPartyRemoteState; readonly changeSet?: FirstPartyRepositoryChangeSet }
+  | { readonly status: 'draft_received'; readonly receipt: import('./draft-receipt').FirstPartyDraftReceipt }
   | { readonly status: 'blocked'; readonly code: FirstPartyDecisionCode; readonly reasons: readonly string[] }
   | { readonly status: 'failure'; readonly code: FirstPartyDecisionCode; readonly reasons: readonly string[]; readonly httpStatus?: number }
 

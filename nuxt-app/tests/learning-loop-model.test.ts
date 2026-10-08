@@ -29,7 +29,7 @@ beforeAll(async () => {
   const built = await buildDataset(1, 'citation_selection', repository)
   expect(built.memberCount).toBe(1000); expect(built.manifest.readiness.ready).toBe(true)
   manifestId = built.manifest.manifestId
-  await reviewDataset(1, manifestId, 'approve', 1, 'Synthetic fixture only: exercise genuine fitting and holdout evaluation.', repository)
+  await reviewDataset(1, manifestId, 'approve', 1, 'Synthetic fixture only: exercise genuine fitting and holdout evaluation.', repository, { knowledgeMode: 'declared_none_v1' })
   for (const family of ['regularized_logistic_baseline_v1', 'pairwise_logistic_ranker_v1'] as const) {
     const fallback = await createBootstrapFallback(1, manifestId, family, repository)
     await approveBootstrapFallback(1, fallback.artifactId, 1, 'Synthetic independent owner review of train-only fallback.', repository)
@@ -90,6 +90,20 @@ describe('hash-bound draft advice never acts as publication or observed truth', 
     expect(result.featureContributions.every(row => !result.missingFeatureList.includes(row.key))).toBe(true)
     expect(await f.models.listObservations(1)).toEqual(before)
     expect(JSON.stringify(result)).not.toContain(f.lineage.draft.title)
+  })
+  it('blocks advice if the bound fallback is revoked during post-prediction draft revalidation', async () => {
+    const f = await adviceFixture()
+    let resolutions = 0
+    f.operations.resolveWorkspaceEntry = vi.fn(async () => {
+      resolutions++
+      if (resolutions === 2) {
+        const fallback = (await f.models.listArtifacts(1)).find(row => row.rollbackArtifactHash === null)!
+        await reviewModel(1, fallback.artifactId, 'revoke', 1, 'Synthetic fallback revocation after prediction returned.', f.models)
+      }
+      return structuredClone(f.lineage)
+    })
+    await expect(getDraftLearningAdvice(1, f.input, { operations: f.operations, learning: f.repository, models: f.models, now: f.now })).rejects.toMatchObject({ statusCode: 409 })
+    expect(resolutions).toBe(2)
   })
   it.each(['revoked_grant', 'edited_draft', 'tampered_artifact', 'revoked_dataset'])('blocks %s', async kind => {
     const f = await adviceFixture(), state = f.models.exportState()

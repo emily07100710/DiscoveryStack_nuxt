@@ -4,6 +4,8 @@ import { evaluateModel } from './evaluator'
 import { assertDisjointComplete, splitFingerprint } from './split-policy'
 import { trainTrainOnlyPrevalencePrior } from './trainer'
 import type { DatasetManifest, DatasetMember, ModelArtifact, TrainingConfig } from './types'
+import type { DatasetKnowledgeApprovalReference } from './knowledge-authority-types'
+import { approvalReference } from './knowledge-authority'
 
 export const TRAIN_PRIOR_CONFIG: TrainingConfig = {
   epochs: 1,
@@ -13,7 +15,7 @@ export const TRAIN_PRIOR_CONFIG: TrainingConfig = {
   featureCatalogVersion: GEO_OUTCOME_FEATURE_CATALOG_VERSION,
 }
 
-export function buildTrainOnlyPriorArtifact(ownerUserId: number, dataset: DatasetManifest, members: DatasetMember[], modelFamily: ModelFamily): ModelArtifact {
+export function buildTrainOnlyPriorArtifact(ownerUserId: number, dataset: DatasetManifest, members: DatasetMember[], modelFamily: ModelFamily, reference?: DatasetKnowledgeApprovalReference): ModelArtifact {
   const split = { train: dataset.trainFingerprints, validation: dataset.validationFingerprints, test: dataset.testFingerprints, siteHoldout: dataset.siteHoldoutFingerprints, queryHoldout: dataset.queryHoldoutFingerprints, temporalHoldout: dataset.temporalHoldoutFingerprints }
   assertDisjointComplete(split, members)
   const trainRows = members.filter(member => member.splitAssignment === 'train')
@@ -27,6 +29,7 @@ export function buildTrainOnlyPriorArtifact(ownerUserId: number, dataset: Datase
     modelVersion: GEO_OUTCOME_TRAIN_PRIOR_VERSION,
     datasetManifestFingerprint: dataset.manifestFingerprint,
     splitManifestFingerprint: splitFingerprint(split),
+    ...(reference || {}),
     parameters,
     evaluationMetrics: metrics,
     limitations: [
@@ -40,7 +43,8 @@ export function buildTrainOnlyPriorArtifact(ownerUserId: number, dataset: Datase
 export function isExactTrainOnlyPriorArtifact(artifact: ModelArtifact, dataset: DatasetManifest, members: DatasetMember[]): boolean {
   if (artifact.ownerUserId !== dataset.ownerUserId || artifact.datasetManifestFingerprint !== dataset.manifestFingerprint || artifact.featureCatalogVersion !== GEO_OUTCOME_FEATURE_CATALOG_VERSION || artifact.labelContractVersion !== GEO_OUTCOME_LABEL_CONTRACT_VERSION || artifact.rollbackArtifactHash !== null) return false
   try {
-    return buildTrainOnlyPriorArtifact(artifact.ownerUserId, dataset, members, artifact.modelFamily).artifactHash === artifact.artifactHash
+    const reference = artifact.datasetDecisionId !== undefined || artifact.knowledgeAuthorityFingerprint !== undefined ? approvalReference(artifact) : undefined
+    return buildTrainOnlyPriorArtifact(artifact.ownerUserId, dataset, members, artifact.modelFamily, reference).artifactHash === artifact.artifactHash
   } catch {
     return false
   }

@@ -18,16 +18,29 @@ const panel = parse(readFileSync(panelPath, 'utf8'), { filename: panelPath.pathn
 if (panel.errors.length) throw new Error('Live publication actions panel did not parse.')
 const panelCompiled = compileScript(panel.descriptor, { id: 'learning-loop-action-panel-render-test', inlineTemplate: true, templateOptions: { ssr: true } })
 const panelJs = transpileModule(panelCompiled.content, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText
+const admissionPath = new URL('../components/OwnerSiteLearningAdmission.vue', import.meta.url)
+const admission = parse(readFileSync(admissionPath, 'utf8'), { filename: admissionPath.pathname })
+if (admission.errors.length) throw new Error('Owner site-learning admission component did not parse.')
+const admissionCompiled = compileScript(admission.descriptor, { id: 'learning-loop-site-admission-render-test', inlineTemplate: true, templateOptions: { ssr: true } })
+const admissionJs = transpileModule(admissionCompiled.content, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText
 
 async function render(failure?: { statusCode: number; message: string }, effectFixture?: unknown, modelFixture?: unknown) {
   const workspace = { configuration: { loopEnabled: false, crawlEnabled: false, retentionEnabled: false, weeklyContentEnabled: false, schedulerEnabled: false }, clients: [], sources: [], authorizations: [], collections: [], limitations: [] }
+  const siteLearningWorkspace = {
+    entries: [{ entryId: 81, targetRowId: 91, clientId: 71, label: '合成網站目標 91', confirmationFingerprint: 'a'.repeat(64), grant: null,
+      authorizations: [{ id: 101, fingerprint: 'b'.repeat(64), consentVersion: 'synthetic-consent-v1', expiresAt: '2027-01-01T00:00:00.000Z' }] }],
+    outcomes: [],
+    release: { state: 'not_generated', status: 'gate_blocked', eligibleCandidateCount: 0, blockedOutcomeCount: 0, modelTrainingAllowed: false, citationTrainingEligible: false, limitations: ['synthetic_fixture_only'] },
+  }
   const models = modelFixture || { workspace: { inventory: { verifiedPrimaryCount: 0 }, readiness: { development: { ready: false, missing: ['尚缺真實核准觀測'] }, shadow: { ready: false } }, datasets: [], trainingRuns: [], models: [] } }
   const effect = effectFixture || { enabled: false, taskType: 'content_effect_direction', release: null, models: [] }
-  const fetcher = vi.fn(async (url: string, options: unknown) => ({ data: ref(url.includes('geo-outcome-model') ? models : url.includes('content-operations') ? { entries: [] } : failure ? undefined : url.endsWith('/effect-models') ? effect : workspace), error: ref(url.includes('closed-loop') ? failure : undefined), pending: ref(false), refresh: vi.fn() }))
+  const fetcher = vi.fn(async (url: string, options: unknown) => ({ data: ref(url.includes('/site-learning/workspace') ? siteLearningWorkspace : url.includes('geo-outcome-model') ? models : url.includes('content-operations') ? { entries: [] } : failure ? undefined : url.endsWith('/effect-models') ? effect : workspace), error: ref(url.includes('closed-loop') ? failure : undefined), pending: ref(false), refresh: vi.fn() }))
   const post = vi.fn(() => { throw new Error('Rendering must not perform mutations.') }), meta = vi.fn(), head = vi.fn()
   const panelModule = { exports: {} as { default?: unknown } }
   new Function('require', 'module', 'exports', 'ref', 'computed', 'reactive', 'onMounted', '$fetch', panelJs)(nuxtRequire, panelModule, panelModule.exports, ref, computed, reactive, vi.fn(), post)
-  const requirePage = (id: string) => id === '~/components/owner/LivePublicationActionsPanel.vue' ? panelModule.exports : nuxtRequire(id)
+  const admissionModule = { exports: {} as { default?: unknown } }
+  new Function('require', 'module', 'exports', admissionJs)(nuxtRequire, admissionModule, admissionModule.exports)
+  const requirePage = (id: string) => id === '~/components/owner/LivePublicationActionsPanel.vue' ? panelModule.exports : id === '~/components/OwnerSiteLearningAdmission.vue' ? admissionModule.exports : nuxtRequire(id)
   const module = { exports: {} as { default?: unknown } }
   new Function('require', 'module', 'exports', 'definePageMeta', 'useHead', 'useFetch', '$fetch', 'computed', 'ref', 'reactive', 'watch', js)(requirePage, module, module.exports, meta, head, fetcher, post, computed, ref, reactive, watch)
   const app = createSSRApp(module.exports.default)
@@ -45,9 +58,12 @@ describe('compiled owner learning workspace', () => {
     expect(html).toContain('不保證排名或收入')
     expect(html).toContain('發布前後證據')
     expect(html).toContain('另納入已獨立審查的實際改動（新版模型）')
+    expect(html).toContain('網站成效資料准入')
+    expect(html).toContain('擁有人申明已有客戶模型用途同意證明，不是代客戶同意')
+    expect(html).toContain('確認此網站版本接入成效資料')
     expect(meta).toHaveBeenCalledWith({ layout: 'owner' })
     expect(head.mock.calls[0]?.[0].meta).toContainEqual({ name: 'robots', content: 'noindex,nofollow,noarchive' })
-    expect(fetcher).toHaveBeenCalledTimes(4); expect(post).not.toHaveBeenCalled()
+    expect(fetcher).toHaveBeenCalledTimes(5); expect(post).not.toHaveBeenCalled()
   })
   it.each([401, 503])('does not show usable fake operations when workspace returns %s', async statusCode => {
     const { html, post } = await render({ statusCode, message: 'Synthetic unavailable fixture.' })

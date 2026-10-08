@@ -22,7 +22,7 @@ const hasCalendar=computed(()=>workspace.value.calendars.some(c=>String(c.client
 watch(selected,()=>{policyId.value='';planId.value='';invitation.value=null;notice.value=''})
 const name=(id:number)=>workspace.value.clients.find(c=>c.id===id)?.displayName || '客戶'
 const time=(iso:string)=>new Date(iso).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})
-const requestStatus=(r:Request)=>['delivered','completed'].includes(r.publicationStatus || '')?'已發佈':r.status==='changes_requested'?'客戶要求修改':r.status==='revoked'?'送審已取消':Date.parse(r.expiresAt)<=Date.now()?'送審已過期':r.status==='approved'?'已同意，等待發佈':'等待客戶確認'
+const requestStatus=(r:Request)=>r.publicationStatus==='awaiting_site_review'?'網站已收稿；發布結果請至內容工作台核驗':['delivered','completed'].includes(r.publicationStatus || '')?'已發佈':r.status==='changes_requested'?'客戶要求修改':r.status==='revoked'?'送審已取消':Date.parse(r.expiresAt)<=Date.now()?'送審已過期':r.status==='approved'?'已同意，等待發佈':'等待客戶確認'
 const deliveryStatus=(r:Request)=>r.notificationStatus==='sent'?'LINE 已接受通知':r.notificationStatus==='failed'?'LINE 通知失敗':r.notificationStatus==='cancelled'?'通知已取消':'等待傳送'
 async function act(action:()=>Promise<unknown>,message:string,failureMessage='這一步尚未完成。請檢查客戶的發文規則、網站設定與系統連線後再試。'){busy.value=true;failed.value=false;notice.value='';try{await action();notice.value=message;await refresh()}catch{failed.value=true;notice.value=failureMessage}finally{busy.value=false}}
 async function addDo(){await act(async()=>{await fetchWeekly('/api/weekly-content/do-alignment',{method:'POST',body:{}})},'Do Alignment 已加入，可先核對網站並綁定 LINE。每週文章仍需另外核准設定。')}
@@ -32,7 +32,7 @@ async function activate(){const p=policies.value.find(p=>p.policyId===policyId.v
 async function invite(){if(!current.value||current.value.status!=='active')return;await act(async()=>{invitation.value=await fetchWeekly<Invitation>(`/api/weekly-content/clients/${current.value!.id}/invitation`,{method:'POST',body:{}})},'請把下方入口與一次性邀請碼私下交給這位客戶。這一步只綁定身分。','這一步尚未完成。請確認客戶仍有效，並檢查 LINE 連線與邀請設定後再試。')}
 async function createCalendar(){if(!current.value||!planId.value)return;await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/calendar`,{method:'POST',body:{productionPlanId:Number(planId.value),startDate:startDate.value,publishLocalTime:publishLocalTime.value,monthlyArticleLimit:monthlyArticleLimit.value}}),'每週寄稿時間已排好。系統會依序使用這份計畫中核准的選題。')}
 const reopenKeys=new Map<string,string>()
-const canReopen=(r:Request)=>!['delivered','completed','publishing'].includes(r.publicationStatus || '') && ['pending','approved'].includes(r.status) && (Date.parse(r.expiresAt)<=Date.now() || (r.status==='pending' && ['failed','cancelled'].includes(r.notificationStatus || '')))
+const canReopen=(r:Request)=>!['delivered','completed','publishing','awaiting_site_review'].includes(r.publicationStatus || '') && ['pending','approved'].includes(r.status) && (Date.parse(r.expiresAt)<=Date.now() || (r.status==='pending' && ['failed','cancelled'].includes(r.notificationStatus || '')))
 async function reopen(r:Request){let idempotencyKey=reopenKeys.get(r.requestId);if(!idempotencyKey){idempotencyKey=crypto.randomUUID();reopenKeys.set(r.requestId,idempotencyKey)}await act(()=>fetchWeekly(`/api/weekly-content/entries/${r.entryId}/reopen`,{method:'POST',body:{clientId:r.clientId,idempotencyKey}}),'同一篇文章已重新送審。客戶需要在新的通知再次確認。')}
 async function pause(){if(!current.value)return;await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/pause`,{method:'POST',body:{status:'paused'}}),'這位客戶的每週送審與發文已暫停。')}
 </script>

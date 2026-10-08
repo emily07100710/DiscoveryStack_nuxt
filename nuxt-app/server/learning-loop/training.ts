@@ -4,6 +4,7 @@ import { summarizeArtifact } from '../geo-outcome-model/artifact'
 import { canBePrimaryCitationTruth } from '../geo-outcome-model/observation-contract'
 import { fingerprint } from '../geo-outcome-model/canonical'
 import { verifyArtifactHash } from '../geo-outcome-model/release-gate'
+import { approvalReference, assertDatasetKnowledgeAuthorityCurrent } from '../geo-outcome-model/knowledge-authority'
 import type { GeoOutcomeRepositoryPort } from '../geo-outcome-model/types'
 import { learningError } from './authority'
 
@@ -31,6 +32,7 @@ export async function trainApprovedLearningDataset(ownerUserId: number, input: u
   const dataset = await repo.getDataset(ownerUserId, datasetManifestId)
   const decision = (await repo.listDatasetDecisions(ownerUserId)).filter(row => row.manifestId === datasetManifestId && row.manifestFingerprint === dataset?.manifestFingerprint).at(-1)
   if (!dataset || dataset.status !== 'approved' || decision?.newStatus !== 'approved' || !dataset.readiness.ready) learningError('OWNER_APPROVED_READY_DATASET_REQUIRED')
+  try { await assertDatasetKnowledgeAuthorityCurrent(ownerUserId, dataset, repo) } catch { learningError('CURRENT_KNOWLEDGE_DEPENDENCY_APPROVAL_REQUIRED') }
   const members = await repo.getDatasetMembers(ownerUserId, datasetManifestId)
   if (!members.length || members.some(member => !canBePrimaryCitationTruth(member.observation))) learningError('CURRENT_DATASET_GOVERNANCE_REQUIRED')
   const reserved = await createTrainingRun(ownerUserId, { datasetManifestId, modelFamily }, repo)
@@ -40,6 +42,9 @@ export async function trainApprovedLearningDataset(ownerUserId: number, input: u
   const latest = (await repo.listDatasetDecisions(ownerUserId)).filter(row => row.manifestId === datasetManifestId && row.manifestFingerprint === dataset.manifestFingerprint).at(-1)
   const current = currentDataset?.status === 'approved' && currentDataset.manifestFingerprint === dataset.manifestFingerprint && latest?.newStatus === 'approved' && fingerprint(currentMembers) === fingerprint(members) && currentMembers.every(member => canBePrimaryCitationTruth(member.observation))
   const artifact = current && run.artifactId ? await repo.getArtifact(ownerUserId, run.artifactId) : null
-  const validArtifact = artifact && artifact.datasetManifestFingerprint === dataset.manifestFingerprint && artifact.artifactHash === run.artifactHash && verifyArtifactHash(artifact) ? artifact : null
+  let validArtifact = artifact && artifact.datasetManifestFingerprint === dataset.manifestFingerprint && artifact.artifactHash === run.artifactHash && verifyArtifactHash(artifact) ? artifact : null
+  if (validArtifact) {
+    try { await assertDatasetKnowledgeAuthorityCurrent(ownerUserId, currentDataset!, repo, approvalReference(validArtifact)) } catch { validArtifact = null }
+  }
   return { status: run.status, trainingRun: { trainingRunId: run.trainingRunId, datasetManifestId, modelFamily: run.modelFamily, status: run.status, artifactHash: run.artifactHash, metrics: run.metrics, reason: run.reason }, artifact: validArtifact ? summarizeArtifact(validArtifact) : null, currentLineageValid: Boolean(current && validArtifact), productionActivation: false as const, limitations: ['train_partition_fit_only', 'site_query_temporal_holdout_evaluated', 'owner_shadow_review_required', 'not_verified_customer_outcome'] }
 }

@@ -71,6 +71,18 @@ describe('intervention owner routes', () => {
       else { expect(matched?.route.pattern, `${method} /${segments.join('/')}`).toEqual(pattern); expect(matched?.params).toEqual(params) }
     }
   })
-  it('keeps bounded private helpers, page and nav', () => { const helper = readFileSync(`${root}server/intervention-loop/http.ts`, 'utf8'); expect(helper).toContain('64 * 1024'); expect(helper).toContain('no-store'); expect(helper).toContain('noindex, nofollow, noarchive'); const page = readFileSync(`${root}pages/audit-lab/interventions.vue`, 'utf8'); expect(page).toContain("definePageMeta({ layout: 'owner' })"); expect(page).toContain("content: 'noindex,nofollow,noarchive'"); expect(page).toContain('status === 401 || status === 403'); expect(page).toContain('登入已逾期，請重新登入。'); expect(page).toContain('v-if="isUnauthorized" class="card"'); expect(page).toContain('const useInterventionWorkspace = useFetch as unknown as InterventionWorkspaceFetch'); expect(page).toContain("useInterventionWorkspace<{ interventions: AnyRow[] }>('/api/interventions/list'"); expect(page).toContain("post('/api/interventions/register',"); expect(page).not.toMatch(/['"`]\/api\/interventions['"`]/u); expect((readFileSync(`${root}layouts/owner.vue`, 'utf8').match(/\/audit-lab\/interventions/g) || []).length).toBe(2) })
+  it('keeps bounded private helpers, page and nav', () => {
+    const helper = readFileSync(`${root}server/intervention-loop/http.ts`, 'utf8')
+    expect(helper).toContain('64 * 1024'); expect(helper).toContain('no-store'); expect(helper).toContain('noindex, nofollow, noarchive')
+    const page = readFileSync(`${root}pages/audit-lab/interventions.vue`, 'utf8')
+    expect(page).toContain("definePageMeta({ layout: 'owner' })"); expect(page).toContain("content: 'noindex,nofollow,noarchive'")
+    expect(page).toContain('status === 401 || status === 403'); expect(page).toContain('登入已逾期，請重新登入。'); expect(page).toContain('v-if="isUnauthorized" class="card"')
+    expect(page).toContain('const useInterventionWorkspace = useFetch as unknown as InterventionWorkspaceFetch')
+    expect(page).toContain("useInterventionWorkspace<{ interventions: AnyRow[] }>('/api/interventions/list'"); expect(page).toContain("post('/api/interventions/register',")
+    expect(page).not.toMatch(/['"`]\/api\/interventions['"`]/u)
+    const layout = readFileSync(`${root}layouts/owner.vue`, 'utf8')
+    expect(layout).toContain('OWNER_NAVIGATION_GROUPS'); expect(layout).toContain(':to="item.to"'); expect(layout).toContain('resolveOwnerNavigation(route.path)')
+    expect((readFileSync(`${root}utils/owner-navigation.ts`, 'utf8').match(/to: '\/audit-lab\/interventions'/g) || []).length).toBe(1)
+  })
   it('does not widen public CORS or forbidden integration areas', () => { const cors = readFileSync(`${root}server/utils/publicCors.ts`, 'utf8'); expect((cors.match(/\/api\//g) || []).length).toBe(2); expect(cors).not.toContain('/api/interventions'); expect(readFileSync(`${root}server/middleware/public-cors.ts`, 'utf8')).not.toContain('/api/interventions'); expect(readFileSync(`${root}server/content-operations/service.ts`, 'utf8').match(/notifyInterventionLoopOutcomeAssessed\(/g)?.length).toBe(1); expect(readFileSync(`${root}server/tasks/content-operations/measurement-tick.ts`, 'utf8')).toContain('runInterventionLoopTickSafely('); for (const path of [`${root}server/content-operations/orchestrator.ts`, `${root}server/content-operations/normalization.ts`]) expect(readFileSync(path, 'utf8')).not.toContain('intervention'); expect(existsSync(`${root}INTERVENTION_LOOP_RUNTIME_V1.md`)).toBe(true); expect(readFileSync(`${root}INTERVENTION_LOOP_RUNTIME_V1.md`, 'utf8')).toContain('RECRAWL_NOT_CONFIRMED') })
 })

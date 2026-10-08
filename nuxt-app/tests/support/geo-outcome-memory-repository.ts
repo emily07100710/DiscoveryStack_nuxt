@@ -1,6 +1,8 @@
 import { fingerprint } from '../../server/geo-outcome-model/canonical'
 import { observationIdentity } from '../../server/geo-outcome-model/observation-contract'
 import { projectAuthoritativeEvidenceBinding } from '../../server/geo-outcome-model/evidence-resolver'
+import { assertValidDatasetKnowledgeAuthority, buildDatasetKnowledgeAuthority } from '../../server/geo-outcome-model/knowledge-authority'
+import type { DatasetKnowledgeAuthority, DatasetKnowledgeState } from '../../server/geo-outcome-model/knowledge-authority-types'
 import type { AuthoritativeEvidenceSource, DatasetDecision, DatasetManifest, DatasetMember, GeoOutcomeRepositoryPort, MemoryGeoOutcomeRepository, MemoryGeoOutcomeState, ModelArtifact, ModelDecision, MutationClaim, MutationClaimResult, ObservationGovernanceAction, ObservationVerificationDecision, OutcomeObservation, TrainingRun, TrainingRunClaimResult } from '../../server/geo-outcome-model/types'
 
 function clone<T>(value: T): T { return structuredClone(value) }
@@ -11,10 +13,17 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
   private state: MemoryGeoOutcomeState
   private lock: Promise<void> = Promise.resolve()
   constructor(initial?: MemoryGeoOutcomeState) {
-    this.state = initial ? { ...clone(initial), datasetDecisions: clone(initial.datasetDecisions || []), evidenceBindings: clone(initial.evidenceBindings || []), authoritativeEvidenceSources: clone(initial.authoritativeEvidenceSources || []) } : { observations: [], datasets: [], datasetMembers: {}, trainingRuns: [], artifacts: [], datasetDecisions: [], decisions: [], verificationDecisions: [], evidenceBindings: [], authoritativeEvidenceSources: [], claims: [] }
+    this.state = initial ? { ...clone(initial), datasetDecisions: clone(initial.datasetDecisions || []), datasetKnowledgeStates: clone(initial.datasetKnowledgeStates || []), evidenceBindings: clone(initial.evidenceBindings || []), authoritativeEvidenceSources: clone(initial.authoritativeEvidenceSources || []) } : { observations: [], datasets: [], datasetMembers: {}, trainingRuns: [], artifacts: [], datasetDecisions: [], datasetKnowledgeStates: [], decisions: [], verificationDecisions: [], evidenceBindings: [], authoritativeEvidenceSources: [], claims: [] }
   }
   exportState(): MemoryGeoOutcomeState { return clone(this.state) }
   seedAuthoritativeEvidence(source: AuthoritativeEvidenceSource): void { this.state.authoritativeEvidenceSources.push(clone(source)) }
+  seedDatasetKnowledgeState(state: DatasetKnowledgeState): void {
+    const dataset = this.state.datasets.find(item => item.ownerUserId === state.ownerUserId && item.manifestId === state.manifestId)
+    if (!dataset || dataset.manifestFingerprint !== state.manifestFingerprint) throw new Error('Dataset knowledge test state must match an existing immutable dataset.')
+    const index = this.state.datasetKnowledgeStates!.findIndex(item => item.ownerUserId === state.ownerUserId && item.manifestId === state.manifestId)
+    if (index < 0) this.state.datasetKnowledgeStates!.push(clone(state))
+    else this.state.datasetKnowledgeStates!.splice(index, 1, clone(state))
+  }
 
   private projectGovernance(observation: OutcomeObservation): OutcomeObservation {
     if (observation.verificationAuthority === 'consumer_surface_server') return clone(observation)
@@ -87,15 +96,34 @@ export class InMemoryGeoOutcomeRepository implements MemoryGeoOutcomeRepository 
       this.state.datasets.push(clone(manifest)); this.state.datasetMembers[manifest.manifestId] = clone(members); return clone(manifest)
     })
   }
-  async transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetManifest['status'], reviewerUserId: number | null, reason: string) {
+  async readDatasetKnowledgeState(ownerUserId: number, manifestId: string): Promise<DatasetKnowledgeState> {
+    const dataset = this.state.datasets.find(item => item.ownerUserId === ownerUserId && item.manifestId === manifestId)
+    if (!dataset) throw new Error('Dataset manifest not found.')
+    const seeded = this.state.datasetKnowledgeStates?.find(item => item.ownerUserId === ownerUserId && item.manifestId === manifestId)
+    if (seeded) return clone(seeded)
+    const nativeDatasetId = this.state.datasets.filter(item => item.ownerUserId === ownerUserId).indexOf(dataset) + 1
+    if (nativeDatasetId <= 0) throw new Error('Dataset test identity is corrupt.')
+    return { ownerUserId, manifestId, manifestFingerprint: dataset.manifestFingerprint, nativeDatasetId, heads: [] }
+  }
+  async transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetManifest['status'], reviewerUserId: number | null, reason: string, knowledgeAuthority?: DatasetKnowledgeAuthority | null) {
     return this.withLock(async () => {
       const index = this.state.datasets.findIndex(d => d.ownerUserId === ownerUserId && d.manifestId === manifestId)
       if (index < 0) throw new Error('Dataset manifest not found.')
       const current = this.state.datasets[index]!; if (current.status === 'revoked' || current.status === 'archived') throw new Error('Dataset is terminal and cannot be modified.')
-      if (status === 'approved' && current.status !== 'ready_for_review') throw new Error('Only ready_for_review datasets may be approved.')
+      let authority: DatasetKnowledgeAuthority | null = null
+      if (status === 'approved') {
+        if (!knowledgeAuthority || reviewerUserId !== ownerUserId) throw new Error('Dataset approval requires an explicit owner-reviewed Knowledge authority.')
+        assertValidDatasetKnowledgeAuthority(knowledgeAuthority)
+        const state = await this.readDatasetKnowledgeState(ownerUserId, manifestId)
+        const expected = buildDatasetKnowledgeAuthority(state, knowledgeAuthority.mode)
+        if (fingerprint(expected) !== fingerprint(knowledgeAuthority)) throw new Error('Dataset Knowledge authority changed before owner approval.')
+        authority = clone(knowledgeAuthority)
+      } else if (knowledgeAuthority != null) throw new Error('Dataset revocation cannot carry Knowledge approval authority.')
+      if (status === 'approved' && current.status !== 'ready_for_review' && current.status !== 'approved') throw new Error('Only ready_for_review or approved datasets may be approved.')
       if (status !== 'approved' && status !== 'revoked') throw new Error('Dataset review may only approve or revoke.')
-      const decisionFingerprint = fingerprint({ ownerUserId, manifestId, previousStatus: current.status, newStatus: status, reviewerUserId, reason, manifestFingerprint: current.manifestFingerprint })
-      const decision: DatasetDecision = { decisionId: `geo-dataset-decision-${decisionFingerprint.slice(0, 20)}`, ownerUserId, manifestId, previousStatus: current.status, newStatus: status, reviewerUserId, reason, manifestFingerprint: current.manifestFingerprint, createdAt: new Date().toISOString() }
+      const decisionData = { ownerUserId, manifestId, previousStatus: current.status, newStatus: status, reviewerUserId, reason, manifestFingerprint: current.manifestFingerprint, ...(authority ? { knowledgeAuthority: authority } : {}) }
+      const decisionFingerprint = fingerprint(decisionData)
+      const decision: DatasetDecision = { decisionId: `geo-dataset-decision-${decisionFingerprint.slice(0, 20)}`, ...decisionData, createdAt: new Date().toISOString() }
       if (this.state.datasetDecisions.some(item => item.decisionId === decision.decisionId)) throw new Error('Duplicate or stale dataset decision.')
       const updated = { ...current, status }; this.state.datasets.splice(index, 1, updated); this.state.datasetDecisions.push(clone(decision)); return { manifest: clone(updated), decision: clone(decision) }
     })

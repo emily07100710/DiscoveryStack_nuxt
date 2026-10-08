@@ -358,6 +358,41 @@
       "when": 1791385601599,
       "tag": "0050_weekly_content_scheduler_cursor_v1",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "5",
+      "when": 1791406812064,
+      "tag": "0051_knowledge_subject_revisions_v1",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "5",
+      "when": 1791411202031,
+      "tag": "0052_knowledge_consumer_bindings_v1",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "5",
+      "when": 1791411514539,
+      "tag": "0053_knowledge_consumer_binding_heads_v1",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "5",
+      "when": 1791415059775,
+      "tag": "0054_cute_whizzer",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "5",
+      "when": 1791438184842,
+      "tag": "0055_private_draft_review_receipts",
+      "breakpoints": true
     }
   ]
 }

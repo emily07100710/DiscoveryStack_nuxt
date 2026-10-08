@@ -225,17 +225,34 @@ export interface KnowledgeContentGap {
 
 export type NewKnowledgeRecord<T extends KnowledgeBaseRecord> = Omit<T, 'id'>
 
-export interface KnowledgeRepository {
-  transaction<T>(work: (repository: KnowledgeRepository) => Promise<T>): Promise<T>
+export interface KnowledgeTransactionOptions {
+  /** Explicit stable read view for private previews; never accepted from an HTTP request. */
+  readonly consistentReadOnly?: true
+  /** Internal server-owned write transaction; row reads are locked before domain decisions. */
+  readonly auditedMutation?: true
+}
 
-  listEntities(ownerUserId: number): Promise<KnowledgeEntity[]>
+export interface KnowledgeRepository {
+  transaction<T>(work: (repository: KnowledgeRepository) => Promise<T>, options?: KnowledgeTransactionOptions): Promise<T>
+  /** Present in the durable runtime; optional only for pre-registry injected adapters. */
+  listConsumerCoverage?(ownerUserId: number): Promise<import('./impact-types').KnowledgeImpactAdapterCoverage[]>
+  lockRevisionSubject(ownerUserId: number, subject: import('./revision-types').KnowledgeRevisionSubject): Promise<void>
+  getRevisionHead(ownerUserId: number, subject: import('./revision-types').KnowledgeRevisionSubject): Promise<import('./revision-types').KnowledgeRevision | null>
+  listRevisionHeads(ownerUserId: number, limit?: number): Promise<import('./impact-types').KnowledgeImpactRevisionHead[]>
+  appendRevision(record: NewKnowledgeRecord<import('./revision-types').KnowledgeRevision>): Promise<import('./revision-types').KnowledgeRevision>
+  appendMutationEvent(record: NewKnowledgeRecord<import('./revision-types').KnowledgeMutationEvent>): Promise<import('./revision-types').KnowledgeMutationEvent>
+  listRevisions(ownerUserId: number, subject: import('./revision-types').KnowledgeRevisionSubject, beforeId?: number, limit?: number): Promise<import('./revision-types').KnowledgeRevision[]>
+  listMutationEvents(ownerUserId: number, subject: import('./revision-types').KnowledgeRevisionSubject, beforeId?: number, limit?: number): Promise<import('./revision-types').KnowledgeMutationEvent[]>
+  getMutationEventForRevision(ownerUserId: number, revisionFingerprint: string): Promise<import('./revision-types').KnowledgeMutationEvent | null>
+
+  listEntities(ownerUserId: number, limit?: number): Promise<KnowledgeEntity[]>
   getEntity(ownerUserId: number, entityId: number): Promise<KnowledgeEntity | null>
   insertEntity(record: NewKnowledgeRecord<KnowledgeEntity>): Promise<KnowledgeEntity>
   updateEntity(ownerUserId: number, entityId: number, patch: Partial<Pick<KnowledgeEntity, 'status' | 'mergedIntoEntityId' | 'updatedAt'>>): Promise<KnowledgeEntity | null>
 
-  listEntityAliases(ownerUserId: number, entityId?: number): Promise<KnowledgeEntityAlias[]>
+  listEntityAliases(ownerUserId: number, entityId?: number, limit?: number): Promise<KnowledgeEntityAlias[]>
   insertEntityAlias(record: NewKnowledgeRecord<KnowledgeEntityAlias>): Promise<KnowledgeEntityAlias>
-  listEntityExternalIds(ownerUserId: number, entityId?: number): Promise<KnowledgeEntityExternalId[]>
+  listEntityExternalIds(ownerUserId: number, entityId?: number, limit?: number): Promise<KnowledgeEntityExternalId[]>
   insertEntityExternalId(record: NewKnowledgeRecord<KnowledgeEntityExternalId>): Promise<KnowledgeEntityExternalId>
 
   listMergeCandidates(ownerUserId: number, status?: KnowledgeEntityMergeCandidate['status']): Promise<KnowledgeEntityMergeCandidate[]>
@@ -247,20 +264,20 @@ export interface KnowledgeRepository {
   insertMergeEvent(record: NewKnowledgeRecord<KnowledgeEntityMergeEvent>): Promise<KnowledgeEntityMergeEvent>
   updateMergeEvent(ownerUserId: number, mergeEventId: number, patch: Partial<Pick<KnowledgeEntityMergeEvent, 'undoneAt' | 'undoReason' | 'updatedAt'>>): Promise<KnowledgeEntityMergeEvent | null>
 
-  listSources(ownerUserId: number): Promise<KnowledgeSource[]>
+  listSources(ownerUserId: number, limit?: number): Promise<KnowledgeSource[]>
   getSource(ownerUserId: number, sourceId: number): Promise<KnowledgeSource | null>
   insertSource(record: NewKnowledgeRecord<KnowledgeSource>): Promise<KnowledgeSource>
-  listSourceVersions(ownerUserId: number, sourceId?: number): Promise<KnowledgeSourceVersion[]>
+  listSourceVersions(ownerUserId: number, sourceId?: number, limit?: number): Promise<KnowledgeSourceVersion[]>
   getSourceVersion(ownerUserId: number, sourceVersionId: number): Promise<KnowledgeSourceVersion | null>
   insertSourceVersion(record: NewKnowledgeRecord<KnowledgeSourceVersion>): Promise<KnowledgeSourceVersion>
 
-  listClaims(ownerUserId: number, status?: KnowledgeClaimStatus): Promise<KnowledgeClaim[]>
+  listClaims(ownerUserId: number, status?: KnowledgeClaimStatus, limit?: number): Promise<KnowledgeClaim[]>
   getClaim(ownerUserId: number, claimId: number): Promise<KnowledgeClaim | null>
   insertClaim(record: NewKnowledgeRecord<KnowledgeClaim>): Promise<KnowledgeClaim>
   updateClaim(ownerUserId: number, claimId: number, patch: Partial<Pick<KnowledgeClaim, 'status' | 'updatedAt'>>): Promise<KnowledgeClaim | null>
-  listClaimEntityLinks(ownerUserId: number, claimId?: number): Promise<KnowledgeClaimEntityLink[]>
+  listClaimEntityLinks(ownerUserId: number, claimId?: number, limit?: number): Promise<KnowledgeClaimEntityLink[]>
   insertClaimEntityLink(record: NewKnowledgeRecord<KnowledgeClaimEntityLink>): Promise<KnowledgeClaimEntityLink>
-  listClaimEvidence(ownerUserId: number, claimId?: number): Promise<KnowledgeClaimEvidence[]>
+  listClaimEvidence(ownerUserId: number, claimId?: number, limit?: number): Promise<KnowledgeClaimEvidence[]>
   insertClaimEvidence(record: NewKnowledgeRecord<KnowledgeClaimEvidence>): Promise<KnowledgeClaimEvidence>
   listClaimStatusEvents(ownerUserId: number, claimId?: number): Promise<KnowledgeClaimStatusEvent[]>
   insertClaimStatusEvent(record: NewKnowledgeRecord<KnowledgeClaimStatusEvent>): Promise<KnowledgeClaimStatusEvent>
@@ -272,11 +289,11 @@ export interface KnowledgeRepository {
 
   getPublisherSetting(ownerUserId: number): Promise<KnowledgePublisherSetting | null>
   upsertPublisherSetting(record: NewKnowledgeRecord<KnowledgePublisherSetting>): Promise<KnowledgePublisherSetting>
-  listContentEntityLinks(ownerUserId: number, briefId?: number): Promise<KnowledgeContentEntityLink[]>
+  listContentEntityLinks(ownerUserId: number, briefId?: number, limit?: number): Promise<KnowledgeContentEntityLink[]>
   insertContentEntityLink(record: NewKnowledgeRecord<KnowledgeContentEntityLink>): Promise<KnowledgeContentEntityLink>
   deleteContentEntityLink(ownerUserId: number, briefId: number, entityId: number, role: KnowledgeContentEntityRole): Promise<boolean>
   getContentAnchor(input: { readonly ownerUserId: number; readonly draftId?: number; readonly briefId?: number }): Promise<KnowledgeContentAnchor | null>
-  listContentAnchors(ownerUserId: number): Promise<KnowledgeContentAnchor[]>
+  listContentAnchors(ownerUserId: number, limit?: number): Promise<KnowledgeContentAnchor[]>
 }
 
 export interface InMemoryKnowledgeRepository extends KnowledgeRepository {

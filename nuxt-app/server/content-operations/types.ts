@@ -1,4 +1,7 @@
 import type { ContentCalendarEntry, ContentCalendarRequest, ContentCalendarResult, DueContentWork } from '../content-calendar'
+import type { FirstPartyDraftReceipt } from '../first-party-publishing/draft-receipt'
+import type { SitePublicationSummary } from './site-publication'
+import type { SiteMeasurementSummary } from './site-measurement'
 import type { PublishedContentOutcomeAssessment, OutcomeLearningCandidateResult } from '../outcome-learning'
 import type { contentOperationAutopilotPolicies, contentOperationBudgetReservations, contentOperationCalendarEntries, contentOperationCalendarEntryTargets, contentOperationCalendars, contentOperationClients, contentOperationEntityStrategyProfiles, contentOperationEvents, contentOperationMachineAuthorizations, contentOperationOutcomeAssessments, contentOperationPublicationAttempts, contentOperationPublicationTargets, contentOperationQueryOwnership, contentOperationRepairAttempts, contentOperationRuns, contentOperationTopicSubstitutions } from '../database/schema'
 
@@ -110,7 +113,7 @@ export type ExecuteContentOperationResult = {
   resultingStatus: ContentOperationCalendarEntryRow['status']
   runId: number
   stage: ContentOperationRunRow['stage']
-  outcome: 'materialized' | 'awaiting_review' | 'ready_to_publish' | 'dry_run_succeeded' | 'delivered' | 'retry_wait' | 'blocked' | 'replayed'
+  outcome: 'materialized' | 'awaiting_review' | 'ready_to_publish' | 'dry_run_succeeded' | 'delivered' | 'draft_received' | 'retry_wait' | 'blocked' | 'replayed'
   retryAt: Date | null
   limitations: string[]
 }
@@ -172,6 +175,10 @@ export type WorkspaceTargetReceiptSummary = {
   receiptFingerprint: string | null
   publicationUrl: string | null
   remoteRevision: string | null
+  draftReceipt: FirstPartyDraftReceipt | null
+  sitePublication?: SitePublicationSummary | null
+  sitePublicationCheckAvailable?: boolean
+  siteMeasurement?: SiteMeasurementSummary
   errorCode: string | null
   errorSummary: string | null
   completedAt: Date | null
@@ -197,6 +204,10 @@ export type WorkspaceEntryTargetProjection = {
 }
 
 export type WorkspaceEntryProjection = ContentOperationCalendarEntryRow & {
+  latestDraftReceipt?: FirstPartyDraftReceipt | null
+  latestSitePublication?: SitePublicationSummary | null
+  siteMeasurement?: SiteMeasurementSummary
+  sitePublicationCheckAvailable?: boolean
   topic: string
   framework: string | null
   target: string | null

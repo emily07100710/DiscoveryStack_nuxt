@@ -150,7 +150,7 @@ function makeRepository(database: any, transactional = false): WeeklyContentRepo
     async latestConsent(id) { const [row] = await database.select().from(consents).where(eq(consents.requestRowId, id)).orderBy(desc(consents.id)).limit(1); return row || null },
     insertConsent: row => insert(consents, row),
     async hasReservedPublication(owner, job, draft) {
-      const lineage = await database.select({ id: contentOperationPublicationAttempts.id }).from(contentOperationPublicationAttempts).innerJoin(requests, and(eq(requests.entryId, contentOperationPublicationAttempts.entryId), eq(requests.ownerUserId, owner), eq(requests.jobId, job), eq(requests.draftId, draft))).where(and(eq(contentOperationPublicationAttempts.ownerUserId, owner), eq(contentOperationPublicationAttempts.mode, 'execute'), or(eq(contentOperationPublicationAttempts.status, 'planned'), eq(contentOperationPublicationAttempts.status, 'delivered')))).limit(1)
+      const lineage = await database.select({ id: contentOperationPublicationAttempts.id }).from(contentOperationPublicationAttempts).innerJoin(requests, and(eq(requests.entryId, contentOperationPublicationAttempts.entryId), eq(requests.ownerUserId, owner), eq(requests.jobId, job), eq(requests.draftId, draft))).where(and(eq(contentOperationPublicationAttempts.ownerUserId, owner), eq(contentOperationPublicationAttempts.mode, 'execute'), or(eq(contentOperationPublicationAttempts.status, 'planned'), eq(contentOperationPublicationAttempts.status, 'delivered'), eq(contentOperationPublicationAttempts.status, 'draft_received')))).limit(1)
       return lineage.length > 0
     },
     enqueueOutbox: row => insert(outbox, row),

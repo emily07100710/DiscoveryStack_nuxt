@@ -2,7 +2,7 @@ import { ServerResponse } from 'node:http'
 import { PassThrough, Readable } from 'node:stream'
 import { createEvent, readBody, readRawBody, type H3Event } from 'h3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readBoundedRequestBody } from '../server/utils/bounded-request-body'
+import { readBoundedRequestBody, readBoundedRequestRawBody } from '../server/utils/bounded-request-body'
 import { readBoundedEditorBody } from '../server/managed-sites/page-editor/http'
 import { MAX_REQUEST_BYTES, readInterventionBody } from '../server/intervention-loop/http'
 
@@ -183,6 +183,18 @@ describe('bounded HTTP request bodies', () => {
     expect(stream.locked).toBe(false)
   })
 
+  it('rejects a disturbed source before caching its tail as bounded original bytes', async () => {
+    const stream = new PassThrough()
+    stream.write(Buffer.from(' '))
+    expect(stream.read(1)).toEqual(Buffer.from(' '))
+    stream.end(Buffer.from('{"x":1}'))
+    const { event, req } = requestEvent({ 'content-type': 'application/json' })
+    Object.assign(req, { rawBody: stream })
+
+    await expect(bounded(event)).rejects.toMatchObject({ statusCode: 422, statusMessage: editorOptions.invalidMessage })
+    await expect(readBoundedRequestRawBody(event, { ...editorOptions, invalidStatusCode: 400 })).rejects.toBeDefined()
+  })
+
   it('retains raw byte size when a second bounded read asks for a smaller limit', async () => {
     const { event } = materialEvent('{}' + ' '.repeat(12))
     await expect(bounded(event, 16)).resolves.toEqual({})
@@ -198,9 +210,73 @@ describe('bounded HTTP request bodies', () => {
   })
 
   it('keeps parsed cache authoritative over raw data and measures inherited cache entries too', async () => {
-    const { req, event } = materialEvent(' '.repeat(17))
+    const { req, event } = materialEvent('{"ignored":1}')
     const parsed = { ok: true }
     Object.setPrototypeOf(req, Object.create(Object.getPrototypeOf(req), { [PARSED_BODY]: { value: parsed, configurable: true } }))
+    await expect(bounded(event)).resolves.toBe(parsed)
+  })
+
+  it('rejects original raw bytes above the limit even when h3 has cached a small parsed object', async () => {
+    const { req, event } = materialEvent('{}' + ' '.repeat(17))
+    Object.assign(req, { [PARSED_BODY]: {} })
+    await expect(bounded(event)).rejects.toMatchObject(editor413)
+  })
+
+  it('checks the original raw promise installed by h3 before trusting its parsed cache', async () => {
+    const { req, event } = requestEvent({ 'transfer-encoding': 'chunked', 'content-type': 'application/json' })
+    const parsed = readBody(event)
+    req.end(Buffer.from('{}' + ' '.repeat(17)))
+    await expect(parsed).resolves.toEqual({})
+    expect((req as unknown as Record<PropertyKey, unknown>)[RAW_BODY]).toBeDefined()
+    await expect(bounded(event)).rejects.toMatchObject(editor413)
+  })
+
+  it('fails closed when h3 parsed a body but its original Node stream is disturbed and unavailable', async () => {
+    const { req, event } = requestEvent({ 'transfer-encoding': 'chunked' })
+    req.write(Buffer.from('{}'))
+    req.read()
+    Object.assign(req, { [PARSED_BODY]: {} })
+    await expect(bounded(event)).rejects.toMatchObject({ statusCode: 422, statusMessage: editorOptions.invalidMessage })
+  })
+
+  it('fails closed when h3 parsed a consumed Web stream without retaining original bytes', async () => {
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(Buffer.from('{}')); controller.close() } })
+    const reader = stream.getReader()
+    await reader.read()
+    reader.releaseLock()
+    const { req, event } = requestEvent()
+    event.web = { request: { body: stream } } as typeof event.web
+    Object.assign(req, { [PARSED_BODY]: {} })
+    await expect(bounded(event)).rejects.toMatchObject({ statusCode: 422, statusMessage: editorOptions.invalidMessage })
+  })
+
+  it('uses bytes retained by an h3 Node parse without consuming the stream again and applies smaller later limits', async () => {
+    const { req, event } = requestEvent({ 'transfer-encoding': 'chunked', 'content-type': 'application/json' })
+    const parsed = readBody(event)
+    req.end(Buffer.from('{"ok":true}'))
+    await expect(parsed).resolves.toEqual({ ok: true })
+    await expect(bounded(event)).resolves.toEqual({ ok: true })
+    expect(req.readableEnded).toBe(true)
+    await expect(bounded(event, 8)).rejects.toMatchObject(editor413)
+  })
+
+  it('uses available adapter bytes for a parsed Web request without consuming its body stream', async () => {
+    const { event } = requestEvent()
+    const bytes = Buffer.from('{"ok":true}')
+    let pulls = 0
+    const stream = new ReadableStream<Uint8Array>({ pull(controller) { pulls++; controller.enqueue(bytes); controller.close() } }, { highWaterMark: 0 })
+    event._requestBody = bytes
+    event.web = { request: { body: stream } } as typeof event.web
+    await expect(readBody(event)).resolves.toEqual({ ok: true })
+    await expect(bounded(event)).resolves.toEqual({ ok: true })
+    expect(pulls).toBe(0)
+    expect(stream.locked).toBe(false)
+  })
+
+  it('keeps a small parsed-only cache valid when original raw bytes are unavailable', async () => {
+    const { req, event } = requestEvent()
+    const parsed = { ok: true }
+    Object.assign(req, { [PARSED_BODY]: parsed })
     await expect(bounded(event)).resolves.toBe(parsed)
   })
 

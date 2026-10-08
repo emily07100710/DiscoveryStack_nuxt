@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { describe, expect, it, vi } from 'vitest'
 import { transpileModule, ModuleKind, ScriptTarget } from 'typescript'
+import { OWNER_NAVIGATION_GROUPS, resolveOwnerNavigation } from '../utils/owner-navigation'
 
 const localRequire = createRequire(import.meta.url)
 const nuxtRequire = createRequire(localRequire.resolve('nuxt/package.json'))
@@ -55,13 +56,14 @@ async function mountLayout() {
   const route = reactive({ path: '/audit-lab/learning-loop' })
   const { renderer, root } = createHost()
   const module = { exports: {} as { default?: unknown } }
+  const testRequire = (id: string) => id === '../utils/owner-navigation' ? { OWNER_NAVIGATION_GROUPS, resolveOwnerNavigation } : nuxtRequire(id)
   new Function('require', 'module', 'exports', 'useRuntimeConfig', 'useRoute', 'useHead', 'computed', 'ref', 'watch', js)(
-    nuxtRequire, module, module.exports, () => ({ public: { discoveryStackPublicSiteOrigin: 'https://public.example.test' } }), () => route, vi.fn(), computed, ref, watch,
+    testRequire, module, module.exports, () => ({ public: { discoveryStackPublicSiteOrigin: 'https://public.example.test' } }), () => route, vi.fn(), computed, ref, watch,
   )
   const app = renderer.createApp(module.exports.default)
   app.component('NuxtLink', defineComponent({
     props: ['to', 'ariaCurrent', 'aria-current'],
-    setup: (props: Record<string, unknown>, { slots }: { slots: { default?: () => unknown } }) => () => h('a', { href: props.to, 'aria-current': props['aria-current'] }, slots.default?.()),
+    setup: (props: Record<string, unknown>, { slots }: { slots: { default?: () => unknown } }) => () => h('a', { href: props.to, 'aria-current': props['aria-current'] ?? props.ariaCurrent }, slots.default?.()),
   }))
   app.mount(root)
   await nextTick()
@@ -103,10 +105,37 @@ describe('owner workbench navigation behavior', () => {
       for (const child of node.children) if (typeof child !== 'string') visit(child)
     }
     visit(nav)
-    expect(links).toHaveLength(14)
+    expect(links).toHaveLength(19)
+    expect(links).toContain('/leads')
+    expect(links).toContain('/audit-lab/content-operations/strategy')
+    expect(links).toContain('/audit-lab/knowledge')
     expect(links).toContain('/audit-lab/learning-loop')
     expect(links).toContain('/audit-lab/email-delivery')
     expect(find(root, node => node.tag === 'a' && node.props.href === 'https://public.example.test/zh-hant')).toBeTruthy()
+    expect(find(root, node => node.tag === 'a' && node.props['aria-current'] === 'page')?.props.href).toBe('/audit-lab/geo')
+    app.unmount()
+  })
+
+  it('keeps exactly one active link for child routes and none for unknown routes', async () => {
+    const { app, root, route } = await mountLayout()
+    route.path = '/audit-lab/content-operations/strategy/draft/42'
+    await nextTick()
+    const activeLinks = () => {
+      const found: Node[] = []
+      const visit = (node: Node) => {
+        if (node.tag === 'a' && node.props['aria-current'] === 'page') found.push(node)
+        for (const child of node.children) if (typeof child !== 'string') visit(child)
+      }
+      visit(root)
+      return found
+    }
+    expect(activeLinks()).toHaveLength(1)
+    const activeLink = activeLinks()[0]
+    if (!activeLink) throw new Error('Expected one active navigation link.')
+    expect(activeLink.props.href).toBe('/audit-lab/content-operations/strategy')
+    route.path = '/audit-lab/not-a-real-page'
+    await nextTick()
+    expect(activeLinks()).toHaveLength(0)
     app.unmount()
   })
 })

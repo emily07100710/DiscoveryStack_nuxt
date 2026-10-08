@@ -52,7 +52,25 @@ Owner execution endpoint 為 `POST /api/content-operations/entries/:id/execute`�
 
 Nitro task 名稱為 `content-operations:execution-tick`。此 task 已註冊於 Nitro 排程，每五分鐘觸發 task；預設立即回 `disabled`；`CONTENT_OPERATIONS_EXECUTION_CRON` 可在 build 時覆寫。module import 與 build 不會啟動 runner。內容 materialization task `content-operations:tick` 另以預設每十五分鐘觸發 task，未明確啟用時也立即回 `disabled`（`CONTENT_OPERATIONS_CRON`），與現有 ModelOps 等相同時段工作累加，不覆寫。task 使用 owner-controlled identity，最多處理 50 筆 owner-scoped eligible runs，並使用 durable lease 與 redacted bounded result。measurement 與 learning 不在此 tick 自動執行。
 
+### 2026-10-08：草稿收到與正式發布分流
+
+Next.js signed API 的可信 `draft_received` 結果會在同一 transaction 保存 immutable attempt 的九欄回執與 checksum、entry `awaiting_site_review`、succeeded publication run，以及執行中的 machine authorization `draft_received`。既有客戶同意／owner review 不會被改寫成老師核准或撤銷。已消耗的草稿 authorization 不能重新變成 authorized／executing／published；仍可由明確撤銷流程標記 revoked。
+
+收到草稿後，owner manual／scheduler／相同或新 idempotency key 均不自動再送；workspace 顯示歷史回執與等待網站審核，不提供重送按鈕。多 target 以獨立回執跳過已收稿／已發布的 route，只重試未解決的 retryable route。只要仍有 draft-only route，aggregate 絕不視為全部 delivered。
+
+Calendar 的 delimiter schedule key 在 first-party 邊界轉為 deterministic owner/entry-bound opaque schedule ID。V4 的 raw authorization fingerprint 只保留於 durable authority／reservation lineage；wire publication reviewId 映射為 `ref-autopilot-v4-<fingerprint>`，不放寬 publisher 的 governed authority 格式。Next.js signed command 的 artifact timestamp 固定為第一筆 exact execute attempt 的 startedAt；重試使用新 HMAC timestamp／nonce，但保持同一 artifact fingerprint 與 remote command idempotency key，支援 response 遺失或 finalization rollback 後的安全 replay。此回復測試使用 owner-approved 路徑；V4 已 claimed 執行中 authorization 遇 DB rollback 的自動復原仍未驗收，不推定可重新授權。
+
+草稿不產生 delivered event、public URL、remote revision、learning snapshot、measurement handoff 或 live-before capture。網站老師實際核准／發布及新的可信 publication receipt，屬於下一個獨立、尚未實作驗收的流程；歷史入稿回執不能推定目前文章狀態。
+
 ## Transaction 與 distributed write boundary
+
+### 2026-10-08：網站發布觀察與入稿 ledger 分開
+
+owner-only `POST /api/content-operations/entries/:id/site-publication-check` 接受精確 `targetRowId` 與 idempotency key，驗 owner、exact origin 與 512-byte 本文後，從 owner/client/calendar/entry/target/binding/attempt 重新解析原始收稿身分。對網站固定唯讀狀態路徑的可信簽章回應，在 transaction 內重查 context，再追加 `site_publication_observed` event。重播回原檢查時間，不重新連線、不把歷史觀察標成最新狀態；不同 context 重用同 key 拒絕。
+
+事件綁定原草稿回執、exact target configuration／bindings、request key hash、回應 hash、觀察與 checksum；不存文章本文、teacher 身分或 secret。每 entry 以 501 sentinel 防止將超過 500 筆觀察的截斷歷史視為完整。工作台取最新 observation timestamp，不讓較舊高版本掩蓋網站回滾／未公開的新觀察；目前 context 不符或 metadata checksum 損毀時不投影為可信發布。
+
+這是獨立發布觀察，不改原 `draft_received` attempt、消耗完的 machine authorization、run 或 `awaiting_site_review` 工作流程。即使 exact matching public snapshot 也不由本查詢直接產生 delivered event、learning snapshot、measurement handoff 或模型訓練；下一段還須將此證據安全接入原有 publication／measurement resolver、處理撤下文章與同意撤銷。網站修改過的公開內容不得沿用舊 DS／客戶核准。本段沒有新增 DS migration 或自動排程。
 
 entry、run、event、review binding、publication attempt 與 durable identity 的狀態變更必須使用既有 repository transaction 或具等效 conditional update。若外部 publisher response 已經成功，但後續 DB transaction 失敗，系統不宣稱可以消除 distributed write boundary；正式 publisher 的 publication identity、remote idempotency 與 append-only attempt ledger 會讓後續 retry 能夠安全 replay。這是 V1 的明確限制，不是「exactly once」的未驗證承諾。
 
@@ -87,3 +105,13 @@ Bounded fetch 會先檢查可信的 bounded `content-length`，並以 stream rea
 啟用後仍由伺服器 `OWNER_OPEN_ID` 決定 owner；每次最多 materialize 50 entries 或處理 50 runs，沿用原先 owner/client/target 範圍、證據、審核、風險、租約、指紋及 policy generation/publication budgets。50 是工作筆數限制，並非美元費用上限；启用前須另外核准既有工作與供應商費用。此開關只限制這兩個背景 task，不阻擋 owner 明確手動 API。既有 measurement／ModelOps 等其他 task 的啟用契約不變。
 
 工作台以 `capabilities.schedulerAvailable` 表示已註冊能力，以 owner-private `readiness.schedulerEnabled` 表示這兩個內容背景 task 的啟用設定。任一布林都不能證明 Render 長時間執行、供應商連線或真實客戶發布已驗收。新程式部署的核准不自動包含變更此開關、執行 migration 0043 或對客戶網站寫入。
+
+## 2026-10-08：網站發布確認的獨立成效交接
+
+`site-measurement.ts` 把目前人工核准原稿與可信網站公開快照綁定，再保存 owner 明確接入成效觀察的獨立事件。原 `draft_received` attempt、收稿成功 run、`awaiting_site_review` entry 永遠不升級為 DS `delivered`；不產生 formal publication／learning／intervention event。
+
+身份核對包含原 target 綁定的 persisted publication identity、原 execute input fingerprint、文章 title/body hash、來源、latest draft/review/risk、原私人收稿回執及公開 document hash/version/publishedAt。公開版本身份不含檢查時鐘、nonce 或私人 draft version，避免相同公開快照在每次檢查後變成新發布。保存事件拒絕重用 nonce；same-key 併發回傳 durable winner，歷史 replay 明示不具即時權威。
+
+已 opt-in 客戶使用獨立 consumed weekly consent reader：檢查原 reservation 時批准有效，以及現在 config/binding/target/policy/draft/source/latest decision 尚有效。不恢復 machine lease，不把 LINE 同意當模型訓練同意。部分測試依賴注入不能落到正式資料庫。
+
+本輪安全支援單一網站的 owner 人工審核路徑；routing／machine 路徑無法證明完整原發布身份時 fail closed。程式與合成測試不代表正式 DB、Do 接收器、LINE、Google 或 worker 已啟用。

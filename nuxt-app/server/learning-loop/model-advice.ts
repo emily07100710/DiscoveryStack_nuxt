@@ -1,10 +1,11 @@
 import { z } from 'zod'
 import { createContentOperationsRepository, type ContentOperationsRepository } from '../content-operations/repository'
 import { fingerprint } from '../geo-outcome-model/canonical'
-import { getProductionGeoOutcomeRepository, predict } from '../geo-outcome-model/service'
+import { getProductionGeoOutcomeRepository, predict, resolveApprovedFallbackForArtifact } from '../geo-outcome-model/service'
 import { canBePrimaryCitationTruth } from '../geo-outcome-model/observation-contract'
 import { verifyArtifactHash } from '../geo-outcome-model/release-gate'
 import { isFallbackOnlyArtifact } from '../geo-outcome-model/artifact'
+import { approvalReference, assertDatasetKnowledgeAuthorityCurrent } from '../geo-outcome-model/knowledge-authority'
 import type { ContentFeatureInput, GeoOutcomeRepositoryPort } from '../geo-outcome-model/types'
 import { contentFingerprint } from '../seo-geo-core/riskGate'
 import { DrizzleLearningLoopRepository } from './repository'
@@ -36,6 +37,8 @@ export async function getDraftLearningAdvice(ownerUserId: number, value: unknown
   const decision = (await models.listDatasetDecisions(ownerUserId)).filter(row => row.manifestFingerprint === dataset?.manifestFingerprint && row.manifestId === dataset?.manifestId).at(-1)
   const members = dataset ? await models.getDatasetMembers(ownerUserId, dataset.manifestId) : []
   if (!dataset || dataset.status !== 'approved' || decision?.newStatus !== 'approved' || !members.length || members.some(row => !canBePrimaryCitationTruth(row.observation))) learningError('CURRENT_MODEL_LINEAGE_REQUIRED')
+  let modelKnowledgeReference
+  try { modelKnowledgeReference = (await assertDatasetKnowledgeAuthorityCurrent(ownerUserId, dataset, models, approvalReference(artifact))).reference } catch { learningError('CURRENT_MODEL_LINEAGE_REQUIRED') }
   // Use an actually represented engine/interface context; missing page features stay missing.
   const context = members[0]!.observation, draft = lineage.draft, body = draft.body as string
   const headings = [...body.matchAll(/^#{1,6}\s+/gm)].map(match => match[0].trim().length)
@@ -60,6 +63,8 @@ export async function getDraftLearningAdvice(ownerUserId: number, value: unknown
   const freshGrant = await learning.getScope(ownerUserId, grantedScope.id)
   const freshAuthority = freshGrant ? resolveLearningAuthority(freshGrant, { ownerUserId, clientId: lineage.client.id, sourceId: freshGrant.authorization.sourceId }, readNow()) : null
   if (!fresh || draftIdentity(fresh) !== exactDraftIdentity || fresh.draft?.id !== draft.id || fresh.draft.contentHash !== draft.contentHash || fresh.entry.contentHash !== draft.contentHash || typeof fresh.draft.title !== 'string' || typeof fresh.draft.body !== 'string' || contentFingerprint(fresh.draft.title, fresh.draft.body) !== draft.contentHash || freshArtifact?.artifactHash !== prediction.modelArtifactHash || freshArtifact.status !== 'approved_for_shadow' || !verifyArtifactHash(freshArtifact) || freshGrant?.authorization.authorizationFingerprint !== grantedScope.authorizationFingerprint || freshAuthority?.sourceFingerprint !== grantedScope.sourceFingerprint || freshDataset?.status !== 'approved' || freshDataset.manifestFingerprint !== dataset.manifestFingerprint || freshDecision?.newStatus !== 'approved' || fingerprint(freshMembers) !== fingerprint(members) || freshMembers.some(row => !canBePrimaryCitationTruth(row.observation))) learningError('ADVICE_LINEAGE_CHANGED')
+  try { await assertDatasetKnowledgeAuthorityCurrent(ownerUserId, freshDataset, models, modelKnowledgeReference) } catch { learningError('ADVICE_LINEAGE_CHANGED') }
+  if (!await resolveApprovedFallbackForArtifact(ownerUserId, freshArtifact, models)) learningError('ADVICE_LINEAGE_CHANGED', '回退模型的核准或資料授權已變動，請更新後重新核對。')
   const advice = { contractVersion: 'exact-draft-model-advice-v1', entryId: lineage.entry.id, draftId: draft.id, draftVersion: draft.version, contentHash: draft.contentHash, modelArtifactHash: prediction.modelArtifactHash, datasetManifestHash: prediction.datasetManifestHash, experimentalScore: prediction.experimentalScore, representedContext: { engine: context.engine, interface: context.interface }, featureContributions: prediction.featureContributions.filter(row => !row.missing && !prediction.missingFeatureList.includes(row.key)).sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution)).slice(0, 8), missingFeatureList: prediction.missingFeatureList, predictionIsVerifiedOutcome: false as const, publicationAuthorization: false as const, productionModelActivation: false as const, limitations: [...prediction.limitations, 'single_draft_advisory_not_a_market_ranking', 'unknown_features_not_inferred', 'does_not_edit_or_publish_content', 'exact_customer_approval_remains_required'] }
   return { ...advice, adviceFingerprint: fingerprint(advice) }
 }

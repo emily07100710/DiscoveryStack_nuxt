@@ -33,6 +33,7 @@ function retryable(code: FirstPartyFailureResult['code']): boolean {
 
 function mapAdapterResult(result: FirstPartyAdapterResult, command: FirstPartyAdapterInput['command']): FirstPartyExecutionResult {
   if (result.status === 'blocked') return result
+  if (result.status === 'draft_received') return { status: 'draft_received', receipt: result.receipt, artifactFingerprint: command.artifactFingerprint, idempotencyKey: command.idempotencyKey }
   if (result.status === 'failure') {
     const status = retryable(result.code) ? 'retryable_failure' : 'permanent_failure'
     return { status, code: result.code, reasons: result.reasons, ...(result.httpStatus === undefined ? {} : { httpStatus: result.httpStatus }) }

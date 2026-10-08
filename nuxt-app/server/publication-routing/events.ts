@@ -7,7 +7,7 @@ import type { DeliveryReceipt, EventAppendResult, PlanEventAggregate, ReceiptSta
 
 const EVENT_KEYS = ['planFingerprint', 'routeId', 'sequence', 'kind', 'attempt', 'executorRunId', 'receiptFingerprint', 'occurredAt', 'detail'] as const
 const EVENT_REQUIRED_KEYS = ['planFingerprint', 'routeId', 'sequence', 'kind', 'attempt', 'executorRunId', 'receiptFingerprint', 'occurredAt'] as const
-const RESULT_KINDS: readonly ReceiptStatus[] = ['delivered', 'blocked', 'failed', 'retry_wait']
+const RESULT_KINDS: readonly ReceiptStatus[] = ['delivered', 'draft_received', 'blocked', 'failed', 'retry_wait']
 
 function rejected(...reasonCodes: string[]): EventAppendResult {
   return { accepted: false, replay: false, collision: false, events: [], reasonCodes, reasons: reasonCodes }
@@ -117,7 +117,7 @@ export class RouteEventLedger {
         return accepted(updated)
       }
       const currentStatus = statusFor(events)
-      if (currentStatus === 'delivered' || currentStatus === 'blocked') return rejected('EVENT_ROUTE_TERMINAL')
+      if (currentStatus === 'delivered' || currentStatus === 'draft_received' || currentStatus === 'blocked') return rejected('EVENT_ROUTE_TERMINAL')
       const previousResultEvent = [...events].reverse().find((candidate) => candidate.kind !== 'planned')
       if (previousResultEvent) {
         const previousReceipt = this.receipts.find((candidate) => candidate.routeId === event.routeId && candidate.attempt === previousResultEvent.attempt)
@@ -162,7 +162,9 @@ export class RouteEventLedger {
     const routes = this.plan.routes.map((route) => this.aggregateRoute(route.routeId))
     const statuses = routes.map((route) => route.status)
     let overall: PlanEventAggregate['overall'] = 'planned'
-    if (statuses.every((status) => status === 'delivered')) overall = 'delivered'
+    const allDeliveredOrDraftReceived = statuses.every((status) => status === 'delivered' || status === 'draft_received')
+    if (allDeliveredOrDraftReceived && statuses.some((status) => status === 'draft_received')) overall = 'awaiting_site_review'
+    else if (statuses.every((status) => status === 'delivered')) overall = 'delivered'
     else if (statuses.every((status) => status === 'blocked')) overall = 'blocked'
     else if (statuses.every((status) => status === 'failed')) overall = 'failed'
     else if (statuses.every((status) => status === 'retry_wait')) overall = 'retry_wait'

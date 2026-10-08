@@ -71,5 +71,6 @@ describe('citation bootstrap fallback', () => {
     const gate = evaluatePromotionGate({ dataset, members: members as DatasetMember[], artifact: forged, ownerApproved: true, rollbackArtifact: null, target: 'shadow', shadowReadiness: getShadowReadiness({ candidates: dataset.sourceObservationFingerprints.length, queryGroups: dataset.queryGroupCount, websites: dataset.websiteCount, engines: Object.keys(dataset.engineCounts).length, positives: dataset.positiveCount, hardNegatives: dataset.hardNegativeCount, observationSpanDays: span, temporalHoldoutCount: dataset.temporalHoldoutRowCount, hasPrimaryEvidence: true }) })
     expect(gate.status).toBe('blocked')
     expect(gate.reasonCodes).toContain('rollback_artifact_missing_or_invalid')
+    expect(gate.reasonCodes).toContain('dataset_knowledge_approval_reference_required')
   })
 })

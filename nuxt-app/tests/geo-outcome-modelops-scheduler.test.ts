@@ -11,17 +11,15 @@ const POLICY = { cadence: 'weekly', minimumNewVerifiedCandidates: 200, minimumNe
 const SCHEDULER_NOW = new Date('2026-08-28T00:00:00.000Z')
 const modelOpsRepository = () => createMemoryModelOpsRepository(undefined, () => new Date(SCHEDULER_NOW))
 
-function remapOwner<T>(value: T, ownerUserId: number): T {
-  const clone = structuredClone(value) as unknown
-  const visit = (node: unknown): unknown => { if (Array.isArray(node)) return node.map(visit); if (!node || typeof node !== 'object') return node; const record = node as Record<string, unknown>; for (const [key, item] of Object.entries(record)) record[key] = key === 'ownerUserId' ? ownerUserId : visit(item); return record }
-  return visit(clone) as T
-}
-
-function combinedState(source: MemoryGeoOutcomeState, ownerIds: number[]): MemoryGeoOutcomeState {
-  const empty: MemoryGeoOutcomeState = { observations: [], datasets: [], datasetMembers: {}, trainingRuns: [], artifacts: [], datasetDecisions: [], decisions: [], verificationDecisions: [], evidenceBindings: [], authoritativeEvidenceSources: [], claims: [] }
-  for (const ownerUserId of ownerIds) {
-    const state = remapOwner(source, ownerUserId)
-    empty.observations.push(...state.observations); empty.datasets.push(...state.datasets); empty.trainingRuns.push(...state.trainingRuns); empty.artifacts.push(...state.artifacts); empty.datasetDecisions.push(...state.datasetDecisions); empty.decisions.push(...state.decisions); empty.verificationDecisions.push(...state.verificationDecisions); empty.evidenceBindings.push(...state.evidenceBindings); empty.authoritativeEvidenceSources.push(...state.authoritativeEvidenceSources); empty.claims.push(...state.claims); Object.assign(empty.datasetMembers, state.datasetMembers)
+function combinedState(states: MemoryGeoOutcomeState[]): MemoryGeoOutcomeState {
+  const empty: MemoryGeoOutcomeState = { observations: [], datasets: [], datasetMembers: {}, trainingRuns: [], artifacts: [], datasetDecisions: [], datasetKnowledgeStates: [], decisions: [], verificationDecisions: [], evidenceBindings: [], authoritativeEvidenceSources: [], claims: [] }
+  for (const state of states) {
+    for (const dataset of state.datasets) {
+      const members = state.datasetMembers[dataset.manifestId]
+      if (!members || members.some(member => member.observation.ownerUserId !== dataset.ownerUserId)) throw new Error('Scheduler fixture dataset members must preserve their real owner scope.')
+      if (Object.hasOwn(empty.datasetMembers, dataset.manifestId)) throw new Error('Scheduler fixture datasets must have owner-specific immutable manifest IDs.')
+    }
+    empty.observations.push(...state.observations); empty.datasets.push(...state.datasets); empty.trainingRuns.push(...state.trainingRuns); empty.artifacts.push(...state.artifacts); empty.datasetDecisions.push(...state.datasetDecisions); empty.datasetKnowledgeStates!.push(...(state.datasetKnowledgeStates || [])); empty.decisions.push(...state.decisions); empty.verificationDecisions.push(...state.verificationDecisions); empty.evidenceBindings.push(...state.evidenceBindings); empty.authoritativeEvidenceSources.push(...state.authoritativeEvidenceSources); empty.claims.push(...state.claims); Object.assign(empty.datasetMembers, state.datasetMembers)
   }
   return empty
 }
@@ -91,7 +89,11 @@ describe('content-operations:geo-modelops-tick', () => {
 
   it('caps training executions at five and leaves the sixth owner deferred', async () => {
     const ownerIds = [42, 43, 44, 45, 46, 47]
-    const outcome = createMemoryGeoOutcomeRepository(combinedState(sourceState, ownerIds))
+    const perOwnerStates = await Promise.all(ownerIds.map(ownerUserId => trustedState(ownerUserId)))
+    const mergedState = combinedState(perOwnerStates)
+    expect(new Set(mergedState.datasets.map(dataset => dataset.manifestId)).size).toBe(ownerIds.length)
+    for (const dataset of mergedState.datasets) expect(mergedState.datasetMembers[dataset.manifestId]!.every(member => member.observation.ownerUserId === dataset.ownerUserId)).toBe(true)
+    const outcome = createMemoryGeoOutcomeRepository(mergedState)
     const modelOps = modelOpsRepository()
     for (const ownerUserId of ownerIds) {
       const policy = await createModelOpsPolicy(ownerUserId, POLICY, `training-budget-policy-${ownerUserId}`, modelOps)
@@ -101,11 +103,11 @@ describe('content-operations:geo-modelops-tick', () => {
     expect(result.maxTrainingExecutionsPerTick).toBe(5)
     expect(result.trainingExecutions).toBe(5)
     expect(result.processed.some(item => item.ownerUserId === 47 && item.reason === 'training_execution_budget_exhausted')).toBe(true)
-  })
+  }, 60000)
 
   it('reloads the persisted autonomous execution flag and does not train after it is disabled', async () => {
     const ownerUserId = 42
-    const state = combinedState(sourceState, [ownerUserId])
+    const state = structuredClone(sourceState)
     state.datasets = []; state.datasetMembers = {}; state.trainingRuns = []; state.artifacts = []; state.datasetDecisions = []; state.decisions = []
     const outcome = createMemoryGeoOutcomeRepository(state)
     const modelOps = modelOpsRepository()

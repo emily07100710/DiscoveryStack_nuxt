@@ -10,7 +10,15 @@ describe('Frappe app, provenance and UI contracts', () => {
 
   it.skipIf(!existsSync('/usr/bin/python3') && !existsSync('/usr/local/bin/python3'))('keeps TypeScript/Python golden parity for the complete materialization manifest', () => { const spec = createGuidedSystemSpec({ requirements: '建立輕量 CRM 系統。', businessType: 'service', industry: 'consulting', preferredTemplate: 'light_crm', identity: { specId: 'spec-parity', ownerId: 'owner:1', clientId: 'client:1', websiteId: 'website:1', managedSiteId: null, systemTenantId: 'tenant:1', locale: 'zh-hant', timezone: 'Asia/Taipei', currency: 'TWD' } }); const ts = compileSystemSpec(spec); const script = `import json,sys; sys.path.insert(0, ${JSON.stringify(join(process.cwd(), '../services/frappe/discovery_stack'))}); from discovery_stack.compiler import compile_spec; print(json.dumps(compile_spec(json.loads(sys.stdin.read())), ensure_ascii=False))`; const py = JSON.parse(execFileSync('python3', ['-c', script], { input: JSON.stringify(spec), encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } })); expect(py).toEqual(ts.materializationManifest) })
 
-  it('shows preview warnings, all workbench sections and one owner navigation entry', () => { const page = readFileSync(join(process.cwd(), 'pages/audit-lab/system-factory.vue'), 'utf8'); for (const marker of ['INTERACTIVE PREVIEW / NOT DEPLOYED', 'synthetic demo data', 'Quote / Payment', 'Provisioning timeline', 'Health', 'Users / Roles / Invitations', 'Integrations', 'Upgrade / Backup / Rollback', 'Audit / Receipts / Advanced', 'unauthorized', 'retry_wait', 'collision', 'stale']) expect(page).toContain(marker); const layout = readFileSync(join(process.cwd(), 'layouts/owner.vue'), 'utf8'); expect(layout.match(/>系統工廠</gu)).toHaveLength(1) })
+  it('shows preview warnings, all workbench sections and one owner navigation entry', () => {
+    const page = readFileSync(join(process.cwd(), 'pages/audit-lab/system-factory.vue'), 'utf8')
+    for (const marker of ['INTERACTIVE PREVIEW / NOT DEPLOYED', 'synthetic demo data', 'Quote / Payment', 'Provisioning timeline', 'Health', 'Users / Roles / Invitations', 'Integrations', 'Upgrade / Backup / Rollback', 'Audit / Receipts / Advanced', 'unauthorized', 'retry_wait', 'collision', 'stale']) expect(page).toContain(marker)
+    const layout = readFileSync(join(process.cwd(), 'layouts/owner.vue'), 'utf8')
+    expect(layout).toContain('OWNER_NAVIGATION_GROUPS'); expect(layout).toContain(':to="item.to"')
+    const navigation = readFileSync(join(process.cwd(), 'utils/owner-navigation.ts'), 'utf8')
+    expect(navigation.match(/label: '系統工廠'/gu)).toHaveLength(1)
+    expect(navigation.match(/to: '\/audit-lab\/system-factory'/gu)).toHaveLength(1)
+  })
 
   it('keeps public Astro source free of Frappe/ERPNext browser imports', () => { const publicPackage = readFileSync(join(process.cwd(), '../public-site/package.json'), 'utf8'); expect(publicPackage).not.toMatch(/frappe|erpnext/iu); const lock = readFileSync(join(process.cwd(), '../public-site/pnpm-lock.yaml'), 'utf8'); expect(lock).not.toMatch(/\bfrappe\b|\berpnext\b/iu) })
 })

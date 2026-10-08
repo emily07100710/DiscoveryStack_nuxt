@@ -56,7 +56,23 @@ secret 只能由 injected server credential resolver 取得；nonce 只能由必
 
 兩個 adapter 在解析 credential 或發出 request 前，都會重新建立 canonical publication plan，並逐一比對 supplied command 與 artifact；direct adapter call 不能繞過 owner、approval、risk gate、schedule、target、hash、idempotency、artifact fingerprint 或 execution-enabled 邊界。
 
+### 2026-10-08：Next.js 私有草稿接收回執
+
+Next.js signed API 的 `202` 可回傳嚴格九欄回執：`status=draft_received`、`published=false`、`receiptScope=draft_ingest_outcome`、`receiptIsCurrentState=false`、`publicationId`、`contentHash`、`postId`、`postVersion=1`、`replayed`。publication/body hash 必須與 exact approved command 一致；多餘、缺漏、getter、矛盾發布欄位或非 Next.js route 都 fail closed。結果為獨立 `draft_received`，沒有 remote revision 或 public URL，絕不降級當作 delivered。
+
+這只是歷史入稿結果，不是文章目前狀態、老師目前核准或正式發布證明。Legacy final publication 回覆仍需要相符 publication/hash/remote revision。Do Alignment receiver 與 DS sender 的本機 actual-code pair 使用合成文章與 injected store，沒有真實網站或資料庫寫入。
+
 ## Existing delivery automation compatibility
+
+### 2026-10-08：獨立、簽章唯讀的網站發布觀察
+
+`checkFirstPartySitePublication` 只對已核對的 active／enabled Next.js signed target 的固定 `POST /api/first-party/publication-status` 做唯讀查詢，不呼叫入稿或老師發布 API。此 POST 不更動網站資料；目前沒有自動 polling task。owner、目標、publication ID、source content hash 與原 post ID 都由伺服器既有收稿 lineage 解析，前端不能提交網址、hash 或發布狀態。
+
+協定 `ds-site-publication-status-v1` 的 request／response HMAC 使用不同 domain，綁定 method、固定 path、exact HTTPS origin、原始 request／response bytes、時間與 CSPRNG nonce；4 KiB 上限、五分鐘時間窗與精確欄位驗證均 fail closed。錯誤、404、timeout、未知欄位或簽章不符不推定文章已刪除或未公開。狀態端不寫 nonce ledger；同一有效唯讀請求在時間窗內可重播，但 DS 驗證回應只屬於 exact request，並拒絕不同命令重用已保存的 nonce。
+
+觀察來自 Do 的公開 `publishedDocument` 快照，而非可繼續編輯的私人 `draft`。接收時另外保存 canonical BlogDocument hash；它與 source Markdown hash 是不同表示法，不能互相比較。舊收件紀錄的接收文件 hash 為 null 時，只能說網站公開，不能聲稱公開版本與送入版本一致；不從現在的草稿或被裁剪的 CREATE revision 補造舊 hash。
+
+回應可呈現 published／private／archived、公開版本、文件 hash 是否相符及另有未發布編輯；`receiptIsCurrentState=false` 明示這是檢查當時的快照，不保證日後仍維持。網站的普通 publish API 仍要求登入 teacher、same-origin 與版本 CAS；機器 key 在本查詢路徑沒有發布權限。本段不聲稱驗證了某一位老師的歷史點擊人、真實 HTTPS／資料庫／Worker 或頁面渲染，也不授予成效／學習權限。
 
 既有 delivery automation contract 保留 `wordpress_rest`、`generic_http` 與 `manual_export`，並新增 `first_party_git` 與 `first_party_signed_api` adapter values，以保持舊資料 compatibility。既有 legacy adapter values 在本 runtime 中只是 metadata compatibility；本模組沒有新增 WordPress executor 或 generic HTTP executor。既有 governed delivery tests 必須維持原有安全條件並獨立通過。
 
@@ -65,3 +81,9 @@ secret 只能由 injected server credential resolver 取得；nonce 只能由必
 本版本應以兩個 targeted test files 驗證 artifact、target guard、approval gates、dry-run zero-fetch、credential isolation、Git create/update/replay/collision/status handling、signed HMAC binding、response identity、timeout/network errors、unknown keys 與 malformed inputs。測試中的所有 external execution 都使用 mocked fetch；不做真實 GitHub Contents write、不做客戶網站 write。
 
 尚未驗證真實 GitHub App credential、真實 HMAC receiver、production target registry、production deployment、remote concurrency semantics 或 GitHub API 的 live contract。任何 production wiring 都必須在 adapter boundary 重新驗證 target、credential、command、idempotency、request status 與 remote identity，並保留可追溯 execution audit。
+
+## 2026-10-08：公開觀察不是發布執行回執
+
+網站老師自行公開文章後，DS 可用固定簽章 status protocol 核對公開 snapshot 與原收稿版本。Owner 另行確認「接入成效觀察」會建立 `site-measurement-confirmation-v1` 事件，而不修改原收稿回執或聲稱 DS 執行了網站發布。只有完整原身份的人工審稿單一目標路徑可使用；既有舊紀錄、routing／autopilot 權威不得補造。
+
+後續量測重新查核簽章公開版本及目前原稿／審核／來源／逐篇同意；網站撤下、封存、公開改版、資料或授權不確定皆不使用舊確認繼續收數。私人草稿未發布修改不等於公開版本改變。既有歷史量測不因此刪除，但此新增觀察路徑不自動取得模型學習權限。

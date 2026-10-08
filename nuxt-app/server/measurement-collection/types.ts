@@ -146,7 +146,8 @@ export type MeasurementRepository = {
   listLlmScope(ownerUserId: number, projectId: number): Promise<{ project: { id: number; ownerUserId: number; canonicalDomain: string; brandName: string; brandAliases: unknown; competitorBrands: unknown; locale: 'en' | 'zh-hant'; status: 'active' | 'archived' } | null; queries: Array<{ id: number; ownerUserId: number; projectId: number; promptText: string; promptHash: string; intent: string; locale: 'en' | 'zh-hant'; active: boolean }> }>
 }
 
-export type MeasurementPublicationLineage = {
+type MeasurementPublicationLineageBase = {
+  ownerUserId: number
   entryId: number
   targetId: number
   clientId: number
@@ -158,6 +159,27 @@ export type MeasurementPublicationLineage = {
   timeZone: string
   publishedAt: Date
 }
+
+export type FormalMeasurementPublicationLineage = MeasurementPublicationLineageBase & {
+  evidenceKind: 'formal_delivered'
+}
+
+export type SiteConfirmationMeasurementPublicationLineage = MeasurementPublicationLineageBase & {
+  evidenceKind: 'site_publication_confirmation'
+  confirmationFingerprint: string
+  calendarId: number
+  draftId: number
+  draftVersion: number
+  jobId: number
+  productionPlanId: number | null
+  scheduleKey: string
+  language: string
+  contentType: string
+  appliedRuleIds: string[]
+  topicClusterCode: string
+}
+
+export type MeasurementPublicationLineage = FormalMeasurementPublicationLineage | SiteConfirmationMeasurementPublicationLineage
 
 export type MeasurementWorkspace = {
   clients: Array<{ id: number; displayName: string; canonicalSiteOrigin: string; timeZone: string }>

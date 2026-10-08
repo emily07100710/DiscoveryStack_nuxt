@@ -4,6 +4,7 @@ import { isOpaqueReference, isValidSha256, strictTimestamp } from './normalizati
 import { SIGNED_API_ENDPOINT_PATH } from './target-guard'
 import { type FirstPartyAdapterInput, type FirstPartyAdapterResult, type FirstPartyDecisionCode, type SignedApiAdapterDependencies, type SignedApiResponsePayload } from './types'
 import { validateFirstPartyAdapterBindings } from './adapter-validation'
+import { hasFirstPartyDraftReceiptMarker, normalizeFirstPartyDraftReceipt } from './draft-receipt'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_TOLERANCE_SECONDS = 300
@@ -129,6 +130,11 @@ export async function executeSignedApiPublish(input: FirstPartyAdapterInput, dep
     if (!validStatus(response.status)) return blocked('RESPONSE_INVALID', 'signed API response status is invalid')
     if (response.status < 200 || response.status > 299) return statusFailure(response.status)
     const payload = await readJson(response)
+    if (hasFirstPartyDraftReceiptMarker(payload)) {
+      const receipt = normalizeFirstPartyDraftReceipt(payload)
+      if (!v2 || response.status !== 202 || !receipt || receipt.publicationId !== input.publication.productionDeliverableId || receipt.contentHash !== input.publication.contentHash) return blocked('REMOTE_IDENTITY_COLLISION', 'signed API draft receipt is malformed, contradictory, or does not match the approved publication')
+      return { status: 'draft_received', receipt }
+    }
     if (!payload || payload.publicationId !== input.publication.productionDeliverableId || payload.contentHash !== input.publication.contentHash || !isOpaqueReference(payload.remoteRevision)) return blocked('REMOTE_IDENTITY_COLLISION', 'signed API response identity does not match the approved publication')
     return {
       status: 'ok',

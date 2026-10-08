@@ -1,6 +1,6 @@
 # Managed Site Email Provider Events V1
 
-Status: **IMPLEMENTED / NOT_DATABASE_APPLIED / NOT_DEPLOYED / PROVIDER_GATED**. Executed local acceptance, failures and skips are recorded separately in `docs/EMAIL_PROVIDER_EVENTS_LOCAL_ACCEPTANCE_2026_10_07.md`; this specification alone is not test or production evidence.
+Status: **IMPLEMENTED / DATABASE_APPLIED / DEPLOYED / PROVIDER_GATED**. As of 2026-10-08, migrations 0048–0050 and the corresponding application release are verified in [the current release record](docs/CONFIGURATION_READY_LAUNCH.md#2026-10-08-release-and-activation-checklist). Resend sending and callbacks remain unconfigured and unverified; flags were not changed. Earlier local acceptance remains historical evidence, not provider acceptance.
 
 ## Scope and evidence boundary
 
@@ -24,7 +24,7 @@ Store authenticated supported events even when a corresponding synchronous outbo
 
 Keep the sender/API/allowlist/private-origin/timeout/encryption/pepper configuration stable through the observation window. A sender configuration change intentionally leaves older receipts unassigned rather than guessing their authority; signing-secret rotation alone does not change the sending-configuration fingerprint. The event ledger is reduced operational metadata, not a promise of indefinite archival or consented ML data. Observation enablement and production retention/operations policy require a separate owner rollout review.
 
-Add a receipt/configuration lookup index to the existing outbox; do not change existing row values, columns, purpose enums, leases, resend keys or status transitions. Generate the migration/snapshot/journal using installed Drizzle with DATABASE_URL unset; review the precise SQL and rehearse it in isolation. No production database application or deployment is implied or performed during implementation.
+Migration 0048 added the receipt/configuration lookup index and reduced provider-event ledger without changing existing outbox values, columns, purpose enums, leases, resend keys or status transitions. It was applied as part of the 2026-10-08 release; the current schema and Live application status are recorded in the release record above. Any later schema change requires its own review and authorization.
 
 ## Order-independent owner projection
 

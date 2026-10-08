@@ -148,7 +148,7 @@ export type ContentOperationsRepository = {
   findMachineAuthorization(ownerUserId: number, entryId: number, authorizationFingerprint: string): Promise<ContentOperationMachineAuthorizationRow | null>
   findMachineAuthorizationForTarget(ownerUserId: number, entryId: number, publicationTargetId: number): Promise<ContentOperationMachineAuthorizationRow | null>
   insertMachineAuthorization(input: MachineAuthorizationInsert): Promise<ContentOperationMachineAuthorizationRow>
-  transitionMachineAuthorization(ownerUserId: number, authorizationFingerprint: string, fromStatus: 'authorized' | 'executing' | 'published', toStatus: 'authorized' | 'executing' | 'published' | 'revoked', at?: Date): Promise<ContentOperationMachineAuthorizationRow | null>
+  transitionMachineAuthorization(ownerUserId: number, authorizationFingerprint: string, fromStatus: 'authorized' | 'executing' | 'published' | 'draft_received', toStatus: 'authorized' | 'executing' | 'published' | 'revoked' | 'draft_received', at?: Date): Promise<ContentOperationMachineAuthorizationRow | null>
   reserveAutopilotBudget(input: BudgetReservationInput): Promise<BudgetReservationResult>
   listAutopilotBudgetReservations(ownerUserId: number, policyId?: string): Promise<ContentOperationBudgetReservationRow[]>
   findCalendarByIdempotency(ownerUserId: number, idempotencyKey: string): Promise<ContentOperationCalendarRow | null>
@@ -173,6 +173,14 @@ export type ContentOperationsRepository = {
   updateRun(ownerUserId: number, runId: number, patch: Partial<RunInsert>): Promise<ContentOperationRunRow>
   appendEvent(input: EventInsert): Promise<ContentOperationEventRow>
   listEvents(ownerUserId: number, entryId?: number): Promise<ContentOperationEventRow[]>
+  /** Dedicated bounded read of append-only website observations; never publication authority. */
+  listSitePublicationEvents?(ownerUserId: number, entryId: number): Promise<ContentOperationEventRow[]>
+  findSitePublicationEvent?(ownerUserId: number, eventFingerprint: string): Promise<ContentOperationEventRow | null>
+  listSiteMeasurementEvents?(ownerUserId: number, entryId: number): Promise<ContentOperationEventRow[]>
+  findSiteMeasurementEvent?(ownerUserId: number, eventFingerprint: string): Promise<ContentOperationEventRow | null>
+  /** Bounded append-only site-learning opt-in, revocation, and review history. */
+  listSiteLearningEvents?(ownerUserId: number, entryId: number): Promise<ContentOperationEventRow[]>
+  findSiteLearningEvent?(ownerUserId: number, eventFingerprint: string): Promise<ContentOperationEventRow | null>
   findLatestOptimizedDraft(ownerUserId: number, jobId: number): Promise<Record<string, unknown> & { id: number; jobId: number; version: number; title: string; body: string; contentHash: string; provenance: unknown; safetyStatus: string } | null>
   findRiskGate(ownerUserId: number, draftId: number, evidenceSnapshotHash: string): Promise<Record<string, unknown> & { id: number; draftId: number; status: string; evidenceSnapshotHash: string; gateVersion?: string; findings?: unknown; riskLevel?: string } | null>
   findLatestReview(ownerUserId: number, jobId: number, draftId: number, evidenceSnapshotHash: string): Promise<Record<string, unknown> & { id: number; jobId: number; draftId: number; reviewerUserId: number; decision: string; evidenceSnapshotHash: string } | null>
@@ -421,6 +429,8 @@ function makeRepository(database: any, currentTime: () => Date = () => new Date(
       }
     },
     async transitionMachineAuthorization(ownerUserId, authorizationFingerprint, fromStatus, toStatus, at) {
+      // A consumed private-draft authorization cannot be recycled into a new write.
+      if ((fromStatus === 'draft_received' && toStatus !== 'revoked') || (toStatus === 'draft_received' && fromStatus !== 'executing')) return null
       const timestamps = toStatus === 'executing' ? { claimedAt: at || new Date() } : toStatus === 'revoked' ? { revokedAt: at || new Date() } : {}
       const result = await database.update(contentOperationMachineAuthorizations).set({ status: toStatus, ...timestamps }).where(and(eq(contentOperationMachineAuthorizations.ownerUserId, ownerUserId), eq(contentOperationMachineAuthorizations.authorizationFingerprint, authorizationFingerprint), eq(contentOperationMachineAuthorizations.status, fromStatus)))
       if (Number(result?.[0]?.affectedRows || 0) !== 1) return null
@@ -609,6 +619,27 @@ function makeRepository(database: any, currentTime: () => Date = () => new Date(
     },
     async listEvents(ownerUserId, entryId) {
       return database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, ownerUserId), entryId ? eq(contentOperationEvents.entryId, entryId) : undefined)).orderBy(desc(contentOperationEvents.occurredAt)).limit(500)
+    },
+    async listSitePublicationEvents(ownerUserId, entryId) {
+      return database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, ownerUserId), eq(contentOperationEvents.entryId, entryId), eq(contentOperationEvents.eventType, 'site_publication_observed'))).orderBy(desc(contentOperationEvents.id)).limit(501)
+    },
+    async findSitePublicationEvent(ownerUserId, eventFingerprint) {
+      const [row] = await database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, ownerUserId), eq(contentOperationEvents.eventType, 'site_publication_observed'), eq(contentOperationEvents.eventFingerprint, eventFingerprint))).limit(1)
+      return row || null
+    },
+    async listSiteMeasurementEvents(ownerUserId, entryId) {
+      return database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, ownerUserId), eq(contentOperationEvents.entryId, entryId), eq(contentOperationEvents.eventType, 'site_measurement_confirmed'))).orderBy(desc(contentOperationEvents.id)).limit(501)
+    },
+    async findSiteMeasurementEvent(ownerUserId, eventFingerprint) {
+      const [row] = await database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, ownerUserId), eq(contentOperationEvents.eventType, 'site_measurement_confirmed'), eq(contentOperationEvents.eventFingerprint, eventFingerprint))).limit(1)
+      return row || null
+    },
+    async listSiteLearningEvents(ownerUserId, entryId) {
+      return database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, ownerUserId), eq(contentOperationEvents.entryId, entryId), inArray(contentOperationEvents.eventType, ['site_learning_opt_in', 'site_learning_revoked', 'site_learning_outcome_reviewed']))).orderBy(desc(contentOperationEvents.id)).limit(501)
+    },
+    async findSiteLearningEvent(ownerUserId, eventFingerprint) {
+      const [row] = await database.select().from(contentOperationEvents).where(and(eq(contentOperationEvents.ownerUserId, ownerUserId), inArray(contentOperationEvents.eventType, ['site_learning_opt_in', 'site_learning_revoked', 'site_learning_outcome_reviewed']), eq(contentOperationEvents.eventFingerprint, eventFingerprint))).limit(1)
+      return row || null
     },
     async findLatestOptimizedDraft(ownerUserId, jobId) {
       const rows = await database.select({ id: seoGeoContentDrafts.id, jobId: seoGeoContentDrafts.jobId, version: seoGeoContentDrafts.version, title: seoGeoContentDrafts.title, body: seoGeoContentDrafts.body, contentHash: seoGeoContentDrafts.contentHash, provenance: seoGeoContentDrafts.provenance, safetyStatus: seoGeoContentDrafts.safetyStatus }).from(seoGeoContentDrafts).innerJoin(seoGeoContentJobs, eq(seoGeoContentDrafts.jobId, seoGeoContentJobs.id)).where(and(eq(seoGeoContentJobs.ownerUserId, ownerUserId), eq(seoGeoContentDrafts.jobId, jobId))).orderBy(desc(seoGeoContentDrafts.version)).limit(50)

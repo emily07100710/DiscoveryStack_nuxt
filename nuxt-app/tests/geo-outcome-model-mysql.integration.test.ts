@@ -421,7 +421,7 @@ mysqlDescribe('GEO outcome model real MySQL integration (explicit disposable loc
     expect(durableReplay?.manifestFingerprint).toBe(durableDevelopment!.manifestFingerprint)
     expect(durableReplay?.createdAt).toBe(durableDevelopment!.createdAt)
     developmentCandidateFingerprints = firstBuilt.manifest.sourceObservationFingerprints
-    const approvedDevelopment = await reviewDataset(ownerUserId, firstBuilt.manifest.manifestId, 'approve', ownerUserId, 'Synthetic 200-candidate development manifest approval.', repository)
+    const approvedDevelopment = await reviewDataset(ownerUserId, firstBuilt.manifest.manifestId, 'approve', ownerUserId, 'Synthetic 200-candidate development manifest approval.', repository, { knowledgeMode: 'declared_none_v1' })
     expect(approvedDevelopment.manifest.status).toBe('approved')
     developmentManifestId = approvedDevelopment.manifest.manifestId
 
@@ -444,7 +444,7 @@ mysqlDescribe('GEO outcome model real MySQL integration (explicit disposable loc
     expect(finalBuilt.manifest.observationEnd && finalBuilt.manifest.observationStart ? Date.parse(finalBuilt.manifest.observationEnd) - Date.parse(finalBuilt.manifest.observationStart) : 0).toBeGreaterThanOrEqual(60 * 86_400_000)
     expect(finalBuilt.manifest.temporalHoldoutRowCount).toBeGreaterThan(0)
     expect(finalBuilt.manifest.readiness).toMatchObject({ ready: true, status: 'ready' })
-    trainedManifestId = (await reviewDataset(ownerUserId, finalBuilt.manifest.manifestId, 'approve', ownerUserId, 'Synthetic complete shadow-size manifest review.', repository)).manifest.manifestId
+    trainedManifestId = (await reviewDataset(ownerUserId, finalBuilt.manifest.manifestId, 'approve', ownerUserId, 'Synthetic complete shadow-size manifest review.', repository, { knowledgeMode: 'declared_none_v1' })).manifest.manifestId
 
     const fallback = await createBootstrapFallback(ownerUserId, trainedManifestId, 'regularized_logistic_baseline_v1', repository)
     const approvedFallback = await approveBootstrapFallback(ownerUserId, fallback.artifactId, ownerUserId, 'Synthetic owner approved the exact train-only fallback artifact.', repository)

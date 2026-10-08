@@ -1,20 +1,28 @@
-import { canonicalJson, sha256Hex } from './canonical'
+import { canonicalJson, fingerprint, sha256Hex } from './canonical'
 import { GEO_OUTCOME_ARTIFACT_SCHEMA_VERSION, GEO_OUTCOME_FEATURE_CATALOG_VERSION, GEO_OUTCOME_LABEL_CONTRACT_VERSION } from './constants'
 import { assertDisjointComplete } from './split-policy'
 import { isExactTrainOnlyPriorArtifact } from './bootstrap-baseline'
 import type { DatasetManifest, DatasetMember, DatasetReadiness, ModelArtifact } from './types'
+import { approvalReference } from './knowledge-authority'
 
 export interface PromotionGateInput { dataset: DatasetManifest; members: DatasetMember[]; artifact: ModelArtifact; ownerApproved: boolean; rollbackArtifact: ModelArtifact | null; target: 'shadow' | 'production'; shadowReadiness?: DatasetReadiness }
 export interface PromotionGateResult { status: 'pass' | 'blocked'; reasonCodes: string[]; explanation: string[] }
 
 export function verifyArtifactHash(artifact: ModelArtifact): boolean {
-  const payload = { artifactSchemaVersion: artifact.artifactSchemaVersion, taskType: artifact.taskType, modelFamily: artifact.modelFamily, modelVersion: artifact.modelVersion, featureCatalogVersion: artifact.featureCatalogVersion, labelContractVersion: artifact.labelContractVersion, datasetManifestFingerprint: artifact.datasetManifestFingerprint, splitManifestFingerprint: artifact.splitManifestFingerprint, coefficients: artifact.coefficients, intercept: artifact.intercept, normalizationStatistics: artifact.normalizationStatistics, trainingConfiguration: artifact.trainingConfiguration, trainingRowCount: artifact.trainingRowCount, evaluationMetrics: artifact.evaluationMetrics, limitations: artifact.limitations, rollbackArtifactHash: artifact.rollbackArtifactHash }
-  return sha256Hex(canonicalJson({ ...payload, artifactFingerprint: artifact.artifactFingerprint })) === artifact.artifactHash
+  let reference
+  try { reference = artifact.datasetDecisionId !== undefined || artifact.knowledgeAuthorityFingerprint !== undefined ? approvalReference(artifact) : null } catch { return false }
+  const payload = { artifactSchemaVersion: artifact.artifactSchemaVersion, taskType: artifact.taskType, modelFamily: artifact.modelFamily, modelVersion: artifact.modelVersion, featureCatalogVersion: artifact.featureCatalogVersion, labelContractVersion: artifact.labelContractVersion, datasetManifestFingerprint: artifact.datasetManifestFingerprint, splitManifestFingerprint: artifact.splitManifestFingerprint, coefficients: artifact.coefficients, intercept: artifact.intercept, normalizationStatistics: artifact.normalizationStatistics, trainingConfiguration: artifact.trainingConfiguration, trainingRowCount: artifact.trainingRowCount, evaluationMetrics: artifact.evaluationMetrics, limitations: artifact.limitations, rollbackArtifactHash: artifact.rollbackArtifactHash, ...(reference || {}) }
+  return fingerprint(payload) === artifact.artifactFingerprint && artifact.artifactId === `geo-model-${artifact.artifactFingerprint.slice(0, 20)}` && sha256Hex(canonicalJson({ ...payload, artifactFingerprint: artifact.artifactFingerprint })) === artifact.artifactHash
 }
-function isValidRollback(current: ModelArtifact, rollback: ModelArtifact | null): boolean { return Boolean(rollback && current.rollbackArtifactHash === rollback.artifactHash && rollback.ownerUserId === current.ownerUserId && rollback.artifactHash !== current.artifactHash && rollback.status === 'approved_for_shadow' && rollback.revokedAt === null && rollback.taskType === current.taskType && rollback.modelFamily === current.modelFamily && rollback.featureCatalogVersion === current.featureCatalogVersion && rollback.labelContractVersion === current.labelContractVersion && verifyArtifactHash(rollback)) }
+function isValidRollback(current: ModelArtifact, rollback: ModelArtifact | null): boolean {
+  if (!rollback) return false
+  try { approvalReference(rollback) } catch { return false }
+  return current.rollbackArtifactHash === rollback.artifactHash && rollback.ownerUserId === current.ownerUserId && rollback.artifactHash !== current.artifactHash && rollback.status === 'approved_for_shadow' && rollback.revokedAt === null && rollback.taskType === current.taskType && rollback.modelFamily === current.modelFamily && rollback.featureCatalogVersion === current.featureCatalogVersion && rollback.labelContractVersion === current.labelContractVersion && verifyArtifactHash(rollback)
+}
 
 export function evaluatePromotionGate(input: PromotionGateInput): PromotionGateResult {
   const reasonCodes: string[] = []; const explanation: string[] = []
+  try { approvalReference(input.artifact) } catch { reasonCodes.push('dataset_knowledge_approval_reference_required'); explanation.push('Artifact 必須綁定明確的 owner 知識依賴核准；舊產物只能保留歷史紀錄。') }
   if (input.dataset.status !== 'approved') { reasonCodes.push('dataset_not_approved'); explanation.push('Dataset manifest 尚未經 owner review 核准。') }
   if (input.target === 'shadow' && input.shadowReadiness && !input.shadowReadiness.ready) { reasonCodes.push('shadow_readiness_insufficient'); explanation.push(...input.shadowReadiness.missing) }
   if (input.artifact.artifactSchemaVersion !== GEO_OUTCOME_ARTIFACT_SCHEMA_VERSION || input.artifact.featureCatalogVersion !== GEO_OUTCOME_FEATURE_CATALOG_VERSION || input.artifact.labelContractVersion !== GEO_OUTCOME_LABEL_CONTRACT_VERSION) { reasonCodes.push('feature_contract_mismatch'); explanation.push('Artifact 與目前 feature/label contract 版本不一致。') }

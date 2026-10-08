@@ -1,5 +1,5 @@
 import type { ModelFamily } from './constants'
-import type { GeoOutcomeRepositoryPort, DatasetDecision, DatasetManifest, ModelArtifact, ModelArtifactSummary, ModelDecision, TrainingRun } from './types'
+import type { GeoOutcomeRepositoryPort, DatasetDecisionSummary, DatasetManifest, ModelArtifact, ModelArtifactSummary, ModelDecision, TrainingRun } from './types'
 
 export type ModelOpsPolicyStatus = 'enabled' | 'paused' | 'revoked'
 export type ModelOpsCadence = 'weekly' | 'biweekly' | 'monthly'
@@ -159,7 +159,7 @@ export interface ModelOpsWorkspace {
     datasets: DatasetManifest[]
     trainingRuns: TrainingRun[]
     models: ModelArtifactSummary[]
-    datasetDecisions: DatasetDecision[]
+    datasetDecisions: DatasetDecisionSummary[]
     modelDecisions: ModelDecision[]
   }
 }

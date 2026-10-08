@@ -92,7 +92,21 @@ UI 存在本身不代表能力可用。頁面不會因為表單或按鈕存在�
 
 `details` 預設折疊。只有展開後才顯示 Client ID、Calendar ID、Entry ID、Production Plan ID、plan fingerprint、approved draft ID、evidence hash、content hash 與 Run ID。主要流程使用客戶名稱、計畫名稱、日期與白話狀態，不把技術 ID 當成主要操作語言。
 
+## 2026-10-08：網站草稿審核階段
+
+Workbench 新增中性 `awaiting_site_review`／`draft_received` 顯示及獨立網站審核 pipeline step。單 target entry 與 multi-target binding 都可顯示經 server exact owner/entry/target/checksum 驗證的九欄歷史入稿回執。UI 再驗證 receipt shape，明示「不代表文章目前狀態或已發布」，不呈現 post ID/hash 作主要語言，也不將入稿狀態標成綠色已發布。
+
+等待網站審核時不提供下一步執行／重送；週更送審頁也區分客戶同意與網站審核，禁止把已收稿項目重新送審。其他未收稿的正常送審行為不變。實際網站老師核准或正式發布必須另有可信流程，不能由此歷史回執推定。
+
 ## 狀態處理
+
+### 2026-10-08：網站發布核驗紀錄
+
+入稿回執改用純歷史事實「網站已收到草稿（歷史回執）」，不推定老師目前仍待審。內容工作台另顯示發布核驗紀錄：公開快照與送入版本相符、公開但內容不同、舊紀錄無法比對、檢查當時未公開或已封存；另外區分公開快照相符但私人草稿有未發布修改。每筆明示核驗時間及之後狀態可能改變，不聲稱即時監控或已刪除。
+
+只有 server projection 提供 exact eligible target 才顯示「核對網站發布狀態」。按鈕明確觸發上述 owner-only 核驗 API，不在 mount／refresh 自動查網站、不提供「我已發布」覆寫。保存 uncertain request key，驗證 verified／workflowChanged=false／learningAuthorized=false 的回應 envelope，再重新讀 workspace；失敗維持安全錯誤及歷史紀錄，不宣告發布。每週送審頁保留不可重開已入稿版本的限制，並引導至內容工作台核驗發布結果。
+
+網站觀察與 DS 工作流程分開：核驗本身不發布、不取得客戶同意，也不推進 delivered／學習。元件再驗證精確摘要欄位與組合；未知或矛盾資料維持未核驗。本段的完整 authenticated owner／teacher、正式資料庫與正式網站仍須另行驗收。
 
 初次 workspace 載入顯示 loading；HTTP 401／403 顯示 owner-only unauthorized 說明；其他載入錯誤顯示 error 並保證沒有執行寫入。沒有資料時顯示空狀態。Mutation 期間顯示 saving、停用所有 mutation 按鈕並阻止第二次送出；成功後顯示 success notice 並 refresh；失敗後顯示白話 error notice，不宣稱操作完成。
 
@@ -114,4 +128,16 @@ UI 存在本身不代表能力可用。頁面不會因為表單或按鈕存在�
 
 ## References
 
+### 2026-10-08：明確接入成效觀察
+
+內容工作台新增「接入成效觀察」二階段確認。入口來自伺服器投影，不由瀏覽器提交發布時間、網址、文章 hash、同意或發布權威。只有核驗未超過五分鐘、公開版本相符，且目前原稿、最新人工審核、風險、來源、網址身份及必要逐篇客戶同意均有效時，才顯示可確認。
+
+`POST /api/content-operations/entries/{id}/site-measurement-confirm` 只接受 `targetRowId`、`expectedPublicationFingerprint`、`confirmed: true`、`idempotencyKey`。同源 owner 驗證先於 body、資料庫及網站存取；請求上限 1024 bytes、簽章狀態回應上限 4096 bytes。確認前重新讀取網站簽章快照；寫入獨立 append-only `site_measurement_confirmed` 事件，不改 entry／原草稿 attempt／run、不發布、不呼叫成效 provider、不授予訓練權限。回應遺失時保留相同 key／版本；成功須嚴格驗證 envelope 並重新讀 workspace。
+
+「已確認」是歷史接入意願，不是現在仍公開、已收數或已訓練。收數前後仍重核網站與授權；未公開、版本不同、資料不完整、核驗過舊、同意失效各有繁體提示。這輪只支援已保留完整網址身份與原請求指紋的單一網站、人工審稿入稿；舊紀錄缺身份、routing 多目標與機器授權路徑維持阻擋，不能由此確認補造原發布權威。
+
 [1]: https://github.com/emily07100710/DiscoveryStack_nuxt — DiscoveryStack_nuxt repository.
+
+### 2026-10-08：獨立的網站成效資料准入
+
+「學習閉環」新增網站成效資料准入區，分開顯示客戶用途授權綁定、成效版本審查與明確資料釋出。模型用途與 LINE 發文同意分開核對；確認欄位預設不勾選。受阻的無證據舊紀錄可以查看，但不能審查成合格資料。既有接入紀錄在來源或網站不可用時仍保留撤銷入口。真實 core 的 DTO 與元件使用相同 nullable／釋出摘要契約，不以人工組裝測試取代串接。詳見 [准入契約](SITE_LEARNING_ADMISSION_V1.md)。

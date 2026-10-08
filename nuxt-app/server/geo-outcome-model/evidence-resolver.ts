@@ -21,6 +21,12 @@ function canonicalTimestamp(value: Date | string): string {
   return date.toISOString()
 }
 
+/** Keep source observations for the same provider run/query pair collision-free in the GEO ledger. */
+export function authoritativeGeoRunIdentity(sourceRecordId: number, requestFingerprint: string): string {
+  if (!Number.isSafeInteger(sourceRecordId) || sourceRecordId <= 0 || !isSha256(requestFingerprint)) throw new Error('Authoritative source run identity is invalid.')
+  return fingerprint({ purpose: 'geo_outcome_source_run_identity', schemaVersion: 'geo-outcome-source-run-identity-v1', sourceRecordId, requestFingerprint })
+}
+
 /**
  * Resolve a hash-only primary-evidence projection from existing owner-scoped
  * LLM Visibility facts. Caller bodies never provide authority flags, hashes,
@@ -84,11 +90,11 @@ export function projectAuthoritativeEvidenceBinding(ownerUserId: number, observa
     && observation.projectId === source.projectId
     && observation.queryIdentityHash === source.promptHash
     && observation.normalizedQueryHash === source.promptHash
-    && observation.runIdentity === source.requestFingerprint
+    && (observation.runIdentity === source.requestFingerprint || observation.runIdentity === authoritativeGeoRunIdentity(source.sourceRecordId, source.requestFingerprint))
     && observation.evidenceSnapshotHash === source.responseHash
     && observation.evidenceLocatorHashes.includes(locatorHash)
     && observation.runTimestamp === observedAt
-    && observation.engine === source.provider
+    && observation.engine === (source.provider === 'manual_other' ? 'other' : source.provider)
     && observation.model === source.modelLabel
     && observation.locale === source.locale
     && observation.interface === 'consumer_surface'

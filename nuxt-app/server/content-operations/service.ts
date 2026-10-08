@@ -63,10 +63,16 @@ import type {
   PlanBundle,
   ReplanCalendarInput,
   WorkspacePayload,
+  WorkspaceEntryTargetProjection,
+  WorkspaceTargetReceiptSummary,
 } from './types'
 import { CONTENT_OPERATIONS_LIMITATIONS } from './types'
 import { canonicalContentOperationRunIdentity } from './run-identity'
 import { getOutcomeCollectionReadiness, type ContentWorkspaceReadinessDependencies } from './workspace-readiness'
+import { draftReceiptFromAttempt } from './draft-receipt'
+import { listSitePublicationHistory, projectSitePublicationHistory, sitePublicationContext } from './site-publication'
+import { projectSiteMeasurement } from './site-measurement'
+import { createWeeklyContentRepository, type WeeklyContentRepository } from '../weekly-content/repository'
 
 const CALENDAR_ENGINE_VERSION = 'content-calendar-cadence-engine-v1'
 const DEFAULT_LEASE_MS = 5 * 60 * 1000
@@ -186,7 +192,7 @@ function entryStatusForDatabase(status: string): ContentOperationCalendarEntryRo
 
 function engineStatusForDatabase(status: ContentOperationCalendarEntryRow['status']): CalendarEntryStatus {
   if (status === 'delivered' || status === 'completed') return 'completed'
-  if (status === 'awaiting_generation' || status === 'awaiting_review' || status === 'ready_to_publish' || status === 'publishing') return 'materialized'
+  if (status === 'awaiting_generation' || status === 'awaiting_review' || status === 'ready_to_publish' || status === 'publishing' || status === 'awaiting_site_review') return 'materialized'
   if (status === 'planned' || status === 'materialized' || status === 'cancelled' || status === 'skipped' || status === 'blocked') return status
   return 'blocked'
 }
@@ -688,6 +694,7 @@ function nextActionForEntry(entry: ContentOperationCalendarEntryRow, hasApproved
   if (entry.status === 'materialized' || entry.status === 'awaiting_generation') return hasApprovedDraft && hasPassedRiskGate ? 'publish' : 'generate'
   if (entry.status === 'awaiting_review') return 'review'
   if (entry.status === 'ready_to_publish' || entry.status === 'publishing') return 'publish'
+  if (entry.status === 'awaiting_site_review') return 'wait'
   if (entry.status === 'delivered') return hasOutcome ? 'learn' : 'measure'
   if (entry.status === 'completed') return hasOutcome ? 'learn' : 'measure'
   return 'none'
@@ -698,9 +705,9 @@ function outcomeValidPairCount(snapshot: unknown): number | null {
   return snapshot.validPairCount
 }
 
-function latestAttemptSummary(targetRowId: number, attempts: ContentOperationPublicationAttemptRow[], runs: ContentOperationRunRow[]) {
+function latestAttemptSummary(target: ContentOperationPublicationTargetRow, entry: ContentOperationCalendarEntryRow, attempts: ContentOperationPublicationAttemptRow[], runs: ContentOperationRunRow[]): WorkspaceTargetReceiptSummary | null {
   const attempt = attempts
-    .filter(candidate => candidate.targetId === targetRowId)
+    .filter(candidate => candidate.targetId === target.id)
     .sort((left, right) => right.attemptNumber - left.attemptNumber || right.createdAt.getTime() - left.createdAt.getTime())[0]
   if (!attempt) return null
   const run = runs.find(candidate => candidate.id === attempt.runId)
@@ -711,6 +718,7 @@ function latestAttemptSummary(targetRowId: number, attempts: ContentOperationPub
     receiptFingerprint: attempt.receiptFingerprint ?? null,
     publicationUrl: attempt.publicationUrl ?? null,
     remoteRevision: attempt.remoteRevision ?? null,
+    draftReceipt: draftReceiptFromAttempt(attempt, entry, target),
     errorCode: attempt.errorCode ?? null,
     errorSummary: attempt.errorSummary ?? null,
     completedAt: attempt.completedAt ?? null,
@@ -718,7 +726,7 @@ function latestAttemptSummary(targetRowId: number, attempts: ContentOperationPub
   }
 }
 
-function projectEntryTargetBinding(binding: ContentOperationCalendarEntryTargetRow, target: ContentOperationPublicationTargetRow | null, attempts: ContentOperationPublicationAttemptRow[], runs: ContentOperationRunRow[]) {
+function projectEntryTargetBinding(binding: ContentOperationCalendarEntryTargetRow, target: ContentOperationPublicationTargetRow | null, entry: ContentOperationCalendarEntryRow, attempts: ContentOperationPublicationAttemptRow[], runs: ContentOperationRunRow[]): WorkspaceEntryTargetProjection {
   return {
     bindingId: binding.id,
     slot: binding.slot,
@@ -734,14 +742,15 @@ function projectEntryTargetBinding(binding: ContentOperationCalendarEntryTargetR
     destinationPublicationIdentityConfigured: Boolean(target?.destinationPublicationIdentity),
     serviceReferenceConfigured: Boolean(target?.serviceReference),
     bindingFingerprint: binding.bindingFingerprint,
-    latestAttempt: target ? latestAttemptSummary(target.id, attempts, runs) : null,
+    latestAttempt: target ? latestAttemptSummary(target, entry, attempts, runs) : null,
   }
 }
 
 export async function buildOwnerContentLearningDataset(ownerUserId: number, repository?: ContentOperationsRepository) {
   const db = await getRepository(repository)
   const outcomes = await db.listOutcomes(ownerUserId)
-  const records = outcomes.map(outcome => {
+  // Site-confirmation assessments are observational only and cannot enter the formal learning bridge.
+  const records = outcomes.filter(outcome => !isRecord(outcome.assessmentSnapshot) || outcome.assessmentSnapshot.evidenceKind !== 'site_publication_confirmation').map(outcome => {
     const assessment = isRecord(outcome.assessmentSnapshot) ? outcome.assessmentSnapshot : null
     const publication = assessment && isRecord(assessment.publication) ? assessment.publication : null
     return {
@@ -759,9 +768,19 @@ export async function getOwnerContentOperationsWorkspace(ownerUserId: number, re
   const policies = (await Promise.all(clients.map(client => db.listAutopilotPolicies(ownerUserId, client.id)))).flat()
   const targetByRowId = new Map(targets.map(target => [target.id, target]))
   const entryDetails = await Promise.all(entries.map(async entry => {
-    const [lineage, bindings, attempts, repairs, substitutions] = await Promise.all([db.resolveWorkspaceEntry(ownerUserId, entry.id), db.listEntryTargetBindings(ownerUserId, entry.id), db.listPublicationAttempts(ownerUserId, entry.id), db.listRepairAttempts(ownerUserId, entry.id), db.listTopicSubstitutions(ownerUserId, entry.id)])
+    const [lineage, bindings, attempts, repairs, substitutions, siteEvents] = await Promise.all([db.resolveWorkspaceEntry(ownerUserId, entry.id), db.listEntryTargetBindings(ownerUserId, entry.id), db.listPublicationAttempts(ownerUserId, entry.id), db.listRepairAttempts(ownerUserId, entry.id), db.listTopicSubstitutions(ownerUserId, entry.id), listSitePublicationHistory(db, ownerUserId, entry.id)])
     const machineAuthorizations = (await Promise.all(bindings.map(binding => db.findMachineAuthorizationForTarget(ownerUserId, entry.id, binding.targetId)))).filter((row): row is NonNullable<typeof row> => Boolean(row))
-    return { lineage, bindings, attempts, repairs, substitutions, machineAuthorizations }
+    const measurementTargets = bindings.length ? bindings.map(binding => binding.targetId) : entry.publicationTargetId ? [entry.publicationTargetId] : []
+    let weeklyRepository: WeeklyContentRepository | undefined
+    if (!repository && lineage?.client.requireCustomerApproval === true) {
+      try { weeklyRepository = createWeeklyContentRepository() } catch { /* Opted-in clients remain blocked if consent cannot be read. */ }
+    }
+    const siteMeasurements = new Map(await Promise.all(measurementTargets.slice(0, 20).map(async targetId => {
+      const target = targetByRowId.get(targetId)
+      return [targetId, target && sitePublicationContext(entry, target, attempts, bindings)
+        ? await projectSiteMeasurement(ownerUserId, entry.id, targetId, { repository: db, weeklyRepository }) : undefined] as const
+    })))
+    return { lineage, bindings, attempts, repairs, substitutions, machineAuthorizations, siteEvents, siteMeasurements }
   }))
   const projections = entries.map((entry, index) => {
     const detail = entryDetails[index]!
@@ -771,8 +790,18 @@ export async function getOwnerContentOperationsWorkspace(ownerUserId: number, re
     const hasOutcome = outcomeAssessments.some(outcome => outcome.entryId === entry.id)
     const publicationTargetBindings = detail.bindings
       .sort((left, right) => left.slot - right.slot)
-      .map(binding => projectEntryTargetBinding(binding, targetByRowId.get(binding.targetId) || null, detail.attempts, runs))
-    return { ...entry, topic: entry.topicCluster, framework: lineage?.client.framework || null, target: lineage?.client.canonicalSiteOrigin || null, hasApprovedDraft, hasPassedRiskGate, nextAction: nextActionForEntry(entry, hasApprovedDraft, hasPassedRiskGate, hasOutcome), publicationTargetBindings }
+      .map(binding => {
+        const target = targetByRowId.get(binding.targetId) || null
+        const projected = projectEntryTargetBinding(binding, target, entry, detail.attempts, runs)
+        const context = target ? sitePublicationContext(entry, target, detail.attempts, detail.bindings) : null
+        if (projected.latestAttempt) projected.latestAttempt = { ...projected.latestAttempt, sitePublication: projectSitePublicationHistory(context, detail.siteEvents), sitePublicationCheckAvailable: Boolean(context && clients.find(client => client.id === target?.clientId)?.status === 'active'), siteMeasurement: detail.siteMeasurements.get(binding.targetId) }
+        return projected
+      })
+    const singleTarget = entry.publicationTargetId ? targetByRowId.get(entry.publicationTargetId) : null
+    const latestDraftReceipt = !detail.bindings.length && singleTarget ? latestAttemptSummary(singleTarget, entry, detail.attempts, runs)?.draftReceipt ?? null : null
+    const context = !detail.bindings.length && singleTarget ? sitePublicationContext(entry, singleTarget, detail.attempts, detail.bindings) : null
+    return { ...entry, topic: entry.topicCluster, framework: lineage?.client.framework || null, target: lineage?.client.canonicalSiteOrigin || null, hasApprovedDraft, hasPassedRiskGate, nextAction: nextActionForEntry(entry, hasApprovedDraft, hasPassedRiskGate, hasOutcome), publicationTargetBindings, latestDraftReceipt,
+      latestSitePublication: projectSitePublicationHistory(context, detail.siteEvents), sitePublicationCheckAvailable: Boolean(context && clients.find(client => client.id === singleTarget?.clientId)?.status === 'active'), siteMeasurement: !detail.bindings.length && singleTarget ? detail.siteMeasurements.get(singleTarget.id) : undefined }
   })
   const activeTargets = targets.filter(target => target.status === 'active')
   const generationProviderConfigured = resolveProductionRuntimeProviders().configured

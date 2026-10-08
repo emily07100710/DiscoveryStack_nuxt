@@ -68,6 +68,32 @@ describe('bounded untouched raw HTTP bytes', () => {
     await expect(raw(event)).resolves.toEqual(bytes)
     await expect(raw(event)).resolves.toEqual(bytes)
   })
+  it.each(['fully', 'partially'] as const)('rejects a %s consumed Web stream instead of signing missing original bytes', async mode => {
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(Buffer.from('{"original":true}')); controller.enqueue(Buffer.from(' ')); controller.close() } })
+    const reader = stream.getReader()
+    await reader.read()
+    if (mode === 'fully') await reader.read()
+    reader.releaseLock()
+    const { event } = fixture()
+    event.web = { request: { body: stream } } as typeof event.web
+    await expect(raw(event)).rejects.toMatchObject({ statusCode: 400, statusMessage: options.invalidMessage })
+  })
+  it('rejects a partially consumed Node stream instead of signing only its tail', async () => {
+    const stream = new PassThrough()
+    stream.write(Buffer.from(' '))
+    expect(stream.read(1)).toEqual(Buffer.from(' '))
+    stream.end(Buffer.from('{"x":1}'))
+    const { event } = fixture(stream)
+    await expect(raw(event)).rejects.toMatchObject({ statusCode: 400, statusMessage: options.invalidMessage })
+  })
+  it('rejects a fully consumed Node stream with the same raw-unavailable error', async () => {
+    const stream = Readable.from([Buffer.from('{"x":1}')])
+    const consumed: Buffer[] = []
+    for await (const chunk of stream) consumed.push(Buffer.from(chunk))
+    expect(Buffer.concat(consumed)).toEqual(Buffer.from('{"x":1}'))
+    const { event } = fixture(stream)
+    await expect(raw(event)).rejects.toMatchObject({ statusCode: 400, statusMessage: options.invalidMessage })
+  })
   it.each(['_requestBody', 'rawCache', 'rawBody', 'body'])('hard-bounds materialized %s and preserves h3 raw-source precedence', async slot => {
     const { req, event } = fixture('{}')
     const bytes = Buffer.alloc(17)

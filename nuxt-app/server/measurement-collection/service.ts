@@ -9,10 +9,13 @@ import { OUTCOME_DATA_CONTRACT_VERSION } from '../outcome-learning'
 import { runOwnerProviderObservation } from '../llm-visibility/repository'
 import type { ProviderObservationRunInput } from '../llm-visibility/contracts'
 import { createMeasurementCollectionRepository } from './repository'
+import { recordSitePublicationMeasurementAssessment } from './site-assessment'
+import type { SiteLearningCollectionProof } from '../content-operations/site-learning'
+import { normalizeSiteLearningCollectionProof, sameSiteLearningCollectionProof, siteLearningCaptureAllowed, snapshotSiteLearningProof } from './site-learning-proof'
 import { isGoogleServiceAccountConfigured, resolveCredentialDependencies, type MeasurementCredentialDependencies } from './credentials'
 import { ga4DataApiAdapter, googleSearchConsoleAdapter } from './adapters'
 import { buildMeasurementWindow, canonicalConnectionFingerprint, deidentifiedSubjectKey, isMeasurementCheckpoint, measurementIdempotencyKey, measurementInputFingerprint, measurementScopeFingerprint, normalizeCredentialReference, normalizeGa4PropertyId, normalizePageScope, normalizeSearchConsoleProperty, publicationLocalDate, sanitizeError } from './normalization'
-import { MEASUREMENT_CHECKPOINTS, MEASUREMENT_LEASE_MS, MEASUREMENT_MAX_RETRY_ATTEMPTS, MEASUREMENT_MAX_RUNS_PER_TICK, MEASUREMENT_RETRY_BASE_MS, MEASUREMENT_SOURCES, type AdapterSuccess, type MeasurementAdapterContext, type MeasurementAdapterResult, type MeasurementConnectionInput, type MeasurementConnectionRow, type MeasurementPhase, type MeasurementRepository, type MeasurementRunRow, type MeasurementSnapshotRow, type MeasurementSource, type MeasurementState, type MeasurementWorkspace, type MeasurementSourceSnapshot } from './types'
+import { MEASUREMENT_CHECKPOINTS, MEASUREMENT_LEASE_MS, MEASUREMENT_MAX_RETRY_ATTEMPTS, MEASUREMENT_MAX_RUNS_PER_TICK, MEASUREMENT_RETRY_BASE_MS, MEASUREMENT_SOURCES, type AdapterSuccess, type MeasurementAdapterContext, type MeasurementAdapterResult, type MeasurementConnectionInput, type MeasurementConnectionRow, type MeasurementPhase, type MeasurementPublicationLineage, type MeasurementRepository, type MeasurementRunRow, type MeasurementSnapshotRow, type MeasurementSource, type MeasurementState, type MeasurementWorkspace, type MeasurementSourceSnapshot, type SiteConfirmationMeasurementPublicationLineage } from './types'
 
 const providerTargetSchema = z.object({
   provider: z.enum(['chatgpt', 'gemini', 'perplexity']),
@@ -47,6 +50,8 @@ type ContentOpsWithEntries = ContentOperationsRepository
 type ServiceDependencies = MeasurementCredentialDependencies & {
   repository?: MeasurementRepository
   contentOperations?: ContentOpsWithEntries
+  resolveSiteMeasurementLineages?: (ownerUserId: number, entryId: number, options: { fresh: boolean; now?: Date; repository?: ContentOperationsRepository }) => Promise<SiteConfirmationMeasurementPublicationLineage[]>
+  resolveSiteLearningCollectionProof?: (ownerUserId: number, lineage: SiteConfirmationMeasurementPublicationLineage, context: { repository: ContentOperationsRepository }) => Promise<SiteLearningCollectionProof | null>
   fetcher?: MeasurementAdapterContext['fetcher']
   runProviderObservation?: typeof runOwnerProviderObservation
   now?: Date
@@ -69,11 +74,32 @@ function getContentRepository(dependencies?: ServiceDependencies): ContentOperat
   return dependencies?.contentOperations || createContentOperationsRepository()
 }
 
+async function currentSiteLearningProof(ownerUserId: number, lineage: MeasurementPublicationLineage, repository: ContentOperationsRepository, dependencies?: ServiceDependencies): Promise<SiteLearningCollectionProof | null> {
+  if (lineage.evidenceKind !== 'site_publication_confirmation' || lineage.productionPlanId === null) return null
+  if ((lineage.contentType !== 'article' && lineage.contentType !== 'faq' && lineage.contentType !== 'service_page')
+    || (lineage.language !== 'en' && lineage.language !== 'zh-hant')) return null
+  try {
+    if (dependencies?.resolveSiteLearningCollectionProof) return normalizeSiteLearningCollectionProof(await dependencies.resolveSiteLearningCollectionProof(ownerUserId, lineage, { repository }))
+    // An injected repository must never cause a test or partial caller to fall through to production authority.
+    if (dependencies?.contentOperations || dependencies?.repository) return null
+    const [{ resolveSiteLearningCollectionProof }, { DrizzleLearningLoopRepository }, { resolveConfirmedSiteMeasurementLineages }, { createWeeklyContentRepository }] = await Promise.all([
+      import('../content-operations/site-learning'), import('../learning-loop/repository'), import('../content-operations/site-measurement'), import('../weekly-content/repository'),
+    ])
+    return normalizeSiteLearningCollectionProof(await resolveSiteLearningCollectionProof(ownerUserId, { ...lineage, productionPlanId: lineage.productionPlanId, contentType: lineage.contentType, language: lineage.language }, {
+      operations: repository, learning: new DrizzleLearningLoopRepository(), now: dependencies?.now || new Date(),
+      resolveSiteLineages(owner, entryId, context) {
+        return resolveConfirmedSiteMeasurementLineages(owner, entryId, { repository: context.repository || repository, fresh: false,
+          weeklyRepositoryFactory: createWeeklyContentRepository, now: dependencies?.now || new Date() })
+      },
+    }, { repository }))
+  } catch { return null } // Operational measurement is independent; invalid learning authority must not grant learning use.
+}
+
 function connectionPageScope(connection: MeasurementConnectionRow): string[] {
   return Array.isArray(connection.allowedPageScope) ? connection.allowedPageScope.filter((value): value is string => typeof value === 'string') : []
 }
 
-function connectionMatchesLineage(connection: MeasurementConnectionRow, lineage: DeliveredMeasurementLineage): boolean {
+function connectionMatchesLineage(connection: MeasurementConnectionRow, lineage: MeasurementPublicationLineage): boolean {
   if (connection.ownerUserId !== lineage.ownerUserId || connection.clientId !== lineage.clientId || connection.status !== 'configured') return false
   if (connection.publicationTargetId && connection.publicationTargetId !== lineage.targetId) return false
   try {
@@ -180,7 +206,7 @@ function projectDeliveredMeasurementLineage(ownerUserId: number, client: Awaited
   const canonicalPage = publicPage.publicationUrl
   const publishedAt = attempt.completedAt
   if (!(publishedAt instanceof Date) || !Number.isFinite(publishedAt.getTime())) return null
-  return { ownerUserId, entryId: delivered.entry.id, targetId: target.id, clientId: delivered.calendar.clientId, canonicalPage, publicationReceiptFingerprint: attempt.receiptFingerprint, contentHash: delivered.entry.contentHash, evidenceSnapshotHash: delivered.entry.evidenceSnapshotHash, timeZone: delivered.calendar.timeZone, publicationLocalDate: publicationLocalDate(publishedAt, delivered.calendar.timeZone), publishedAt }
+  return { ownerUserId, entryId: delivered.entry.id, targetId: target.id, clientId: delivered.calendar.clientId, canonicalPage, publicationReceiptFingerprint: attempt.receiptFingerprint, contentHash: delivered.entry.contentHash, evidenceSnapshotHash: delivered.entry.evidenceSnapshotHash, timeZone: delivered.calendar.timeZone, publicationLocalDate: publicationLocalDate(publishedAt, delivered.calendar.timeZone), publishedAt, evidenceKind: 'formal_delivered' as const }
 }
 
 async function resolveDeliveredMeasurementLineages(ownerUserId: number, entryId: number, contentRepository: ContentOperationsRepository) {
@@ -213,13 +239,53 @@ async function resolveDeliveredMeasurementLineages(ownerUserId: number, entryId:
   return lineages
 }
 
-type DeliveredMeasurementLineage = Awaited<ReturnType<typeof resolveDeliveredMeasurementLineages>>[number]
+async function resolveMeasurementLineages(ownerUserId: number, entryId: number, contentRepository: ContentOperationsRepository, dependencies: ServiceDependencies | undefined, options: { fresh: boolean; now?: Date }): Promise<MeasurementPublicationLineage[]> {
+  const formal = await resolveDeliveredMeasurementLineages(ownerUserId, entryId, contentRepository)
+  const site = await resolveSiteMeasurementLineages(ownerUserId, entryId, dependencies, options)
+  const formalTargets = new Set(formal.map(lineage => lineage.targetId))
+  return [...formal, ...site.filter(lineage => !formalTargets.has(lineage.targetId))]
+}
+
+async function resolveSiteMeasurementLineages(ownerUserId: number, entryId: number, dependencies: ServiceDependencies | undefined, options: { fresh: boolean; now?: Date; repository?: ContentOperationsRepository }): Promise<SiteConfirmationMeasurementPublicationLineage[]> {
+  let site: SiteConfirmationMeasurementPublicationLineage[] = []
+  if (dependencies?.resolveSiteMeasurementLineages) {
+    site = await dependencies.resolveSiteMeasurementLineages(ownerUserId, entryId, options)
+  } else if (!dependencies?.contentOperations) {
+    // Keep the measurement service independent of the content-operation resolver at module load time.
+    const resolver = await import('../content-operations/site-measurement')
+    if (options.repository) {
+      const weekly = await import('../weekly-content/repository')
+      site = await resolver.resolveConfirmedSiteMeasurementLineages(ownerUserId, entryId, { ...options, weeklyRepositoryFactory: weekly.createWeeklyContentRepository })
+    } else site = await resolver.resolveConfirmedSiteMeasurementLineages(ownerUserId, entryId, options)
+  }
+  return site.filter(lineage => lineage.evidenceKind === 'site_publication_confirmation'
+    && lineage.ownerUserId === ownerUserId && lineage.entryId === entryId
+    && Number.isSafeInteger(lineage.targetId) && lineage.targetId > 0
+    && Number.isSafeInteger(lineage.clientId) && lineage.clientId > 0
+    && /^[a-f0-9]{64}$/u.test(lineage.confirmationFingerprint)
+    && lineage.publicationReceiptFingerprint === lineage.confirmationFingerprint
+    && /^[a-f0-9]{64}$/u.test(lineage.contentHash) && /^[a-f0-9]{64}$/u.test(lineage.evidenceSnapshotHash)
+    && lineage.publishedAt instanceof Date && Number.isFinite(lineage.publishedAt.getTime())
+    && Number.isSafeInteger(lineage.draftId) && lineage.draftId > 0 && Number.isSafeInteger(lineage.draftVersion) && lineage.draftVersion > 0
+    && Number.isSafeInteger(lineage.jobId) && lineage.jobId > 0 && lineage.productionPlanId !== null && Number.isSafeInteger(lineage.productionPlanId) && lineage.productionPlanId > 0
+    && typeof lineage.scheduleKey === 'string' && lineage.scheduleKey.length > 0 && typeof lineage.contentType === 'string' && typeof lineage.language === 'string'
+    && Array.isArray(lineage.appliedRuleIds) && lineage.appliedRuleIds.length > 0 && lineage.appliedRuleIds.every(ruleId => typeof ruleId === 'string' && ruleId.length > 0)
+    && typeof lineage.topicClusterCode === 'string' && lineage.topicClusterCode.length > 0)
+}
+
+type DeliveredMeasurementLineage = MeasurementPublicationLineage
 
 function runInsert(ownerUserId: number, connection: MeasurementConnectionRow, lineage: DeliveredMeasurementLineage, checkpointDays: typeof MEASUREMENT_CHECKPOINTS[number], now: Date): Omit<MeasurementRunRow, 'id' | 'createdAt' | 'updatedAt'> {
   const window = buildMeasurementWindow(lineage.publicationLocalDate, lineage.timeZone, checkpointDays, connection.sourceAvailabilityLagDays, now, lineage.publishedAt)
   const scopeFingerprint = measurementScopeFingerprint({ ownerUserId, clientId: lineage.clientId, websiteOrigin: connection.canonicalOrigin, entryId: lineage.entryId, targetId: lineage.targetId, canonicalPage: lineage.canonicalPage, source: connection.source, checkpointDays })
-  const idempotencyKey = measurementIdempotencyKey({ ownerUserId, entryId: lineage.entryId, targetId: lineage.targetId, source: connection.source, checkpointDays, baselineStart: window.baselineStart, followUpStart: window.followUpStart })
-  const inputFingerprint = measurementInputFingerprint({ ownerUserId, connectionId: connection.id, entryId: lineage.entryId, targetId: lineage.targetId, source: connection.source, checkpointDays, publicationReceiptFingerprint: lineage.publicationReceiptFingerprint, canonicalPage: lineage.canonicalPage, contentHash: lineage.contentHash, evidenceSnapshotHash: lineage.evidenceSnapshotHash, scopeFingerprint, baselineStart: window.baselineStart.toISOString(), baselineEnd: window.baselineEnd.toISOString(), followUpStart: window.followUpStart.toISOString(), followUpEnd: window.followUpEnd.toISOString(), dueAt: window.dueAt.toISOString() })
+  const baseIdempotencyKey = measurementIdempotencyKey({ ownerUserId, entryId: lineage.entryId, targetId: lineage.targetId, source: connection.source, checkpointDays, baselineStart: window.baselineStart, followUpStart: window.followUpStart })
+  const idempotencyKey = lineage.evidenceKind === 'site_publication_confirmation'
+    ? `site-measurement-run:${createHash('sha256').update(`${lineage.confirmationFingerprint}:${baseIdempotencyKey}`).digest('hex')}`
+    : baseIdempotencyKey
+  const input = { ownerUserId, connectionId: connection.id, entryId: lineage.entryId, targetId: lineage.targetId, source: connection.source, checkpointDays, publicationReceiptFingerprint: lineage.publicationReceiptFingerprint, canonicalPage: lineage.canonicalPage, contentHash: lineage.contentHash, evidenceSnapshotHash: lineage.evidenceSnapshotHash, scopeFingerprint, baselineStart: window.baselineStart.toISOString(), baselineEnd: window.baselineEnd.toISOString(), followUpStart: window.followUpStart.toISOString(), followUpEnd: window.followUpEnd.toISOString(), dueAt: window.dueAt.toISOString() }
+  const inputFingerprint = lineage.evidenceKind === 'site_publication_confirmation'
+    ? measurementInputFingerprint({ ...input, evidenceKind: lineage.evidenceKind, confirmationFingerprint: lineage.confirmationFingerprint, draftId: lineage.draftId, draftVersion: lineage.draftVersion, connectionConfigurationFingerprint: connection.configurationFingerprint })
+    : measurementInputFingerprint(input)
   return { ownerUserId, clientId: lineage.clientId, connectionId: connection.id, entryId: lineage.entryId, targetId: lineage.targetId, source: connection.source, checkpointDays, publicationReceiptFingerprint: lineage.publicationReceiptFingerprint, canonicalPage: lineage.canonicalPage, contentHash: lineage.contentHash, evidenceSnapshotHash: lineage.evidenceSnapshotHash, publicationLocalDate: lineage.publicationLocalDate, timeZone: lineage.timeZone, baselineWindowStart: window.baselineStart, baselineWindowEnd: lineage.publishedAt, followUpWindowStart: lineage.publishedAt, followUpWindowEnd: window.followUpEnd, dueAt: window.dueAt, state: 'queued', attemptNumber: 0, leaseOwner: null, leaseExpiresAt: null, retryEligibleAt: null, idempotencyKey, inputFingerprint, outputFingerprint: null, errorCode: null, errorSummary: null, startedAt: null, completedAt: null }
 }
 
@@ -235,8 +301,8 @@ async function blockStaleRuns(ownerUserId: number, lineage: DeliveredMeasurement
 export async function scheduleMeasurementForEntry(ownerUserId: number, entryId: number, dependencies?: ServiceDependencies) {
   const repository = getMeasurementRepository(dependencies)
   const contentRepository = getContentRepository(dependencies)
-  const lineages = await resolveDeliveredMeasurementLineages(ownerUserId, entryId, contentRepository)
-  if (!lineages.length) invalid('Measurement scheduling requires at least one validated delivered publication receipt.')
+  const lineages = await resolveMeasurementLineages(ownerUserId, entryId, contentRepository, dependencies, { fresh: false, now: dependencies?.now })
+  if (!lineages.length) invalid('Measurement scheduling requires a validated delivered receipt or owner-confirmed site publication lineage.')
   const connections = await repository.listConnections(ownerUserId)
   const runs: MeasurementRunRow[] = []
   for (const lineage of lineages) {
@@ -267,18 +333,55 @@ function retryDate(now: Date, attemptNumber: number): Date {
 }
 
 function snapshotInput(row: MeasurementSnapshotRow) {
-  return { source: row.source, deidentifiedSubjectKey: row.deidentifiedSubjectKey, scopeFingerprint: row.scopeFingerprint, phase: row.phase, windowStart: row.windowStart instanceof Date ? row.windowStart.toISOString() : new Date(row.windowStart).toISOString(), windowEnd: row.windowEnd instanceof Date ? row.windowEnd.toISOString() : new Date(row.windowEnd).toISOString(), capturedAt: row.capturedAt instanceof Date ? row.capturedAt.toISOString() : new Date(row.capturedAt).toISOString(), sourceHash: row.sourceHash, metrics: row.normalizedMetrics }
+  const proof = snapshotSiteLearningProof(row.providerProvenance)
+  return { source: row.source, deidentifiedSubjectKey: row.deidentifiedSubjectKey, scopeFingerprint: row.scopeFingerprint, phase: row.phase, windowStart: row.windowStart instanceof Date ? row.windowStart.toISOString() : new Date(row.windowStart).toISOString(), windowEnd: row.windowEnd instanceof Date ? row.windowEnd.toISOString() : new Date(row.windowEnd).toISOString(), capturedAt: row.capturedAt instanceof Date ? row.capturedAt.toISOString() : new Date(row.capturedAt).toISOString(), sourceHash: row.sourceHash, metrics: row.normalizedMetrics,
+    ...(proof ? { providerProvenance: { siteLearningCollectionProof: proof } } : {}) }
 }
 
-async function assessMeasurementOutcome(ownerUserId: number, run: MeasurementRunRow, repository: MeasurementRepository, contentRepository: ContentOperationsRepository, now: Date) {
+async function assessMeasurementOutcome(ownerUserId: number, run: MeasurementRunRow, repository: MeasurementRepository, contentRepository: ContentOperationsRepository, now: Date, lineage?: MeasurementPublicationLineage, dependencies?: ServiceDependencies) {
   const runs = (await repository.listRuns(ownerUserId, { entryId: run.entryId })).filter(candidate => candidate.targetId === run.targetId && candidate.checkpointDays === run.checkpointDays && candidate.publicationReceiptFingerprint === run.publicationReceiptFingerprint && candidate.contentHash === run.contentHash && candidate.evidenceSnapshotHash === run.evidenceSnapshotHash)
   const snapshots = (await Promise.all(runs.map(candidate => repository.listSnapshots(ownerUserId, candidate.id)))).flat()
   const outcomeSnapshots = snapshots.filter(snapshot => snapshot.source !== 'llm_visibility')
   const baselineMeasurements = outcomeSnapshots.filter(snapshot => snapshot.phase === 'baseline').map(snapshotInput)
   const followUpMeasurements = outcomeSnapshots.filter(snapshot => snapshot.phase === 'follow_up').map(snapshotInput)
   const sourceHashes = outcomeSnapshots.map(snapshot => snapshot.sourceHash).sort()
+  if (lineage?.evidenceKind === 'site_publication_confirmation') {
+    return recordSitePublicationMeasurementAssessment({ ownerUserId, lineage, checkpointDays: run.checkpointDays, baselineMeasurements, followUpMeasurements, measuredAt: now, repository: contentRepository,
+      resolveCollectionProof: transaction => currentSiteLearningProof(ownerUserId, lineage, transaction || contentRepository, dependencies),
+      revalidate: async () => {
+        const fresh = await freshRunLineage(ownerUserId, run, contentRepository, dependencies)
+        return fresh?.evidenceKind === 'site_publication_confirmation' && matchesRunLineage(run, fresh) ? fresh : null
+      },
+      revalidateForPersistence: async transaction => {
+        const fresh = await freshRunLineage(ownerUserId, run, transaction, dependencies, { fresh: false, repository: transaction })
+        return fresh?.evidenceKind === 'site_publication_confirmation' && matchesRunLineage(run, fresh) ? fresh : null
+      } })
+  }
   const idempotencyKey = `measurement-outcome:${createHash('sha256').update(JSON.stringify({ ownerUserId, entryId: run.entryId, targetId: run.targetId, checkpointDays: run.checkpointDays, sourceHashes })).digest('hex')}`.slice(0, 128)
   return recordOwnerOutcomeAssessment(ownerUserId, { entryId: run.entryId, targetId: run.targetId, idempotencyKey, baselineMeasurements, followUpMeasurements, consent: NO_CONSENT_LINEAGE, dataContractVersion: OUTCOME_DATA_CONTRACT_VERSION, measuredAt: now.toISOString(), learningCandidate: false }, contentRepository)
+}
+
+function matchesRunLineage(run: MeasurementRunRow, lineage: MeasurementPublicationLineage | undefined): lineage is MeasurementPublicationLineage {
+  return Boolean(lineage && lineage.ownerUserId === run.ownerUserId && lineage.entryId === run.entryId && lineage.targetId === run.targetId
+    && lineage.publicationReceiptFingerprint === run.publicationReceiptFingerprint && lineage.contentHash === run.contentHash
+    && lineage.evidenceSnapshotHash === run.evidenceSnapshotHash && lineage.canonicalPage === run.canonicalPage
+    && lineage.clientId === run.clientId && lineage.timeZone === run.timeZone && lineage.publicationLocalDate === run.publicationLocalDate
+    && lineage.publishedAt.getTime() === run.followUpWindowStart.getTime())
+}
+
+function staleLineageCode(run: MeasurementRunRow, lineage?: MeasurementPublicationLineage): string {
+  return lineage?.evidenceKind === 'site_publication_confirmation' || run.idempotencyKey.startsWith('site-measurement-run:')
+    ? 'STALE_SITE_PUBLICATION_CONFIRMATION'
+    : 'STALE_PUBLICATION_LINEAGE'
+}
+
+async function freshRunLineage(ownerUserId: number, run: MeasurementRunRow, contentRepository: ContentOperationsRepository, dependencies: ServiceDependencies | undefined,
+  options: { fresh: boolean; repository?: ContentOperationsRepository } = { fresh: true }) {
+  const formal = await resolveDeliveredMeasurementLineages(ownerUserId, run.entryId, contentRepository)
+  const formalMatch = formal.find(lineage => matchesRunLineage(run, lineage))
+  if (formalMatch) return formalMatch
+  const site = await resolveSiteMeasurementLineages(ownerUserId, run.entryId, dependencies, { ...options, now: dependencies?.now, repository: options.repository })
+  return site.find(lineage => matchesRunLineage(run, lineage))
 }
 
 async function collectLlmSnapshot(ownerUserId: number, run: MeasurementRunRow, connection: MeasurementConnectionRow, phase: MeasurementPhase, windowStart: Date, windowEnd: Date, canonicalPage: string, scopeFingerprint: string, dependencies: ServiceDependencies): Promise<MeasurementAdapterResult> {
@@ -324,26 +427,88 @@ async function executeClaimedRun(ownerUserId: number, run: MeasurementRunRow, de
   if (!connection) return { state: 'blocked', assessment: null, errorCode: 'CONNECTION_NOT_FOUND' }
   if (connection.status === 'revoked') return { state: 'blocked', assessment: null, errorCode: 'CONNECTION_REVOKED' }
   if (connection.status === 'paused') return { state: 'blocked', assessment: null, errorCode: 'CONNECTION_PAUSED' }
-  const lineages = await resolveDeliveredMeasurementLineages(ownerUserId, run.entryId, contentRepository)
-  const lineage = lineages.find(candidate => candidate.targetId === run.targetId)
-  if (!lineage || lineage.publicationReceiptFingerprint !== run.publicationReceiptFingerprint || lineage.contentHash !== run.contentHash || lineage.evidenceSnapshotHash !== run.evidenceSnapshotHash || lineage.canonicalPage !== run.canonicalPage) return { state: 'blocked', assessment: null, errorCode: 'STALE_PUBLICATION_LINEAGE' }
+  let lineage = await freshRunLineage(ownerUserId, run, contentRepository, dependencies)
+  if (!lineage || !connectionMatchesLineage(connection, lineage)) return { state: 'blocked', assessment: null, errorCode: staleLineageCode(run, lineage) }
+  const initialConnectionFingerprint = connection.configurationFingerprint
   const scopeFingerprint = measurementScopeFingerprint({ ownerUserId, clientId: run.clientId, websiteOrigin: connection.canonicalOrigin, entryId: run.entryId, targetId: run.targetId, canonicalPage: run.canonicalPage, source: run.source, checkpointDays: run.checkpointDays })
+  if (lineage.evidenceKind === 'site_publication_confirmation') {
+    const scheduledFingerprint = measurementInputFingerprint({ ownerUserId, connectionId: connection.id, entryId: run.entryId, targetId: run.targetId, source: run.source,
+      checkpointDays: run.checkpointDays, publicationReceiptFingerprint: lineage.publicationReceiptFingerprint, canonicalPage: lineage.canonicalPage,
+      contentHash: lineage.contentHash, evidenceSnapshotHash: lineage.evidenceSnapshotHash, scopeFingerprint,
+      baselineStart: run.baselineWindowStart.toISOString(), baselineEnd: run.baselineWindowEnd.toISOString(),
+      followUpStart: run.followUpWindowStart.toISOString(), followUpEnd: run.followUpWindowEnd.toISOString(), dueAt: run.dueAt.toISOString(),
+      evidenceKind: lineage.evidenceKind, confirmationFingerprint: lineage.confirmationFingerprint, draftId: lineage.draftId, draftVersion: lineage.draftVersion,
+      connectionConfigurationFingerprint: initialConnectionFingerprint })
+    if (scheduledFingerprint !== run.inputFingerprint) return { state: 'blocked', assessment: null, errorCode: 'STALE_SITE_MEASUREMENT_CONFIGURATION' }
+  }
   const results: MeasurementAdapterResult[] = []
   for (const phase of ['baseline', 'follow_up'] as const) {
     const existing = await repository.findSnapshot(ownerUserId, run.id, phase)
     if (existing) continue
-    const result = await collectPhase(ownerUserId, run, connection, phase, dependencies, scopeFingerprint)
+    const beforeLineage = await freshRunLineage(ownerUserId, run, contentRepository, dependencies)
+    const beforeConnection = await repository.findConnection(ownerUserId, connection.id)
+    if (!matchesRunLineage(run, beforeLineage) || !beforeConnection || beforeConnection.ownerUserId !== ownerUserId || beforeConnection.status !== 'configured'
+      || beforeConnection.configurationFingerprint !== initialConnectionFingerprint || !connectionMatchesLineage(beforeConnection, beforeLineage)) {
+      return { state: 'blocked', assessment: null, errorCode: staleLineageCode(run, beforeLineage) }
+    }
+    const proofBefore = await currentSiteLearningProof(ownerUserId, beforeLineage, contentRepository, dependencies)
+    const result = await collectPhase(ownerUserId, run, beforeConnection, phase, dependencies, scopeFingerprint)
     if (result.status !== 'succeeded') {
-      if ('code' in result && ['NEEDS_REAUTHORIZATION', 'TOKEN_EXPIRED', 'REQUIRED_SCOPE_MISSING'].includes(result.code)) await repository.updateConnection(ownerUserId, connection.id, { status: 'needs_reauthorization' })
-      if (result.status === 'insufficient_data') return { state: 'insufficient_data', assessment: await assessMeasurementOutcome(ownerUserId, run, repository, contentRepository, dependencies.now || new Date()), errorCode: result.reasonCode }
+      if ('code' in result && ['NEEDS_REAUTHORIZATION', 'TOKEN_EXPIRED', 'REQUIRED_SCOPE_MISSING'].includes(result.code)) {
+        const currentConnection = await repository.findConnection(ownerUserId, connection.id)
+        const currentLineage = lineage.evidenceKind === 'site_publication_confirmation'
+          ? await freshRunLineage(ownerUserId, run, contentRepository, dependencies)
+          : lineage
+        if (currentConnection && currentConnection.ownerUserId === ownerUserId && currentConnection.status === 'configured'
+          && currentConnection.configurationFingerprint === initialConnectionFingerprint && currentLineage
+          && connectionMatchesLineage(currentConnection, currentLineage)) {
+          await repository.updateConnection(ownerUserId, connection.id, { status: 'needs_reauthorization' })
+        }
+      }
+      if (result.status === 'insufficient_data') {
+        lineage = await freshRunLineage(ownerUserId, run, contentRepository, dependencies)
+        const currentConnection = await repository.findConnection(ownerUserId, connection.id)
+        if (!matchesRunLineage(run, lineage) || !currentConnection || currentConnection.ownerUserId !== ownerUserId || currentConnection.status !== 'configured' || currentConnection.configurationFingerprint !== initialConnectionFingerprint || !connectionMatchesLineage(currentConnection, lineage)) return { state: 'blocked', assessment: null, errorCode: staleLineageCode(run, lineage) }
+        return { state: 'insufficient_data', assessment: await assessMeasurementOutcome(ownerUserId, run, repository, contentRepository, dependencies.now || new Date(), lineage, dependencies), errorCode: result.reasonCode }
+      }
       return { state: result.status === 'retry_wait' && run.attemptNumber < MEASUREMENT_MAX_RETRY_ATTEMPTS ? 'retry_wait' : result.status === 'retry_wait' ? 'failed' : result.status, assessment: null, errorCode: result.code }
+    }
+    lineage = await freshRunLineage(ownerUserId, run, contentRepository, dependencies)
+    const afterConnection = await repository.findConnection(ownerUserId, connection.id)
+    if (!matchesRunLineage(run, lineage) || !afterConnection || afterConnection.ownerUserId !== ownerUserId || afterConnection.status !== 'configured'
+      || afterConnection.configurationFingerprint !== initialConnectionFingerprint || !connectionMatchesLineage(afterConnection, lineage)) {
+      return { state: 'blocked', assessment: null, errorCode: staleLineageCode(run, lineage) }
     }
     results.push(result)
     const snapshot = result.snapshot
-    await repository.insertSnapshot({ ownerUserId, runId: run.id, entryId: run.entryId, targetId: run.targetId, source: snapshot.source, phase: snapshot.phase, deidentifiedSubjectKey: snapshot.deidentifiedSubjectKey, scopeFingerprint: snapshot.scopeFingerprint, windowStart: new Date(snapshot.windowStart), windowEnd: new Date(snapshot.windowEnd), capturedAt: new Date(snapshot.capturedAt), sourceHash: snapshot.sourceHash, normalizedMetrics: snapshot.normalizedMetrics, providerProvenance: snapshot.providerProvenance, limitations: snapshot.limitations })
+    const proofAfter = await currentSiteLearningProof(ownerUserId, lineage, contentRepository, dependencies)
+    const learningProof = proofBefore && sameSiteLearningCollectionProof(proofBefore, proofAfter)
+      && lineage.evidenceKind === 'site_publication_confirmation'
+      && siteLearningCaptureAllowed(proofBefore, snapshot.capturedAt, lineage.confirmationFingerprint, dependencies.now || new Date()) ? proofBefore : null
+    const { siteLearningCollectionProof: _untrustedProof, ...providerMetadata } = snapshot.providerProvenance || {}
+    const providerProvenance = lineage.evidenceKind === 'site_publication_confirmation'
+      ? { ...providerMetadata, publicationEvidenceKind: lineage.evidenceKind, confirmationFingerprint: lineage.confirmationFingerprint,
+        ...(learningProof ? { siteLearningCollectionProof: learningProof } : {}) }
+      : snapshot.providerProvenance
+    await repository.insertSnapshot({ ownerUserId, runId: run.id, entryId: run.entryId, targetId: run.targetId, source: snapshot.source, phase: snapshot.phase, deidentifiedSubjectKey: snapshot.deidentifiedSubjectKey, scopeFingerprint: snapshot.scopeFingerprint, windowStart: new Date(snapshot.windowStart), windowEnd: new Date(snapshot.windowEnd), capturedAt: new Date(snapshot.capturedAt), sourceHash: snapshot.sourceHash, normalizedMetrics: snapshot.normalizedMetrics, providerProvenance, limitations: snapshot.limitations })
   }
-  if (connection.source !== 'llm_visibility' && (connection.status === 'needs_reauthorization' || !connection.connectedAt)) await repository.updateConnection(ownerUserId, connection.id, { status: 'configured', connectedAt: dependencies.now || new Date() })
-  const assessment = await assessMeasurementOutcome(ownerUserId, run, repository, contentRepository, dependencies.now || new Date())
+  if (connection.source !== 'llm_visibility' && (connection.status === 'needs_reauthorization' || !connection.connectedAt)) {
+    const currentConnection = await repository.findConnection(ownerUserId, connection.id)
+    const currentLineage = lineage.evidenceKind === 'site_publication_confirmation'
+      ? await freshRunLineage(ownerUserId, run, contentRepository, dependencies)
+      : lineage
+    const stillAuthorized = currentConnection && currentConnection.ownerUserId === ownerUserId && currentConnection.status === 'configured'
+      && currentConnection.configurationFingerprint === initialConnectionFingerprint && currentLineage
+      && connectionMatchesLineage(currentConnection, currentLineage)
+    if (stillAuthorized && !currentConnection.connectedAt) {
+      await repository.updateConnection(ownerUserId, connection.id, { connectedAt: dependencies.now || new Date() })
+    }
+  }
+  lineage = await freshRunLineage(ownerUserId, run, contentRepository, dependencies)
+  const finalConnection = await repository.findConnection(ownerUserId, connection.id)
+  if (!matchesRunLineage(run, lineage) || !finalConnection || finalConnection.ownerUserId !== ownerUserId || finalConnection.status !== 'configured'
+    || finalConnection.configurationFingerprint !== initialConnectionFingerprint || !connectionMatchesLineage(finalConnection, lineage)) return { state: 'blocked', assessment: null, errorCode: staleLineageCode(run, lineage) }
+  const assessment = await assessMeasurementOutcome(ownerUserId, run, repository, contentRepository, dependencies.now || new Date(), lineage, dependencies)
   return { state: 'succeeded', assessment, errorCode: undefined }
 }
 
@@ -381,7 +546,7 @@ export async function runMeasurementCollectionTick(ownerUserId: number, dependen
   const now = dependencies?.now || new Date()
   const entries = await contentRepository.listEntries(ownerUserId)
   let scheduled = 0
-  for (const entry of entries.filter(item => item.status === 'delivered' || item.status === 'completed').slice(0, 500)) {
+  for (const entry of entries.filter(item => item.status === 'delivered' || item.status === 'completed' || item.status === 'awaiting_site_review').slice(0, 500)) {
     try { scheduled += (await scheduleMeasurementForEntry(ownerUserId, entry.id, dependencies)).scheduled } catch { /* stale or invalid delivery is intentionally fail-closed */ }
   }
   const maxRuns = Math.max(1, Math.min(MEASUREMENT_MAX_RUNS_PER_TICK, Math.trunc(dependencies?.maxRuns || MEASUREMENT_MAX_RUNS_PER_TICK)))
@@ -417,10 +582,10 @@ export async function retryMeasurementRun(ownerUserId: number, runId: number, de
 export async function dryRunMeasurementForEntry(ownerUserId: number, entryId: number, dependencies?: ServiceDependencies) {
   const repository = getMeasurementRepository(dependencies)
   const contentRepository = getContentRepository(dependencies)
-  const lineages = await resolveDeliveredMeasurementLineages(ownerUserId, entryId, contentRepository)
-  if (!lineages.length) invalid('Measurement dry-run requires at least one validated delivered publication receipt.')
+  const lineages = await resolveMeasurementLineages(ownerUserId, entryId, contentRepository, dependencies, { fresh: false, now: dependencies?.now })
+  if (!lineages.length) invalid('Measurement dry-run requires a validated delivered receipt or owner-confirmed site publication lineage.')
   const connections = await repository.listConnections(ownerUserId)
-  return { entryId, targets: lineages.map(lineage => ({ targetId: lineage.targetId, canonicalPage: lineage.canonicalPage })), planned: lineages.flatMap(lineage => connections.filter(connection => connectionMatchesLineage(connection, lineage)).flatMap(connection => MEASUREMENT_CHECKPOINTS.map(checkpointDays => { const window = buildMeasurementWindow(lineage.publicationLocalDate, lineage.timeZone, checkpointDays, connection.sourceAvailabilityLagDays, dependencies?.now || new Date(), lineage.publishedAt); return { targetId: lineage.targetId, canonicalPage: lineage.canonicalPage, connectionId: connection.id, source: connection.source, checkpointDays, baselineWindow: { start: window.baselineStart.toISOString(), end: window.baselineEnd.toISOString() }, followUpWindow: { start: window.followUpStart.toISOString(), end: window.followUpEnd.toISOString() }, dueAt: window.dueAt.toISOString(), exactPageScope: lineage.canonicalPage, providerRequestPlanned: connection.source !== 'llm_visibility' } }))), limitations: [...BASE_LIMITATIONS, 'dry-run does not call external providers or resolve credentials'] }
+  return { entryId, targets: lineages.map(lineage => ({ targetId: lineage.targetId, canonicalPage: lineage.canonicalPage, evidenceKind: lineage.evidenceKind })), planned: lineages.flatMap(lineage => connections.filter(connection => connectionMatchesLineage(connection, lineage)).flatMap(connection => MEASUREMENT_CHECKPOINTS.map(checkpointDays => { const window = buildMeasurementWindow(lineage.publicationLocalDate, lineage.timeZone, checkpointDays, connection.sourceAvailabilityLagDays, dependencies?.now || new Date(), lineage.publishedAt); return { targetId: lineage.targetId, canonicalPage: lineage.canonicalPage, evidenceKind: lineage.evidenceKind, connectionId: connection.id, source: connection.source, checkpointDays, baselineWindow: { start: window.baselineStart.toISOString(), end: window.baselineEnd.toISOString() }, followUpWindow: { start: window.followUpStart.toISOString(), end: window.followUpEnd.toISOString() }, dueAt: window.dueAt.toISOString(), exactPageScope: lineage.canonicalPage, providerRequestPlanned: connection.source !== 'llm_visibility' } }))), limitations: [...BASE_LIMITATIONS, 'dry-run does not call external providers, credentials, or signed website status endpoints'] }
 }
 
 export async function dryRunMeasurementRun(ownerUserId: number, runId: number, dependencies?: ServiceDependencies) {

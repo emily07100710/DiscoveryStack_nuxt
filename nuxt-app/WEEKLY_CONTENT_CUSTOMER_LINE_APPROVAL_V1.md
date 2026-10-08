@@ -2,6 +2,8 @@
 
 本功能使用既有 Content Operations 的客戶、經營策略、核准來源、選題與正式發布器。它不要求建立付費 Managed Site 專案，也不使用客戶按鈕假造 owner 的 SEO 審核。
 
+目前發布狀態（2026-10-08）：排程游標 migration 0050 與相應程式已套用並 Live；[發布與首次啟用核對](docs/CONFIGURATION_READY_LAUNCH.md#2026-10-08-release-and-activation-checklist)記錄正式驗收。這不代表 LINE 已設定或週更已啟用；全域排程仍關閉，真實客戶流程尚待授權與驗收。
+
 ## 真正的順序
 
 1. Owner 先核對或建立自己名下的 active 客戶及公司網站，即可發出身分綁定邀請；此步不要求已有每週文章配置、發布目標或 V4 政策。
@@ -26,7 +28,7 @@
 - 背景 tick 另需既有 `NUXT_CONTENT_OPERATIONS_SCHEDULER_ENABLED` 精確為 `true`；註冊 cron 不代表啟用。所有旗標及金鑰僅 server 使用。 此開關同時放行既有 Content Operations materialize／execution 背景工作，不是單一客戶開關；正式開啟前必須盤點同 owner 已啟用客戶、政策、待處理 entries 與費用範圍。
 - 固定每五分鐘觸發一次 weekly tick；全域 worker 以該 owner 的持久配置游標，按穩定配置 ID 讀取目前 active 配置，每輪最多十位客戶、尾端回繞，paused/revoked 不占處理名額。候選選取與游標前移共用一個短 SQL 交易及 exact-owner row lock，不把 AI、LINE 或發布放進該交易；commit 失敗不能開始處理。第 51 筆以後不再被清單上限永久排除，程序重啟不會重設游標，但游標本身不是作業租約、同意、成本或發布權限。每位客戶開始處理前重新查目前配置；owner、ID、政策、目標、指紋或 active 狀態漂移即停止該客戶。通知仍最多十筆。擁有人介面 `listConfigs` 的五十筆讀取上限不是 worker 的選取來源。
 - 每週流程的日曆在 SQL `LIMIT` 前以 owner/client 限縮，不再從 owner 全域前一百筆中事後篩客戶。每位客戶的歷史上限仍為一百張；多讀一筆作截斷哨兵，若無法證明歷史完整就停止排程，不能把已用選題或預算當成未使用。這不是無上限歷史或大規模 worker fleet 的承諾。
-- 持久游標需要另行審查及套用新增式 `0050`；未套用時保持全域 scheduler 關閉。任何新增式 migration 都不由啟動自動套用。公平候選選取不證明主機持續運作、準時送稿、睡眠期間補跑或每次只產生一篇；仍需獨立主機與真實範圍驗收。游標及候選選取契約見 [Scheduler Cursor V1](WEEKLY_CONTENT_SCHEDULER_CURSOR_V1.md)。
+- 持久游標的新增式 migration `0050` 已套用；migration 不會由啟動自動套用，套用也不會打開全域 scheduler。任何正式執行仍須另行審查、盤點全域工作影響並明確授權。公平候選選取不證明主機持續運作、準時送稿、睡眠期間補跑或每次只產生一篇；仍需獨立主機與真實範圍驗收。游標及候選選取契約見 [Scheduler Cursor V1](WEEKLY_CONTENT_SCHEDULER_CURSOR_V1.md)。
 - `NUXT_WEEKLY_CONTENT_TOKEN_KEY` 至少 32 bytes；HMAC 派生的 read/action token 只存 hash，變更 token key 後舊派生 token 無法重新送出或使用。
 - `requireCustomerApproval` 為 server-owned client flag，預設 false。舊客戶不查 weekly 表。已 opt-in 客戶即使功能關閉、配置暫停／撤銷或資料缺失，仍 fail closed，不能回到無客戶同意的發文路徑。
 - 七張 weekly 表保存配置、邀約 hash、私密 sender binding、精確審稿 request、append-only decision、LINE outbox 與 verified semantic event inbox。不得保存原始 webhook、LINE/channel keys 或 raw action/read token 到事件或公開 DTO。
@@ -46,4 +48,4 @@ Login／LIFF 與 Messaging API 必須使用同一 LINE Provider，並核對連�
 
 本機測試涵蓋 disabled 零 I/O、owner/sender 隔離、未配置文章服務的身分綁定、公司明確確認與 own-company 清單、綁定不寫文章設定或同意、簽章至真服務同意、read-only 預覽、並行重送、版本／類型／語言／來源／政策／風險變更、暫停、精確 TTL、同意撤回、過期重開、不可變 outbox、SQL 租約條件與 V4 原稿續租。
 
-真實 LINE 官方帳號、資料庫 migration、正式 AI 成本、Do 接收器部署、真實客戶推播／同意／自動發布，以及 Google/AI 搜尋成效尚需分別設定、核准及實測；本機／mock PASS 不代表以上已完成。
+真實 LINE 官方帳號、正式 AI 成本、Do 接收器部署、真實客戶推播／同意／自動發布，以及 Google／AI 搜尋成效尚需分別設定、核准及實測；0050 已套用不等於這些流程已完成，本機／mock PASS 也不代表以上已完成。

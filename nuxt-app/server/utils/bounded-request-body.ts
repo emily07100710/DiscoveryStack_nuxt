@@ -1,5 +1,5 @@
 import { assertMethod, createError, getRequestHeader, readBody, type H3Event } from 'h3'
-import type { Readable } from 'node:stream'
+import { Readable } from 'node:stream'
 
 const RAW_BODY = Symbol.for('h3RawBody')
 const PARSED_BODY = Symbol.for('h3ParsedBody')
@@ -36,8 +36,10 @@ function stopNodeStream(event: H3Event, stream: Readable) {
   else response.once('finish', destroy).once('close', destroy)
 }
 
-function readNodeStream(event: H3Event, stream: Readable, options: BodyOptions): Promise<Buffer> {
-  if ((stream as Readable & { aborted?: boolean }).aborted || stream.destroyed || stream.readableEnded) return Promise.reject(aborted())
+function readNodeStream(event: H3Event, stream: Readable, options: BodyOptions, rejectDisturbed = false): Promise<Buffer> {
+  if ((stream as Readable & { aborted?: boolean }).aborted) return Promise.reject(aborted())
+  if (rejectDisturbed && Readable.isDisturbed(stream)) return Promise.reject(createError({ statusCode: options.invalidStatusCode, statusMessage: options.invalidMessage }))
+  if (stream.destroyed || stream.readableEnded) return Promise.reject(aborted())
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let bytes = 0
@@ -100,13 +102,20 @@ function assertFormDataSize(form: FormData, options: BodyOptions) {
   }
 }
 
-async function materialize(event: H3Event, source: unknown, options: BodyOptions, rawOnly = false): Promise<Buffer | undefined> {
+async function materialize(event: H3Event, source: unknown, options: BodyOptions, rawOnly = false, rejectDisturbed = false): Promise<Buffer | undefined> {
   const value = await source
   if (value === undefined || value === null) return undefined
   if (Buffer.isBuffer(value)) { checkSize(value.byteLength, options); return value }
-  if (typeof (value as ReadableStream).getReader === 'function') return readWebStream(value as ReadableStream<Uint8Array>, options)
-  if (typeof (value as Readable).pipe === 'function') return readNodeStream(event, value as Readable, options)
+  if (typeof (value as ReadableStream).getReader === 'function') {
+    if (rejectDisturbed && Readable.isDisturbed(value as never)) return invalid(options)
+    return readWebStream(value as ReadableStream<Uint8Array>, options)
+  }
+  if (typeof (value as Readable).pipe === 'function') {
+    if (rejectDisturbed && Readable.isDisturbed(value as never)) return invalid(options)
+    return readNodeStream(event, value as Readable, options, rejectDisturbed)
+  }
   if (typeof (value as ReadableStream).pipeTo === 'function') {
+    if (rejectDisturbed && Readable.isDisturbed(value as never)) return invalid(options)
     const chunks: Buffer[] = []; let bytes = 0
     await (value as ReadableStream<Uint8Array>).pipeTo(new WritableStream({ write(chunk: Uint8Array) { checkSize(bytes + chunk.byteLength, options); const buffer = Buffer.from(chunk); bytes += buffer.byteLength; chunks.push(buffer) } }))
     return Buffer.concat(chunks, bytes)
@@ -144,7 +153,7 @@ export async function readBoundedRequestRawBody(event: H3Event, options: BodyOpt
     const source = event._requestBody || event.web?.request?.body || request[RAW_BODY] || request.rawBody || request.body
     const hasIncomingBody = Boolean(Number.parseInt(String(request.headers['content-length'] || ''))) || /\bchunked\b/iu.test(String(request.headers['transfer-encoding'] || ''))
     if (!source && PARSED_BODY in request) return invalid(options)
-    const raw = source ? materialize(event, source, options, true) : hasIncomingBody ? readNodeStream(event, request, options) : Promise.resolve(Buffer.alloc(0))
+    const raw = source ? materialize(event, source, options, true, true) : hasIncomingBody ? readNodeStream(event, request, options, true) : Promise.resolve(Buffer.alloc(0))
     request[BOUNDED_RAW_BODY] = raw
     request[RAW_BODY] = raw
   }
@@ -168,6 +177,21 @@ export async function readBoundedRequestBody(event: H3Event, options: BodyOption
   }
   // readBody returns this cache first, even when its value is undefined or a promise.
   if (PARSED_BODY in request) {
+    if (!request[BOUNDED_RAW_BODY]) {
+      // h3 may have parsed the body before this bounded reader ran. Preserve its parsed
+      // value as authoritative, but independently enforce the original bytes when retained.
+      const source = request[RAW_BODY] || event._requestBody || event.web?.request?.body || request.rawBody || request.body
+      const hasIncomingBody = Boolean(Number.parseInt(String(request.headers['content-length'] || ''))) || /\bchunked\b/iu.test(String(request.headers['transfer-encoding'] || ''))
+      if (source) request[BOUNDED_RAW_BODY] = materialize(event, source, options, false, true)
+      else if (hasIncomingBody) {
+        if (request.destroyed || request.readableEnded || Readable.isDisturbed(request)) return invalid(options)
+        request[BOUNDED_RAW_BODY] = readNodeStream(event, request, options)
+      }
+    }
+    if (request[BOUNDED_RAW_BODY]) {
+      const original = await request[BOUNDED_RAW_BODY]
+      if (original) checkSize(original.byteLength, options)
+    }
     const parsed = await request[PARSED_BODY]
     const serialized = jsonBytes(parsed, options)
     if (serialized !== undefined) checkSize(Buffer.byteLength(serialized, 'utf8'), options)
@@ -180,7 +204,7 @@ export async function readBoundedRequestBody(event: H3Event, options: BodyOption
     const hasIncomingBody = Boolean(Number.parseInt(String(request.headers['content-length'] || ''))) || /\bchunked\b/iu.test(String(request.headers['transfer-encoding'] || ''))
     // Preserve h3's absent-body distinction (text/* yields undefined, framed empty text yields '').
     if (!source && !hasIncomingBody) return readBody(event)
-    const raw = source ? materialize(event, source, options) : readNodeStream(event, request, options)
+    const raw = source ? materialize(event, source, options, false, true) : readNodeStream(event, request, options, true)
     request[BOUNDED_RAW_BODY] = raw
     request[RAW_BODY] = raw
   }

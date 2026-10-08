@@ -1,4 +1,5 @@
 import type { CitationStatus, DatasetStatus, Engine, InterfaceName, LabelBasis, ModelFamily, ModelStatus, ObservableStatus, RetrievalStatus, TaskType, VerificationStatus } from './constants'
+import type { DatasetKnowledgeAuthority, DatasetKnowledgeState, DatasetKnowledgeApprovalReference, DatasetKnowledgeAuthoritySummary } from './knowledge-authority-types'
 
 export type Nullable<T> = T | null
 
@@ -164,6 +165,8 @@ export interface DatasetManifest {
   status: DatasetStatus
   ownerUserId: number
   createdAt: string
+  /** Read-time projection only, excluded from the immutable manifest fingerprint. */
+  knowledgeAuthority?: DatasetKnowledgeAuthoritySummary
 }
 
 export interface TrainingConfig {
@@ -239,6 +242,9 @@ export interface ModelArtifact {
   ownerUserId: number
   status: ModelStatus
   revokedAt: string | null
+  /** Missing on legacy artifacts; never grants current use authority. */
+  datasetDecisionId?: string
+  knowledgeAuthorityFingerprint?: string
 }
 
 export interface ModelDecision {
@@ -264,6 +270,13 @@ export interface DatasetDecision {
   reason: string
   manifestFingerprint: string
   createdAt: string
+  /** Null/absent is legacy not_declared, not an implicit no-dependency declaration. */
+  knowledgeAuthority?: DatasetKnowledgeAuthority | null
+}
+
+/** Owner-facing history is a receipt, not current execution authority. */
+export type DatasetDecisionSummary = Omit<DatasetDecision, 'knowledgeAuthority'> & {
+  knowledgeAuthority: Pick<DatasetKnowledgeAuthority, 'mode' | 'authorityFingerprint'> & { activePinCount: number } | null
 }
 
 export interface ExperimentalPrediction {
@@ -300,7 +313,7 @@ export interface WorkspaceSummary {
   datasets: DatasetManifest[]
   trainingRuns: TrainingRun[]
   models: ModelArtifactSummary[]
-  datasetDecisions: DatasetDecision[]
+  datasetDecisions: DatasetDecisionSummary[]
   decisions: ModelDecision[]
 }
 
@@ -387,6 +400,8 @@ export interface TrainingRun {
   leaseOwner: string | null
   leaseExpiresAt: string | null
   version: number
+  datasetDecisionId?: string
+  knowledgeAuthorityFingerprint?: string
 }
 
 export interface ModelArtifactSummary {
@@ -405,6 +420,8 @@ export interface ModelArtifactSummary {
   limitations: string[]
   rollbackArtifactHash: string | null
   revokedAt: string | null
+  datasetDecisionId?: string
+  knowledgeAuthorityFingerprint?: string
 }
 
 export interface GeoOutcomeRepositoryPort {
@@ -417,7 +434,8 @@ export interface GeoOutcomeRepositoryPort {
   getDataset(ownerUserId: number, manifestId: string): Promise<DatasetManifest | null>
   getDatasetMembers(ownerUserId: number, manifestId: string): Promise<DatasetMember[]>
   saveDatasetTransactional(ownerUserId: number, manifest: DatasetManifest, members: DatasetMember[]): Promise<DatasetManifest>
-  transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetStatus, reviewerUserId: number | null, reason: string): Promise<{ manifest: DatasetManifest, decision: DatasetDecision }>
+  transitionDatasetWithDecision(ownerUserId: number, manifestId: string, status: DatasetStatus, reviewerUserId: number | null, reason: string, knowledgeAuthority?: DatasetKnowledgeAuthority | null): Promise<{ manifest: DatasetManifest, decision: DatasetDecision }>
+  readDatasetKnowledgeState(ownerUserId: number, manifestId: string, lock?: boolean): Promise<DatasetKnowledgeState>
   listDatasetDecisions(ownerUserId: number): Promise<DatasetDecision[]>
   createTrainingRun(ownerUserId: number, run: TrainingRun): Promise<TrainingRun>
   getTrainingRun(ownerUserId: number, trainingRunId: string): Promise<TrainingRun | null>
@@ -440,6 +458,7 @@ export interface GeoOutcomeRepositoryPort {
 export interface MemoryGeoOutcomeRepository extends GeoOutcomeRepositoryPort {
   exportState(): MemoryGeoOutcomeState
   seedAuthoritativeEvidence(source: AuthoritativeEvidenceSource): void
+  seedDatasetKnowledgeState(state: DatasetKnowledgeState): void
 }
 
 export interface AuthoritativeEvidenceSource {
@@ -476,6 +495,7 @@ export interface AuthoritativeEvidenceSource {
 }
 
 export interface MemoryGeoOutcomeState {
+  datasetKnowledgeStates?: DatasetKnowledgeState[]
   observations: OutcomeObservation[]
   datasets: DatasetManifest[]
   datasetMembers: Record<string, DatasetMember[]>
