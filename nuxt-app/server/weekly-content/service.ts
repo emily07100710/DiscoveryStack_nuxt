@@ -6,7 +6,9 @@ import type { WeeklyConfig, WeeklyReviewRequest, WeeklyOwnerConfig, WeeklyDecisi
 import { weeklyRequestMatchesCurrent, weeklyConsentAllowsPublication } from './publication-guard'
 export type WeeklyContentDependencies = { repository: WeeklyContentRepository; featureEnabled: boolean; tokenKey: string; now?: Date }
 export const LINE_IDENTITY_BINDING_PURPOSE = 'identity_binding' as const
+export const REPLACE_LINE_RECIPIENT_CONFIRMATION = 'REPLACE_LINE_RECIPIENT' as const
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+export const lineBindingFingerprint = (ownerUserId: number, clientId: number, lineUserId: string, invitationHash: string) => hash(JSON.stringify({owner:ownerUserId,client:clientId,recipient:lineUserId,invitation:invitationHash}))
 const error = (code: string, statusCode = 409): never => { throw createError({ statusCode, statusMessage: code }) }
 const bounded = (value: unknown, max = 128): string => { if (typeof value !== 'string' || !value || value.length > max) return error('WEEKLY_INPUT_INVALID',422); return value }
 const opaque = (prefix: string) => prefix + randomBytes(24).toString('base64url')
@@ -76,6 +78,36 @@ export async function issueLineBindingInvite(input: { ownerUserId: number; clien
     return { purpose:LINE_IDENTITY_BINDING_PURPOSE, invitationToken, expiresAt:expiresAt.toISOString() }
   })
 }
+/** Explicit owner-only recipient replacement. The prior private LINE id is retained only in storage and never projected. */
+export async function replaceLineBinding(input: { ownerUserId: number; clientId: number; confirmation: typeof REPLACE_LINE_RECIPIENT_CONFIRMATION }, deps: WeeklyContentDependencies) {
+  if(input.confirmation!==REPLACE_LINE_RECIPIENT_CONFIRMATION)return error('WEEKLY_LINE_REPLACEMENT_CONFIRMATION_REQUIRED',422)
+  enabled(deps)
+  return deps.repository.transaction(async repo=>{
+    const client=await repo.findClient(input.ownerUserId,input.clientId,true)
+    if(!client || client.ownerUserId!==input.ownerUserId || client.id!==input.clientId || client.status!=='active')return error('WEEKLY_CLIENT_NOT_AVAILABLE',404)
+    const now=clock(deps)
+    if(!Number.isFinite(now.getTime()))return error('WEEKLY_CLOCK_INVALID',422)
+    const invitationToken=opaque('wli_'),tokenHash=hash(invitationToken),expiresAt=new Date(now.getTime()+10*60*1000)
+    // Keep the same client -> invitation -> binding lock order used by LIFF confirmation.
+    // If no replaceable binding exists, the transaction rolls the invitation expiry back.
+    await repo.expireInvitations(input.ownerUserId,input.clientId,now)
+    const current=await repo.getBinding(input.ownerUserId,input.clientId,true)
+    if(!current || current.ownerUserId!==input.ownerUserId || current.clientId!==input.clientId || current.status!=='active')return error('WEEKLY_ACTIVE_LINE_BINDING_REQUIRED')
+    const previousFingerprint=current.bindingFingerprint
+    const activeRequest=await repo.findActiveRequest(input.ownerUserId,input.clientId,now)
+    if(activeRequest && await repo.hasReservedPublication(input.ownerUserId,activeRequest.jobId,activeRequest.draftId))return error('WEEKLY_PUBLICATION_ALREADY_RESERVED')
+    // Lock every unsent notification before revoking. A claimed delivery is not safe to
+    // replace; queued/retry rows stay fenced until this transaction cancels them.
+    const unsent=await repo.lockUnsentOutboxForBinding(input.ownerUserId,input.clientId,current.id)
+    if(unsent.some(row=>row.status==='processing'))return error('WEEKLY_LINE_DELIVERY_IN_PROGRESS')
+    const revokedFingerprint=hash(JSON.stringify({purpose:'weekly-line-binding-revocation-v1',owner:input.ownerUserId,client:input.clientId,previous:previousFingerprint,invitation:tokenHash,at:now.toISOString()}))
+    if(!await repo.revokeBinding(input.ownerUserId,input.clientId,previousFingerprint,revokedFingerprint,now))return error('WEEKLY_LINE_BINDING_CHANGED')
+    await repo.revokeOpenRequestsForBinding(input.ownerUserId,input.clientId,current.id,previousFingerprint,now)
+    await repo.cancelUnsentOutboxForBinding(input.ownerUserId,input.clientId,current.id,now)
+    await repo.insertInvitation({ownerUserId:input.ownerUserId,clientId:input.clientId,tokenHash,expiresAt,consumedAt:null,bindingFingerprint:null,eventHash:null})
+    return {purpose:LINE_IDENTITY_BINDING_PURPOSE,invitationToken,expiresAt:expiresAt.toISOString()}
+  })
+}
 async function replayInbox(repo: WeeklyContentRepository, eventHash: string, fingerprint: string) {
   const prior=await repo.findInbox(eventHash)
   if (!prior) return null
@@ -110,7 +142,9 @@ export async function claimLineBindingInvite(input: VerifiedLineIdentity & { inv
     if (!client || client.ownerUserId!==candidate.ownerUserId || client.id!==candidate.clientId || client.status!=='active')return error('WEEKLY_CLIENT_NOT_AVAILABLE',404)
     const invite=await repo.findInvitation(hash(input.invitationToken),true)
     if(!invite || invite.ownerUserId!==client.ownerUserId || invite.clientId!==client.id)return error('WEEKLY_INVITATION_EXPIRED')
-    const fingerprint=hash(JSON.stringify({ owner:invite.ownerUserId,client:invite.clientId,recipient:input.lineUserId }))
+    // Invitation lineage makes every successful (re)binding distinct, even when the same
+    // LINE account is bound again. Old review consent therefore cannot revive after replacement.
+    const fingerprint=lineBindingFingerprint(invite.ownerUserId,invite.clientId,input.lineUserId,invite.tokenHash)
     if(invite.consumedAt && invite.bindingFingerprint!==fingerprint)return error('WEEKLY_INVITATION_ALREADY_USED')
     const wasConsumed=Boolean(invite.consumedAt)
     const current=await repo.getBinding(invite.ownerUserId,invite.clientId,true)

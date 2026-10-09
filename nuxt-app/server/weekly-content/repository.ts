@@ -27,6 +27,10 @@ export interface WeeklyContentRepository {
   getBinding(ownerUserId: number, clientId: number, lock?: boolean): Promise<PrivateLineBinding | null>
   listActiveIdentityBindingsForLineUser(lineUserId: string, limit?: number): Promise<WeeklyIdentityBinding[]>
   saveBinding(row: InsertRow<PrivateLineBinding>): Promise<PrivateLineBinding>
+  revokeBinding(ownerUserId: number, clientId: number, expectedFingerprint: string, revokedFingerprint: string, now: Date): Promise<boolean>
+  revokeOpenRequestsForBinding(ownerUserId: number, clientId: number, bindingId: number, bindingFingerprint: string, now: Date): Promise<number>
+  lockUnsentOutboxForBinding(ownerUserId: number, clientId: number, bindingId: number): Promise<WeeklyOutbox[]>
+  cancelUnsentOutboxForBinding(ownerUserId: number, clientId: number, bindingId: number, now: Date): Promise<number>
   getRequest(requestId: string, lock?: boolean): Promise<WeeklyReviewRequest | null>
   findLatestRequestForEntry(ownerUserId: number, clientId: number, entryId: number): Promise<WeeklyReviewRequest|null>
   getOutboxForRequest(requestRowId: number): Promise<WeeklyOutbox|null>
@@ -137,6 +141,19 @@ function makeRepository(database: any, transactional = false): WeeklyContentRepo
       .where(and(eq(bindings.lineUserId, lineUserId), eq(bindings.status, 'active'), eq(contentOperationClients.status, 'active')))
       .orderBy(asc(bindings.id)).limit(Math.max(1, Math.min(20, limit))),
     async saveBinding(row) { await database.insert(bindings).values(row).onDuplicateKeyUpdate({ set: row }); return (await repository.getBinding(row.ownerUserId, row.clientId))! },
+    async revokeBinding(owner, client, expectedFingerprint, revokedFingerprint, now) {
+      const result=await database.update(bindings).set({status:'revoked',bindingFingerprint:revokedFingerprint,updatedAt:now}).where(and(eq(bindings.ownerUserId,owner),eq(bindings.clientId,client),eq(bindings.status,'active'),eq(bindings.bindingFingerprint,expectedFingerprint)))
+      return Number(result?.[0]?.affectedRows || 0)===1
+    },
+    async revokeOpenRequestsForBinding(owner,client,bindingId,bindingFingerprint,now) {
+      const result=await database.update(requests).set({status:'revoked',updatedAt:now}).where(and(eq(requests.ownerUserId,owner),eq(requests.clientId,client),eq(requests.bindingId,bindingId),eq(requests.bindingFingerprint,bindingFingerprint),or(eq(requests.status,'pending'),eq(requests.status,'approved'))))
+      return Number(result?.[0]?.affectedRows || 0)
+    },
+    lockUnsentOutboxForBinding: (owner,client,bindingId) => database.select().from(outbox).where(and(eq(outbox.ownerUserId,owner),eq(outbox.clientId,client),eq(outbox.bindingId,bindingId),or(eq(outbox.status,'queued'),eq(outbox.status,'retry_wait'),eq(outbox.status,'processing')))).orderBy(asc(outbox.id)).for('update'),
+    async cancelUnsentOutboxForBinding(owner,client,bindingId,now) {
+      const result=await database.update(outbox).set({status:'cancelled',leaseToken:null,leaseExpiresAt:null,retryEligibleAt:null,errorCode:'line_recipient_replaced',updatedAt:now}).where(and(eq(outbox.ownerUserId,owner),eq(outbox.clientId,client),eq(outbox.bindingId,bindingId),or(eq(outbox.status,'queued'),eq(outbox.status,'retry_wait'))))
+      return Number(result?.[0]?.affectedRows || 0)
+    },
     getRequest: (id, lock) => one(requests, eq(requests.requestId, id), lock),
     async findLatestRequestForEntry(owner,client,entry) { const [row]=await database.select().from(requests).where(and(eq(requests.ownerUserId,owner),eq(requests.clientId,client),eq(requests.entryId,entry))).orderBy(desc(requests.id)).limit(1);return row || null },
     getOutboxForRequest: id=>one(outbox,eq(outbox.requestRowId,id)),

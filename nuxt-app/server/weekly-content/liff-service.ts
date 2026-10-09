@@ -3,7 +3,7 @@ import { createError, getRequestHeader, setResponseHeaders, type H3Event } from 
 import { z, ZodError } from 'zod'
 import { readBoundedRequestBody } from '../utils/bounded-request-body'
 import { createWeeklyContentRepository, type WeeklyContentRepository } from './repository'
-import { claimLineBindingInvite, LINE_IDENTITY_BINDING_PURPOSE } from './service'
+import { claimLineBindingInvite, lineBindingFingerprint, LINE_IDENTITY_BINDING_PURPOSE } from './service'
 import { verifyWeeklyLiffIdentity, type VerifiedWeeklyLiffIdentity } from './liff-identity'
 import type { ContentOperationClientRow } from '../content-operations/types'
 import type { LineBindingInvitation } from './types'
@@ -53,7 +53,7 @@ async function invitationContext(repo: WeeklyContentRepository, raw: string, ide
   const now = getNow()
   if (identity.expiresAtSeconds <= Math.floor(now.getTime() / 1000)) return fail('LINE_IDENTITY_INVALID', 401)
   if (!invite || !client || client.ownerUserId !== first.ownerUserId || client.id !== first.clientId || invite.ownerUserId !== client.ownerUserId || invite.clientId !== client.id || client.status !== 'active' || invite.expiresAt.getTime() <= now.getTime()) return fail('LIFF_INVITATION_NOT_AVAILABLE', 409)
-  const fingerprint = hash(JSON.stringify({ owner: invite.ownerUserId, client: invite.clientId, recipient: identity.lineUserId }))
+  const fingerprint = lineBindingFingerprint(invite.ownerUserId, invite.clientId, identity.lineUserId, invite.tokenHash)
   if (binding?.status === 'active' && binding.lineUserId !== identity.lineUserId || invite.consumedAt && (invite.bindingFingerprint !== fingerprint || binding?.status !== 'active' || binding.bindingFingerprint !== fingerprint)) return fail('LIFF_INVITATION_NOT_AVAILABLE', 409)
   return { invite, client, company: company(client) }
 }

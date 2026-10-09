@@ -39,8 +39,9 @@ function ownerContext(change: Record<string, unknown> = {}) {
   return {
     workspace: { readiness: { enabled: true, lineConfigured: true, schedulerEnabled: false }, clients: [client], configs: [], requests: [], plans: [], policies: [], calendars: [] },
     current: client, config: null, policies: [], selected: '1', policyId: '', invitation: null, hasCalendar: false,
+    replacementOpen: false, replacementConfirmed: false,
     pending: false, error: null, notice: '', failed: false, busy: false, planId: '', startDate: '2026-10-05', publishLocalTime: '10:00', monthlyArticleLimit: 4,
-    time: (value: string) => value, addDo: () => {}, invite: () => {}, requireApproval: () => {}, activate: () => {}, createCalendar: () => {}, pause: () => {}, refresh: () => {},
+    time: (value: string) => value, addDo: () => {}, invite: () => {}, openReplacement: () => {}, cancelReplacement: () => {}, replaceLineRecipient: () => {}, requireApproval: () => {}, activate: () => {}, createCalendar: () => {}, pause: () => {}, refresh: () => {},
     ...change,
   }
 }
@@ -71,6 +72,36 @@ describe('actual weekly owner and customer identity templates', () => {
     expect(html).toContain('客戶 LINE 已綁定（身分已連結）')
     expect(html).toContain('每週文章服務尚未啟用')
     expect(html).not.toContain('每週文章送審已啟用')
+    expect(html).not.toContain('產生客戶 LINE 綁定邀請</button>')
+    expect(button(html, '更換 LINE 收件人並產生新邀請')).not.toContain('disabled')
+  })
+  it('requires a second explicit confirmation before replacing a bound LINE recipient', async () => {
+    const current = { ...client, lineBound: true }
+    const unchecked = await renderPage('../pages/audit-lab/weekly-content.vue', ownerContext({ current, replacementOpen: true }))
+    expect(unchecked).toContain('現在綁定的 LINE 會立即失去')
+    expect(unchecked).toContain('所有尚未使用的舊邀請碼也會立即失效')
+    expect(unchecked).toContain('不會啟用、停用或更改文章服務、排程與文章發佈狀態')
+    expect(button(unchecked, '確認更換並產生新邀請')).toContain('disabled')
+    const checked = await renderPage('../pages/audit-lab/weekly-content.vue', ownerContext({ current, replacementOpen: true, replacementConfirmed: true }))
+    expect(button(checked, '確認更換並產生新邀請')).not.toContain('disabled')
+  })
+  it('uses the dedicated replacement endpoint and server confirmation literal without logging the invitation', () => {
+    const source = readFileSync(new URL('../pages/audit-lab/weekly-content.vue', import.meta.url), 'utf8')
+    expect(source).toContain('/replace-line-binding`')
+    expect(source).toContain("body:{confirmation:'REPLACE_LINE_RECIPIENT'}")
+    expect(source).toContain('current.value.lineBound||invitation.value')
+    expect(source).toContain('!replacementConfirmed.value||invitation.value')
+    expect(source).toContain('if(!replacementReturned){replacementOpen.value=false;replacementConfirmed.value=false}')
+    expect(source).toContain('目前無法確認 LINE 收件人是否已完成更換')
+    expect(source).not.toContain('原有綁定與文章設定維持不變')
+    expect(source).not.toMatch(/console\.(?:log|info|debug|warn|error)/)
+  })
+  it('does not offer another invitation mutation while the one-time replacement invite is visible', async () => {
+    const invitation = { purpose: 'identity_binding', invitationToken: 'synthetic-invite', expiresAt: '2026-10-05T00:10:00Z', connectUrl: 'https://example.test/connect' }
+    const html = await renderPage('../pages/audit-lab/weekly-content.vue', ownerContext({ invitation }))
+    expect(html).not.toContain('產生客戶 LINE 綁定邀請</button>')
+    expect(html).not.toContain('更換 LINE 收件人並產生新邀請</button>')
+    expect(html).toContain('一次性邀請碼（請私下交給指定客戶）')
   })
   it('keeps identity invitations available while only the weekly article service is paused', async () => {
     const html = await renderPage('../pages/audit-lab/weekly-content.vue', ownerContext({ config: { clientId: 1, status: 'paused', reviewTtlHours: 72 } }))

@@ -15,11 +15,12 @@ const selected=ref('');const policyId=ref('');const planId=ref('');const startDa
 const publishLocalTime=ref('10:00');const monthlyArticleLimit=ref(4);const busy=ref(false);const notice=ref('');const failed=ref(false)
 type Invitation={purpose:'identity_binding';invitationToken:string;expiresAt:string;connectUrl:string}
 const invitation=ref<Invitation|null>(null)
+const replacementOpen=ref(false);const replacementConfirmed=ref(false)
 const current=computed(()=>workspace.value.clients.find(c=>String(c.id)===selected.value))
 const config=computed(()=>workspace.value.configs.find(c=>String(c.clientId)===selected.value))
 const policies=computed(()=>workspace.value.policies.filter(p=>String(p.clientId)===selected.value && p.status==='enabled' && p.policyVersion==='governed-autopilot-policy-v4' && Date.parse(p.expiresAt)>Date.now()))
 const hasCalendar=computed(()=>workspace.value.calendars.some(c=>String(c.clientId)===selected.value && c.hasPendingArticle))
-watch(selected,()=>{policyId.value='';planId.value='';invitation.value=null;notice.value=''})
+watch(selected,()=>{policyId.value='';planId.value='';invitation.value=null;replacementOpen.value=false;replacementConfirmed.value=false;notice.value=''})
 const name=(id:number)=>workspace.value.clients.find(c=>c.id===id)?.displayName || '客戶'
 const time=(iso:string)=>new Date(iso).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})
 const requestStatus=(r:Request)=>r.publicationStatus==='awaiting_site_review'?'網站已收稿；發布結果請至內容工作台核驗':['delivered','completed'].includes(r.publicationStatus || '')?'已發佈':r.status==='changes_requested'?'客戶要求修改':r.status==='revoked'?'送審已取消':Date.parse(r.expiresAt)<=Date.now()?'送審已過期':r.status==='approved'?'已同意，等待發佈':'等待客戶確認'
@@ -29,7 +30,10 @@ async function addDo(){await act(async()=>{await fetchWeekly('/api/weekly-conten
 const activationKeys=new Map<string,string>()
 async function requireApproval(){if(!current.value)return;await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/require-approval`,{method:'POST',body:{consent:true}}),'已設定這位客戶每篇文章都要本人同意。接著可設定每週寫作與發文規則。')}
 async function activate(){const p=policies.value.find(p=>p.policyId===policyId.value);if(!p||!current.value)return;const key=`${current.value.id}:${p.policyId}`;let idempotencyKey=activationKeys.get(key);if(!idempotencyKey){idempotencyKey=crypto.randomUUID();activationKeys.set(key,idempotencyKey)}await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/activate`,{method:'POST',body:{publicationTargetId:p.publicationTargetId,policyId:p.policyId,reviewTtlHours:72,idempotencyKey}}),'每週文章送審已設定。寄稿仍需有效 LINE 綁定、核准選題與文章預算。')}
-async function invite(){if(!current.value||current.value.status!=='active')return;await act(async()=>{invitation.value=await fetchWeekly<Invitation>(`/api/weekly-content/clients/${current.value!.id}/invitation`,{method:'POST',body:{}})},'請把下方入口與一次性邀請碼私下交給這位客戶。這一步只綁定身分。','這一步尚未完成。請確認客戶仍有效，並檢查 LINE 連線與邀請設定後再試。')}
+async function invite(){if(!current.value||current.value.status!=='active'||current.value.lineBound||invitation.value)return;await act(async()=>{invitation.value=await fetchWeekly<Invitation>(`/api/weekly-content/clients/${current.value!.id}/invitation`,{method:'POST',body:{}})},'請把下方入口與一次性邀請碼私下交給這位客戶。這一步只綁定身分。','這一步尚未完成。請確認客戶仍有效，並檢查 LINE 連線與邀請設定後再試。')}
+function openReplacement(){if(!current.value||current.value.status!=='active'||!current.value.lineBound||invitation.value)return;replacementConfirmed.value=false;replacementOpen.value=true}
+function cancelReplacement(){replacementOpen.value=false;replacementConfirmed.value=false}
+async function replaceLineRecipient(){if(!current.value||current.value.status!=='active'||!current.value.lineBound||!replacementConfirmed.value||invitation.value)return;let replacementReturned=false;await act(async()=>{invitation.value=await fetchWeekly<Invitation>(`/api/weekly-content/clients/${current.value!.id}/replace-line-binding`,{method:'POST',body:{confirmation:'REPLACE_LINE_RECIPIENT'}});replacementReturned=true;replacementOpen.value=false;replacementConfirmed.value=false},'舊 LINE 的公司存取權已撤銷，所有舊邀請碼已失效。請立即把下方新邀請碼私下交給新的收件人；文章服務、排程與發佈狀態沒有改變。','目前無法確認 LINE 收件人是否已完成更換。請先按「更新進度」重新讀取狀態；若顯示尚未綁定，再產生一組新的邀請，且不要沿用舊邀請碼。文章服務、排程與發佈狀態不受影響。');if(!replacementReturned){replacementOpen.value=false;replacementConfirmed.value=false}}
 async function createCalendar(){if(!current.value||!planId.value)return;await act(()=>fetchWeekly(`/api/weekly-content/clients/${current.value!.id}/calendar`,{method:'POST',body:{productionPlanId:Number(planId.value),startDate:startDate.value,publishLocalTime:publishLocalTime.value,monthlyArticleLimit:monthlyArticleLimit.value}}),'每週寄稿時間已排好。系統會依序使用這份計畫中核准的選題。')}
 const reopenKeys=new Map<string,string>()
 const canReopen=(r:Request)=>!['delivered','completed','publishing','awaiting_site_review'].includes(r.publicationStatus || '') && ['pending','approved'].includes(r.status) && (Date.parse(r.expiresAt)<=Date.now() || (r.status==='pending' && ['failed','cancelled'].includes(r.notificationStatus || '')))
@@ -50,7 +54,16 @@ async function pause(){if(!current.value)return;await act(()=>fetchWeekly(`/api/
         <p v-if="current.status!=='active'">這位客戶目前未啟用，不能產生新邀請。</p>
         <p v-else>{{current.lineBound?'客戶 LINE 已綁定（身分已連結）':'客戶 LINE 尚未綁定'}}</p>
         <p>這一步只確認公司與 LINE 身分，不會啟用每週寫稿、安排寄稿或授權文章發佈。</p>
-        <button :disabled="busy || current.status!=='active'" @click="invite">產生客戶 LINE 綁定邀請</button>
+        <button v-if="!current.lineBound && !invitation" :disabled="busy || current.status!=='active'" @click="invite">產生客戶 LINE 綁定邀請</button>
+        <button v-else-if="current.lineBound && !invitation" :disabled="busy || current.status!=='active'" class="danger" @click="openReplacement">更換 LINE 收件人並產生新邀請</button>
+        <div v-if="replacementOpen" class="replace-panel" role="dialog" aria-modal="false" aria-labelledby="replace-line-title">
+          <h3 id="replace-line-title">確認更換 LINE 收件人</h3>
+          <p><strong>完成確認後，現在綁定的 LINE 會立即失去 {{current.displayName}} 的存取權，所有尚未使用的舊邀請碼也會立即失效。</strong></p>
+          <p>系統只會產生一組新的十分鐘邀請碼。這項操作不會啟用、停用或更改文章服務、排程與文章發佈狀態。</p>
+          <label class="confirm-check"><input v-model="replacementConfirmed" type="checkbox">我確認要撤銷目前 LINE 的存取權，並產生新的收件人邀請</label>
+          <button :disabled="busy || !replacementConfirmed" class="danger" @click="replaceLineRecipient">確認更換並產生新邀請</button>
+          <button :disabled="busy" class="secondary" @click="cancelReplacement">取消</button>
+        </div>
         <div v-if="invitation" class="invite"><p>請客戶加入「搜尋王」好友（@453ojflc），開啟下方入口，登入 LINE 後貼上邀請碼。確認公司名稱與網站正確，再同意連結身分。邀請只對應這位客戶，有效十分鐘。</p><a :href="invitation.connectUrl" target="_blank" rel="noopener noreferrer">開啟 LINE 客戶綁定</a><p>一次性邀請碼（請私下交給指定客戶）：</p><code>{{invitation.invitationToken}}</code><p>有效至 {{time(invitation.expiresAt)}}</p><p>綁定後，文章服務與費用範圍仍需另外核准；每篇原稿都需要客戶另行同意。</p></div>
       </section>
       <section v-if="current" class="card"><h2>{{current.displayName}} 的每週文章服務</h2>
@@ -67,5 +80,5 @@ async function pause(){if(!current.value)return;await act(()=>fetchWeekly(`/api/
   </div>
 </template>
 <style scoped>
-.weekly-page{max-width:1080px;margin:auto;padding:40px 24px;font-size:18px;line-height:1.7}h1{font-size:36px;margin:6px 0}h2{font-size:24px}h3{font-size:20px}.brand{color:#365da0;font-weight:700}.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:28px 0}.flow span,.card{background:white;border:1px solid #d9e2ef;border-radius:12px;padding:20px}.card{margin:20px 0}.card a{display:inline-block;margin:8px 18px 8px 0;color:#315da7}.error{background:#fff0ee;color:#9b2e21;padding:16px;border-radius:8px}label{display:grid;gap:6px;margin:16px 0;max-width:600px}select,input{font:inherit;padding:10px;border:1px solid #aebcd0;border-radius:6px}button{font:inherit;border:0;border-radius:8px;padding:10px 18px;background:#295d9b;color:white;margin:8px 12px 8px 0;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}.secondary{background:#e6ecf5;color:#23436b}.invite{padding:16px;background:#eff5ff;border-radius:8px}code{overflow-wrap:anywhere}li{display:grid;gap:4px;padding:18px 0;border-bottom:1px solid #d9e2ef}ul{padding:0;list-style:none}@media(max-width:700px){.flow{grid-template-columns:1fr 1fr}.weekly-page{padding:24px 16px}h1{font-size:30px}}
+.weekly-page{max-width:1080px;margin:auto;padding:40px 24px;font-size:18px;line-height:1.7}h1{font-size:36px;margin:6px 0}h2{font-size:24px}h3{font-size:20px}.brand{color:#365da0;font-weight:700}.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:28px 0}.flow span,.card{background:white;border:1px solid #d9e2ef;border-radius:12px;padding:20px}.card{margin:20px 0}.card a{display:inline-block;margin:8px 18px 8px 0;color:#315da7}.error{background:#fff0ee;color:#9b2e21;padding:16px;border-radius:8px}label{display:grid;gap:6px;margin:16px 0;max-width:600px}select,input{font:inherit;padding:10px;border:1px solid #aebcd0;border-radius:6px}button{font:inherit;border:0;border-radius:8px;padding:10px 18px;background:#295d9b;color:white;margin:8px 12px 8px 0;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}.secondary{background:#e6ecf5;color:#23436b}.danger{background:#9b2e21}.replace-panel{margin-top:16px;padding:18px;border:2px solid #c76053;border-radius:10px;background:#fff6f4}.replace-panel h3{margin-top:0;color:#7e271d}.confirm-check{display:flex;align-items:flex-start;gap:10px;max-width:760px}.confirm-check input{width:20px;height:20px;margin-top:6px;padding:0;flex:0 0 auto}.invite{padding:16px;background:#eff5ff;border-radius:8px}code{overflow-wrap:anywhere}li{display:grid;gap:4px;padding:18px 0;border-bottom:1px solid #d9e2ef}ul{padding:0;list-style:none}@media(max-width:700px){.flow{grid-template-columns:1fr 1fr}.weekly-page{padding:24px 16px}h1{font-size:30px}}
 </style>

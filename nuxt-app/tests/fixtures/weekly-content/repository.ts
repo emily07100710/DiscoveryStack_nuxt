@@ -42,6 +42,10 @@ export class WeeklyFixture {
         return [{binding,client:this.state.client}]
       }),
       saveBinding:vi.fn(async(value)=>this.state.binding={...row(value),id:this.state.binding?.id||this.state.nextId}),
+      revokeBinding:vi.fn(async(owner,client,expected,revoked,at)=>{const binding=this.state.binding;if(!binding||binding.ownerUserId!==owner||binding.clientId!==client||binding.status!=='active'||binding.bindingFingerprint!==expected)return false;Object.assign(binding,{status:'revoked',bindingFingerprint:revoked,updatedAt:at});return true}),
+      revokeOpenRequestsForBinding:vi.fn(async(owner,client,bindingId,fingerprint,at)=>{let changed=0;for(const request of this.state.requests)if(request.ownerUserId===owner&&request.clientId===client&&request.bindingId===bindingId&&request.bindingFingerprint===fingerprint&&['pending','approved'].includes(request.status)){Object.assign(request,{status:'revoked',updatedAt:at});changed++}return changed}),
+      lockUnsentOutboxForBinding:vi.fn(async(owner,client,bindingId)=>this.state.outbox.filter(item=>item.ownerUserId===owner&&item.clientId===client&&item.bindingId===bindingId&&['queued','retry_wait','processing'].includes(item.status))),
+      cancelUnsentOutboxForBinding:vi.fn(async(owner,client,bindingId,at)=>{let changed=0;for(const item of this.state.outbox)if(item.ownerUserId===owner&&item.clientId===client&&item.bindingId===bindingId&&['queued','retry_wait'].includes(item.status)){Object.assign(item,{status:'cancelled',leaseToken:null,leaseExpiresAt:null,retryEligibleAt:null,errorCode:'line_recipient_replaced',updatedAt:at});changed++}return changed}),
       getRequest:vi.fn(async(id)=>this.state.requests.find(value=>value.requestId===id)||null),
       findLatestRequestForEntry:vi.fn(async(owner,client,entry)=>this.state.requests.filter(value=>value.ownerUserId===owner&&value.clientId===client&&value.entryId===entry).at(-1)||null),
       getOutboxForRequest:vi.fn(async(id)=>this.state.outbox.find(value=>value.requestRowId===id)||null),
