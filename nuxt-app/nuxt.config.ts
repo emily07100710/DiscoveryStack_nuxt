@@ -83,6 +83,8 @@ export default defineNuxtConfig({
     '/en/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/zh-hant/audit-lab': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
     '/weekly-content/connect': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0', 'Referrer-Policy': 'no-referrer' } },
+    '/weekly-content/connect/workbench': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0', 'Referrer-Policy': 'no-referrer' } },
+    '/weekly-content/workbench': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0', 'Referrer-Policy': 'no-referrer' } },
     '/weekly-content/review/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive', 'Cache-Control': 'private, no-store, max-age=0', 'Referrer-Policy': 'no-referrer' } },
     '/api/**': { headers: { 'X-Robots-Tag': 'noindex, nofollow, noarchive' } },
   },

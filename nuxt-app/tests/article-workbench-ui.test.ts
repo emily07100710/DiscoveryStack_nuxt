@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { articleReadyForPublication, articleStatus, cloneDocument, documentSignature, needsProgressReload, plainArticleDocument, safeArticleUrl, workbenchError, workspaceIdIsValid } from '../components/article-workbench/types'
 import type { ArticleDocument, ArticleWorkspace } from '../components/article-workbench/types'
 
@@ -105,6 +105,20 @@ describe('formal article workbench actual templates', () => {
 })
 
 describe('article workbench browser boundaries', () => {
+  it.each(['/weekly-content/workbench', '/weekly-content/connect/workbench'])('keeps %s private, unindexed and without referrer leakage', async (path) => {
+    // Evaluate the real Nuxt configuration without starting Nuxt or loading credentials.
+    vi.stubGlobal('defineNuxtConfig', (config: unknown) => config)
+    try {
+      const config = (await import('../nuxt.config')).default as unknown as { routeRules: Record<string, { headers?: Record<string, string> }> }
+      expect(config.routeRules[path]?.headers).toMatchObject({
+        'Cache-Control': 'private, no-store, max-age=0',
+        'X-Robots-Tag': 'noindex, nofollow, noarchive',
+        'Referrer-Policy': 'no-referrer',
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
   it('only accepts the opaque workspace ID, not customer or company selection authority', () => { expect(workspaceIdIsValid(`aw_${'a'.repeat(32)}`)).toBe(true); expect(workspaceIdIsValid('1')).toBe(false); expect(workspaceIdIsValid(`aw_${'a'.repeat(31)}`)).toBe(false) })
   it('never stores, logs or embeds LINE ID tokens into navigation or images', () => {
     const source = file('../pages/weekly-content/workbench.vue')
