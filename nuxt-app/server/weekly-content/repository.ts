@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gt, isNull, lte, or, sql } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDatabase } from '../database'
-import { contentOperationClients, contentOperationAutopilotPolicies, contentOperationPublicationTargets, contentOperationPublicationAttempts, seoGeoContentJobs, weeklyContentConfigs as configs, weeklyContentSchedulerCursors as schedulerCursors, weeklyContentInvitations as invitations, weeklyContentBindings as bindings, weeklyContentReviewRequests as requests, weeklyContentConsents as consents, weeklyContentOutbox as outbox, weeklyContentWebhookInbox as inbox, contentOperationRuns } from '../database/schema'
+import { contentOperationClients, contentOperationAutopilotPolicies, contentOperationPublicationTargets, contentOperationPublicationAttempts, seoGeoContentJobs, weeklyContentConfigs as configs, weeklyContentSchedulerCursors as schedulerCursors, weeklyContentInvitations as invitations, weeklyContentBindings as bindings, weeklyContentReviewRequests as requests, weeklyContentReviewTests as reviewTests, weeklyContentConsents as consents, weeklyContentOutbox as outbox, weeklyContentWebhookInbox as inbox, contentOperationRuns } from '../database/schema'
 import { createContentOperationsRepositoryFromDatabase } from '../content-operations/repository'
 import type { ContentOperationClientRow } from '../content-operations/types'
 import type { WeeklyConfig, LineBindingInvitation, PrivateLineBinding, WeeklyIdentityBinding, WeeklyReviewRequest, WeeklyConsent, WeeklyOutbox, WeeklyDraft, WeeklyWebhookInbox } from './types'
@@ -30,6 +30,8 @@ export interface WeeklyContentRepository {
   revokeBinding(ownerUserId: number, clientId: number, expectedFingerprint: string, revokedFingerprint: string, now: Date): Promise<boolean>
   revokeOpenRequestsForBinding(ownerUserId: number, clientId: number, bindingId: number, bindingFingerprint: string, now: Date): Promise<number>
   lockUnsentOutboxForBinding(ownerUserId: number, clientId: number, bindingId: number): Promise<WeeklyOutbox[]>
+  hasBlockingReviewTest(ownerUserId: number, clientId: number, bindingId: number, bindingFingerprint: string, now: Date): Promise<boolean>
+  revokePendingReviewTestsForBinding(ownerUserId: number, clientId: number, bindingId: number, bindingFingerprint: string, now: Date): Promise<number>
   cancelUnsentOutboxForBinding(ownerUserId: number, clientId: number, bindingId: number, now: Date): Promise<number>
   getRequest(requestId: string, lock?: boolean): Promise<WeeklyReviewRequest | null>
   findLatestRequestForEntry(ownerUserId: number, clientId: number, entryId: number): Promise<WeeklyReviewRequest|null>
@@ -150,6 +152,19 @@ function makeRepository(database: any, transactional = false): WeeklyContentRepo
       return Number(result?.[0]?.affectedRows || 0)
     },
     lockUnsentOutboxForBinding: (owner,client,bindingId) => database.select().from(outbox).where(and(eq(outbox.ownerUserId,owner),eq(outbox.clientId,client),eq(outbox.bindingId,bindingId),or(eq(outbox.status,'queued'),eq(outbox.status,'retry_wait'),eq(outbox.status,'processing')))).orderBy(asc(outbox.id)).for('update'),
+    async hasBlockingReviewTest(owner,client,bindingId,bindingFingerprint,_now) {
+      // Lock every undecided test in this binding lineage. A provider push can
+      // outlive the review TTL, so `processing` blocks replacement regardless
+      // of expiry; queued/retry rows are fenced by these locks and revoked next.
+      const rows=await database.select({notificationStatus:reviewTests.notificationStatus}).from(reviewTests).where(and(eq(reviewTests.ownerUserId,owner),eq(reviewTests.clientId,client),eq(reviewTests.bindingId,bindingId),eq(reviewTests.bindingFingerprint,bindingFingerprint),eq(reviewTests.status,'pending'))).orderBy(asc(reviewTests.id)).for('update')
+      return rows.some((row:{notificationStatus:string})=>row.notificationStatus==='processing')
+    },
+    async revokePendingReviewTestsForBinding(owner,client,bindingId,bindingFingerprint,now) {
+      const lineage=and(eq(reviewTests.ownerUserId,owner),eq(reviewTests.clientId,client),eq(reviewTests.bindingId,bindingId),eq(reviewTests.bindingFingerprint,bindingFingerprint),eq(reviewTests.status,'pending'))
+      await database.update(reviewTests).set({notificationStatus:'cancelled',notificationLeaseToken:null,notificationLeaseExpiresAt:null,notificationRetryEligibleAt:null,notificationErrorCode:'line_recipient_replaced',updatedAt:now}).where(and(lineage,or(eq(reviewTests.notificationStatus,'queued'),eq(reviewTests.notificationStatus,'retry_wait'))))
+      const result=await database.update(reviewTests).set({status:'revoked',updatedAt:now}).where(lineage)
+      return Number(result?.[0]?.affectedRows||0)
+    },
     async cancelUnsentOutboxForBinding(owner,client,bindingId,now) {
       const result=await database.update(outbox).set({status:'cancelled',leaseToken:null,leaseExpiresAt:null,retryEligibleAt:null,errorCode:'line_recipient_replaced',updatedAt:now}).where(and(eq(outbox.ownerUserId,owner),eq(outbox.clientId,client),eq(outbox.bindingId,bindingId),or(eq(outbox.status,'queued'),eq(outbox.status,'retry_wait'))))
       return Number(result?.[0]?.affectedRows || 0)

@@ -43,6 +43,7 @@ describe('owner-authorized LINE recipient replacement',()=>{
     expect(pending[0]?.tokenHash).toBe(sha(result.invitationToken))
     expect(f.state.invites.find(row=>row.tokenHash===sha(stale.invitationToken))?.expiresAt).toEqual(WEEKLY_NOW)
     expect(f.repository.revokeBinding).toHaveBeenCalledWith(1,1,originalBinding.bindingFingerprint,expect.stringMatching(/^[a-f0-9]{64}$/),WEEKLY_NOW)
+    expect(f.repository.revokePendingReviewTestsForBinding).toHaveBeenCalledWith(1,1,originalBinding.id,originalBinding.bindingFingerprint,WEEKLY_NOW)
   })
 
   it('keeps old approval invalid after the same LINE account binds again because the binding lineage changes',async()=>{
@@ -101,6 +102,17 @@ describe('owner-authorized LINE recipient replacement',()=>{
       expect(f.state.requests.find(row=>row.id===request.id)?.status).toBe('approved')
       expect(f.state.invites.filter(row=>!row.consumedAt)).toHaveLength(0)
     }
+  })
+
+  it('fails closed while a review-test push is processing, even when its review TTL has elapsed',async()=>{
+    const {f,request,originalBinding}=await ready()
+    vi.mocked(f.repository.hasBlockingReviewTest).mockResolvedValueOnce(true)
+    await expect(replacement(f)).rejects.toThrow('WEEKLY_REVIEW_TEST_DELIVERY_IN_PROGRESS')
+    expect(f.repository.hasBlockingReviewTest).toHaveBeenCalledWith(1,1,originalBinding.id,originalBinding.bindingFingerprint,WEEKLY_NOW)
+    expect(f.state.binding).toEqual(originalBinding)
+    expect(f.state.requests.find(row=>row.id===request.id)?.status).toBe('approved')
+    expect(f.repository.revokePendingReviewTestsForBinding).not.toHaveBeenCalled()
+    expect(f.state.invites.filter(row=>!row.consumedAt)).toHaveLength(0)
   })
 
   it('cancels only queued/retry notices and preserves sent or failed delivery history',async()=>{

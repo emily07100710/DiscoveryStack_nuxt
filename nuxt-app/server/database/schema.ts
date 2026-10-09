@@ -4338,6 +4338,28 @@ export const weeklyContentReviewRequests = mysqlTable('weeklyContentReviewReques
   requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(), status: mysqlEnum('status',['pending','approved','changes_requested','revoked']).notNull(),
   expiresAt: timestamp('expiresAt').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
 }, t => [uniqueIndex('weekly_review_opaque_uq').on(t.requestId),uniqueIndex('weekly_review_fingerprint_uq').on(t.requestFingerprint),index('weekly_review_owner_status_idx').on(t.ownerUserId,t.status)])
+/** Isolated owner-prepared LINE review samples. These rows grant no publishing or policy authority. */
+export const weeklyContentReviewTests = mysqlTable('weeklyContentReviewTests', {
+  id: int('id').autoincrement().primaryKey(), requestId: varchar('requestId', { length: 36 }).notNull(),
+  ownerUserId: int('ownerUserId').notNull(), clientId: int('clientId').notNull(), bindingId: int('bindingId').notNull(),
+  bindingFingerprint: varchar('bindingFingerprint', { length: 64 }).notNull(), sourceLabel: varchar('sourceLabel', { length: 40 }).notNull(),
+  title: varchar('title', { length: 160 }).notNull(), body: text('body').notNull(), contentHash: varchar('contentHash', { length: 64 }).notNull(),
+  requestFingerprint: varchar('requestFingerprint', { length: 64 }).notNull(), idempotencyKey: varchar('idempotencyKey', { length: 128 }).notNull(),
+  readTokenHash: varchar('readTokenHash', { length: 64 }).notNull(), actionTokenHash: varchar('actionTokenHash', { length: 64 }).notNull(),
+  status: mysqlEnum('status', ['pending','approved','changes_requested','revoked']).default('pending').notNull(),
+  decisionEventHash: varchar('decisionEventHash', { length: 64 }), decisionActorFingerprint: varchar('decisionActorFingerprint', { length: 64 }), decisionFingerprint: varchar('decisionFingerprint', { length: 64 }), decidedAt: timestamp('decidedAt'),
+  notificationStatus: mysqlEnum('notificationStatus', ['queued','processing','sent','retry_wait','failed','cancelled']).default('queued').notNull(),
+  notificationAttemptCount: int('notificationAttemptCount').default(0).notNull(), notificationLeaseToken: varchar('notificationLeaseToken', { length: 96 }), notificationLeaseExpiresAt: timestamp('notificationLeaseExpiresAt'),
+  notificationRetryEligibleAt: timestamp('notificationRetryEligibleAt'), notificationRetryKey: varchar('notificationRetryKey', { length: 36 }).notNull(),
+  notificationPayloadFingerprint: varchar('notificationPayloadFingerprint', { length: 64 }), notificationProviderMessageId: varchar('notificationProviderMessageId', { length: 128 }),
+  notificationErrorCode: varchar('notificationErrorCode', { length: 80 }), notificationSentAt: timestamp('notificationSentAt'),
+  expiresAt: timestamp('expiresAt').notNull(), createdAt: timestamp('createdAt').defaultNow().notNull(), updatedAt: timestamp('updatedAt').defaultNow().onUpdateNow().notNull(),
+}, t => [
+  uniqueIndex('weekly_review_test_request_uq').on(t.requestId),
+  uniqueIndex('weekly_review_test_owner_key_uq').on(t.ownerUserId,t.clientId,t.idempotencyKey),
+  index('weekly_review_test_owner_client_idx').on(t.ownerUserId,t.clientId,t.id),
+  index('weekly_review_test_binding_status_idx').on(t.ownerUserId,t.clientId,t.bindingId,t.status),
+])
 export const weeklyContentConsents = mysqlTable('weeklyContentConsents', {
   id: int('id').autoincrement().primaryKey(), ownerUserId: int('ownerUserId').notNull(), clientId: int('clientId').notNull(), requestRowId: int('requestRowId').notNull(),
   decision: mysqlEnum('decision',['approved','changes_requested']).notNull(), eventHash: varchar('eventHash', { length: 64 }).notNull(),

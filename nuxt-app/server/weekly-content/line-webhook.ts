@@ -32,7 +32,14 @@ export function parseWeeklyLinePostback(value: unknown): { requestId: string; ac
   if (fields.length !== 4 || fields[0] !== 'wca' || !WEEKLY_LINE_REQUEST_ID.test(fields[1] || '') || !isWeeklyLineToken(fields[2]) || !['approved', 'changes_requested'].includes(fields[3] || '')) return null
   return { requestId: fields[1]!, actionToken: fields[2]!, decision: fields[3] as 'approved' | 'changes_requested' }
 }
-type Action = { lineUserId: string; webhookEventId: string; semanticFingerprint: string; replyToken?: string } & ({kind:'interaction';interaction:WeeklyLineInteraction} | { kind: 'binding'; invitationToken: string } | { kind: 'review'; requestId: string; actionToken: string; decision: 'approved' | 'changes_requested' })
+export function parseWeeklyLineReviewTestPostback(value: unknown): { requestId: string; actionToken: string; decision: 'approved' | 'changes_requested' } | null {
+  if (typeof value !== 'string' || value.length > 300) return null
+  const fields = value.split('|')
+  if (fields.length !== 4 || fields[0] !== 'wct' || !/^wct_[A-Za-z0-9_-]{32}$/u.test(fields[1] || '') || !isWeeklyLineToken(fields[2]) || !['approved', 'changes_requested'].includes(fields[3] || '')) return null
+  return { requestId: fields[1]!, actionToken: fields[2]!, decision: fields[3] as 'approved' | 'changes_requested' }
+}
+export type VerifiedReviewTestAction = { lineUserId: string; webhookEventId: string; semanticFingerprint: string; requestId: string; actionToken: string; decision: 'approved' | 'changes_requested' }
+type Action = { lineUserId: string; webhookEventId: string; semanticFingerprint: string; replyToken?: string } & ({kind:'interaction';interaction:WeeklyLineInteraction} | { kind: 'binding'; invitationToken: string } | { kind: 'review' | 'review_test'; requestId: string; actionToken: string; decision: 'approved' | 'changes_requested' })
 function parseVerifiedActions(rawBody: Uint8Array, expectedDestination: string, onboarding = false, requireLiffBindingConfirmation = false): { actions: Action[]; ignored: number } {
   let payload: unknown
   try { payload = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(rawBody)) } catch { invalid() }
@@ -60,12 +67,16 @@ function parseVerifiedActions(rawBody: Uint8Array, expectedDestination: string, 
     } else if (event.type === 'postback' && record(event.postback)) {
       const postback = parseWeeklyLinePostback(event.postback.data)
       if (postback) actions.push({ kind: 'review', replyToken, lineUserId, webhookEventId: event.webhookEventId, ...postback, semanticFingerprint: hash(JSON.stringify({ ...identity, requestId: postback.requestId, actionTokenHash: hash(postback.actionToken), decision: postback.decision })) })
-      else ignored++
+      else {
+        const test = parseWeeklyLineReviewTestPostback(event.postback.data)
+        if (test) actions.push({ kind: 'review_test', replyToken, lineUserId, webhookEventId: event.webhookEventId, ...test, semanticFingerprint: hash(JSON.stringify({ ...identity, purpose: 'review_test', requestId: test.requestId, actionTokenHash: hash(test.actionToken), decision: test.decision })) })
+        else ignored++
+      }
     } else ignored++
   }
   return { actions, ignored }
 }
-export type WeeklyLineWebhookOptions = { featureEnabled: boolean; channelSecret: string; botUserId: string; getDependencies: () => WeeklyContentDependencies | Promise<WeeklyContentDependencies>; requireLiffBindingConfirmation?:boolean; onboarding?: {publicOrigin:string;liffId?:string;liffEnabled?:boolean;channelAccessToken:string;fetchImpl?:typeof fetch} }
+export type WeeklyLineWebhookOptions = { featureEnabled: boolean; channelSecret: string; botUserId: string; getDependencies: () => WeeklyContentDependencies | Promise<WeeklyContentDependencies>; reviewTest?: (action: VerifiedReviewTestAction) => Promise<{status: string}>; requireLiffBindingConfirmation?:boolean; onboarding?: {publicOrigin:string;liffId?:string;liffEnabled?:boolean;channelAccessToken:string;fetchImpl?:typeof fetch} }
 export async function processWeeklyLineWebhook(input: WeeklyLineWebhookOptions & { rawBody: Uint8Array; signature: unknown }): Promise<{ status: 'disabled' | 'accepted'; processed: number; ignored: number }> {
   if (!input.featureEnabled) return { status: 'disabled', processed: 0, ignored: 0 }
   if (!WEEKLY_LINE_USER_ID.test(input.botUserId) || typeof input.channelSecret !== 'string' || input.channelSecret.length < 16 || input.channelSecret.length > 256) throw createError({ statusCode: 503, statusMessage: 'Weekly LINE webhook is not configured.' })
@@ -79,8 +90,10 @@ export async function processWeeklyLineWebhook(input: WeeklyLineWebhookOptions &
   let processed = 0, ignored = parsed.ignored
   for (const action of parsed.actions) {
     try {
+      if (action.kind === 'review_test' && !input.reviewTest) { ignored++; continue }
       const result = action.kind === 'interaction' ? await claimWeeklyLineInteraction(action,dependencies)
         : action.kind === 'binding' ? await claimLineBindingInvite({ invitationToken: action.invitationToken, lineUserId: action.lineUserId, webhookEventId: action.webhookEventId, semanticFingerprint: action.semanticFingerprint }, dependencies)
+        : action.kind === 'review_test' ? await input.reviewTest!(action)
         : await reviewFromVerifiedLine({ requestId: action.requestId, actionToken: action.actionToken, lineUserId: action.lineUserId, webhookEventId: action.webhookEventId, semanticFingerprint: action.semanticFingerprint, decision: action.decision }, dependencies)
       processed++
       // Business writes are already committed. A reply failure must not revoke or repeat a decision.
@@ -88,6 +101,7 @@ export async function processWeeklyLineWebhook(input: WeeklyLineWebhookOptions &
       if(input.onboarding && action.replyToken && result?.status!=='replayed') {
         let message:WeeklyLineReplyMessage
         if(action.kind==='interaction')message=buildWeeklyLineWelcomeMessage({...input.onboarding,interaction:action.interaction})
+        else if(action.kind==='review_test')message={type:'text',text:action.decision==='approved'?'已收到你對測試稿的同意。這次只記錄流程測試結果，不會發布文章。':'已收到測試稿的修改要求。這次只記錄流程測試結果，不會發布文章。'}
         else message={type:'text',text:action.kind==='binding'?'綁定已完成。請點「我的公司」查看公司與網站。':action.decision==='approved'?'已收到這篇文章的發佈同意。系統會再次檢查內容與授權，再進入發文流程。':'已收到修改要求，這篇文章會保留待修。服務窗口將協助調整後重新送審。'}
         await sendWeeklyLineReply({replyToken:action.replyToken,message},input.onboarding)
       }

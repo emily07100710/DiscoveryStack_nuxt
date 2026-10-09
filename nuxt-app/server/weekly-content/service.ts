@@ -96,6 +96,7 @@ export async function replaceLineBinding(input: { ownerUserId: number; clientId:
     const previousFingerprint=current.bindingFingerprint
     const activeRequest=await repo.findActiveRequest(input.ownerUserId,input.clientId,now)
     if(activeRequest && await repo.hasReservedPublication(input.ownerUserId,activeRequest.jobId,activeRequest.draftId))return error('WEEKLY_PUBLICATION_ALREADY_RESERVED')
+    if(await repo.hasBlockingReviewTest(input.ownerUserId,input.clientId,current.id,previousFingerprint,now))return error('WEEKLY_REVIEW_TEST_DELIVERY_IN_PROGRESS')
     // Lock every unsent notification before revoking. A claimed delivery is not safe to
     // replace; queued/retry rows stay fenced until this transaction cancels them.
     const unsent=await repo.lockUnsentOutboxForBinding(input.ownerUserId,input.clientId,current.id)
@@ -103,6 +104,7 @@ export async function replaceLineBinding(input: { ownerUserId: number; clientId:
     const revokedFingerprint=hash(JSON.stringify({purpose:'weekly-line-binding-revocation-v1',owner:input.ownerUserId,client:input.clientId,previous:previousFingerprint,invitation:tokenHash,at:now.toISOString()}))
     if(!await repo.revokeBinding(input.ownerUserId,input.clientId,previousFingerprint,revokedFingerprint,now))return error('WEEKLY_LINE_BINDING_CHANGED')
     await repo.revokeOpenRequestsForBinding(input.ownerUserId,input.clientId,current.id,previousFingerprint,now)
+    await repo.revokePendingReviewTestsForBinding(input.ownerUserId,input.clientId,current.id,previousFingerprint,now)
     await repo.cancelUnsentOutboxForBinding(input.ownerUserId,input.clientId,current.id,now)
     await repo.insertInvitation({ownerUserId:input.ownerUserId,clientId:input.clientId,tokenHash,expiresAt,consumedAt:null,bindingFingerprint:null,eventHash:null})
     return {purpose:LINE_IDENTITY_BINDING_PURPOSE,invitationToken,expiresAt:expiresAt.toISOString()}
