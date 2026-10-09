@@ -14,13 +14,13 @@ async function activate(f:WeeklyFixture){await activateWeeklyReviewConfig({owner
 describe('搜尋王 customer welcome and signed interactions',()=>{
  it('provides honest branded copy and a fixed LIFF entry with no customer, invite or identity in URLs',()=>{
   const f=setup(),text=JSON.stringify(buildWeeklyLineWelcomeMessage(f.options.onboarding))
-  expect(text).toContain('搜尋王');expect(text).toContain('https://liff.line.me/1234567890-AbCdEf12');expect(text).toContain('邀請碼');expect(text).not.toContain(USER);expect(text).not.toContain('wli_');expect(SEARCHKING_WELCOME_TEXT).toContain('只有你同意的那一版')
+  expect(text).toContain('DS搜尋王');expect(text).toContain('#171A32');expect(text).toContain('#B9A477');expect(text).toContain('https://liff.line.me/1234567890-AbCdEf12');expect(text).toContain('邀請碼');expect(text).not.toContain(USER);expect(text).not.toContain('wli_');expect(SEARCHKING_WELCOME_TEXT).toContain('只有你同意的那一版');expect(SEARCHKING_WELCOME_TEXT).not.toContain('👑')
   expect(weeklyLineConnectUrl({publicOrigin:'https://preview.example.com'})).toBe('https://preview.example.com/weekly-content/connect')
  })
  it.each(['https://127.0.0.1','http://preview.example.com','https://preview.example.com/?key=secret'])('rejects unsafe configured origin %s before creating cards',origin=>expect(()=>weeklyLineConnectUrl({publicOrigin:origin})).toThrow())
  it('rejects invalid LIFF IDs instead of interpolating an arbitrary destination',()=>expect(()=>weeklyLineConnectUrl({publicOrigin:'https://preview.example.com',liffEnabled:true,liffId:'evil.example/?token=secret'})).toThrow())
  it('covers a bounded rich menu with three fixed safe commands, never a customer directory',()=>{
-  const menu=buildSearchkingRichMenu();expect(menu.size).toEqual({width:2500,height:843});expect(menu.areas.map(a=>a.action.text)).toEqual(['綁定我的公司','我的公司','使用說明']);expect(menu.areas.reduce((n,a)=>n+a.bounds.width,0)).toBe(2500)
+  const menu=buildSearchkingRichMenu();expect(menu.size).toEqual({width:2500,height:843});expect(menu.name).toBe('DS搜尋王 客戶服務');expect(menu.areas.map(a=>a.action.text)).toEqual(['綁定我的公司','我的公司','使用說明']);expect(menu.areas.reduce((n,a)=>n+a.bounds.width,0)).toBe(2500)
  })
  it('verifies exact signature and destination before resolving a repository or replying',async()=>{
   const f=setup();await expect(processWeeklyLineWebhook({...f.options,...signed([event()]),signature:'bad'})).rejects.toMatchObject({statusCode:401});await expect(processWeeklyLineWebhook({...f.options,...signed([event()],USER)})).rejects.toMatchObject({statusCode:400});expect(f.getDependencies).not.toHaveBeenCalled();expect(f.fetchImpl).not.toHaveBeenCalled()

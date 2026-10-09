@@ -1,0 +1,11 @@
+Use case: logo-brand.
+Asset type: production-ready square LINE Official Account profile logo, raster bitmap.
+Primary request: an understated luxury-hotel-style typographic logo for DiscoveryStack's Chinese service 搜尋王.
+Background: a completely flat solid navy blue #171A32, matching the current DiscoveryStack official website.
+Text, exactly two horizontal lines, centered:
+Top line EXACTLY "DISCOVERYSTACK" in uppercase Latin letters, all on ONE line. Spelling D I S C O V E R Y S T A C K, no spaces in the word. Muted metallic-gold color #B9A477.
+Bottom line EXACTLY "搜尋王" in Traditional Chinese, also gold #B9A477. Use the traditional 搜 and 尋 forms, never simplified 寻.
+Typography: refined luxury-hotel signage. Top line elegant high-contrast Roman serif capital letters with delicate but legible serifs and carefully balanced moderate tracking. Bottom line a dignified traditional Chinese Song/Ming serif, beautifully formed strokes, calm and sophisticated. Chinese line noticeably larger than the long English line. Do not mimic a specific existing hotel brand.
+Composition: square, straight-on flat artwork; the two-line lockup centrally placed with tasteful vertical spacing and generous balanced negative space. English word width about 76% of canvas, Chinese line width about 42%. Keep every letter well within the inner 78% of canvas, safe for LINE's circular avatar crop. Make the gold legible at thumbnail size; medium-weight fine serif strokes, not hairline-thin.
+Mood: premium, formal, quietly luxurious, editorial precision. Restrained two-color palette only.
+Constraints: no crown, magnifier, mascot, cute elements, emblem, decorative frame, extra words, texture, photographs, gradients, shine, 3D, mockup, drop shadow, watermark. Gold is a flat color, not embossed. No transparent background. Output one clean square logo, not variants.

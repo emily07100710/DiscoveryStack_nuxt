@@ -3,7 +3,7 @@ import ArticlePreview from '../../components/article-workbench/ArticlePreview.vu
 import { articleReadyForPublication, articleStatus, blockText, cloneDocument, documentSignature, needsProgressReload, safeArticleUrl, workbenchError, workspaceIdIsValid } from '../../components/article-workbench/types'
 import type { ArticleDocument, ArticleMedia, ArticleTextBlock, ArticleWorkspace } from '../../components/article-workbench/types'
 definePageMeta({ i18n: false, layout: false, alias: ['/weekly-content/connect/workbench'] })
-useHead({ title: '文章審稿工作台｜搜尋王', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }, { name: 'referrer', content: 'no-referrer' }] })
+useHead({ title: '文章審稿工作台｜DS搜尋王', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }, { name: 'referrer', content: 'no-referrer' }] })
 type Config = { enabled: false } | { enabled: true; liffId: string; origin: string }
 type LiffSdk = { init(options: { liffId: string }): Promise<void>; isLoggedIn(): boolean; login(options: { redirectUri: string }): void; getIDToken(): string | null; getContext(): { scope?: string[] } | null }
 type Response = { workspace: ArticleWorkspace; replayed: boolean }
@@ -147,7 +147,7 @@ onBeforeUnmount(() => { active = false; window.removeEventListener('beforeunload
 
 <template>
   <main class="workbench-page">
-    <header class="workbench-header"><div class="brand"><img src="/brand/searchking-avatar-v1.png" alt="搜尋王" width="40" height="40"><div><strong>搜尋王</strong><span>文章審稿工作台</span></div></div><span class="formal-chip">正式文章</span></header>
+    <header class="workbench-header"><div class="brand"><img src="/brand/ds-searchking-line-avatar-premium-v1.png" alt="DS搜尋王" width="40" height="40"><div><strong>DS搜尋王</strong><span>文章審稿工作台</span></div></div><span class="formal-chip">正式文章</span></header>
     <section v-if="state !== 'ready'" class="entry-card"><p class="eyebrow">REVIEW YOUR STORY</p><h1>把最後一版，確認好。</h1><p v-if="state === 'loading'" role="status">正在確認你的 LINE 身分與文章權限…</p><template v-else-if="state === 'login'"><p>請用已連結公司帳號的 LINE 登入。此頁不會公開文章內容。</p><button @click="login">用 LINE 登入審稿</button></template><p v-else-if="state === 'disabled'">正式審稿入口尚未開放，請聯絡服務人員。</p><p v-else>請從最新的 LINE 送審通知重新開啟；不要使用其他人的連結。</p></section>
     <template v-else-if="workspace && draft">
       <section class="workspace-heading"><div><p class="eyebrow">{{ workspace.company?.displayName || '你的公司文章' }}</p><h1>閱讀、調整，再確認發布。</h1><p>{{ workspace.company?.canonicalSiteOrigin }}</p></div><div class="status-box"><span class="status-dot" :class="workspace.status"></span><strong>{{ articleStatus(workspace.status) }}</strong><span>第 {{ workspace.version }} 版</span></div></section>

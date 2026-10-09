@@ -34,22 +34,22 @@ export function buildWeeklyLineReviewMessage(input: { requestId: string; readTok
   const origin = normalizeWeeklyLinePublicOrigin(input.publicOrigin)
   const expiry = new Date(input.expiresAt)
   if (!Number.isFinite(expiry.getTime())) throw createError({ statusCode: 422, statusMessage: 'Weekly article notification is invalid.' })
-  const brand = typeof input.brand === 'string' && input.brand.trim() ? Array.from(input.brand.trim()).slice(0, 60).join('') : '搜尋王'
+  const brand = typeof input.brand === 'string' && input.brand.trim() ? Array.from(input.brand.trim()).slice(0, 60).join('') : 'DS搜尋王'
   const title = Array.from(input.title.trim()).slice(0, 120).join('')
   const preview = new URL(`/weekly-content/review/${input.requestId}`, origin)
   preview.searchParams.set('token', input.readToken)
   return {
     type: 'flex', altText: `${brand}：本週文章已備妥，請閱讀後確認。`,
-    contents: { type: 'bubble', body: { type: 'box', layout: 'vertical', spacing: 'md', contents: [
-      { type: 'text', text: brand, weight: 'bold', size: 'sm', color: '#53635A' },
-      { type: 'text', text: '本週文章，請你確認', weight: 'bold', size: 'lg', wrap: true },
-      { type: 'text', text: title, size: 'md', wrap: true },
-      { type: 'text', text: '先閱讀全文。點選同意後，文章才會進入公開部落格的發布佇列；要求修改則保留待修。', size: 'sm', wrap: true, color: '#666666' },
-      { type: 'text', text: `回覆期限：${expiry.toISOString()}`, size: 'xs', wrap: true, color: '#777777' },
+    contents: { type: 'bubble', styles: { body: { backgroundColor: '#EEE9DF' }, footer: { backgroundColor: '#101326' } }, body: { type: 'box', layout: 'vertical', spacing: 'md', contents: [
+      { type: 'text', text: brand, weight: 'bold', size: 'sm', color: '#B9A477' },
+      { type: 'text', text: '本週文章，請你確認', weight: 'bold', size: 'lg', color: '#171A32', wrap: true },
+      { type: 'text', text: title, size: 'md', color: '#171A32', wrap: true },
+      { type: 'text', text: '先閱讀全文。點選同意後，文章才會進入公開部落格的發布佇列；要求修改則保留待修。', size: 'sm', wrap: true, color: '#101326' },
+      { type: 'text', text: `回覆期限：${expiry.toISOString()}`, size: 'xs', wrap: true, color: '#101326' },
     ] }, footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [
-      { type: 'button', action: { type: 'uri', label: '閱讀完整文章', uri: preview.toString() } },
-      { type: 'button', style: 'primary', action: { type: 'postback', label: '同意發佈', data: encodeWeeklyLinePostback(input.requestId, input.actionToken, 'approved'), displayText: '我已閱讀，同意發佈這篇文章' } },
-      { type: 'button', action: { type: 'postback', label: '要求修改', data: encodeWeeklyLinePostback(input.requestId, input.actionToken, 'changes_requested'), displayText: '這篇文章需要修改' } },
+      { type: 'button', color: '#B9A477', action: { type: 'uri', label: '閱讀完整文章', uri: preview.toString() } },
+      { type: 'button', style: 'primary', color: '#171A32', action: { type: 'postback', label: '同意發佈', data: encodeWeeklyLinePostback(input.requestId, input.actionToken, 'approved'), displayText: '我已閱讀，同意發佈這篇文章' } },
+      { type: 'button', color: '#B9A477', action: { type: 'postback', label: '要求修改', data: encodeWeeklyLinePostback(input.requestId, input.actionToken, 'changes_requested'), displayText: '這篇文章需要修改' } },
     ] } },
   }
 }

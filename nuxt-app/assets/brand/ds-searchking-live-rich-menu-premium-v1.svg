@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2500" height="1686" viewBox="0 0 2500 1686" role="img" aria-labelledby="title desc">
+  <title id="title">DS搜尋王 LINE 六格圖文選單</title>
+  <desc id="desc">兩列三欄。上排為客戶綁定、文章審稿、每週服務，均標示服務準備中；下排為認識 DS搜尋王、合作流程、聯絡我們。</desc>
+  <rect width="2500" height="1686" fill="#171A32"/>
+  <g fill="none" stroke="#B9A477" stroke-width="2">
+    <path d="M833.33 0v1686M1666.67 0v1686M0 843h2500"/>
+    <path d="M322 642h189M1155 642h189M1988 642h189M322 1485h189M1155 1485h189M1988 1485h189" stroke-width="3"/>
+  </g>
+  <g font-family="PingFang TC, Noto Sans CJK TC, sans-serif" text-anchor="middle">
+    <g fill="#B9A477" font-size="78" font-weight="600" letter-spacing="2">
+      <text x="416.67" y="385">客戶綁定</text>
+      <text x="1250" y="385">文章審稿</text>
+      <text x="2083.33" y="385">每週服務</text>
+    </g>
+    <g fill="#EEE9DF" fill-opacity=".72" font-size="42" font-weight="400" letter-spacing="5">
+      <text x="416.67" y="492">服務準備中</text>
+      <text x="1250" y="492">服務準備中</text>
+      <text x="2083.33" y="492">服務準備中</text>
+    </g>
+    <g fill="#B9A477" font-size="72" font-weight="600" letter-spacing="2">
+      <text x="416.67" y="1262">認識 DS搜尋王</text>
+      <text x="1250" y="1262">合作流程</text>
+      <text x="2083.33" y="1262">聯絡我們</text>
+    </g>
+  </g>
+</svg>

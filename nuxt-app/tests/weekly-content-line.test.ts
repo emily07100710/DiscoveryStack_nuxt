@@ -34,7 +34,8 @@ describe('weekly LINE Flex and stable push transport', () => {
   it('uses the requested brand, a view-only read URL and distinct consent postbacks', () => {
     const message = buildWeeklyLineReviewMessage(messageInput)
     const text = JSON.stringify(message)
-    expect(text).toContain('搜尋王')
+    expect(text).toContain('DS搜尋王')
+    expect(text).toContain('#171A32')
     expect(text).toContain(`/weekly-content/review/${RID}?token=${READ}`)
     expect(text).toContain(`wca|${RID}|${ACTION}|approved`)
     expect(text).toContain(`wca|${RID}|${ACTION}|changes_requested`)

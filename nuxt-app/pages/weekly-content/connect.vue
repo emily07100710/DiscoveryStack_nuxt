@@ -8,7 +8,7 @@ const state = ref<'loading' | 'login' | 'ready' | 'disabled' | 'error' | 'succes
 const invitation = ref(''), consent = ref(false), message = ref(''), busy = ref(false)
 const context = ref<WeeklyLiffContext | null>(null), connectedCompany = ref<WeeklyLiffCompany | null>(null)
 let sdk: LiffSdk | undefined, config: Extract<PublicConfig, { enabled: true }> | undefined, examinedInvitation = ''
-useHead({ title: '連結公司與 LINE｜搜尋王', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }, { name: 'referrer', content: 'no-referrer' }] })
+useHead({ title: '連結公司與 LINE｜DS搜尋王', meta: [{ name: 'robots', content: 'noindex, nofollow, noarchive' }, { name: 'referrer', content: 'no-referrer' }] })
 function clearConfirmation() { context.value = null; consent.value = false; examinedInvitation = '' }
 function cleanHistory() { window.history.replaceState(null, '', '/weekly-content/connect') }
 function publicMessage(cause: unknown) {
@@ -82,7 +82,7 @@ onBeforeUnmount(() => { invitation.value = ''; examinedInvitation = ''; context.
 <template>
   <main class="connect-page">
     <section class="connect-card">
-      <div class="brand"><img src="/brand/searchking-avatar-v1.png" alt="搜尋王" width="64" height="64"><span>搜尋王</span></div>
+      <div class="brand"><img src="/brand/ds-searchking-line-avatar-premium-v1.png" alt="DS搜尋王" width="64" height="64"><span>DS搜尋王</span></div>
       <h1>連結公司與 LINE</h1>
       <p class="intro">這一步只確認公司與 LINE 身分，不會啟用每週寫稿或授權發文。文章服務另行啟用後，仍需要你逐篇看稿並同意原稿，文章才會發到公司的網站。</p>
       <aside class="data-notice" aria-labelledby="line-data-notice-title">
@@ -101,13 +101,13 @@ onBeforeUnmount(() => { invitation.value = ''; examinedInvitation = ''; context.
         <form @submit.prevent="examine"><label for="invite">公司邀約碼</label><input id="invite" v-model="invitation" autocomplete="off" autocapitalize="off" :spellcheck="false" maxlength="36" placeholder="貼上 wli_ 開頭的邀約碼" :disabled="busy" @input="clearConfirmation"><button :disabled="busy">核對公司</button></form>
         <div v-if="context?.mode === 'invitation'" class="company-confirm"><h2>請確認要連結的公司</h2><strong>{{ context.company.displayName }}</strong><p>{{ context.company.canonicalSiteOrigin }}</p><label class="consent"><input v-model="consent" type="checkbox" :disabled="busy">我確認這是我的公司，同意連結目前 LINE 帳號。文章服務另行啟用後，可透過此 LINE 接收送審通知。</label><p>連結身分不代表啟用文章服務，也不代表同意任何一篇文章發佈。</p><button :disabled="!consent || busy" @click="confirm">確認連結這家公司</button></div>
       </template>
-      <template v-else-if="state === 'success'"><h2>已連結 {{ connectedCompany?.displayName }}</h2><p>這一步只完成身分連結，不會啟用每週寫稿或授權任何文章發佈。文章服務與費用範圍由服務人員另外確認。</p><p>請加入「搜尋王」官方帳號並保持可接收訊息。文章服務啟用且原稿完成後，才會送到 LINE，仍需要你逐篇同意原稿才會發佈。</p><p>{{ connectedCompany?.canonicalSiteOrigin }}</p></template>
+      <template v-else-if="state === 'success'"><h2>已連結 {{ connectedCompany?.displayName }}</h2><p>這一步只完成身分連結，不會啟用每週寫稿或授權任何文章發佈。文章服務與費用範圍由服務人員另外確認。</p><p>請加入「DS搜尋王」官方帳號並保持可接收訊息。文章服務啟用且原稿完成後，才會送到 LINE，仍需要你逐篇同意原稿才會發佈。</p><p>{{ connectedCompany?.canonicalSiteOrigin }}</p></template>
       <p v-if="message" class="notice" role="alert">{{ message }}</p>
     </section>
   </main>
 </template>
 
 <style scoped>
-.connect-page{min-height:100vh;background:#f6f4ef;color:#292e36;display:flex;justify-content:center;padding:48px 20px}.connect-card{width:100%;max-width:560px;padding:32px;background:#fff;border:1px solid #e3e1db;border-radius:18px}.brand{display:flex;align-items:center;gap:14px;color:#4d5dad;font-weight:700;letter-spacing:.12em}.brand img{border-radius:16px}h1{font-size:28px;line-height:1.3}h2{font-size:19px}.intro,p{line-height:1.8}form{display:grid;gap:12px;margin-top:24px}input:not([type=checkbox]){padding:12px;border:1px solid #bfc4ce;border-radius:8px;width:100%;box-sizing:border-box}button{background:#4d5dad;color:white;border:0;padding:12px 18px;border-radius:8px;font:inherit;font-weight:600;cursor:pointer}button:disabled{opacity:.5;cursor:default}.company-list article,.company-confirm{background:#f7f8fb;padding:18px;border-radius:12px;margin:20px 0}.company-confirm p,.company-list p{overflow-wrap:anywhere}.consent{display:flex;gap:10px;line-height:1.7;margin:20px 0}.notice{color:#864337}
-.data-notice{margin:20px 0;padding-top:16px;border-top:1px solid #e3e1db}.data-notice h2{font-size:17px}.data-notice p{font-size:14px}.data-notice a{color:#2c3e8f;text-underline-offset:3px}
+.connect-page{min-height:100vh;background:#EEE9DF;color:#171A32;display:flex;justify-content:center;padding:48px 20px}.connect-card{width:100%;max-width:560px;padding:32px;background:#F7F4ED;border:1px solid #B9A477;border-radius:18px}.brand{display:flex;align-items:center;gap:14px;color:#171A32;font-weight:700;letter-spacing:.04em}.brand img{border-radius:16px}h1{font-size:28px;line-height:1.3}h2{font-size:19px}.intro,p{line-height:1.8}form{display:grid;gap:12px;margin-top:24px}input:not([type=checkbox]){padding:12px;border:1px solid #B9A477;border-radius:8px;width:100%;box-sizing:border-box}button{background:#171A32;color:#EEE9DF;border:0;padding:12px 18px;border-radius:8px;font:inherit;font-weight:600;cursor:pointer}button:disabled{opacity:.5;cursor:default}.company-list article,.company-confirm{background:#EEE9DF;border:1px solid #B9A477;padding:18px;border-radius:12px;margin:20px 0}.company-confirm p,.company-list p{overflow-wrap:anywhere}.consent{display:flex;gap:10px;line-height:1.7;margin:20px 0}.consent input{accent-color:#171A32}.notice{color:#864337}
+.data-notice{margin:20px 0;padding-top:16px;border-top:1px solid #B9A477}.data-notice h2{font-size:17px}.data-notice p{font-size:14px}.data-notice a{color:#171A32;text-decoration-color:#B9A477;text-underline-offset:3px}
 </style>

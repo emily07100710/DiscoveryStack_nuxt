@@ -60,18 +60,18 @@ export function buildReviewTestMessage(input:{requestId:string;readToken:string;
   if(!WEEKLY_REVIEW_TEST_REQUEST_ID.test(input.requestId)||!isWeeklyLineToken(input.readToken)||!isWeeklyLineToken(input.actionToken))return fail('WEEKLY_REVIEW_TEST_MESSAGE_INVALID',422)
   const origin=normalizeWeeklyLinePublicOrigin(input.publicOrigin),expiry=new Date(input.expiresAt)
   if(!Number.isFinite(expiry.getTime()))return fail('WEEKLY_REVIEW_TEST_MESSAGE_INVALID',422)
-  const title=Array.from(plain(input.title,160,'title')).slice(0,120).join(''),brand=typeof input.brand==='string'&&input.brand.trim()?Array.from(input.brand.trim()).slice(0,60).join(''):'搜尋王'
+  const title=Array.from(plain(input.title,160,'title')).slice(0,120).join(''),brand=typeof input.brand==='string'&&input.brand.trim()?Array.from(input.brand.trim()).slice(0,60).join(''):'DS搜尋王'
   const preview=new URL(`/weekly-content/test-review/${input.requestId}`,origin);preview.searchParams.set('token',input.readToken)
-  return {type:'flex',altText:`${brand}：請確認測試稿；本次不會發布文章。`,contents:{type:'bubble',body:{type:'box',layout:'vertical',spacing:'md',contents:[
-    {type:'text',text:brand,weight:'bold',size:'sm',color:'#53635A'},
-    {type:'text',text:'單篇測試稿，請你確認',weight:'bold',size:'lg',wrap:true},
-    {type:'text',text:title,size:'md',wrap:true},
-    {type:'text',text:'這是一封流程測試。你的選擇只會記錄這篇測試稿，不會發布文章，也不會開啟排程。',size:'sm',wrap:true,color:'#666666'},
-    {type:'text',text:`回覆期限：${expiry.toISOString()}`,size:'xs',wrap:true,color:'#777777'},
+  return {type:'flex',altText:`${brand}：請確認測試稿；本次不會發布文章。`,contents:{type:'bubble',styles:{body:{backgroundColor:'#EEE9DF'},footer:{backgroundColor:'#101326'}},body:{type:'box',layout:'vertical',spacing:'md',contents:[
+    {type:'text',text:brand,weight:'bold',size:'sm',color:'#B9A477'},
+    {type:'text',text:'單篇測試稿，請你確認',weight:'bold',size:'lg',color:'#171A32',wrap:true},
+    {type:'text',text:title,size:'md',color:'#171A32',wrap:true},
+    {type:'text',text:'這是一封流程測試。你的選擇只會記錄這篇測試稿，不會發布文章，也不會開啟排程。',size:'sm',wrap:true,color:'#101326'},
+    {type:'text',text:`回覆期限：${expiry.toISOString()}`,size:'xs',wrap:true,color:'#101326'},
   ]},footer:{type:'box',layout:'vertical',spacing:'sm',contents:[
-    {type:'button',action:{type:'uri',label:'閱讀測試文章',uri:preview.toString()}},
-    {type:'button',style:'primary',action:{type:'postback',label:'同意測試稿',data:encodeReviewTestPostback(input.requestId,input.actionToken,'approved'),displayText:'我同意這篇測試稿（不會發布）'}},
-    {type:'button',action:{type:'postback',label:'要求修改',data:encodeReviewTestPostback(input.requestId,input.actionToken,'changes_requested'),displayText:'這篇測試稿需要修改（不會發布）'}},
+    {type:'button',color:'#B9A477',action:{type:'uri',label:'閱讀測試文章',uri:preview.toString()}},
+    {type:'button',style:'primary',color:'#171A32',action:{type:'postback',label:'同意測試稿',data:encodeReviewTestPostback(input.requestId,input.actionToken,'approved'),displayText:'我同意這篇測試稿（不會發布）'}},
+    {type:'button',color:'#B9A477',action:{type:'postback',label:'要求修改',data:encodeReviewTestPostback(input.requestId,input.actionToken,'changes_requested'),displayText:'這篇測試稿需要修改（不會發布）'}},
   ]}}}
 }
 

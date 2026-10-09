@@ -72,6 +72,10 @@ describe('formal publication runtime',()=>{
   it('puts only an authenticated workbench URI on the new LINE card, never action tokens',()=>{
     const message=buildArticleWorkbenchNotification({lineUserId:'private-not-in-message',workspaceId,title:document.title,retryKey:'fixture',expiresAt:authority.expiresAt},env.NUXT_WEEKLY_CONTENT_LIFF_ID)
     const raw=JSON.stringify(message)
+    expect(raw).toContain('DS搜尋王')
+    expect(raw).toContain('#171A32')
+    expect(raw).toContain('#B9A477')
+    expect(raw).toContain('#EEE9DF')
     expect(raw).toContain(`/workbench?workspaceId=${workspaceId}`)
     expect(raw).not.toMatch(/postback|idToken|private-not-in-message|actionToken|停止發布|撤回/)
   })

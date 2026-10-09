@@ -1,6 +1,19 @@
-# 搜尋王 LINE 官方帳號與客戶綁定 V1
+# DS搜尋王 LINE 官方帳號與客戶綁定 V1
 
-## 實際範圍與證據
+## 2026-10-10 品牌更新
+
+官方帳號對外名稱已在 LINE 商業簡介公開為「DS搜尋王」。新頭像為上行金色 `DISCOVERYSTACK`、下行繁體「搜尋王」的兩行襯線字標；LINE 的圓形裁切已核對完整。LINE 提示名稱公開後 7 天內不能再次變更，頭像公開後 1 小時內不能再次變更。
+
+品牌色沿用目前官網 `premium.css`：深藍 `#171A32`、深色 `#101326`、金色 `#B9A477`、紙色 `#EEE9DF`。商業簡介底部按鈕僅支援平台固定色票，已選擇最接近品牌的深藍 `#323B54` 並公開；不能改變用戶 LINE App 本身的聊天泡泡顏色或字體。
+
+- `public/brand/ds-searchking-line-avatar-premium-v1.png`：內建 imagegen 生成的新頭像。
+- `assets/brand/ds-searchking-line-avatar-premium-v1.prompt.txt`：本次完整生成提示。
+- `assets/brand/ds-searchking-live-rich-menu-premium-v1.svg` 與同名 `public/brand/*.png`：符合平台既有六格版型的向量圖稿與輸出；保留原有三個官網連結、上排未設定動作以及使用期間。
+- `assets/brand/searchking-rich-menu-v1.svg` 與 `public/brand/ds-searchking-rich-menu-premium-v1.png`：程式三欄 message-action 選單的品牌更新素材；不是目前 OA Manager 使用中的六格選單。
+
+迎新、測試及正式審稿通知與 LINE 入口頁的品牌文字和色票已同步更新。此次沒有重新寄送審稿通知、沒有變動邀請或收稿人權限，也沒有開啟每週排程。下方原 V1 開通筆記保留為歷史準備狀態，不能當作目前正式設定或部署狀態。
+
+## 原 V1 準備範圍與證據（歷史筆記）
 
 OA 搜尋王（@453ojflc）已建立。品牌圖片、歡迎文字、Flex 卡片、底部選單 payload 與 LIFF 客戶頁是本機交付。尚未套用 LINE 帳號頭像／歡迎訊息／選單，也未建立或公開 LINE Login／LIFF channel。完整候選最後 typecheck/build/full safe 以 root 最後交付收據為準，focused mock 不代表 LINE 收發或真實客戶綁定。
 

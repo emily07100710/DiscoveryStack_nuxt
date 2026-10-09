@@ -102,6 +102,8 @@ describe('isolated owner-prepared LINE review tests',()=>{
     const requestId=`wct_${'a'.repeat(32)}`
     const message=buildReviewTestMessage({requestId,readToken:createHmacToken('weekly-review-test-read-v1',requestId),actionToken:createHmacToken('weekly-review-test-action-v1',requestId),title:'測試文章',expiresAt:new Date(WEEKLY_NOW.getTime()+86_400_000),publicOrigin:'https://synthetic-review.taipei'})
     const serialized=JSON.stringify(message)
+    expect(serialized).toContain('DS搜尋王')
+    expect(serialized).toContain('#171A32')
     expect(serialized).toContain('/weekly-content/test-review/wct_')
     expect(serialized).toContain('wct|wct_')
     expect(serialized).toContain('同意測試稿')
