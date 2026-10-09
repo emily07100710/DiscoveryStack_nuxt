@@ -35,10 +35,20 @@ async function mountWeeklyPage() {
   const module = { exports: {} as Record<string, unknown> }
   const fetcher = vi.fn(() => { throw new Error('Synthetic weekly page render must not make network requests.') })
   const loadWorkspace = vi.fn(async () => ({ data: ref(workspace), pending: ref(false), error: ref(null), refresh: vi.fn(async () => undefined) }))
+  // This mounted test exercises the parent's receipt/status and reopening contract.
+  // Resolve only this explicitly imported child locally, rather than resolving a
+  // workspace .vue import from Nuxt's package directory or running its API setup.
+  // The child's rendering and approval boundaries have dedicated workbench tests.
+  const ArticleWorkbenchOwnerStub = defineComponent({
+    name: 'ArticleWorkbenchOwnerReceiptStub',
+    props: { clientId: Number, clientName: String, lineBound: Boolean, clientActive: Boolean },
+    emits: ['busy'],
+    setup: () => () => h('section', { 'data-receipt-test-child': 'article-workbench-owner' }),
+  })
   const sandbox: Record<string, unknown> = {
     module,
     exports: module.exports,
-    require: (id: string) => id === 'vue' ? vue : nuxtRequire(id),
+    require: (id: string) => id === 'vue' ? vue : id === '../../components/article-workbench/ArticleWorkbenchOwner.vue' ? ArticleWorkbenchOwnerStub : nuxtRequire(id),
     computed: vue.computed,
     ref: vue.ref,
     watch: vue.watch,

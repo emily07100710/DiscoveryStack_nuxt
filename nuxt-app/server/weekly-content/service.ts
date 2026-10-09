@@ -244,8 +244,10 @@ export async function reviewFromVerifiedLine(input: VerifiedLineIdentity & { req
       await repo.insertInbox({ eventHash,payloadFingerprint:input.semanticFingerprint,status:'processed',resultCode:'DECISION_REPLAYED' })
       return { status:'replayed' as const,resultCode:'DECISION_REPLAYED' }
     }
-    // Customers may withdraw approval before the shared job-lock reservation. A requested revision needs a new exact draft/review.
-    if(request.status!=='pending' && !(request.status==='approved' && input.decision==='changes_requested'))return error('WEEKLY_DECISION_ALREADY_FINAL')
+    // Once a customer approves an exact version it is read-only. Editing a
+    // different version requires a fresh review; ordinary postbacks cannot
+    // withdraw approval or mutate a version already queued for publication.
+    if(request.status!=='pending')return error('WEEKLY_DECISION_ALREADY_FINAL')
     if(await repo.hasReservedPublication(request.ownerUserId,request.jobId,request.draftId))return error('WEEKLY_PUBLICATION_ALREADY_RESERVED')
     const now=clock(deps)
     if(!weeklyRequestMatchesCurrent(request,config,binding,draft,now))return error('WEEKLY_REQUEST_EXPIRED_OR_CHANGED')

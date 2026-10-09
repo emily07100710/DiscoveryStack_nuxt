@@ -27,7 +27,8 @@ async function renderPage(path: string, context: Record<string, unknown>) {
   expect(compiled.errors).toEqual([])
   const render = new Function('Vue', compiled.code)(Vue) as Render
   const NuxtLink = Vue.defineComponent({ render: () => Vue.h('a') })
-  return renderer.renderToString(Vue.createSSRApp(Vue.defineComponent({ setup: () => context, render, components: { NuxtLink } })))
+  const ArticleWorkbenchOwner = Vue.defineComponent({ render: () => Vue.h('section') })
+  return renderer.renderToString(Vue.createSSRApp(Vue.defineComponent({ setup: () => context, render, components: { NuxtLink, ArticleWorkbenchOwner } })))
 }
 function button(html: string, label: string) {
   const match = [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)].find(row => row[2]?.replace(/<[^>]+>/g, '').trim() === label)
@@ -41,7 +42,7 @@ function ownerContext(change: Record<string, unknown> = {}) {
     current: client, config: null, policies: [], selected: '1', policyId: '', invitation: null, hasCalendar: false,
     replacementOpen: false, replacementConfirmed: false,
     reviewTestTitle: '', reviewTestBody: '', reviewTestConfirmed: false, reviewTestBusy: false, reviewTestLoading: false, reviewTestsLoaded: false, reviewTestNotice: '', reviewTestFailed: false, reviewTests: [], reviewTestSendState: 'idle', reviewTestReloadedAfterUncertain: false,
-    pending: false, error: null, notice: '', failed: false, busy: false, planId: '', startDate: '2026-10-05', publishLocalTime: '10:00', monthlyArticleLimit: 4,
+    pending: false, error: null, notice: '', failed: false, busy: false, formalWorkbenchBusy: false, planId: '', startDate: '2026-10-05', publishLocalTime: '10:00', monthlyArticleLimit: 4,
     time: (value: string) => value, reviewTestDecisionStatus: (test: { status: string; expiresAt: string }) => test.status === 'approved' ? '客戶已同意測試稿' : test.status === 'changes_requested' ? '客戶要求修改' : test.status === 'revoked' ? '送審已取消' : Date.parse(test.expiresAt) <= Date.now() ? '已過期' : '等待回覆', reviewTestNotificationStatus: (test: { notificationStatus: string }) => test.notificationStatus === 'sent' ? 'LINE 已接受通知' : test.notificationStatus === 'cancelled' ? 'LINE 通知已取消' : '等待 LINE 傳送', addDo: () => {}, invite: () => {}, openReplacement: () => {}, cancelReplacement: () => {}, replaceLineRecipient: () => {}, loadReviewTests: () => {}, sendReviewTest: () => {}, requireApproval: () => {}, activate: () => {}, createCalendar: () => {}, pause: () => {}, refresh: () => {},
     ...change,
   }
@@ -165,6 +166,12 @@ describe('actual weekly owner and customer identity templates', () => {
     expect(blocked).not.toContain('使用同一識別碼安全重試</button>')
     const reloaded = await renderPage('../pages/audit-lab/weekly-content.vue', ownerContext({ ...draft, reviewTestReloadedAfterUncertain: true }))
     expect(button(reloaded, '使用同一識別碼安全重試')).not.toContain('disabled')
+  })
+  it('locks client and LINE recipient changes while a formal workbench action is running', async () => {
+    const html = await renderPage('../pages/audit-lab/weekly-content.vue', ownerContext({ current: { ...client, lineBound: true }, formalWorkbenchBusy: true, replacementOpen: true, replacementConfirmed: true }))
+    expect(html).toMatch(/<select[^>]*disabled[^>]*>/)
+    expect(button(html, '更換 LINE 收件人並產生新邀請')).toContain('disabled')
+    expect(button(html, '確認更換並產生新邀請')).toContain('disabled')
   })
   it('keeps per-payload idempotency and private drafts in memory only', () => {
     const source = readFileSync(new URL('../pages/audit-lab/weekly-content.vue', import.meta.url), 'utf8')

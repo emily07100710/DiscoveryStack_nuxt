@@ -56,7 +56,20 @@ onMounted(async () => {
     const result = await connectFetch<PublicConfig>('/api/weekly-content/connect/config')
     if (!result.enabled) { cleanHistory(); state.value = 'disabled'; return }
     if (window.location.origin !== result.origin || result.connectPath !== '/weekly-content/connect') throw new Error('origin not configured')
-    config = result; sdk = await loadSdk(); await sdk.init({ liffId: result.liffId }); cleanHistory()
+    // LIFF consumes OAuth and liff.state before we touch the URL. A workbench
+    // lives below this configured endpoint, so it can share the same LIFF app.
+    const originalLiffState = new URL(window.location.href).searchParams.get('liff.state')
+    config = result; sdk = await loadSdk(); await sdk.init({ liffId: result.liffId })
+    if (window.location.pathname.startsWith('/weekly-content/connect/workbench')) return
+    if (originalLiffState && originalLiffState.length <= 512) {
+      const next = new URL(originalLiffState, window.location.origin)
+      const workspaceId = next.searchParams.get('workspaceId') || ''
+      if (next.origin === result.origin && next.pathname === '/workbench' && /^aw_[A-Za-z0-9_-]{32}$/.test(workspaceId)) {
+        window.location.replace(`${result.origin}/weekly-content/connect/workbench?workspaceId=${encodeURIComponent(workspaceId)}`)
+        return
+      }
+    }
+    cleanHistory()
     if (!sdk.isLoggedIn()) { state.value = 'login'; return }
     const scopes = sdk.getContext()?.scope || []
     if (!scopes.includes('openid') || scopes.some(scope => scope !== 'openid')) throw new Error('scope not configured')

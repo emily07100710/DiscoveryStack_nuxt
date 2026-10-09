@@ -142,7 +142,17 @@ function makeRepository(database: any, transactional = false): WeeklyContentRepo
       .innerJoin(contentOperationClients, and(eq(contentOperationClients.id, bindings.clientId), eq(contentOperationClients.ownerUserId, bindings.ownerUserId)))
       .where(and(eq(bindings.lineUserId, lineUserId), eq(bindings.status, 'active'), eq(contentOperationClients.status, 'active')))
       .orderBy(asc(bindings.id)).limit(Math.max(1, Math.min(20, limit))),
-    async saveBinding(row) { await database.insert(bindings).values(row).onDuplicateKeyUpdate({ set: row }); return (await repository.getBinding(row.ownerUserId, row.clientId))! },
+    async saveBinding(row) {
+      // Redeeming a fresh invitation for the SAME person can still rotate the
+      // binding fingerprint. Apply the same fence as explicit replacement.
+      const existing=await repository.getBinding(row.ownerUserId,row.clientId,true)
+      if(existing&&existing.bindingFingerprint!==row.bindingFingerprint){
+        const {guardArticleWorkspacesForRebind}=await import('../article-workbench/repository')
+        await guardArticleWorkspacesForRebind(database,{ownerUserId:row.ownerUserId,clientId:row.clientId,bindingId:existing.id,now:new Date()})
+      }
+      await database.insert(bindings).values(row).onDuplicateKeyUpdate({set:row})
+      return (await repository.getBinding(row.ownerUserId,row.clientId))!
+    },
     async revokeBinding(owner, client, expectedFingerprint, revokedFingerprint, now) {
       const result=await database.update(bindings).set({status:'revoked',bindingFingerprint:revokedFingerprint,updatedAt:now}).where(and(eq(bindings.ownerUserId,owner),eq(bindings.clientId,client),eq(bindings.status,'active'),eq(bindings.bindingFingerprint,expectedFingerprint)))
       return Number(result?.[0]?.affectedRows || 0)===1
@@ -160,6 +170,11 @@ function makeRepository(database: any, transactional = false): WeeklyContentRepo
       return rows.some((row:{notificationStatus:string})=>row.notificationStatus==='processing')
     },
     async revokePendingReviewTestsForBinding(owner,client,bindingId,bindingFingerprint,now) {
+      // This transaction already holds the client and current binding locks.
+      // Fence formal workspaces before replacing the recipient; an in-flight
+      // external preparation, notification or publication must finish first.
+      const {guardArticleWorkspacesForRebind}=await import('../article-workbench/repository')
+      await guardArticleWorkspacesForRebind(database,{ownerUserId:owner,clientId:client,bindingId,now})
       const lineage=and(eq(reviewTests.ownerUserId,owner),eq(reviewTests.clientId,client),eq(reviewTests.bindingId,bindingId),eq(reviewTests.bindingFingerprint,bindingFingerprint),eq(reviewTests.status,'pending'))
       await database.update(reviewTests).set({notificationStatus:'cancelled',notificationLeaseToken:null,notificationLeaseExpiresAt:null,notificationRetryEligibleAt:null,notificationErrorCode:'line_recipient_replaced',updatedAt:now}).where(and(lineage,or(eq(reviewTests.notificationStatus,'queued'),eq(reviewTests.notificationStatus,'retry_wait'))))
       const result=await database.update(reviewTests).set({status:'revoked',updatedAt:now}).where(lineage)
